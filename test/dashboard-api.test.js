@@ -900,6 +900,17 @@ setTimeout(async () => {
     }
 
     // Test 3.5: seedKV writes metadata
+    console.log('Test 3.4a: GET /api/projects exposes canonical project registry');
+    {
+      const response = await makeRequest('GET', '/api/projects?limit=10');
+      assert.strictEqual(response.status, 200, 'Project registry projection should return 200');
+      assert.strictEqual(response.data.ok, true, 'Project registry projection should report success');
+      assert.ok(Array.isArray(response.data.projects), 'Project registry projection should return rows');
+      assert.ok(Number.isInteger(response.data.total), 'Project registry projection should return a bounded total');
+      console.log('✓ Passed\n');
+    }
+
+    // Test 3.5: seedKV writes metadata
     console.log('Test 3.5: seedKV writes metadata');
     {
       // Delete existing test keys via API

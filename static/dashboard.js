@@ -44,15 +44,15 @@ function showAuthModal(onSuccess) {
     modal = document.createElement('dialog');
     modal.id = 'auth-modal';
     modal.innerHTML = `
-      <form method="dialog" style="max-width: 300px; padding: 20px; background: #161b22; border: 1px solid #30363d; border-radius: 8px; color: #c9d1d9;">
-        <h3 style="margin-top: 0; color: #58a6ff;">Authentication Required</h3>
-        <label style="display: block; margin: 10px 0 5px; font-size: .85rem;">Username:</label>
-        <input type="text" id="auth-username" style="width: 100%; padding: 8px; margin-bottom: 10px; background: #0d1117; border: 1px solid #30363d; border-radius: 4px; color: #c9d1d9;" required>
-        <label style="display: block; margin: 10px 0 5px; font-size: .85rem;">Password:</label>
-        <input type="password" id="auth-password" style="width: 100%; padding: 8px; margin-bottom: 15px; background: #0d1117; border: 1px solid #30363d; border-radius: 4px; color: #c9d1d9;" required>
-        <div style="display: flex; gap: 10px; justify-content: flex-end;">
-          <button type="button" id="auth-cancel" style="padding: 8px 16px; background: #21262d; border: 1px solid #30363d; color: #c9d1d9; border-radius: 4px; cursor: pointer;">Cancel</button>
-          <button type="submit" id="auth-submit" style="padding: 8px 16px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">Login</button>
+      <form method="dialog" class="auth-modal-form">
+        <h3 class="auth-modal-title">Authentication Required</h3>
+        <label class="auth-modal-label">Username:</label>
+        <input type="text" id="auth-username" class="auth-modal-input" required>
+        <label class="auth-modal-label">Password:</label>
+        <input type="password" id="auth-password" class="auth-modal-input auth-modal-password" required>
+        <div class="auth-modal-actions">
+          <button type="button" id="auth-cancel" class="auth-modal-cancel">Cancel</button>
+          <button type="submit" id="auth-submit" class="auth-modal-submit">Login</button>
         </div>
       </form>
     `;
@@ -93,13 +93,13 @@ function showBootstrapModal() {
     modal = document.createElement('dialog');
     modal.id = 'bootstrap-modal';
     modal.innerHTML = `
-      <form method="dialog" style="max-width: 340px; padding: 20px; background: #161b22; border: 1px solid #30363d; border-radius: 8px; color: #c9d1d9;">
-        <h3 style="margin-top: 0; color: #58a6ff;">Create Sidekick Owner</h3>
-        <p style="font-size: .85rem;">This one-time setup creates the first local Owner account.</p>
-        <input type="text" id="bootstrap-username" placeholder="Username" required style="width: 100%; padding: 8px; margin-bottom: 10px; box-sizing: border-box;">
-        <input type="text" id="bootstrap-display-name" placeholder="Display name" required style="width: 100%; padding: 8px; margin-bottom: 10px; box-sizing: border-box;">
-        <input type="password" id="bootstrap-password" placeholder="Password (12+ characters)" required style="width: 100%; padding: 8px; margin-bottom: 15px; box-sizing: border-box;">
-        <button type="submit" style="padding: 8px 16px; background: #238636; color: white; border: none; border-radius: 4px; cursor: pointer;">Create Owner</button>
+      <form method="dialog" class="auth-modal-form bootstrap-modal-form">
+        <h3 class="auth-modal-title">Create Sidekick Owner</h3>
+        <p class="bootstrap-modal-note">This one-time setup creates the first local Owner account.</p>
+        <input type="text" id="bootstrap-username" placeholder="Username" class="auth-modal-input" required>
+        <input type="text" id="bootstrap-display-name" placeholder="Display name" class="auth-modal-input" required>
+        <input type="password" id="bootstrap-password" placeholder="Password (12+ characters)" class="auth-modal-input auth-modal-password" required>
+        <button type="submit" class="auth-modal-submit bootstrap-modal-submit">Create Owner</button>
       </form>`;
     document.body.appendChild(modal);
     modal.querySelector('form').addEventListener('submit', async (e) => {
@@ -215,7 +215,7 @@ function updateToolSummary(tools) {
 const SERVICE_ICONS = { 'sidekick-mcp': 'fa-server', 'sidekick-dashboard': 'fa-gauge-high', 'sidekick-agent': 'fa-robot', 'ollama': 'fa-brain' };
 const SERVICE_LABELS = { 'sidekick-mcp': 'MCP', 'sidekick-dashboard': 'Dashboard', 'sidekick-agent': 'Agent', 'ollama': 'Ollama' };
 const SOURCE_ICONS = { 'agent': 'fa-robot', 'mcp': 'fa-plug', 'unknown': 'fa-circle-question' };
-const SOURCE_COLORS = { 'agent': '#58a6ff', 'mcp': '#bc8cff', 'unknown': '#8b949e' };
+const SOURCE_CLASSES = { agent: 'source-icon-agent', mcp: 'source-icon-mcp', unknown: 'source-icon-unknown' };
 
 // Toast notification system
 function showToast(message, type = 'info') {
@@ -259,6 +259,24 @@ function apiError(url, error, status) {
 }
 
 function $(id){return document.getElementById(id)}
+
+// Shared rendering primitives keep domain pages honest about loading, empty,
+// and unavailable states while leaving record-specific markup to each view.
+function viewState(kind, message) {
+  const labels = { loading: 'Loading…', empty: 'Nothing recorded.', error: 'Unavailable.' };
+  return '<div class="view-state view-state-' + esc(kind) + '" role="status">' + esc(message || labels[kind] || '') + '</div>';
+}
+
+function renderRecordList(target, records, render, emptyMessage) {
+  if (!target) return;
+  if (!Array.isArray(records)) { target.innerHTML = viewState('error'); return; }
+  target.innerHTML = records.length ? records.map(render).join('') : viewState('empty', emptyMessage);
+}
+
+function renderInspector(target, title, content) {
+  if (!target) return;
+  target.innerHTML = '<div class="inspector-head"><div class="section-title">Inspector</div><h3>' + esc(title || 'Record') + '</h3></div><div class="inspector-body">' + content + '</div>';
+}
 
 function getToolStatsWindow() {
   const select = $('toolStatsWindow');
@@ -376,17 +394,19 @@ function loadProjects() {
   const summary = $('projectsSummary');
   if (!list) return;
   list.innerHTML = '<div class="skeleton-stack"><div class="skeleton-line wide"></div><div class="skeleton-line"></div><div class="skeleton-line short"></div></div>';
-  authFetch('/api/kv').then(response => response.json()).then(data => {
-    const projects = Array.isArray(data.projects) ? data.projects : [];
-    if (summary) summary.innerHTML = metric('Recorded projects', projects.length, 'Derived from explicit KV project metadata');
+  authFetch('/api/projects').then(response => response.json()).then(data => {
+    const rows = Array.isArray(data.projects) ? data.projects : [];
+    const projects = rows.map(row => row.project || {}).filter(project => project.project_id);
+    if (summary) summary.innerHTML = metric('Registered projects', projects.length, 'Canonical project registry; no inferred ownership');
     if (!projects.length) {
       list.innerHTML = '<div class="panel project-empty"><div class="empty">No explicitly scoped projects are recorded yet.</div><p class="sub">Create project metadata through a governed workflow or inspect unscoped records in Data.</p></div>';
       return;
     }
-    const entries = Array.isArray(data.entries) ? data.entries : [];
-    list.innerHTML = projects.map(project => {
-      const count = entries.filter(entry => entry.project === project).length;
-      return '<article class="project-card"><span class="eyebrow">Project workspace</span><h2>' + esc(project) + '</h2><p>' + count + ' explicitly scoped record' + (count === 1 ? '' : 's') + ' in KV. Other work surfaces may remain unscoped.</p><button class="btn btn-outline btn-sm" type="button" data-project="' + attr(project) + '">Inspect project data</button></article>';
+    list.innerHTML = rows.map(row => {
+      const project = row.project || {};
+      const workspace = row.workspace;
+      const sources = Array.isArray(row.sources) ? row.sources : [];
+      return '<article class="project-card"><span class="eyebrow">Project workspace</span><h2>' + esc(project.display_name || project.project_id) + '</h2><p>' + esc(project.description || 'No project description recorded.') + '</p><div class="project-meta"><span>' + esc(project.state || 'unknown') + '</span><span>' + sources.length + ' recorded source' + (sources.length === 1 ? '' : 's') + '</span><span>' + (workspace ? 'Workspace configured' : 'Workspace not configured') + '</span></div><button class="btn btn-outline btn-sm" type="button" data-project="' + attr(project.project_id) + '">Inspect project data</button></article>';
     }).join('');
     list.querySelectorAll('[data-project]').forEach(button => button.addEventListener('click', () => { routeToPage('data'); const filter = $('kvProjectFilter'); if (filter) { filter.value = button.dataset.project; if (typeof filterKV === 'function') filterKV(); } }));
   }).catch(error => { list.innerHTML = '<div class="panel project-empty"><div class="error-text">Project data unavailable.</div><p class="sub">' + esc(error.message) + '</p></div>'; });
@@ -502,8 +522,8 @@ async function loadResearchSources() {
     const details = status.readiness || {};
     if (readiness) readiness.textContent = 'Workspace: ' + ((details.workspace || {}).state || 'unknown') + ' · Local probes: ' + ((details.policy || {}).local_probes_enabled ? 'enabled' : 'disabled') + ' · Environments: ' + (details.environment_count ?? 0);
     if (repositories) repositories.innerHTML = (repoData.repositories || []).map(repo =>
-      '<div class="card" style="padding:10px;margin:8px 0"><strong>' + esc(repo.name || repo.repository_id) + '</strong> <span class="sub">' + esc(repo.state) + ' · ' + esc(repo.repository_id) + '</span>' +
-      '<div style="margin-top:8px"><button class="btn btn-sm btn-outline" onclick="selectResearchRepository(' + jsArg(repo.repository_id) + ', ' + jsArg(repo.campaign_id) + ')">Show snapshots</button></div></div>'
+      '<div class="card compact-card research-source-card"><strong>' + esc(repo.name || repo.repository_id) + '</strong> <span class="sub">' + esc(repo.state) + ' · ' + esc(repo.repository_id) + '</span>' +
+      '<div class="research-actions"><button class="btn btn-sm btn-outline" data-dashboard-action="research-select" data-id="' + attr(repo.repository_id) + '" data-campaign="' + attr(repo.campaign_id) + '">Show snapshots</button></div></div>'
     ).join('') || '<div class="empty">No campaign repositories found.</div>';
   } catch (error) { if (readiness) readiness.textContent = error.message; if (repositories) repositories.textContent = 'Unable to load repositories.'; }
 }
@@ -514,8 +534,8 @@ async function selectResearchRepository(repositoryId, campaignId) {
   try {
     const data = await researchJson('/api/research/source/snapshots?repository_id=' + encodeURIComponent(repositoryId) + '&limit=25');
     if (output) output.innerHTML = (data.snapshots || []).map(snapshot =>
-      '<div class="card" style="padding:10px;margin:8px 0"><strong>' + esc(snapshot.snapshot_id) + '</strong> <span class="sub">' + esc(snapshot.state) + ' · integrity: ' + esc(snapshot.integrity_status) + ' · authority: ' + esc(snapshot.authority) + '</span>' +
-      '<div style="margin-top:8px"><button class="btn btn-sm btn-outline" onclick="showResearchSnapshot(' + jsArg(snapshot.snapshot_id) + ')">Details</button> <button class="btn btn-sm" onclick="researchSelect(' + jsArg(snapshot.snapshot_id) + ')">Select</button> <button class="btn btn-sm btn-outline" onclick="researchVerify(' + jsArg(snapshot.snapshot_id) + ')">Verify</button> <button class="btn btn-sm btn-outline" onclick="researchIndex(' + jsArg(snapshot.snapshot_id) + ')">Index</button> <button class="btn btn-sm btn-outline" onclick="researchArchive(' + jsArg(snapshot.snapshot_id) + ')">Archive</button> <button class="btn btn-sm btn-danger" onclick="researchRemove(' + jsArg(snapshot.snapshot_id) + ')">Remove</button></div></div>'
+      '<div class="card compact-card research-source-card"><strong>' + esc(snapshot.snapshot_id) + '</strong> <span class="sub">' + esc(snapshot.state) + ' · integrity: ' + esc(snapshot.integrity_status) + ' · authority: ' + esc(snapshot.authority) + '</span>' +
+      '<div class="research-actions"><button class="btn btn-sm btn-outline" data-dashboard-action="research-snapshot" data-id="' + attr(snapshot.snapshot_id) + '">Details</button> <button class="btn btn-sm" data-dashboard-action="research-action" data-handler="researchSelect" data-id="' + attr(snapshot.snapshot_id) + '">Select</button> <button class="btn btn-sm btn-outline" data-dashboard-action="research-action" data-handler="researchVerify" data-id="' + attr(snapshot.snapshot_id) + '">Verify</button> <button class="btn btn-sm btn-outline" data-dashboard-action="research-action" data-handler="researchIndex" data-id="' + attr(snapshot.snapshot_id) + '">Index</button> <button class="btn btn-sm btn-outline" data-dashboard-action="research-action" data-handler="researchArchive" data-id="' + attr(snapshot.snapshot_id) + '">Archive</button> <button class="btn btn-sm btn-danger" data-dashboard-action="research-action" data-handler="researchRemove" data-id="' + attr(snapshot.snapshot_id) + '">Remove</button></div></div>'
     ).join('') || '<div class="empty">No snapshots found.</div>';
   } catch (error) { if (output) output.textContent = error.message; }
 }
@@ -565,7 +585,7 @@ async function loadRepositoryResearch(next) {
 
 function identityError(message) {
   const el = $('identityError');
-  if (el) el.innerHTML = message ? '<div class="card" style="padding:10px;border-color:#f85149;color:#f85149">' + esc(message) + '</div>' : '';
+  if (el) el.innerHTML = message ? '<div class="card error-card">' + esc(message) + '</div>' : '';
 }
 
 async function loadIdentityAdmin() {
@@ -580,14 +600,14 @@ async function loadIdentityAdmin() {
       const stateAction = principal.enabled ? 'disable' : 'enable';
       const stateLabel = principal.enabled ? 'Disable' : 'Enable';
       const roles = (principal.roles || []).map(role => '<span class="metrics-status-pill ' + (role === 'owner' ? 'warn' : 'ok') + '">' + esc(role) + '</span>').join(' ');
-      return '<div class="card" style="padding:12px;margin-bottom:10px">'
-        + '<div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap">'
-        + '<div><div style="font-weight:600">' + esc(principal.display_name) + '</div>'
+      return '<div class="card compact-card identity-card">'
+        + '<div class="identity-header">'
+        + '<div><div class="identity-name">' + esc(principal.display_name) + '</div>'
         + '<div class="sub">' + esc(principal.principal_id) + ' · ' + esc(principal.principal_type) + ' · ' + (principal.enabled ? 'enabled' : 'disabled') + '</div></div>'
         + '<div>' + roles + '</div></div>'
-        + '<div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button class="btn btn-sm btn-outline" onclick="toggleIdentityPrincipal(' + jsArg(principal.principal_id) + ', ' + jsArg(stateAction) + ')">' + stateLabel + '</button>'
+        + '<div class="identity-actions"><button class="btn btn-sm btn-outline" data-dashboard-action="identity" data-handler="toggleIdentityPrincipal" data-id="' + attr(principal.principal_id) + '" data-value="' + attr(stateAction) + '">' + stateLabel + '</button>'
         + '<select id="identity-role-' + attr(principal.principal_id) + '"><option value="viewer">Viewer</option><option value="operator">Operator</option><option value="auditor">Auditor</option><option value="administrator">Administrator</option><option value="owner">Owner</option></select>'
-        + '<button class="btn btn-sm btn-outline" onclick="assignIdentityRole(' + jsArg(principal.principal_id) + ')">Assign role</button></div>'
+        + '<button class="btn btn-sm btn-outline" data-dashboard-action="identity" data-handler="assignIdentityRole" data-id="' + attr(principal.principal_id) + '">Assign role</button></div>'
         + '</div>';
     }).join('') || '<div class="sub">No principals found.</div>';
   } catch (error) { identityError(error.message); }
@@ -718,8 +738,8 @@ function renderExpandableValue(value, opts){
   const preview = rendered.slice(0, limit);
   return '<div class="expandable-block">' +
     '<pre class="value-block ' + cls + ' expandable-preview" id="' + id + '-preview">' + esc(preview) + '\n… truncated (' + rendered.length.toLocaleString() + ' chars) …</pre>' +
-    '<pre class="value-block ' + cls + ' expandable-full" id="' + id + '-full" style="display:none">' + esc(rendered) + '</pre>' +
-    '<button class="btn btn-sm btn-outline expandable-toggle" onclick="toggleExpandable(\'' + id + '\', this)">Show full (' + rendered.length.toLocaleString() + ' chars)</button>' +
+    '<pre class="value-block ' + cls + ' expandable-full" id="' + id + '-full">' + esc(rendered) + '</pre>' +
+    '<button class="btn btn-sm btn-outline expandable-toggle" data-dashboard-action="expandable" data-id="' + attr(id) + '">Show full (' + rendered.length.toLocaleString() + ' chars)</button>' +
   '</div>';
 }
 
@@ -819,7 +839,7 @@ function loadDashboardSummary(){
     const score = d.health.score;
     const scoreEl = $('healthScore');
     scoreEl.textContent = score;
-    scoreEl.style.color = score >= 80 ? '#3fb950' : score >= 50 ? '#d29922' : '#f85149';
+    scoreEl.className = 'mission-score ' + (score >= 80 ? 'ok' : score >= 50 ? 'warn' : 'danger');
     // Load average, honestly labeled (see the "Load 1m" tile label in the HTML).
     $('healthCpu').textContent = d.health.load_1m + ' / ' + d.health.cpu_count + ' cores';
     $('healthMem').textContent = Math.round(d.health.memory);
@@ -838,33 +858,33 @@ function loadDashboardSummary(){
     const sessionDetails = Array.isArray(d.sessions.mcpSessionDetails) ? d.sessions.mcpSessionDetails : [];
     const sessionDetailsEl = $('sessionDetails');
     if (sessionDetails.length === 0) {
-      sessionDetailsEl.innerHTML = '<div class="empty" style="padding:2px 0">No MCP sessions</div>';
+      sessionDetailsEl.innerHTML = '<div class="empty summary-empty">No MCP sessions</div>';
     } else {
       sessionDetailsEl.innerHTML = sessionDetails.slice(0, 4).map(s => {
         const label = s.initialized ? 'ready' : 'starting';
         return '<div class="session-detail"><span title="' + esc(s.id || '') + '">' + esc(shortSessionId(s.id)) + '</span><span>' + label + ', idle ' + formatDuration(s.idle) + '</span></div>';
-      }).join('') + (sessionDetails.length > 4 ? '<div style="color:#484f58">+' + (sessionDetails.length - 4) + ' more</div>' : '');
+      }).join('') + (sessionDetails.length > 4 ? '<div class="summary-more">+' + (sessionDetails.length - 4) + ' more</div>' : '');
     }
     
     // Recent errors
     const errorsEl = $('recentErrors');
     if(!d.recentErrors || d.recentErrors.length === 0){
-      errorsEl.innerHTML = '<div class="empty" style="padding:4px 0">No recent errors</div>';
+      errorsEl.innerHTML = '<div class="empty system-empty">No recent errors</div>';
     } else {
       errorsEl.innerHTML = d.recentErrors.map(e => {
         const time = new Date(e.time).toLocaleTimeString();
-        return '<div style="margin-bottom:4px"><span style="color:#8b949e">' + time + '</span> ' + esc(e.tool) + '<br><span style="color:#f85149;font-size:.72rem">' + esc(e.summary) + '</span></div>';
+        return '<div class="summary-error"><span class="summary-muted">' + time + '</span> ' + esc(e.tool) + '<br><span class="summary-danger">' + esc(e.summary) + '</span></div>';
       }).join('');
     }
     
     // Recent deployments
     const deployEl = $('recentDeployments');
     if(!d.deployments || d.deployments.length === 0){
-      deployEl.innerHTML = '<div class="empty" style="padding:4px 0">No deployment info</div>';
+      deployEl.innerHTML = '<div class="empty system-empty">No deployment info</div>';
     } else {
       deployEl.innerHTML = d.deployments.map(dep => {
         const time = new Date(dep.deployed_at).toLocaleString();
-        return '<div style="margin-bottom:4px"><span style="color:#58a6ff;font-family:var(--font)">' + esc(dep.commit) + '</span> <span style="color:#8b949e">(' + esc(dep.branch) + ')</span><br><span style="color:#8b949e;font-size:.72rem">' + time + '</span></div>';
+        return '<div class="summary-error"><span class="summary-code">' + esc(dep.commit) + '</span> <span class="summary-muted">(' + esc(dep.branch) + ')</span><br><span class="summary-muted">' + time + '</span></div>';
       }).join('');
     }
   }).catch(e => apiError('/api/dashboard-summary', e, 0));
@@ -894,8 +914,8 @@ function loadDashboardSummary(){
     // Show top 5 tools
     const top5 = d.stats.slice(0, 5);
     if (top5.length > 0) {
-      $('topTools').innerHTML = '<div style="color:#58a6ff;margin-bottom:4px">Top tools:</div>' + 
-        top5.map(s => '<div style="display:flex;justify-content:space-between"><span style="color:#c9d1d9">' + esc(s.name.replace('sidekick_', '')) + '</span><span style="color:#8b949e">' + s.count + '</span></div>').join('');
+      $('topTools').innerHTML = '<div class="summary-top-tools">Top tools:</div>' +
+        top5.map(s => '<div class="summary-tool-row"><span class="summary-tool-name">' + esc(s.name.replace('sidekick_', '')) + '</span><span class="summary-tool-count">' + s.count + '</span></div>').join('');
     }
   }).catch(e => apiError('/api/stats', e, 0));
 }
@@ -1222,14 +1242,13 @@ function renderLogs(){
   visibleSessions.forEach((session, si) => {
     const src = session.source || 'unknown';
     const icon = SOURCE_ICONS[src] || SOURCE_ICONS['unknown'];
-    const color = SOURCE_COLORS[src] || SOURCE_COLORS['unknown'];
     const timeRange = fmtDate(session.start_time) + (session.end_time && session.end_time !== session.start_time ? ' - ' + fmtTime(session.end_time) : '');
     const tools = (session.tools || []).slice(0, 6).join(', ');
     const title = session.summary || tools || (session.call_count + ' activity calls');
     const subtitle = [timeRange, session.project ? 'project ' + session.project : '', session.grouping === 'time_source_fallback' ? 'fallback grouping' : session.grouping].filter(Boolean).join(' · ');
     html += '<section class="session-group">';
     html += '<button class="session-header" aria-expanded="false" type="button">';
-    html += '<i class="fas ' + icon + '" style="color:' + color + '"></i>';
+    html += '<i class="fas ' + icon + ' ' + (SOURCE_CLASSES[src] || SOURCE_CLASSES.unknown) + '"></i>';
     html += '<span class="session-main"><strong>' + esc(session.grouping === 'generated_execution' ? 'generated-tool activity' : src + ' activity') + '</strong><small>Click to expand timeline</small></span>';
     html += '<span class="session-count">' + session.call_count + ' calls</span>';
     html += statusBadge(session.failure_count === 0);
@@ -1239,7 +1258,7 @@ function renderLogs(){
     html += '<div class="session-body" id="session-' + si + '">' + (session.entries || []).map(renderLogDetail).join('') + '</div></section>';
   });
   if (visibleSessions.length < allSessions.length) {
-    html += '<button class="load-more" onclick="loadMoreLogs()">Show more sessions (' + (allSessions.length - visibleSessions.length) + ' remaining)</button>';
+    html += '<button class="load-more" data-dashboard-action="callback" data-handler="loadMoreLogs">Show more sessions (' + (allSessions.length - visibleSessions.length) + ' remaining)</button>';
   }
   container.innerHTML = html;
   container.querySelectorAll('.session-header').forEach((el, idx) => {
@@ -1365,7 +1384,7 @@ function renderKVInspector(entry){
   if (!entry) { el.innerHTML = '<div class="empty">Select an entry to inspect its value, metadata, and safe actions.</div>'; return; }
   const valueText = displayValue(entry.value);
   const looksMarkdown = typeof entry.value === 'string' && /(^#\s|\n#{1,6}\s|\n[-*]\s|```)/m.test(entry.value);
-  el.innerHTML = '<div class="inspector-head"><div><div class="section-title">Inspector</div><h3>' + esc(entry.key) + '</h3></div><div class="kv-actions"><button onclick="copyText(' + jsArg(entry.key) + ')">Copy key</button><button onclick="copySelectedKVValue()">Copy value</button><button onclick="openEditModal(' + jsArg(entry.key) + ')">Edit</button><button class="del" onclick="deleteKV(' + jsArg(entry.key) + ')">Delete</button></div></div>' +
+  el.innerHTML = '<div class="inspector-head"><div><div class="section-title">Inspector</div><h3>' + esc(entry.key) + '</h3></div><div class="kv-actions"><button data-dashboard-action="callback" data-handler="copyText" data-id="' + attr(entry.key) + '">Copy key</button><button data-dashboard-action="callback" data-handler="copySelectedKVValue">Copy value</button><button data-dashboard-action="callback" data-handler="openEditModal" data-id="' + attr(entry.key) + '">Edit</button><button class="del" data-dashboard-action="callback" data-handler="deleteKV" data-id="' + attr(entry.key) + '">Delete</button></div></div>' +
     '<div class="meta-grid"><div><span>Namespace</span><strong>' + esc(entry.namespace || 'global') + '</strong></div><div><span>Project</span><strong>' + esc(entry.project || 'global') + '</strong></div><div><span>Source</span><strong>' + esc(entry.source || 'unknown') + '</strong></div><div><span>Type</span><strong>' + esc(entry.data_type) + '</strong></div><div><span>Size</span><strong>' + formatBytes(entry.size || 0) + '</strong></div><div><span>Updated</span><strong>' + esc(entry.updated ? formatTimeAgo(entry.updated) : 'unknown') + '</strong></div></div>' +
     (looksMarkdown ? '<details class="detail-block"><summary>Markdown text</summary>' + renderMarkdownPreview(entry.value) + '</details>' : '') +
     '<details class="detail-block" open><summary>Structured value</summary>' + renderStructuredValue(entry.value, { limit: 4000, expanded: valueText.length < 4000 }) + '</details>' +
@@ -1432,13 +1451,13 @@ function showValueModal(key) {
     valueHtml = '<div class="json-tree">' + renderJsonTree(parsed, 0) + '</div>';
   } else {
     valueHtml = '<div class="kv-modal-value">' + esc(String(entry.value)) + '</div>';
-    valueHtml += '<button class="btn btn-sm btn-outline" style="margin-top:8px" onclick="navigator.clipboard.writeText(this.previousElementSibling.textContent);showToast(&quot;Copied!&quot;,&quot;success&quot;)"><i class="fas fa-copy"></i> Copy</button>';
+    valueHtml += '<button class="btn btn-sm btn-outline modal-copy-button" data-dashboard-action="copy-modal"><i class="fas fa-copy"></i> Copy</button>';
   }
   
   modal.innerHTML = '<div class="kv-modal-content">' +
     '<div class="kv-modal-header">' +
       '<h3>' + esc(key) + '</h3>' +
-      '<button class="kv-modal-close" style="background:none;border:none;color:#8b949e;cursor:pointer;font-size:20px;">' +
+      '<button class="kv-modal-close">' +
         '<i class="fas fa-times"></i>' +
       '</button>' +
     '</div>' +
@@ -1450,10 +1469,10 @@ function showValueModal(key) {
 }
 
 function renderJsonTree(obj, depth) {
-  if (obj === null) return '<span style="color:#f85149">null</span>';
-  if (typeof obj === 'boolean') return '<span style="color:#ffa657">' + obj + '</span>';
-  if (typeof obj === 'number') return '<span style="color:#79c0ff">' + obj + '</span>';
-  if (typeof obj === 'string') return '<span style="color:#a5d6ff">"' + esc(obj) + '"</span>';
+  if (obj === null) return '<span class="json-null">null</span>';
+  if (typeof obj === 'boolean') return '<span class="json-boolean">' + obj + '</span>';
+  if (typeof obj === 'number') return '<span class="json-number">' + obj + '</span>';
+  if (typeof obj === 'string') return '<span class="json-string">"' + esc(obj) + '"</span>';
   
   const isArray = Array.isArray(obj);
   const entries = isArray ? obj : Object.entries(obj);
@@ -1462,19 +1481,28 @@ function renderJsonTree(obj, depth) {
   
   if (entries.length === 0) return isArray ? '[]' : '{}';
   
-  let html = '<span style="color:#8b949e">' + (isArray ? '[' : '{') + '</span>';
-  html += '<div style="padding-left:20px">';
+  let html = '<span class="json-punctuation">' + (isArray ? '[' : '{') + '</span>';
+  html += '<div class="json-indent">';
   
   const items = isArray ? entries.map((v, i) => [i, v]) : entries;
   for (const [k, v] of items) {
-    const keyStr = isArray ? '' : '<span style="color:#7ee787">"' + esc(k) + '"</span>: ';
+    const keyStr = isArray ? '' : '<span class="json-key">"' + esc(k) + '"</span>: ';
     const valueStr = renderJsonTree(v, depth + 1);
     html += '<div>' + keyStr + valueStr + '</div>';
   }
   
   html += '</div>';
-  html += '<span style="color:#8b949e">' + (isArray ? ']' : '}') + '</span>';
+  html += '<span class="json-punctuation">' + (isArray ? ']' : '}') + '</span>';
   return html;
+}
+
+function copyModalValue(btn) {
+  const value = btn.previousElementSibling;
+  if (!value) return;
+  navigator.clipboard.writeText(value.textContent).then(() => {
+    btn.textContent = 'Copied!';
+    setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+  }).catch(() => showToast('Copy failed', 'error'));
 }
 
 function openEditModal(key){
@@ -1701,7 +1729,7 @@ function importKV() {
         showConfirmModal({
           title: 'Import KV Data',
           message: `Import ${data.entries.length} entries from ${file.name}?`,
-          details: `<strong>Exported at:</strong> ${data.exported_at || 'Unknown'}<br><strong>Version:</strong> ${data.version || 'Unknown'}<br><strong>Entries:</strong> ${data.entries.length}<br><br><span style="color:#f85149">⚠️ This will overwrite existing entries with the same keys!</span>`,
+          details: `<strong>Exported at:</strong> ${data.exported_at || 'Unknown'}<br><strong>Version:</strong> ${data.version || 'Unknown'}<br><strong>Entries:</strong> ${data.entries.length}<br><br><span class="summary-danger">⚠️ This will overwrite existing entries with the same keys!</span>`,
           tier: 1,
           requiredText: 'IMPORT',
           action: () => {
@@ -1809,7 +1837,7 @@ function renderMemoryStats(stats) {
   const typeEntries = Object.entries(byType);
   if (typeEntries.length > 0) {
     $('memStatsByType').innerHTML = typeEntries.map(([type, count]) =>
-      '<div><span style="color:#58a6ff">' + esc(type) + '</span>: ' + count + '</div>'
+      '<div><span class="summary-accent">' + esc(type) + '</span>: ' + count + '</div>'
     ).join('');
   } else {
     $('memStatsByType').innerHTML = '<div class="empty">No data</div>';
@@ -1819,7 +1847,7 @@ function renderMemoryStats(stats) {
   const projEntries = Object.entries(byProject);
   if (projEntries.length > 0) {
     $('memStatsByProject').innerHTML = projEntries.map(([proj, count]) =>
-      '<div><span style="color:#58a6ff">' + esc(proj) + '</span>: ' + count + '</div>'
+      '<div><span class="summary-accent">' + esc(proj) + '</span>: ' + count + '</div>'
     ).join('');
   } else {
     $('memStatsByProject').innerHTML = '<div class="empty">No data</div>';
@@ -1931,8 +1959,8 @@ function renderMemoryCard(m) {
     excerpt +
     evidence +
     '<div class="memory-footer"><span class="memory-time">Updated ' + esc(formatTimeAgo(m.updated_at)) + '</span><span>Source: ' + esc(m.source || 'unknown') + (m.source_tool ? ' / ' + esc(m.source_tool) : '') + '</span><div class="memory-actions">' +
-      (m.enabled ? '<button class="btn btn-sm btn-outline" onclick="disableMemory(' + jsArg(m.id) + ')">Disable</button>' : '<button class="btn btn-sm btn-outline" onclick="enableMemory(' + jsArg(m.id) + ')">Enable</button>') +
-      '<button class="btn btn-sm btn-danger" onclick="deleteMemory(' + jsArg(m.id) + ')">Delete</button></div></div>' +
+      (m.enabled ? '<button class="btn btn-sm btn-outline" data-dashboard-action="callback" data-handler="disableMemory" data-id="' + attr(m.id) + '">Disable</button>' : '<button class="btn btn-sm btn-outline" data-dashboard-action="callback" data-handler="enableMemory" data-id="' + attr(m.id) + '">Enable</button>') +
+      '<button class="btn btn-sm btn-danger" data-dashboard-action="callback" data-handler="deleteMemory" data-id="' + attr(m.id) + '">Delete</button></div></div>' +
     '<details class="detail-block"><summary>Full content and metadata</summary>' +
       '<div class="memory-full">' + esc(m.content || '') + '</div>' +
       '<div class="meta-grid"><div><span>Created</span><strong>' + esc(m.created_at ? fmtDate(m.created_at) : 'unknown') + '</strong></div><div><span>Observed</span><strong>' + esc(m.observed_at ? fmtDate(m.observed_at) : 'unknown') + '</strong></div><div><span>Valid</span><strong>' + esc((m.valid_from || 'unknown') + ' to ' + (m.valid_to || 'current')) + '</strong></div><div><span>Scope</span><strong>' + esc(scope) + '</strong></div><div><span>Authority</span><strong>' + esc(String(m.source_authority || 'unknown')) + '</strong></div><div><span>Directness</span><strong>' + esc(m.directness || 'unknown') + '</strong></div><div><span>Task</span><strong>' + esc(m.source_task_id || 'none') + '</strong></div><div><span>Importance</span><strong>' + esc(m.importance || 'normal') + '</strong></div><div><span>Expires</span><strong>' + esc(m.expires_at || 'none') + '</strong></div><div><span>Revalidate</span><strong>' + esc(m.revalidate_after || 'none') + '</strong></div><div><span>Tags</span><strong>' + esc((m.tags || []).join(', ') || 'none') + '</strong></div></div>' +
@@ -2107,7 +2135,7 @@ function loadDurableAgentTask(taskId){
       const terminal = ['completed', 'partial', 'failed', 'blocked', 'interrupted', 'waiting'].includes(task.state);
       const actionKinds = [['investigate', 'Investigate finding'], ['implement', 'Implement recommendation'], ['verify', 'Verify claim'], ['repair', 'Repair failure'], ['compare', 'Compare alternatives'], ['deliverable', 'Produce deliverable'], ['continue', 'Continue unresolved work'], ['apply', 'Apply approved proposal'], ['monitor', 'Monitor condition'], ['recheck', 'Recheck condition']];
       continuationActions.innerHTML = terminal && !agentRunning
-        ? '<span class="sub">Continuation creates a new governed task; it receives fresh authorization and no inherited approval.</span><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">' + actionKinds.map(item => '<button class="btn btn-sm btn-outline" type="button" onclick="startAgentContinuation(\'' + item[0] + '\')">' + item[1] + '</button>').join('') + '</div>'
+        ? '<span class="sub">Continuation creates a new governed task; it receives fresh authorization and no inherited approval.</span><div class="agent-continuation-actions">' + actionKinds.map(item => '<button class="btn btn-sm btn-outline" type="button" data-dashboard-action="agent" data-handler="startAgentContinuation" data-value="' + attr(item[0]) + '">' + item[1] + '</button>').join('') + '</div>'
         : '';
     }
     if ($('agentResume')) $('agentResume').disabled = !['paused', 'interrupted', 'blocked'].includes(task.state) || agentRunning;
@@ -2140,7 +2168,7 @@ function loadAgentLearningCandidates(projectRef) {
     target.innerHTML = candidates.length ? candidates.slice(0, 20).map(candidate => {
       const label = esc(candidate.kind || 'candidate') + ' · ' + esc(candidate.state || 'proposal');
       const id = jsArg(candidate.candidate_id); const ref = jsArg(project);
-      return '<div class="agent-learning-candidate"><span>' + label + '</span> <button class="btn btn-sm btn-outline" onclick="reviewAgentLearningCandidate(' + id + ',' + ref + ',\'trial\')">Trial</button> <button class="btn btn-sm btn-outline" onclick="reviewAgentLearningCandidate(' + id + ',' + ref + ',\'rejected\')">Reject</button> <button class="btn btn-sm btn-outline" onclick="reviewAgentLearningCandidate(' + id + ',' + ref + ',\'active\')">Promote</button></div>';
+      return '<div class="agent-learning-candidate"><span>' + label + '</span> <button class="btn btn-sm btn-outline" data-dashboard-action="callback" data-handler="reviewAgentLearningCandidate" data-id="' + attr(candidate.candidate_id) + '" data-value="trial" data-index="' + attr(project) + '">Trial</button> <button class="btn btn-sm btn-outline" data-dashboard-action="callback" data-handler="reviewAgentLearningCandidate" data-id="' + attr(candidate.candidate_id) + '" data-value="rejected" data-index="' + attr(project) + '">Reject</button> <button class="btn btn-sm btn-outline" data-dashboard-action="callback" data-handler="reviewAgentLearningCandidate" data-id="' + attr(candidate.candidate_id) + '" data-value="active" data-index="' + attr(project) + '">Promote</button></div>';
     }).join('') : 'No project-scoped learning candidates.';
   }).catch(() => { target.textContent = 'Learning candidates unavailable.'; });
 }
@@ -2375,7 +2403,7 @@ function toggleHistory(){
   }
   if (expanded) {
       authFetch('/api/agent/history').then(r=>r.json()).then(d=>{
-      let html = '<div style="color:#8b949e;font-size:.78rem;margin-bottom:12px;padding:8px;background:#161b22;border-radius:6px">' +
+      let html = '<div class="agent-history-note">' +
         '<i class="fas fa-info-circle"></i> Agent history shows tasks submitted via this dashboard. ' +
         'Tool calls from opencode appear in the Activity tab, grouped by session.</div>';
       if (!d.runs || !d.runs.length) { html += '<div class="empty">No past runs</div>'; el.innerHTML = html; return; }
@@ -2383,13 +2411,13 @@ function toggleHistory(){
         '<div class="history-item">' +
         '<span class="log-time">' + fmtTime(r.t) + '</span> ' +
         '<span class="' + (r.status === 'completed' ? 'log-ok' : 'log-fail') + '">' + r.status + '</span> ' +
-        '<span class="log-summary" style="flex:1">' + esc(r.goal.substring(0,80)) +
-        (r.parentTaskId ? ' <span style="color:#8b949e;font-size:.7rem" title="Follow-up of ' + esc(r.parentTaskId) + '">(follow-up of ' + esc(r.parentTaskId) + ')</span>' : '') +
+        '<span class="log-summary">' + esc(r.goal.substring(0,80)) +
+        (r.parentTaskId ? ' <span class="sub" title="Follow-up of ' + esc(r.parentTaskId) + '">(follow-up of ' + esc(r.parentTaskId) + ')</span>' : '') +
         '</span>' +
         '<button class="btn btn-sm btn-outline" data-action="followup" data-id="' + esc(r.id) + '" title="Follow up" aria-label="Follow up on task ' + esc(r.id) + '"><i class="fas fa-reply"></i></button>' +
         '<button class="btn btn-sm btn-outline" data-action="export" data-id="' + esc(r.id) + '" title="Export"><i class="fas fa-download"></i></button>' +
         '<button class="btn btn-sm btn-outline" data-action="toggle" data-id="' + esc(r.id) + '" title="Details"><i class="fas fa-chevron-down"></i></button>' +
-        '<div id="run-detail-' + esc(r.id) + '" style="display:none;width:100%"></div>' +
+        '<div id="run-detail-' + esc(r.id) + '" class="agent-run-detail"></div>' +
         '</div>'
       ).join('');
       el.innerHTML = html;
@@ -2429,15 +2457,15 @@ function toggleRunDetail(id){
     });
     let lineageHtml = '';
     if (run.parent_task_id) {
-      lineageHtml = '<div class="agent-step" style="margin-bottom:6px">Follow-up to ' +
+      lineageHtml = '<div class="agent-step agent-lineage">Follow-up to ' +
         '<a href="#" data-action="open" data-id="' + esc(run.parent_task_id) + '">' + esc(run.parent_task_id) + '</a>' +
         ' · Thread root: ' + esc(run.root_task_id || id) + '</div>';
     } else if (run.root_task_id && run.root_task_id !== id) {
-      lineageHtml = '<div class="agent-step" style="margin-bottom:6px">Thread root: ' + esc(run.root_task_id) + '</div>';
+      lineageHtml = '<div class="agent-step agent-lineage">Thread root: ' + esc(run.root_task_id) + '</div>';
     }
     const formHtml =
-      '<div class="followup-form" style="margin-top:10px;display:flex;flex-direction:column;gap:6px">' +
-      '<label for="followup-input-' + esc(id) + '" style="color:#8b949e;font-size:.75rem">Follow up on this task</label>' +
+       '<div class="followup-form">' +
+       '<label for="followup-input-' + esc(id) + '" class="agent-followup-label">Follow up on this task</label>' +
       '<textarea id="followup-input-' + esc(id) + '" class="agent-goal" rows="2" placeholder="Ask a follow-up based on this result…" aria-label="Follow-up goal for task ' + esc(id) + '"></textarea>' +
       '<div><button class="btn btn-sm" data-action="followup-submit" data-id="' + esc(id) + '">Send follow-up</button></div>' +
       '</div>';
@@ -2700,14 +2728,14 @@ function renderEvolveExecution(execution){
   if (!target || !execution) return;
   const running = ['queued','running'].includes(execution.state);
   const steps = (execution.steps || []).map(step =>
-    '<tr><td>' + esc(step.step_number) + '</td><td><code>' + esc(step.tool_name) + '</code></td><td><pre style="white-space:pre-wrap;max-width:260px">' + esc(JSON.stringify(step.args || {}, null, 2)) + '</pre></td><td>' + esc(step.started_at ? fmtTime(step.started_at) : '-') + '</td><td>' + esc(formatMs(step.duration_ms)) + '</td><td>' + esc(step.result_summary || '') + '</td><td>' + esc(step.retry_count || 0) + '</td><td>' + esc(step.error_category || '') + '</td><td>' + esc(step.success === null ? step.state : (step.success ? 'ok' : 'failed')) + '</td></tr>'
+    '<tr><td>' + esc(step.step_number) + '</td><td><code>' + esc(step.tool_name) + '</code></td><td><pre class="execution-step-args">' + esc(JSON.stringify(step.args || {}, null, 2)) + '</pre></td><td>' + esc(step.started_at ? fmtTime(step.started_at) : '-') + '</td><td>' + esc(formatMs(step.duration_ms)) + '</td><td>' + esc(step.result_summary || '') + '</td><td>' + esc(step.retry_count || 0) + '</td><td>' + esc(step.error_category || '') + '</td><td>' + esc(step.success === null ? step.state : (step.success ? 'ok' : 'failed')) + '</td></tr>'
   ).join('');
-  target.innerHTML = '<div class="card" style="margin:12px 0">' +
-    '<div style="display:flex;justify-content:space-between;gap:12px;align-items:center"><div><strong>Execution <code>' + esc(execution.id) + '</code></strong><div style="margin-top:4px"><span class="badge">' + esc(execution.state) + '</span> <span class="badge">source=' + esc(execution.source || 'unknown') + '</span></div></div>' +
-    '<div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn btn-sm btn-outline" onclick="openExecutionActivity(\'' + esc(execution.id) + '\')">Open in Activity</button>' + (running ? '<button class="btn btn-sm btn-outline" onclick="cancelEvolveExecution(\'' + esc(execution.id) + '\')">Cancel</button>' : '') + '</div></div>' +
-    '<div style="margin-top:10px;color:#8b949e;font-size:.8rem">Success criteria: ' + esc(execution.success_criteria || 'All generated workflow steps must complete successfully') + ' · satisfied=' + esc(execution.success_criteria_satisfied === null ? 'pending' : execution.success_criteria_satisfied) + '</div>' +
-    '<div style="margin-top:10px;color:#8b949e;font-size:.8rem">Final summary: ' + esc(execution.final_summary || '') + '</div>' +
-    '<div style="overflow:auto;margin-top:10px"><table class="data-table"><thead><tr><th>#</th><th>Tool</th><th>Args</th><th>Start</th><th>Duration</th><th>Summary</th><th>Retries</th><th>Error</th><th>Status</th></tr></thead><tbody>' + (steps || '<tr><td colspan="9" class="empty">No steps yet</td></tr>') + '</tbody></table></div>' +
+  target.innerHTML = '<div class="card execution-card">' +
+    '<div class="execution-head"><div><strong>Execution <code>' + esc(execution.id) + '</code></strong><div class="execution-state"><span class="badge">' + esc(execution.state) + '</span> <span class="badge">source=' + esc(execution.source || 'unknown') + '</span></div></div>' +
+    '<div class="evolve-execution-actions"><button class="btn btn-sm btn-outline" data-dashboard-action="callback" data-handler="openExecutionActivity" data-id="' + attr(execution.id) + '">Open in Activity</button>' + (running ? '<button class="btn btn-sm btn-outline" data-dashboard-action="callback" data-handler="cancelEvolveExecution" data-id="' + attr(execution.id) + '">Cancel</button>' : '') + '</div></div>' +
+    '<div class="execution-note">Success criteria: ' + esc(execution.success_criteria || 'All generated workflow steps must complete successfully') + ' · satisfied=' + esc(execution.success_criteria_satisfied === null ? 'pending' : execution.success_criteria_satisfied) + '</div>' +
+    '<div class="execution-note">Final summary: ' + esc(execution.final_summary || '') + '</div>' +
+    '<div class="execution-table"><table class="data-table"><thead><tr><th>#</th><th>Tool</th><th>Args</th><th>Start</th><th>Duration</th><th>Summary</th><th>Retries</th><th>Error</th><th>Status</th></tr></thead><tbody>' + (steps || '<tr><td colspan="9" class="empty">No steps yet</td></tr>') + '</tbody></table></div>' +
   '</div>';
 }
 
@@ -2736,25 +2764,25 @@ function loadEvolve(){
       const trial = item.recent_trial_results || [];
       const allowed = item.allowed_actions || {};
       const controls = [
-        allowed.validate ? '<button class="btn btn-sm" onclick="validateEvolve(\'' + esc(item.id) + '\')">Validate</button>' : '',
-        allowed.approve ? '<button class="btn btn-sm" onclick="approveEvolve(\'' + esc(item.id) + '\')">Approve Trial</button>' : '',
-        allowed.promote ? '<button class="btn btn-sm" onclick="promoteEvolve(\'' + esc(item.id) + '\')">Promote</button>' : '',
-        active ? '<button class="btn btn-sm" onclick="runEvolveTrial(\'' + esc(item.id) + '\',' + index + ')">Run Trial</button>' : '',
-        active && item.recent_executions && item.recent_executions.length ? '<button class="btn btn-sm btn-outline" onclick="watchEvolveExecution(\'' + esc(item.recent_executions[0].id) + '\')">Watch Executions</button>' : '',
-        allowed.reject ? '<button class="btn btn-sm btn-outline" onclick="rejectEvolve(\'' + esc(item.id) + '\')">Reject</button>' : '',
-        allowed.deprecate ? '<button class="btn btn-sm btn-outline" onclick="deprecateEvolve(\'' + esc(item.id) + '\')">Deprecate</button>' : '',
-        '<button class="btn btn-sm btn-outline" onclick="feedbackEvolve(\'' + esc(item.id) + '\', true)">Useful</button>',
-        '<button class="btn btn-sm btn-outline" onclick="feedbackEvolve(\'' + esc(item.id) + '\', false)">Not Useful</button>'
+        allowed.validate ? '<button class="btn btn-sm" data-dashboard-action="evolve" data-handler="validateEvolve" data-id="' + attr(item.id) + '">Validate</button>' : '',
+        allowed.approve ? '<button class="btn btn-sm" data-dashboard-action="evolve" data-handler="approveEvolve" data-id="' + attr(item.id) + '">Approve Trial</button>' : '',
+        allowed.promote ? '<button class="btn btn-sm" data-dashboard-action="evolve" data-handler="promoteEvolve" data-id="' + attr(item.id) + '">Promote</button>' : '',
+        active ? '<button class="btn btn-sm" data-dashboard-action="evolve" data-handler="runEvolveTrial" data-id="' + attr(item.id) + '" data-index="' + attr(index) + '">Run Trial</button>' : '',
+        active && item.recent_executions && item.recent_executions.length ? '<button class="btn btn-sm btn-outline" data-dashboard-action="evolve" data-handler="watchEvolveExecution" data-id="' + attr(item.recent_executions[0].id) + '">Watch Executions</button>' : '',
+        allowed.reject ? '<button class="btn btn-sm btn-outline" data-dashboard-action="evolve" data-handler="rejectEvolve" data-id="' + attr(item.id) + '">Reject</button>' : '',
+        allowed.deprecate ? '<button class="btn btn-sm btn-outline" data-dashboard-action="evolve" data-handler="deprecateEvolve" data-id="' + attr(item.id) + '">Deprecate</button>' : '',
+        '<button class="btn btn-sm btn-outline" data-dashboard-action="evolve" data-handler="feedbackEvolve" data-id="' + attr(item.id) + '" data-value="true">Useful</button>',
+        '<button class="btn btn-sm btn-outline" data-dashboard-action="evolve" data-handler="feedbackEvolve" data-id="' + attr(item.id) + '" data-value="false">Not Useful</button>'
       ].filter(Boolean).join(' ');
-      return '<div class="card" style="margin-bottom:12px">' +
-        '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">' +
+      return '<div class="card evolve-card">' +
+        '<div class="evolve-head">' +
           '<div>' +
-            '<div style="font-weight:700;color:#c9d1d9">' + esc(item.candidate_title || item.proposed_tool_name) + '</div>' +
-            '<div style="font-size:.78rem;color:#8b949e;margin-top:4px"><code>' + esc(item.proposed_tool_name) + '</code></div>' +
+            '<div class="evolve-title">' + esc(item.candidate_title || item.proposed_tool_name) + '</div>' +
+            '<div class="evolve-name"><code>' + esc(item.proposed_tool_name) + '</code></div>' +
           '</div>' +
-          '<div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">' + controls + '</div>' +
+          '<div class="evolve-controls">' + controls + '</div>' +
         '</div>' +
-        '<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">' +
+        '<div class="evolve-badges">' +
           '<span class="badge">' + esc(state) + '</span>' +
           '<span class="badge">risk=' + esc(item.risk || 'medium') + '</span>' +
           '<span class="badge">evidence=' + esc(item.evidence_count || 0) + '</span>' +
@@ -2763,11 +2791,11 @@ function loadEvolve(){
           '<span class="badge">calls saved=' + esc(item.estimated_calls_saved || 0) + '</span>' +
           '<span class="badge">validation=' + esc(validation) + '</span>' +
         '</div>' +
-        '<div style="margin-top:10px"><span class="s-label">Parameters:</span> ' + renderEvolveParams(item.inferred_parameters || {}) + '</div>' +
-        (item.score_breakdown ? '<div style="margin-top:8px;color:#8b949e;font-size:.78rem">Score: ' + esc(JSON.stringify(item.score_breakdown)) + '</div>' : '') +
-        (item.duplicate_reasons && item.duplicate_reasons.length ? '<div class="agent-err" style="margin-top:8px">Duplicate signals: ' + esc(item.duplicate_reasons.join(', ')) + '</div>' : '') +
-        '<div style="margin-top:10px;color:#8b949e;font-size:.78rem">Trial executions: use=' + esc(item.use_count || 0) + ', ok=' + esc(item.success_count || 0) + ', fail=' + esc(item.failure_count || 0) + (trial.length ? ', legacy audit=' + esc(trial.map(t => t.success ? 'ok' : 'fail').join(',')) : '') + '</div>' +
-        (item.recent_executions && item.recent_executions.length ? '<div style="margin-top:8px;color:#8b949e;font-size:.78rem">Recent executions: ' + item.recent_executions.map(ex => '<button class="btn btn-sm btn-outline" onclick="watchEvolveExecution(\'' + esc(ex.id) + '\')">' + esc(ex.state) + ' ' + esc(fmtTime(ex.created_at)) + '</button>').join(' ') + '</div>' : '') +
+        '<div class="evolve-detail"><span class="s-label">Parameters:</span> ' + renderEvolveParams(item.inferred_parameters || {}) + '</div>' +
+        (item.score_breakdown ? '<div class="evolve-note">Score: ' + esc(JSON.stringify(item.score_breakdown)) + '</div>' : '') +
+        (item.duplicate_reasons && item.duplicate_reasons.length ? '<div class="agent-err evolve-error">Duplicate signals: ' + esc(item.duplicate_reasons.join(', ')) + '</div>' : '') +
+        '<div class="evolve-note">Trial executions: use=' + esc(item.use_count || 0) + ', ok=' + esc(item.success_count || 0) + ', fail=' + esc(item.failure_count || 0) + (trial.length ? ', legacy audit=' + esc(trial.map(t => t.success ? 'ok' : 'fail').join(',')) : '') + '</div>' +
+      (item.recent_executions && item.recent_executions.length ? '<div class="evolve-note">Recent executions: ' + item.recent_executions.map(ex => '<button class="btn btn-sm btn-outline" data-dashboard-action="evolve" data-handler="watchEvolveExecution" data-id="' + attr(ex.id) + '">' + esc(ex.state) + ' ' + esc(fmtTime(ex.created_at)) + '</button>').join(' ') + '</div>' : '') +
       '</div>';
     }).join('');
   }).catch(e => {
@@ -2929,10 +2957,10 @@ function renderComputeWorker(w){
     '</div>' +
     '<div class="compute-row-actions">' +
       ((admin === 'maintenance' || admin === 'draining')
-        ? '<button class="btn btn-sm" title="Clear maintenance and resume claiming jobs" onclick="computeWorkerAction(' + jsArg(w.workerId) + ',\'enable\')">Resume</button>'
-        : '<button class="btn btn-sm btn-outline" title="Stop claiming new jobs; worker stays connected" onclick="computeWorkerAction(' + jsArg(w.workerId) + ',\'disable\')">Put in maintenance</button>') +
+         ? '<button class="btn btn-sm" title="Clear maintenance and resume claiming jobs" data-dashboard-action="compute-worker" data-id="' + attr(w.workerId) + '" data-value="enable">Resume</button>'
+         : '<button class="btn btn-sm btn-outline" title="Stop claiming new jobs; worker stays connected" data-dashboard-action="compute-worker" data-id="' + attr(w.workerId) + '" data-value="disable">Put in maintenance</button>') +
       (cred !== 'revoked'
-        ? '<button class="btn btn-sm btn-danger" title="Terminal: revoke the credential (re-enroll to recover)" onclick="computeWorkerAction(' + jsArg(w.workerId) + ',\'revoke\')">Revoke credential</button>'
+         ? '<button class="btn btn-sm btn-danger" title="Terminal: revoke the credential (re-enroll to recover)" data-dashboard-action="compute-worker" data-id="' + attr(w.workerId) + '" data-value="revoke">Revoke credential</button>'
         : '<span class="badge danger">credential revoked</span>') +
     '</div>' +
   '</div>';
@@ -2989,7 +3017,7 @@ function renderComputeJob(j){
   const canCancel = !JOB_TERMINAL_STATES.includes(j.status);
   const canRetry = JOB_RETRYABLE_STATES.includes(j.status);
   return '<div class="compute-row compact-row">' +
-    '<button class="compute-job-button" onclick="showComputeJob(' + jsArg(j.jobId) + ')">' +
+    '<button class="compute-job-button" data-dashboard-action="compute-detail" data-id="' + attr(j.jobId) + '">' +
       '<strong>' + esc(j.jobType || j.capability || 'job') + '</strong>' +
       '<small>' + esc(j.jobId) + ' / ' + esc(created) + '</small>' +
       (prompt ? '<span>' + esc(String(prompt).slice(0, 140)) + '</span>' : '') +
@@ -2997,8 +3025,8 @@ function renderComputeJob(j){
     '<div class="compute-job-state">' +
       '<span class="badge ' + statusClass + '">' + esc(j.status || 'unknown') + '</span>' +
       '<span>' + esc(j.progressPercent || 0) + '%</span>' +
-      (canCancel ? '<button class="btn btn-sm btn-outline" onclick="computeJobAction(' + jsArg(j.jobId) + ',\'cancel\')">Cancel</button>' : '') +
-      (canRetry ? '<button class="btn btn-sm" onclick="computeJobAction(' + jsArg(j.jobId) + ',\'retry\')">Retry</button>' : '') +
+       (canCancel ? '<button class="btn btn-sm btn-outline" data-dashboard-action="compute-job" data-id="' + attr(j.jobId) + '" data-value="cancel">Cancel</button>' : '') +
+       (canRetry ? '<button class="btn btn-sm" data-dashboard-action="compute-job" data-id="' + attr(j.jobId) + '" data-value="retry">Retry</button>' : '') +
     '</div>' +
   '</div>';
 }
@@ -3014,7 +3042,7 @@ function showComputeJob(id){
     const created = j.createdAt ? fmtDate(j.createdAt) : '';
     const duration = j.startedAt && j.completedAt ? formatMs(new Date(j.completedAt) - new Date(j.startedAt)) : (j.startedAt ? 'running' : '--');
     let html = '<div class="card compute-detail-card">';
-    html += '<div class="compute-panel-head"><div><div class="section-title">Job Detail</div><div class="sub">' + esc(j.jobId) + '</div></div><button class="btn btn-sm btn-outline" onclick="$(\'computeJobDetail\').innerHTML=\'\'">Close</button></div>';
+    html += '<div class="compute-panel-head"><div><div class="section-title">Job Detail</div><div class="sub">' + esc(j.jobId) + '</div></div><button class="btn btn-sm btn-outline" data-dashboard-action="database" data-handler="clearComputeJobDetail">Close</button></div>';
 
     html += '<div class="job-meta-strip">';
     html += '<span class="badge ' + statusClass + '">' + esc(j.status || 'unknown') + '</span>';
@@ -3044,7 +3072,7 @@ function showComputeJob(id){
       html += '<div class="section-title">Result</div>';
       html += '<div class="detail-block">';
       html += renderExpandableValue(jobResult, { limit: 1200 });
-      html += '<button class="btn btn-sm btn-outline copy-btn" onclick="copyBlockText(this)">Copy</button>';
+      html += '<button class="btn btn-sm btn-outline copy-btn" data-dashboard-action="copy-block">Copy</button>';
       html += '</div>';
     } else if (j.errorMessage) {
       html += '<div class="section-title">Error</div>';
@@ -3083,7 +3111,7 @@ function showComputeJob(id){
         html += '</div>';
         if (a.content) {
           html += renderExpandableValue(a.content, { limit: 800 });
-          html += '<button class="btn btn-sm btn-outline copy-btn" onclick="copyBlockText(this)">Copy</button>';
+          html += '<button class="btn btn-sm btn-outline copy-btn" data-dashboard-action="copy-block">Copy</button>';
         } else {
           // Artifact bodies are not served over the API, so show where the
           // artifact actually lives instead of a bare dead end.
@@ -3133,6 +3161,11 @@ function showComputeJob(id){
   });
 }
 
+function clearComputeJobDetail(){
+  const detail = $('computeJobDetail');
+  if (detail) detail.innerHTML = '';
+}
+
 // Guards against a second in-flight request: each click mints a distinct
 // single-use token, so a double-click silently burned one.
 let computeEnrollmentPending = false;
@@ -3161,7 +3194,7 @@ function createComputeEnrollment(){
     result.innerHTML = '<div class="compute-token-warning">Token value is shown once. Store it only on the worker machine.</div>' +
       '<div class="compute-token-value" id="computeEnrollTokenValue">' + esc(d.token) + '</div>' +
       // Shown once and too long to hand-select reliably.
-      '<button class="btn btn-sm btn-outline" onclick="copyElementText(\'computeEnrollTokenValue\', this)">Copy token</button>' +
+      '<button class="btn btn-sm btn-outline" data-dashboard-action="copy-element" data-id="computeEnrollTokenValue">Copy token</button>' +
       '<div class="compute-command-list">' + Object.entries(commands).map(([name, command]) =>
         '<div><strong>' + esc(name) + '</strong><pre>' + esc(command) + '</pre></div>'
       ).join('') + '</div>' +
@@ -3234,6 +3267,8 @@ const PREDICT_STATUS_COLORS = {
 const PREDICT_CONFIDENCE_COLORS = {
   very_high: '#3fb950', high: '#58a6ff', medium: '#a371f7', low: '#f0883e', none: '#8b949e'
 };
+const PREDICT_STATUS_CLASS = Object.fromEntries(Object.keys(PREDICT_STATUS_COLORS).map(key => [key, 'predict-status-' + key]));
+const PREDICT_CONFIDENCE_CLASS = Object.fromEntries(Object.keys(PREDICT_CONFIDENCE_COLORS).map(key => [key, 'predict-confidence-' + key]));
 
 // Field names below are the canonical /api/predict/status contract documented
 // in docs/predict.md. Do not read undeclared fields.
@@ -3250,14 +3285,14 @@ function loadPredictStatus() {
       : '—';
     const s = d.last_analysis_summary;
 
-    let html = '<div style="display:flex;gap:16px;flex-wrap:wrap;font-size:.82rem;color:#8b949e">' +
-      '<span>Active: <strong style="color:#3fb950">' + (d.active || 0) + '</strong></span>' +
-      '<span>Terminal: <strong style="color:#8b949e">' + (d.terminal || 0) + '</strong></span>' +
-      '<span>Total retained: <strong style="color:#c9d1d9">' + (d.total || 0) + '</strong></span>' +
-      '<span>Detectors: <strong style="color:#c9d1d9">' + enabled + '/' + detectors.length + '</strong></span>' +
-      '<span>Last analysis: <strong style="color:#c9d1d9">' + lastAnalyzed + '</strong></span>' +
-      '<span>Scope: <strong style="color:#c9d1d9">' + scopeLabel + '</strong></span>' +
-      '<span>Retention: <strong style="color:#c9d1d9">' + (d.retention_days != null ? d.retention_days + 'd' : 'not configured') + '</strong></span>' +
+    let html = '<div class="predict-status">' +
+      '<span>Active: <strong class="predict-stat active">' + (d.active || 0) + '</strong></span>' +
+      '<span>Terminal: <strong class="predict-stat">' + (d.terminal || 0) + '</strong></span>' +
+      '<span>Total retained: <strong class="predict-stat">' + (d.total || 0) + '</strong></span>' +
+      '<span>Detectors: <strong class="predict-stat">' + enabled + '/' + detectors.length + '</strong></span>' +
+      '<span>Last analysis: <strong class="predict-stat">' + lastAnalyzed + '</strong></span>' +
+      '<span>Scope: <strong class="predict-stat">' + scopeLabel + '</strong></span>' +
+      '<span>Retention: <strong class="predict-stat">' + (d.retention_days != null ? d.retention_days + 'd' : 'not configured') + '</strong></span>' +
     '</div>';
 
     if (s) {
@@ -3266,10 +3301,10 @@ function loadPredictStatus() {
       const rejectedDetail = Object.keys(rejected).length
         ? Object.keys(rejected).map(function (k) { return esc(k) + '=' + rejected[k]; }).join(', ')
         : 'none';
-      html += '<div style="margin-top:6px;font-size:.78rem;color:#8b949e">' +
-        'Last run: considered <strong style="color:#c9d1d9">' + (s.candidates_considered || 0) + '</strong>, ' +
-        'admitted <strong style="color:#c9d1d9">' + (s.candidates_admitted || 0) + '</strong>, ' +
-        'rejected <strong style="color:#c9d1d9">' + rejectedTotal + '</strong> (' + rejectedDetail + ')' +
+      html += '<div class="predict-run-summary">' +
+        'Last run: considered <strong class="predict-stat">' + (s.candidates_considered || 0) + '</strong>, ' +
+        'admitted <strong class="predict-stat">' + (s.candidates_admitted || 0) + '</strong>, ' +
+        'rejected <strong class="predict-stat">' + rejectedTotal + '</strong> (' + rejectedDetail + ')' +
         ' · created ' + (s.created || 0) +
         ' · refreshed ' + (s.refreshed || 0) +
         ' · reactivated ' + (s.reactivated || 0) +
@@ -3280,7 +3315,7 @@ function loadPredictStatus() {
 
     if (d.last_purge) {
       const p = d.last_purge;
-      html += '<div style="margin-top:4px;font-size:.75rem;color:#8b949e">Last purge: ' +
+      html += '<div class="predict-purge-summary">Last purge: ' +
         (p.deleted_predictions || 0) + ' predictions, ' + (p.deleted_evidence || 0) + ' evidence, ' +
         (p.preserved || 0) + ' preserved by policy</div>';
     }
@@ -3311,30 +3346,26 @@ function loadPredict() {
     }
     list.innerHTML = items.map(p => {
       const typeLabel = PREDICT_TYPE_LABELS[p.type] || p.type;
-      const statusColor = PREDICT_STATUS_COLORS[p.status] || '#8b949e';
-      const confColor = PREDICT_CONFIDENCE_COLORS[p.confidence] || '#8b949e';
+      const statusClass = PREDICT_STATUS_CLASS[p.status] || 'predict-status-unknown';
+      const confidenceClass = PREDICT_CONFIDENCE_CLASS[p.confidence] || 'predict-confidence-none';
       const pct = Math.round((p.probability || 0) * 100);
-      const progressWidth = Math.min(100, Math.max(5, pct));
-      return '<div class="card" style="margin-bottom:10px;padding:12px;cursor:pointer" onclick="showPredictDetail(\'' + esc(p.id) + '\')">' +
-        '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">' +
-          '<div style="flex:1">' +
-            '<div style="font-weight:600;color:#c9d1d9">' + esc(p.subject || p.type) + '</div>' +
-            '<div style="color:#8b949e;font-size:.78rem;margin-top:4px;line-height:1.5">' + esc(p.explanation || '').substring(0, 200) + (p.explanation && p.explanation.length > 200 ? '...' : '') + '</div>' +
+      return '<div class="card predict-card" data-dashboard-action="predict" data-handler="showPredictDetail" data-id="' + attr(p.id) + '">' +
+        '<div class="predict-head">' +
+          '<div class="predict-subject">' + esc(p.subject || p.type) +
+            '<div class="predict-explanation">' + esc(p.explanation || '').substring(0, 200) + (p.explanation && p.explanation.length > 200 ? '...' : '') + '</div>' +
           '</div>' +
-          '<div style="text-align:right;min-width:90px">' +
-            '<div style="font-size:.78rem;color:#8b949e">' + typeLabel + '</div>' +
-            '<div style="font-size:1.1rem;font-weight:700;color:' + confColor + '">' + pct + '%</div>' +
+          '<div class="predict-type">' +
+            '<div>' + esc(typeLabel) + '</div>' +
+            '<div class="predict-probability ' + confidenceClass + '">' + pct + '%</div>' +
           '</div>' +
         '</div>' +
-        '<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">' +
-          '<span class="badge" style="border-color:' + statusColor + '">' + esc(p.status) + '</span>' +
-          '<span class="badge" style="border-color:' + confColor + '">confidence=' + esc(p.confidence) + '</span>' +
+        '<div class="predict-badges">' +
+          '<span class="badge ' + statusClass + '">' + esc(p.status) + '</span>' +
+          '<span class="badge ' + confidenceClass + '">confidence=' + esc(p.confidence) + '</span>' +
           '<span class="badge">observations=' + esc(p.observation_count || 0) + '</span>' +
           (p.project ? '<span class="badge">' + esc(p.project) + '</span>' : '') +
-          '<div style="flex:1"></div>' +
-          '<div style="width:80px;height:6px;background:#21262d;border-radius:3px;overflow:hidden">' +
-            '<div style="height:100%;width:' + progressWidth + '%;background:' + confColor + ';border-radius:3px"></div>' +
-          '</div>' +
+          '<div class="predict-spacer"></div>' +
+          '<progress class="predict-progress-fill ' + confidenceClass + '" value="' + pct + '" max="100" aria-label="Prediction probability">' + pct + '%</progress>' +
         '</div>' +
       '</div>';
     }).join('');
@@ -3357,43 +3388,43 @@ function showPredictDetail(id) {
     const typeLabel = PREDICT_TYPE_LABELS[p.type] || p.type;
     const pct = Math.round((p.probability || 0) * 100);
     const breakdown = p.score_breakdown || {};
-    detail.innerHTML = '<div class="card" style="padding:16px;margin-bottom:12px">' +
-      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">' +
+    detail.innerHTML = '<div class="card predict-detail-card">' +
+      '<div class="predict-detail-head">' +
         '<div>' +
-          '<div style="font-size:.78rem;color:#8b949e">' + typeLabel + ' &middot; ' + esc(p.id) + '</div>' +
-          '<div style="font-size:1.1rem;font-weight:700;color:#c9d1d9;margin-top:4px">' + esc(p.subject || p.type) + '</div>' +
+          '<div class="predict-detail-type">' + esc(typeLabel) + ' &middot; ' + esc(p.id) + '</div>' +
+          '<div class="predict-detail-subject">' + esc(p.subject || p.type) + '</div>' +
         '</div>' +
-        '<div style="text-align:right">' +
-          '<div style="font-size:1.5rem;font-weight:700;color:#58a6ff">' + pct + '%</div>' +
-          '<div style="font-size:.78rem;color:#8b949e">' + esc(p.confidence) + ' confidence</div>' +
+        '<div class="predict-detail-probability">' +
+          '<div>' + pct + '%</div>' +
+          '<div class="predict-detail-confidence">' + esc(p.confidence) + ' confidence</div>' +
         '</div>' +
       '</div>' +
-      '<div style="color:#c9d1d9;line-height:1.6;margin-bottom:12px">' + esc(p.explanation || 'No explanation') + '</div>' +
-      '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">' +
-        '<span class="badge" style="border-color:' + (PREDICT_STATUS_COLORS[p.status] || '#8b949e') + '">' + esc(p.status) + '</span>' +
+      '<div class="predict-detail-explanation">' + esc(p.explanation || 'No explanation') + '</div>' +
+      '<div class="predict-detail-badges">' +
+        '<span class="badge ' + (PREDICT_STATUS_CLASS[p.status] || 'predict-status-unknown') + '">' + esc(p.status) + '</span>' +
         '<span class="badge">observations=' + esc(p.observation_count || 0) + '</span>' +
         (p.project ? '<span class="badge">' + esc(p.project) + '</span>' : '') +
         (p.session_id ? '<span class="badge">session=' + esc(p.session_id.substring(0, 12)) + '</span>' : '') +
         '<span class="badge">rule=' + esc(p.rule_version || 'none') + '</span>' +
       '</div>' +
-      (Object.keys(breakdown).length ? '<div style="margin-bottom:12px"><div style="font-size:.78rem;color:#8b949e;margin-bottom:6px">Score Breakdown</div><pre style="background:#161b22;padding:8px;border-radius:4px;font-size:.78rem;color:#c9d1d9;overflow-x:auto;white-space:pre-wrap">' + esc(JSON.stringify(breakdown, null, 2)) + '</pre></div>' : '') +
-      (evidence.length ? '<div style="margin-bottom:12px"><div style="font-size:.78rem;color:#8b949e;margin-bottom:6px">Evidence (' + evidence.length + ')</div>' + evidence.map(e =>
-        '<div style="padding:6px 8px;border-left:3px solid #30363d;margin-bottom:4px;font-size:.78rem">' +
-          '<div><span class="badge">' + esc(e.source_type) + '</span> ' + (e.source_id ? '<code>' + esc(e.source_id) + '</code>' : '') + (e.timestamp ? ' <span style="color:#8b949e">' + esc(fmtTime(e.timestamp)) + '</span>' : '') + '</div>' +
-          '<div style="color:#c9d1d9;margin-top:2px">' + esc(e.summary || '') + '</div>' +
+      (Object.keys(breakdown).length ? '<div class="predict-section"><div class="predict-section-title">Score Breakdown</div><pre class="predict-pre">' + esc(JSON.stringify(breakdown, null, 2)) + '</pre></div>' : '') +
+      (evidence.length ? '<div class="predict-section"><div class="predict-section-title">Evidence (' + evidence.length + ')</div>' + evidence.map(e =>
+        '<div class="predict-evidence">' +
+          '<div><span class="badge">' + esc(e.source_type) + '</span> ' + (e.source_id ? '<code>' + esc(e.source_id) + '</code>' : '') + (e.timestamp ? ' <span class="summary-muted">' + esc(fmtTime(e.timestamp)) + '</span>' : '') + '</div>' +
+          '<div class="predict-summary">' + esc(e.summary || '') + '</div>' +
         '</div>'
       ).join('') : '</div>') +
-      (feedback.length ? '<div style="margin-bottom:12px"><div style="font-size:.78rem;color:#8b949e;margin-bottom:6px">Feedback (' + feedback.length + ')</div>' + feedback.map(f =>
-        '<div style="padding:4px 0;font-size:.78rem"><span class="badge" style="border-color:' + (f.feedback === 'useful' ? '#3fb950' : f.feedback === 'not_useful' ? '#f85149' : '#f0883e') + '">' + esc(f.feedback) + '</span> ' + (f.created_at ? '<span style="color:#8b949e">' + esc(fmtTime(f.created_at)) + '</span>' : '') + (f.context ? ' <span style="color:#8b949e">' + esc(f.context) + '</span>' : '') + '</div>'
+      (feedback.length ? '<div class="predict-section"><div class="predict-section-title">Feedback (' + feedback.length + ')</div>' + feedback.map(f =>
+        '<div class="predict-feedback"><span class="badge predict-feedback-' + (f.feedback === 'useful' ? 'useful' : f.feedback === 'not_useful' ? 'not-useful' : 'other') + '">' + esc(f.feedback) + '</span> ' + (f.created_at ? '<span class="summary-muted">' + esc(fmtTime(f.created_at)) + '</span>' : '') + (f.context ? ' <span class="summary-muted">' + esc(f.context) + '</span>' : '') + '</div>'
       ).join('') : '</div>') +
-      '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
-        '<button class="btn btn-sm" onclick="predictFeedback(\'' + esc(p.id) + '\',\'useful\')">Useful</button>' +
-        '<button class="btn btn-sm" onclick="predictFeedback(\'' + esc(p.id) + '\',\'not_useful\')">Not Useful</button>' +
-        '<button class="btn btn-sm" onclick="predictFeedback(\'' + esc(p.id) + '\',\'acted_on\')">Acted On</button>' +
-        '<button class="btn btn-sm" onclick="predictOutcome(\'' + esc(p.id) + '\',\'confirmed\')">Confirmed</button>' +
-        '<button class="btn btn-sm" onclick="predictOutcome(\'' + esc(p.id) + '\',\'did_not_occur\')">Did Not Occur</button>' +
-        '<button class="btn btn-sm btn-outline" onclick="predictDismiss(\'' + esc(p.id) + '\')">Dismiss</button>' +
-        '<button class="btn btn-sm btn-outline" onclick="predictBack()">Back to list</button>' +
+      '<div class="predict-actions">' +
+        '<button class="btn btn-sm" data-dashboard-action="predict" data-handler="predictFeedback" data-id="' + attr(p.id) + '" data-value="useful">Useful</button>' +
+        '<button class="btn btn-sm" data-dashboard-action="predict" data-handler="predictFeedback" data-id="' + attr(p.id) + '" data-value="not_useful">Not Useful</button>' +
+        '<button class="btn btn-sm" data-dashboard-action="predict" data-handler="predictFeedback" data-id="' + attr(p.id) + '" data-value="acted_on">Acted On</button>' +
+        '<button class="btn btn-sm" data-dashboard-action="predict" data-handler="predictOutcome" data-id="' + attr(p.id) + '" data-value="confirmed">Confirmed</button>' +
+        '<button class="btn btn-sm" data-dashboard-action="predict" data-handler="predictOutcome" data-id="' + attr(p.id) + '" data-value="did_not_occur">Did Not Occur</button>' +
+        '<button class="btn btn-sm btn-outline" data-dashboard-action="predict" data-handler="predictDismiss" data-id="' + attr(p.id) + '">Dismiss</button>' +
+        '<button class="btn btn-sm btn-outline" data-dashboard-action="predict" data-handler="predictBack">Back to list</button>' +
       '</div>' +
     '</div>';
   }).catch(e => {
@@ -3490,13 +3521,13 @@ function runPredictAnalyze() {
           'superseded ' + (d.superseded || 0),
           'expired ' + (d.expired || 0)
         ];
-        let html = '<div class="card" style="padding:10px;font-size:.8rem">' +
-          '<div><strong style="color:#c9d1d9">Analysis complete</strong> ' +
-          '<span style="color:#8b949e">(' + esc(d.scope ? d.scope.mode : '') +
+        let html = '<div class="card compact-card compact-result">' +
+          '<div><strong>Analysis complete</strong> ' +
+          '<span class="summary-muted">(' + esc(d.scope ? d.scope.mode : '') +
           (d.scope && d.scope.project ? ':' + esc(d.scope.project) : '') + ', ' + (d.duration_ms || 0) + 'ms)</span></div>' +
-          '<div style="color:#8b949e;margin-top:4px">' + parts.join(' · ') + '</div>';
+          '<div class="summary-muted compact-label">' + parts.join(' · ') + '</div>';
         if (rejectedTotal > 0) {
-          html += '<div style="color:#8b949e;margin-top:4px">Rejected ' + rejectedTotal + ': ' +
+          html += '<div class="summary-muted compact-label">Rejected ' + rejectedTotal + ': ' +
             Object.keys(rejected).map(function (k) { return esc(k) + '=' + rejected[k]; }).join(', ') + '</div>';
         }
         html += '</div>';
@@ -3520,14 +3551,14 @@ function runPredictPurgePreview() {
     if (d.ok === false) { out.innerHTML = '<div class="agent-err">' + esc(d.error || 'Preview failed') + '</div>'; return; }
     const w = d.would_delete || {};
     const preserved = d.preserved || {};
-    out.innerHTML = '<div class="card" style="padding:10px;font-size:.8rem">' +
-      '<div><strong style="color:#c9d1d9">Purge preview</strong> ' +
-      '<span style="color:#8b949e">(retention ' + esc(String(d.retention_days)) + 'd, cutoff ' + esc(String(d.cutoff)) + ')</span></div>' +
-      '<div style="color:#8b949e;margin-top:4px">Would delete: ' + (w.predictions || 0) + ' predictions, ' +
+    out.innerHTML = '<div class="card compact-card compact-result">' +
+      '<div><strong>Purge preview</strong> ' +
+      '<span class="summary-muted">(retention ' + esc(String(d.retention_days)) + 'd, cutoff ' + esc(String(d.cutoff)) + ')</span></div>' +
+      '<div class="summary-muted compact-label">Would delete: ' + (w.predictions || 0) + ' predictions, ' +
       (w.prediction_evidence || 0) + ' evidence, ' + (w.prediction_audit || 0) + ' audit rows. ' +
       'Feedback rows are always retained.</div>' +
-      '<div style="color:#8b949e;margin-top:4px">Preserved by policy: ' + (preserved.count || 0) + '</div>' +
-      '<div style="color:#8b949e;margin-top:4px">Nothing was modified. Run purge from the Predict tool with confirm=true to execute.</div>' +
+      '<div class="summary-muted compact-label">Preserved by policy: ' + (preserved.count || 0) + '</div>' +
+      '<div class="summary-muted compact-label">Nothing was modified. Run purge from the Predict tool with confirm=true to execute.</div>' +
     '</div>';
   }).catch(e => {
     if (out) out.innerHTML = '<div class="agent-err">Purge preview failed</div>';
@@ -3551,23 +3582,23 @@ function loadApprovals(){
       const pending = a.status === 'pending';
       const requested = a.requested_at ? fmtDate(a.requested_at) : '';
       const completed = a.completed_at ? '<div><span class="s-label">Completed:</span> ' + esc(fmtDate(a.completed_at)) + '</div>' : '';
-      const result = a.result_preview ? '<pre style="white-space:pre-wrap;margin-top:8px;max-height:140px;overflow:auto">' + esc(a.result_preview) + '</pre>' : '';
-      return '<div class="approval-entry" style="padding:12px 0;border-bottom:1px solid #21262d">' +
-        '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">' +
+      const result = a.result_preview ? '<pre class="approval-result">' + esc(a.result_preview) + '</pre>' : '';
+      return '<div class="approval-entry">' +
+        '<div class="approval-head">' +
           '<div>' +
-            '<div style="font-weight:700;color:#c9d1d9">' + esc(a.tool) + '</div>' +
-            '<div style="font-size:.78rem;color:#8b949e;margin-top:4px">' +
+            '<div class="approval-tool">' + esc(a.tool) + '</div>' +
+            '<div class="approval-meta">' +
               '<span class="badge ' + riskClass + '">' + esc(a.risk || 'low') + '</span> ' +
               '<span class="badge">' + esc(a.source || 'unknown') + '</span> ' +
               '<span class="badge">' + esc(a.status || 'pending') + '</span>' +
             '</div>' +
           '</div>' +
-          (pending ? '<div style="display:flex;gap:8px">' +
-            '<button class="btn btn-sm" onclick="approveRequest(\'' + esc(a.id) + '\')"><i class="fas fa-check"></i> Approve</button>' +
-            '<button class="btn btn-sm btn-outline" onclick="rejectRequest(\'' + esc(a.id) + '\')"><i class="fas fa-times"></i> Reject</button>' +
+          (pending ? '<div class="approval-actions">' +
+            '<button class="btn btn-sm" data-dashboard-action="callback" data-handler="approveRequest" data-id="' + attr(a.id) + '"><i class="fas fa-check"></i> Approve</button>' +
+            '<button class="btn btn-sm btn-outline" data-dashboard-action="callback" data-handler="rejectRequest" data-id="' + attr(a.id) + '"><i class="fas fa-times"></i> Reject</button>' +
           '</div>' : '') +
         '</div>' +
-        '<div style="font-size:.78rem;color:#8b949e;margin-top:8px;line-height:1.5">' +
+        '<div class="approval-notes">' +
           '<div><span class="s-label">Requested:</span> ' + esc(requested) + '</div>' +
           '<div><span class="s-label">Reason:</span> ' + esc(a.reason || '') + '</div>' +
           completed +
@@ -3582,12 +3613,12 @@ function loadApprovals(){
           // attribute or JS-string context — jsArg()/attr() are the helpers for
           // those. An id containing a quote would otherwise break out of the
           // onclick handler.
-          ? '<div style="margin-top:8px">' +
-              '<button class="btn btn-sm btn-outline" onclick="loadApprovalPreview(' + jsArg(a.id) + ')">' +
+          ? '<div class="approval-preview">' +
+              '<button class="btn btn-sm btn-outline" data-dashboard-action="callback" data-handler="loadApprovalPreview" data-id="' + attr(a.id) + '">' +
                 '<i class="fas fa-eye"></i> Show arguments</button>' +
-              '<pre id="approval-args-' + attr(a.id) + '" style="white-space:pre-wrap;margin-top:8px;max-height:220px;overflow:auto;display:none"></pre>' +
+              '<pre id="approval-args-' + attr(a.id) + '" class="approval-args"></pre>' +
             '</div>'
-          : '<pre style="white-space:pre-wrap;margin-top:8px;max-height:220px;overflow:auto">' + esc(a.args_preview || '{}') + '</pre>') +
+          : '<pre class="approval-args">' + esc(a.args_preview || '{}') + '</pre>') +
         result +
       '</div>';
     }).join('');
@@ -3654,19 +3685,18 @@ function loadReconciliations(){
       var riskClass = r.risk === 'critical' ? 'danger' : r.risk === 'high' ? 'warn' : '';
       var buttons = d.can_resolve
         ? RECONCILIATION_DECISIONS.map(function(dec){
-            return '<button class="btn btn-sm ' + dec.style + '" style="margin:0 6px 6px 0" ' +
-              'onclick="resolveReconciliation(' + jsArg(r.task_id) + ',' + jsArg(dec.id) + ')" ' +
+            return '<button class="btn btn-sm reconciliation-decision ' + dec.style + '" data-dashboard-action="callback" data-handler="resolveReconciliation" data-id="' + attr(r.task_id) + '" data-value="' + attr(dec.id) + '" ' +
               'title="' + attr(dec.meaning) + '">' +
               '<i class="fas ' + dec.icon + '"></i> ' + esc(dec.label) + '</button>';
           }).join('')
-        : '<div style="color:#f85149;font-size:.8rem">Resolving requires an authenticated principal. ' +
+        : '<div class="reconciliation-error">Resolving requires an authenticated principal. ' +
           'Configure dashboard authentication — an unattributed reconciliation is refused by design.</div>';
 
-      return '<div class="approval-entry" style="padding:12px 0;border-bottom:1px solid #21262d">' +
-        '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">' +
+      return '<div class="approval-entry">' +
+        '<div class="approval-head">' +
           '<div>' +
-            '<div style="font-weight:700;color:#c9d1d9">' + esc(r.tool_name) + '</div>' +
-            '<div style="font-size:.78rem;color:#8b949e;margin-top:4px">' +
+            '<div class="approval-tool">' + esc(r.tool_name) + '</div>' +
+            '<div class="approval-meta">' +
               '<span class="badge ' + riskClass + '">' + esc(r.risk || 'unknown') + '</span> ' +
               '<span class="badge">task ' + esc(r.task_id) + '</span> ' +
               '<span class="badge">step ' + esc(r.step_id) + '</span> ' +
@@ -3674,20 +3704,20 @@ function loadReconciliations(){
             '</div>' +
           '</div>' +
         '</div>' +
-        '<div style="font-size:.78rem;color:#8b949e;margin-top:8px;line-height:1.5">' +
+        '<div class="approval-notes">' +
           '<div><span class="s-label">Authorized by:</span> ' + esc(r.approver_identity || '(unattributed)') + '</div>' +
           '<div><span class="s-label">Requested:</span> ' + esc(r.requested_at ? fmtDate(r.requested_at) : '') + '</div>' +
           '<div><span class="s-label">Became ambiguous:</span> ' + esc(r.updated_at ? fmtDate(r.updated_at) : '') + '</div>' +
           '<div><span class="s-label">Argument digest:</span> <code>' + esc(r.args_digest || '') + '</code></div>' +
         '</div>' +
         (r.args_preview_available
-          ? '<div style="margin-top:8px">' +
-              '<button class="btn btn-sm btn-outline" onclick="loadApprovalPreview(' + jsArg(r.approval_id) + ')">' +
+          ? '<div class="approval-preview">' +
+              '<button class="btn btn-sm btn-outline" data-dashboard-action="callback" data-handler="loadApprovalPreview" data-id="' + attr(r.approval_id) + '">' +
                 '<i class="fas fa-eye"></i> Show arguments</button>' +
-              '<pre id="approval-args-' + attr(r.approval_id) + '" style="white-space:pre-wrap;margin-top:8px;max-height:220px;overflow:auto;display:none"></pre>' +
+              '<pre id="approval-args-' + attr(r.approval_id) + '" class="approval-args"></pre>' +
             '</div>'
-          : '<div style="margin-top:8px;font-size:.78rem;color:#8b949e">Arguments are no longer available; only the digest above identifies this action.</div>') +
-        '<div style="margin-top:12px">' + buttons + '</div>' +
+          : '<div class="approval-preview summary-muted">Arguments are no longer available; only the digest above identifies this action.</div>') +
+        '<div class="reconciliation-actions">' + buttons + '</div>' +
       '</div>';
     }).join('');
   }).catch(e => apiError('/api/reconciliations', e, 0));
@@ -3721,7 +3751,7 @@ function resolveReconciliation(taskId, decision){
 function loadApprovalPreview(id){
   var target = document.getElementById('approval-args-' + id);
   if (!target) return;
-  target.style.display = 'block';
+  target.classList.add('is-visible');
   target.textContent = 'Loading…';
   authFetch('/api/approvals/' + encodeURIComponent(id) + '/preview')
     .then(r=>r.json())
@@ -3853,30 +3883,30 @@ function loadDbStats() {
 function renderDbSchema(schema) {
   let html = '';
   for (const [table, info] of Object.entries(schema)) {
-    html += '<div style="margin-bottom:16px">';
-    html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">';
-    html += '<i class="fas fa-table" style="color:#58a6ff"></i>';
-    html += '<span style="font-weight:600;color:#c9d1d9;font-family:var(--font)">' + esc(table) + '</span>';
-    html += '<span style="color:#8b949e;font-size:.8rem">(' + info.rowCount + ' rows)</span>';
+    html += '<div class="database-table-section">';
+    html += '<div class="database-table-heading">';
+    html += '<i class="fas fa-table database-icon"></i>';
+    html += '<span class="database-name">' + esc(table) + '</span>';
+    html += '<span class="database-row-count">(' + info.rowCount + ' rows)</span>';
     html += '</div>';
-    html += '<div style="padding-left:24px">';
+    html += '<div class="database-columns">';
     for (const col of info.columns) {
-      const pk = col.pk ? '<span style="color:#ffa657;font-size:.75rem;margin-left:4px">PK</span>' : '';
-      const notnull = col.notnull ? '<span style="color:#f85149;font-size:.75rem;margin-left:4px">NOT NULL</span>' : '';
-      html += '<div style="display:flex;align-items:center;gap:8px;padding:2px 0;font-size:.85rem">';
-      html += '<i class="fas fa-columns" style="color:#6e7681;font-size:.75rem"></i>';
-      html += '<span style="color:#c9d1d9;font-family:var(--font)">' + esc(col.name) + '</span>';
-      html += '<span style="color:#8b949e;font-size:.8rem">' + esc(col.type || 'TEXT') + '</span>';
+      const pk = col.pk ? '<span class="database-flag database-primary">PK</span>' : '';
+      const notnull = col.notnull ? '<span class="database-flag database-notnull">NOT NULL</span>' : '';
+      html += '<div class="database-column">';
+      html += '<i class="fas fa-columns database-column-icon"></i>';
+      html += '<span class="database-column-name">' + esc(col.name) + '</span>';
+      html += '<span class="database-column-type">' + esc(col.type || 'TEXT') + '</span>';
       html += pk + notnull;
       html += '</div>';
     }
     if (info.indexes.length > 0) {
-      html += '<div style="margin-top:6px;padding-top:6px;border-top:1px solid #21262d">';
+      html += '<div class="database-indexes">';
       for (const idx of info.indexes) {
-        html += '<div style="display:flex;align-items:center;gap:8px;padding:2px 0;font-size:.8rem">';
-        html += '<i class="fas fa-key" style="color:#3fb950;font-size:.7rem"></i>';
-        html += '<span style="color:#8b949e">' + esc(idx.name) + '</span>';
-        if (idx.unique) html += '<span style="color:#3fb950;font-size:.7rem">UNIQUE</span>';
+        html += '<div class="database-index">';
+        html += '<i class="fas fa-key database-index-icon"></i>';
+        html += '<span class="database-index-name">' + esc(idx.name) + '</span>';
+        if (idx.unique) html += '<span class="database-unique">UNIQUE</span>';
         html += '</div>';
       }
       html += '</div>';
@@ -3902,29 +3932,29 @@ function runQuery() {
         return;
       }
       const cols = Object.keys(d.rows[0]);
-      let html = '<div style="color:#8b949e;font-size:.8rem;margin-bottom:8px">' + d.count + ' rows (' + d.duration + 'ms)</div>';
-      html += '<table style="width:100%;border-collapse:collapse;font-size:.85rem">';
+      let html = '<div class="database-result-count">' + d.count + ' rows (' + d.duration + 'ms)</div>';
+      html += '<table class="database-results-table">';
       html += '<thead><tr>';
       for (const col of cols) {
-        html += '<th style="text-align:left;padding:6px 8px;border-bottom:1px solid #30363d;color:#58a6ff;font-family:var(--font)">' + esc(col) + '</th>';
+        html += '<th>' + esc(col) + '</th>';
       }
       html += '</tr></thead><tbody>';
       for (const row of d.rows) {
         html += '<tr>';
         for (const col of cols) {
           const val = row[col];
-          const display = val === null ? '<span style="color:#6e7681">NULL</span>' : esc(String(val));
-          html += '<td style="padding:6px 8px;border-bottom:1px solid #21262d;color:#c9d1d9;font-family:var(--font);max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + display + '</td>';
+          const display = val === null ? '<span class="database-null">NULL</span>' : esc(String(val));
+          html += '<td>' + display + '</td>';
         }
         html += '</tr>';
       }
       html += '</tbody></table>';
       $('dbQueryResult').innerHTML = html;
     } else {
-      $('dbQueryResult').innerHTML = '<div style="color:#f85149;padding:8px;background:#4a2d2d;border-radius:4px">' + esc(d.error) + '</div>';
+      $('dbQueryResult').innerHTML = '<div class="database-error">' + esc(d.error) + '</div>';
     }
   }).catch(e => {
-    $('dbQueryResult').innerHTML = '<div style="color:#f85149;padding:8px;background:#4a2d2d;border-radius:4px">' + esc(e.message) + '</div>';
+    $('dbQueryResult').innerHTML = '<div class="database-error">' + esc(e.message) + '</div>';
   });
 }
 
@@ -3942,37 +3972,37 @@ function runDbSearch() {
       let html = '';
       for (const table of tables) {
         const rows = d.results[table];
-        html += '<div style="margin-bottom:12px">';
-        html += '<div style="font-weight:600;color:#58a6ff;margin-bottom:6px">' + esc(table) + ' (' + rows.length + ')</div>';
+        html += '<div class="database-search-section">';
+        html += '<div class="database-search-heading">' + esc(table) + ' (' + rows.length + ')</div>';
         for (const row of rows.slice(0, 5)) {
-          html += '<div style="padding:6px 8px;background:#0d1117;border-radius:4px;margin-bottom:4px;font-size:.8rem;color:#c9d1d9;font-family:var(--font)">';
+          html += '<div class="database-search-row">';
           html += esc(JSON.stringify(row).substring(0, 200));
           if (JSON.stringify(row).length > 200) html += '...';
           html += '</div>';
         }
         if (rows.length > 5) {
-          html += '<div style="color:#8b949e;font-size:.8rem;padding-left:8px">... and ' + (rows.length - 5) + ' more</div>';
+          html += '<div class="database-search-more">... and ' + (rows.length - 5) + ' more</div>';
         }
         html += '</div>';
       }
       $('dbSearchResult').innerHTML = html;
     } else {
-      $('dbSearchResult').innerHTML = '<div style="color:#f85149">' + esc(d.error) + '</div>';
+      $('dbSearchResult').innerHTML = '<div class="agent-err">' + esc(d.error) + '</div>';
     }
   }).catch(e => {
-    $('dbSearchResult').innerHTML = '<div style="color:#f85149">' + esc(e.message) + '</div>';
+    $('dbSearchResult').innerHTML = '<div class="agent-err">' + esc(e.message) + '</div>';
   });
 }
 
 function renderDbMigrations(d) {
-  let html = '<div style="margin-bottom:8px;color:#8b949e">Current version: <span style="color:#58a6ff;font-weight:600">' + d.currentVersion + '</span></div>';
+  let html = '<div class="database-current-version">Current version: <span class="database-version">' + d.currentVersion + '</span></div>';
   if (d.migrations.length === 0) {
     html += '<div class="empty">No migrations found</div>';
   } else {
     for (const m of d.migrations) {
-      const status = m.applied ? '<span style="color:#3fb950"><i class="fas fa-check"></i> Applied</span>' : '<span style="color:#d29922"><i class="fas fa-clock"></i> Pending</span>';
-      html += '<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid #21262d">';
-      html += '<span style="color:#c9d1d9;font-family:var(--font)">' + esc(m.file) + '</span>';
+      const status = m.applied ? '<span class="database-applied"><i class="fas fa-check"></i> Applied</span>' : '<span class="database-pending"><i class="fas fa-clock"></i> Pending</span>';
+      html += '<div class="database-migration">';
+      html += '<span class="database-migration-file">' + esc(m.file) + '</span>';
       html += status;
       html += '</div>';
     }
@@ -4056,7 +4086,7 @@ function renderTools(){
       const hasStats = stats && stats.count > 0;
       const stateLabel = getToolStateLabel(t);
       const riskClass = getRiskBadgeClass(t.risk);
-      html += '<div class="tool-card" onclick="showToolDetail(\'' + esc(t.name) + '\')">';
+      html += '<div class="tool-card" data-dashboard-action="callback" data-handler="showToolDetail" data-id="' + attr(t.name) + '">';
       html += '<div class="tool-card-name">' + esc(t.name) + '</div>';
       html += '<div class="tool-card-desc">' + esc(t.description) + '</div>';
       html += '<div class="tool-card-badges">';
@@ -4066,13 +4096,13 @@ function renderTools(){
       html += '</div>';
       if (hasStats) {
         const rate = Math.round(stats.ok / stats.count * 100);
-        const rateColor = rate >= 90 ? '#3fb950' : rate >= 70 ? '#d29922' : '#f85149';
+        const rateClass = rate >= 90 ? 'tool-rate-good' : rate >= 70 ? 'tool-rate-warn' : 'tool-rate-danger';
         html += '<div class="tool-card-stats">';
         html += '<span class="stat-item"><i class="fas fa-play"></i> ' + stats.count + '</span>';
         html += '<span class="stat-item"><i class="fas fa-check"></i> ' + stats.ok + '</span>';
         html += '<span class="stat-item"><i class="fas fa-times"></i> ' + stats.fail + '</span>';
         html += '<span class="stat-item"><i class="fas fa-clock"></i> ' + stats.avgMs + 'ms</span>';
-        html += '<span class="stat-item" style="color:' + rateColor + '"><i class="fas fa-chart-line"></i> ' + rate + '%</span>';
+        html += '<span class="stat-item ' + rateClass + '"><i class="fas fa-chart-line"></i> ' + rate + '%</span>';
         html += '</div>';
       }
       html += '</div>';
@@ -4082,21 +4112,21 @@ function renderTools(){
   
   // Add Evolved Procedures section
   if (allProcedures.length > 0) {
-    html += '<div class="tool-category-header" style="margin-top:24px">';
+    html += '<div class="tool-category-header tool-category-evolved">';
     html += '<i class="fas fa-magic"></i>';
     html += '<span class="cat-name">Evolved Procedures</span>';
     html += '<span class="cat-count">' + allProcedures.length + '</span>';
     html += '</div>';
     html += '<div class="tool-grid">';
     for (const p of allProcedures) {
-      html += '<div class="tool-card" onclick="showProcedureDetail(\'' + esc(p.name) + '\')">';
+      html += '<div class="tool-card" data-dashboard-action="callback" data-handler="showProcedureDetail" data-id="' + attr(p.name) + '">';
       html += '<div class="tool-card-name">' + esc(p.name) + '</div>';
       html += '<div class="tool-card-desc">' + esc(p.description) + '</div>';
-      html += '<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">';
-      html += '<span style="font-size:.68rem;color:#bc8cff;border:1px solid #30363d;border-radius:4px;padding:2px 6px"><i class="fas fa-magic"></i> evolved</span>';
-      html += '<span style="font-size:.68rem;color:#8b949e;border:1px solid #30363d;border-radius:4px;padding:2px 6px">' + p.steps.length + ' steps</span>';
+      html += '<div class="procedure-meta">';
+      html += '<span class="procedure-pill evolved"><i class="fas fa-magic"></i> evolved</span>';
+      html += '<span class="procedure-pill steps">' + p.steps.length + ' steps</span>';
       if (p.useCount > 0) {
-        html += '<span style="font-size:.68rem;color:#3fb950;border:1px solid #30363d;border-radius:4px;padding:2px 6px">used ' + p.useCount + 'x</span>';
+        html += '<span class="procedure-pill used">used ' + p.useCount + 'x</span>';
       }
       html += '</div>';
       html += '</div>';
@@ -4115,34 +4145,34 @@ function showToolDetail(name){
   const catInfo = catData || { icon: 'fa-wrench' };
   const stats = toolStats[name];
   const hasStats = stats && stats.count > 0;
-  let html = '<div class="tool-detail-overlay active" onclick="if(event.target===this)this.classList.remove(\'active\')">';
+  let html = '<div class="tool-detail-overlay active">';
   html += '<div class="tool-detail">';
-  html += '<h3><i class="fas ' + catInfo.icon + '" style="margin-right:8px"></i>' + esc(t.name) + '</h3>';
+  html += '<h3><i class="fas ' + catInfo.icon + ' tool-detail-icon"></i>' + esc(t.name) + '</h3>';
   html += '<div class="td-desc">' + esc(t.description) + '</div>';
-  html += '<div class="td-section"><div class="td-label">Category</div><div style="color:#58a6ff">' + esc(cat) + '</div></div>';
-  html += '<div class="td-section"><div class="td-label">Policy</div><div style="color:' + (t.enabled === false ? '#f85149' : '#3fb950') + '">' + esc(getToolStateLabel(t)) + ' - risk: ' + esc(t.risk || 'low') + '</div><div style="color:#8b949e;margin-top:4px">' + esc(t.policy || '') + '</div></div>';
-  html += '<div class="td-section"><div class="td-label">Approval</div><div style="color:' + (t.approval_required ? '#d29922' : '#8b949e') + '">' + (t.approval_required ? 'Required before execution' : 'Not required') + '</div><div style="color:#8b949e;margin-top:4px">' + esc(t.approval || '') + '</div></div>';
+  html += '<div class="td-section"><div class="td-label">Category</div><div class="tool-detail-category">' + esc(cat) + '</div></div>';
+  html += '<div class="td-section"><div class="td-label">Policy</div><div class="tool-detail-state ' + (t.enabled === false ? 'disabled' : 'ok') + '">' + esc(getToolStateLabel(t)) + ' - risk: ' + esc(t.risk || 'low') + '</div><div class="tool-detail-policy">' + esc(t.policy || '') + '</div></div>';
+  html += '<div class="td-section"><div class="td-label">Approval</div><div class="tool-detail-approval ' + (t.approval_required ? 'required' : 'optional') + '">' + (t.approval_required ? 'Required before execution' : 'Not required') + '</div><div class="tool-detail-approval-note">' + esc(t.approval || '') + '</div></div>';
   if (hasStats) {
     const rate = Math.round(stats.ok / stats.count * 100);
-    const rateColor = rate >= 90 ? '#3fb950' : rate >= 70 ? '#d29922' : '#f85149';
+    const rateClass = rate >= 90 ? 'success' : rate >= 70 ? 'warning' : 'danger';
     html += '<div class="td-section"><div class="td-label">Usage Stats</div>';
-    html += '<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;text-align:center">';
-    html += '<div><div style="font-size:1.2rem;font-weight:600;color:#58a6ff">' + stats.count + '</div><div style="font-size:.7rem;color:#8b949e">CALLS</div></div>';
-    html += '<div><div style="font-size:1.2rem;font-weight:600;color:#3fb950">' + stats.ok + '</div><div style="font-size:.7rem;color:#8b949e">SUCCESS</div></div>';
-    html += '<div><div style="font-size:1.2rem;font-weight:600;color:#f85149">' + stats.fail + '</div><div style="font-size:.7rem;color:#8b949e">FAIL</div></div>';
-    html += '<div><div style="font-size:1.2rem;font-weight:600;color:#c9d1d9">' + stats.avgMs + 'ms</div><div style="font-size:.7rem;color:#8b949e">AVG</div></div>';
-    html += '<div><div style="font-size:1.2rem;font-weight:600;color:' + rateColor + '">' + rate + '%</div><div style="font-size:.7rem;color:#8b949e">RATE</div></div>';
+    html += '<div class="tool-detail-stats">';
+    html += '<div><div class="tool-detail-stat-value accent">' + stats.count + '</div><div class="tool-detail-stat-label">CALLS</div></div>';
+    html += '<div><div class="tool-detail-stat-value success">' + stats.ok + '</div><div class="tool-detail-stat-label">SUCCESS</div></div>';
+    html += '<div><div class="tool-detail-stat-value danger">' + stats.fail + '</div><div class="tool-detail-stat-label">FAIL</div></div>';
+    html += '<div><div class="tool-detail-stat-value neutral">' + stats.avgMs + 'ms</div><div class="tool-detail-stat-label">AVG</div></div>';
+    html += '<div><div class="tool-detail-stat-value ' + rateClass + '">' + rate + '%</div><div class="tool-detail-stat-label">RATE</div></div>';
     html += '</div></div>';
   }
   if (t.args && Object.keys(t.args).length) {
     html += '<div class="td-section"><div class="td-label">Arguments</div><div class="td-args">';
     for (const [k, v] of Object.entries(t.args)) {
       const isOpt = String(v).includes('optional');
-      html += '<div class="td-arg-row"><span class="td-arg-name">' + esc(k) + '</span><span class="td-arg-type">' + esc(String(v)) + '</span>' + (isOpt ? ' <span style="color:#484f58;font-size:.75rem">(optional)</span>' : '') + '</div>';
+      html += '<div class="td-arg-row"><span class="td-arg-name">' + esc(k) + '</span><span class="td-arg-type">' + esc(String(v)) + '</span>' + (isOpt ? ' <span class="optional-arg">(optional)</span>' : '') + '</div>';
     }
     html += '</div></div>';
   }
-  html += '<div style="margin-top:16px;text-align:right"><button class="btn btn-outline" onclick="this.closest(\'.tool-detail-overlay\').classList.remove(\'active\')">Close</button></div>';
+  html += '<div class="overlay-actions"><button class="btn btn-outline" data-dashboard-action="close-overlay">Close</button></div>';
   html += '</div></div>';
   const existing = document.querySelector('.tool-detail-overlay');
   if (existing) existing.remove();
@@ -4152,33 +4182,33 @@ function showToolDetail(name){
 function showProcedureDetail(name){
   const p = allProcedures.find(x => x.name === name);
   if (!p) return;
-  let html = '<div class="tool-detail-overlay active" onclick="if(event.target===this)this.classList.remove(\'active\')">';
+  let html = '<div class="tool-detail-overlay active">';
   html += '<div class="tool-detail">';
-  html += '<h3><i class="fas fa-magic" style="margin-right:8px;color:#bc8cff"></i>' + esc(p.name) + '</h3>';
+  html += '<h3><i class="fas fa-magic tool-detail-icon evolved"></i>' + esc(p.name) + '</h3>';
   html += '<div class="td-desc">' + esc(p.description) + '</div>';
-  html += '<div class="td-section"><div class="td-label">Type</div><div style="color:#bc8cff"><i class="fas fa-magic"></i> Evolved Procedure</div></div>';
-  html += '<div class="td-section"><div class="td-label">Created</div><div style="color:#8b949e">' + (p.createdAt ? new Date(p.createdAt).toLocaleString() : 'Unknown') + '</div></div>';
+  html += '<div class="td-section"><div class="td-label">Type</div><div class="procedure-type"><i class="fas fa-magic"></i> Evolved Procedure</div></div>';
+  html += '<div class="td-section"><div class="td-label">Created</div><div class="procedure-date">' + (p.createdAt ? new Date(p.createdAt).toLocaleString() : 'Unknown') + '</div></div>';
   if (p.lastUsed) {
-    html += '<div class="td-section"><div class="td-label">Last Used</div><div style="color:#8b949e">' + new Date(p.lastUsed).toLocaleString() + '</div></div>';
+    html += '<div class="td-section"><div class="td-label">Last Used</div><div class="procedure-date">' + new Date(p.lastUsed).toLocaleString() + '</div></div>';
   }
-  html += '<div class="td-section"><div class="td-label">Usage Count</div><div style="color:#3fb950">' + (p.useCount || 0) + ' times</div></div>';
+  html += '<div class="td-section"><div class="td-label">Usage Count</div><div class="procedure-usage">' + (p.useCount || 0) + ' times</div></div>';
   
   if (p.parameters && Object.keys(p.parameters).length > 0) {
     html += '<div class="td-section"><div class="td-label">Parameters</div><div class="td-args">';
     for (const [k, v] of Object.entries(p.parameters)) {
-      html += '<div class="td-arg-row"><span class="td-arg-name">' + esc(k) + '</span><span class="td-arg-type">' + esc(v.type || 'string') + '</span>' + (v.required ? '' : ' <span style="color:#484f58;font-size:.75rem">(optional)</span>') + '</div>';
+      html += '<div class="td-arg-row"><span class="td-arg-name">' + esc(k) + '</span><span class="td-arg-type">' + esc(v.type || 'string') + '</span>' + (v.required ? '' : ' <span class="optional-arg">(optional)</span>') + '</div>';
     }
     html += '</div></div>';
   }
   
   if (p.steps && p.steps.length > 0) {
     html += '<div class="td-section"><div class="td-label">Steps (' + p.steps.length + ')</div>';
-    html += '<div style="margin-top:8px">';
+    html += '<div class="procedure-steps">';
     for (let i = 0; i < p.steps.length; i++) {
       const step = p.steps[i];
-      html += '<div style="padding:8px;margin-bottom:8px;background:#0d1117;border:1px solid #21262d;border-radius:6px">';
-      html += '<div style="font-size:.75rem;color:#58a6ff;margin-bottom:4px">Step ' + (i+1) + ': ' + esc(step.tool) + '</div>';
-      html += '<div style="font-size:.75rem;color:#8b949e;font-family:monospace;white-space:pre-wrap">';
+      html += '<div class="procedure-step">';
+      html += '<div class="procedure-step-title">Step ' + (i+1) + ': ' + esc(step.tool) + '</div>';
+      html += '<div class="procedure-step-args">';
       html += esc(JSON.stringify(step.args, null, 2));
       html += '</div></div>';
     }
@@ -4187,14 +4217,14 @@ function showProcedureDetail(name){
   
   if (p.triggerPhrases && p.triggerPhrases.length > 0) {
     html += '<div class="td-section"><div class="td-label">Trigger Phrases</div>';
-    html += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">';
+    html += '<div class="procedure-triggers">';
     for (const phrase of p.triggerPhrases) {
-      html += '<span style="font-size:.75rem;color:#c9d1d9;background:#21262d;padding:4px 8px;border-radius:4px">' + esc(phrase) + '</span>';
+      html += '<span class="procedure-trigger">' + esc(phrase) + '</span>';
     }
     html += '</div></div>';
   }
   
-  html += '<div style="margin-top:16px;text-align:right"><button class="btn btn-outline" onclick="this.closest(\'.tool-detail-overlay\').classList.remove(\'active\')">Close</button></div>';
+  html += '<div class="overlay-actions"><button class="btn btn-outline" data-dashboard-action="close-overlay">Close</button></div>';
   html += '</div></div>';
   const existing = document.querySelector('.tool-detail-overlay');
   if (existing) existing.remove();
@@ -4252,7 +4282,7 @@ function renderBlackboxIncidentList(){
   list.innerHTML = allBlackboxIncidents.map(inc => {
     const cls = inc.id === selectedBlackboxIncident ? ' selected' : '';
     const expiry = inc.pinned ? 'pinned' : (inc.expires_at ? 'expires ' + new Date(inc.expires_at).toLocaleDateString() : 'no expiry');
-    return '<button class="blackbox-incident' + cls + '" onclick="showBlackboxIncident(\'' + esc(inc.id) + '\')">'
+    return '<button class="blackbox-incident' + cls + '" data-dashboard-action="callback" data-handler="showBlackboxIncident" data-id="' + attr(inc.id) + '">'
       + '<span><strong>' + esc(inc.title || inc.id) + '</strong><small>' + esc(inc.id) + ' · ' + esc(inc.host || 'unknown host') + '</small></span>'
       + '<span class="blackbox-badges"><em>' + esc(inc.lifecycle_state) + '</em><em>' + esc(inc.severity || 'unknown') + '</em><em>' + esc(expiry) + '</em></span>'
       + '</button>';
@@ -4284,9 +4314,9 @@ function renderBlackboxDetail(incident){
   html += '<div class="blackbox-state"><span>' + esc(incident.lifecycle_state) + '</span><small>' + esc(incident.severity || 'unknown') + '</small></div>';
   html += '</div>';
   html += '<div class="blackbox-toolbar">';
-  html += '<button class="btn btn-sm btn-outline" onclick="analyzeBlackboxIncident(\'' + esc(incident.id) + '\')"' + (isAnalyzable ? '' : ' disabled title="No analyzable evidence available"') + '><i class="fas fa-magnifying-glass-chart"></i> Analyze</button>';
-  html += '<button class="btn btn-sm btn-outline" onclick="pinBlackboxIncident(\'' + esc(incident.id) + '\')"><i class="fas fa-thumbtack"></i> Pin</button>';
-  html += '<button class="btn btn-sm btn-outline" onclick="exportBlackboxIncident(\'' + esc(incident.id) + '\')"><i class="fas fa-download"></i> Export</button>';
+  html += '<button class="btn btn-sm btn-outline" data-dashboard-action="callback" data-handler="analyzeBlackboxIncident" data-id="' + attr(incident.id) + '"' + (isAnalyzable ? '' : ' disabled title="No analyzable evidence available"') + '><i class="fas fa-magnifying-glass-chart"></i> Analyze</button>';
+  html += '<button class="btn btn-sm btn-outline" data-dashboard-action="callback" data-handler="pinBlackboxIncident" data-id="' + attr(incident.id) + '"><i class="fas fa-thumbtack"></i> Pin</button>';
+  html += '<button class="btn btn-sm btn-outline" data-dashboard-action="callback" data-handler="exportBlackboxIncident" data-id="' + attr(incident.id) + '"><i class="fas fa-download"></i> Export</button>';
   html += '</div>';
   html += '<div class="meta-grid">'
     + '<div><span>Host</span><strong>' + esc(incident.host || 'unknown') + '</strong></div>'
@@ -4313,7 +4343,7 @@ function renderBlackboxCapture(capture){
       if (diag.collectors_rejected && diag.collectors_rejected.length) html += '<small>Rejected: ' + esc(diag.collectors_rejected.map(r => r.key + ' (' + r.reason + ')').join(', ')) + '</small>';
       html += '</div>';
     }
-    html += '<button class="btn btn-sm btn-outline" onclick="retryBlackboxCapture(\'' + esc(capture.id) + '\', \'' + esc(capture.incident_id) + '\')"><i class="fas fa-rotate-right"></i> Retry Capture</button>';
+    html += '<button class="btn btn-sm btn-outline" data-dashboard-action="callback" data-handler="retryBlackboxCapture" data-id="' + attr(capture.id) + '" data-index="' + attr(capture.incident_id) + '"><i class="fas fa-rotate-right"></i> Retry Capture</button>';
     html += '</div>';
   }
   html += '<div class="blackbox-capture-head"><strong>' + esc(capture.id) + '</strong><span class="badge ' + (capture.state === 'completed' ? '' : 'warn') + '">' + esc(capture.state) + '</span><span>' + esc(capture.profile) + '</span><span>' + esc(capture.succeeded_count + '/' + capture.source_count + ' succeeded') + '</span><span>' + esc(formatBytes(capture.total_bytes || 0)) + '</span></div>';
@@ -4334,7 +4364,7 @@ async function loadBlackboxSources(captureId){
       box.innerHTML = '<div class="empty">No sources recorded.</div>';
       return;
     }
-    box.innerHTML = sources.map(source => '<button class="blackbox-source ' + esc(source.state) + '" onclick="openBlackboxSource(\'' + esc(source.id) + '\')">'
+    box.innerHTML = sources.map(source => '<button class="blackbox-source ' + esc(source.state) + '" data-dashboard-action="callback" data-handler="openBlackboxSource" data-id="' + attr(source.id) + '">'
       + '<strong>' + esc(source.display_name) + '</strong><small>' + esc(source.category || 'Source') + ' · ' + esc(source.duration_ms || 0) + 'ms · exit ' + esc(source.exit_code === null ? 'n/a' : source.exit_code) + '</small>'
       + '<span>' + sourceBadges(source) + '</span></button>').join('');
   } catch (error) {
@@ -4356,7 +4386,7 @@ async function openBlackboxSource(sourceId){
     const res = await authFetch('/api/blackbox/sources/' + encodeURIComponent(sourceId) + '?limit=131072');
     const data = await res.json();
     const s = data.source;
-    let html = '<div class="tool-detail-overlay active" onclick="if(event.target===this)this.classList.remove(\'active\')"><div class="tool-detail blackbox-source-detail">';
+    let html = '<div class="tool-detail-overlay active"><div class="tool-detail blackbox-source-detail">';
     html += '<h3>' + esc(s.display_name) + '</h3>';
     html += '<div class="meta-grid"><div><span>Source</span><strong>' + esc(s.source_key) + '</strong></div><div><span>State</span><strong>' + esc(s.state) + '</strong></div><div><span>Duration</span><strong>' + esc(s.duration_ms || 0) + 'ms</strong></div><div><span>Hash</span><strong>' + esc((s.content_hash || '').slice(0, 16)) + '</strong></div></div>';
     html += '<div class="td-section"><div class="td-label">Collector</div><div class="quick-action-pre">' + esc(s.command + ' ' + (s.arguments_preview || []).join(' ')) + '</div></div>';
@@ -4365,7 +4395,7 @@ async function openBlackboxSource(sourceId){
     html += '<div class="value-block is-long">' + esc(s.stdout || '') + '</div>';
     if (s.stderr) html += '<div class="td-section"><div class="td-label">Stderr</div><div class="value-block is-long">' + esc(s.stderr) + '</div></div>';
     html += '<div class="td-section"><div class="td-label">Normalized</div><div class="value-block">' + esc(JSON.stringify(s.normalized || {}, null, 2)) + '</div></div>';
-    html += '<div style="margin-top:16px;text-align:right"><button class="btn btn-outline" onclick="this.closest(\'.tool-detail-overlay\').remove()">Close</button></div>';
+    html += '<div class="overlay-actions"><button class="btn btn-outline" data-dashboard-action="close-overlay">Close</button></div>';
     html += '</div></div>';
     const existing = document.querySelector('.tool-detail-overlay');
     if (existing) existing.remove();
@@ -4461,7 +4491,7 @@ async function exportBlackboxIncident(id){
     const text = typeof data.export === 'string' ? data.export : JSON.stringify(data.export, null, 2);
     const existing = document.querySelector('.tool-detail-overlay');
     if (existing) existing.remove();
-    document.body.insertAdjacentHTML('beforeend', '<div class="tool-detail-overlay active" onclick="if(event.target===this)this.remove()"><div class="tool-detail"><h3>Export Preview</h3><div class="value-block is-long">' + esc(text) + '</div><div style="margin-top:16px;text-align:right"><button class="btn btn-outline" onclick="this.closest(\'.tool-detail-overlay\').remove()">Close</button></div></div></div>');
+    document.body.insertAdjacentHTML('beforeend', '<div class="tool-detail-overlay active"><div class="tool-detail"><h3>Export Preview</h3><div class="value-block is-long">' + esc(text) + '</div><div class="overlay-actions"><button class="btn btn-outline" data-dashboard-action="close-overlay">Close</button></div></div></div>');
   } catch (error) {
     showToast(error.message, 'error');
   }
@@ -4577,7 +4607,7 @@ function capError(message) {
   const el = $('capError');
   if (!el) return;
   el.innerHTML = message
-    ? '<div class="card" style="padding:10px;border-color:#f85149;color:#f85149">' + esc(message) + '</div>'
+    ? '<div class="card error-card-inline">' + esc(message) + '</div>'
     : '';
 }
 
@@ -4597,7 +4627,7 @@ async function loadCapabilities() {
 
 function networkScopeError(message) {
   const el = $('networkScopeError');
-  if (el) el.innerHTML = message ? '<div class="card" style="padding:10px;border-color:#f85149;color:#f85149">' + esc(message) + '</div>' : '';
+  if (el) el.innerHTML = message ? '<div class="card error-card-inline">' + esc(message) + '</div>' : '';
 }
 
 async function loadNetworkScopes() {
@@ -4615,13 +4645,13 @@ async function loadNetworkScopes() {
 function renderNetworkScope(scope) {
   const enabled = scope.state === 'active';
   const action = enabled ? 'disabled' : 'active';
-  return '<div class="card" style="padding:12px;margin-bottom:10px">'
-    + '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">'
-    + '<div><div style="font-weight:600">' + esc(scope.name) + ' <span class="sub">r' + esc(scope.revision) + '</span></div>'
+  return '<div class="card scope-card">'
+    + '<div class="scope-head">'
+    + '<div><div class="identity-name">' + esc(scope.name) + ' <span class="sub">r' + esc(scope.revision) + '</span></div>'
     + '<div class="sub">' + esc(scope.scope_id) + ' &middot; ' + esc(scope.state) + ' &middot; digest ' + esc((scope.digest || '').slice(0, 16)) + '...</div></div>'
-    + '<div style="display:flex;gap:6px"><button class="btn btn-sm btn-outline" onclick="setNetworkScopeState(' + jsArg(scope.scope_id) + ',' + jsArg(action) + ')">' + (enabled ? 'Disable' : 'Enable') + '</button>'
-    + '<button class="btn btn-sm" onclick="updateNetworkScope(' + jsArg(scope.scope_id) + ')">New Revision</button></div></div>'
-    + '<pre style="margin-top:10px;max-height:240px;overflow:auto">' + esc(JSON.stringify(scope, null, 2)) + '</pre></div>';
+    + '<div class="network-scope-actions"><button class="btn btn-sm btn-outline" data-dashboard-action="callback" data-handler="setNetworkScopeState" data-id="' + attr(scope.scope_id) + '" data-value="' + attr(action) + '">' + (enabled ? 'Disable' : 'Enable') + '</button>'
+    + '<button class="btn btn-sm" data-dashboard-action="callback" data-handler="updateNetworkScope" data-id="' + attr(scope.scope_id) + '">New Revision</button></div></div>'
+    + '<pre class="scope-json">' + esc(JSON.stringify(scope, null, 2)) + '</pre></div>';
 }
 
 async function createNetworkScope() {
@@ -4666,21 +4696,21 @@ function renderInstalledCapabilities(packs) {
   }
   el.innerHTML = packs.map(pack => {
     const actions = [];
-    actions.push('<button class="btn btn-sm" onclick="capabilityDetail(' + jsArg(pack.name) + ')"><i class="fas fa-circle-info"></i> Details</button>');
-    actions.push('<button class="btn btn-sm" onclick="capabilityHealth(' + jsArg(pack.name) + ')"><i class="fas fa-stethoscope"></i> Health Check</button>');
-    actions.push('<button class="btn btn-sm btn-outline" onclick="capabilityMaturity(' + jsArg(pack.name) + ')"><i class="fas fa-certificate"></i> Maturity</button>');
+    actions.push('<button class="btn btn-sm" data-dashboard-action="callback" data-handler="capabilityDetail" data-id="' + attr(pack.name) + '"><i class="fas fa-circle-info"></i> Details</button>');
+    actions.push('<button class="btn btn-sm" data-dashboard-action="callback" data-handler="capabilityHealth" data-id="' + attr(pack.name) + '"><i class="fas fa-stethoscope"></i> Health Check</button>');
+    actions.push('<button class="btn btn-sm btn-outline" data-dashboard-action="callback" data-handler="capabilityMaturity" data-id="' + attr(pack.name) + '"><i class="fas fa-certificate"></i> Maturity</button>');
     if (pack.enabled) {
-      actions.push('<button class="btn btn-sm btn-outline" onclick="capabilityAction(' + jsArg(pack.name) + ',\'disable\')"><i class="fas fa-pause"></i> Disable</button>');
+      actions.push('<button class="btn btn-sm btn-outline" data-dashboard-action="callback" data-handler="capabilityAction" data-id="' + attr(pack.name) + '" data-value="disable"><i class="fas fa-pause"></i> Disable</button>');
     } else {
-      actions.push('<button class="btn btn-sm" onclick="capabilityAction(' + jsArg(pack.name) + ',\'enable\')"><i class="fas fa-play"></i> Enable</button>');
+      actions.push('<button class="btn btn-sm" data-dashboard-action="callback" data-handler="capabilityAction" data-id="' + attr(pack.name) + '" data-value="enable"><i class="fas fa-play"></i> Enable</button>');
     }
-    actions.push('<button class="btn btn-sm btn-outline" onclick="capabilityUpgrade(' + jsArg(pack.name) + ')"><i class="fas fa-arrow-up"></i> Upgrade</button>');
-    actions.push('<button class="btn btn-sm btn-outline" onclick="capabilityUninstall(' + jsArg(pack.name) + ')"><i class="fas fa-trash"></i> Uninstall</button>');
+    actions.push('<button class="btn btn-sm btn-outline" data-dashboard-action="callback" data-handler="capabilityUpgrade" data-id="' + attr(pack.name) + '"><i class="fas fa-arrow-up"></i> Upgrade</button>');
+    actions.push('<button class="btn btn-sm btn-outline" data-dashboard-action="callback" data-handler="capabilityUninstall" data-id="' + attr(pack.name) + '"><i class="fas fa-trash"></i> Uninstall</button>');
 
-    return '<div class="card" style="padding:12px;margin-bottom:10px">'
-      + '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">'
+    return '<div class="card capability-card">'
+      + '<div class="capability-head">'
       + '<div>'
-      + '<div style="font-weight:600">' + esc(pack.display_name || pack.name) + ' <span class="sub">v' + esc(pack.version) + '</span></div>'
+      + '<div class="identity-name">' + esc(pack.display_name || pack.name) + ' <span class="sub">v' + esc(pack.version) + '</span></div>'
       + '<div class="sub">' + esc(pack.name) + ' &middot; ' + esc(pack.publisher || 'unknown publisher') + ' &middot; '
       + esc(pack.provenance === 'first_party' ? 'first-party' : 'third-party')
       + (pack.bundled ? ' &middot; bundled' : '') + '</div>'
@@ -4688,14 +4718,14 @@ function renderInstalledCapabilities(packs) {
       + '<div>' + capPill(pack.health) + ' <span class="metrics-status-pill ' + (pack.enabled ? 'ok' : 'warn') + '">' + esc(pack.state) + '</span>'
        + ' <span class="metrics-status-pill ' + (pack.maturity && pack.maturity.level === 'certified' ? 'ok' : 'warn') + '" title="Evidence-bound pack maturity">' + esc((pack.maturity && pack.maturity.level) || 'foundation') + '</span></div>'
       + '</div>'
-      + '<div class="sub" style="margin-top:8px">'
+      + '<div class="sub capability-meta">'
       + 'Modules: ' + (pack.modules.length ? esc(pack.modules.join(', ')) : 'none')
       + ' &middot; Tools: ' + (pack.tools.length ? esc(pack.tools.join(', ')) : 'none')
       + ' &middot; Workflows: ' + pack.workflows.length
       + ' &middot; Knowledge: ' + pack.knowledge
       + '</div>'
-      + '<div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap">' + actions.join('') + '</div>'
-      + '<pre id="capDetail-' + attr(pack.name) + '" style="display:none;margin-top:10px;max-height:420px;overflow:auto"></pre>'
+      + '<div class="capability-actions">' + actions.join('') + '</div>'
+      + '<pre id="capDetail-' + attr(pack.name) + '" class="capability-detail"></pre>'
       + '</div>';
   }).join('');
 }
@@ -4708,23 +4738,23 @@ function renderAvailableCapabilities(packs) {
   }
   el.innerHTML = packs.map(pack => {
     if (pack.error) {
-      return '<div class="card" style="padding:12px;margin-bottom:10px;border-color:#f85149">'
-        + '<div style="font-weight:600">' + esc(pack.name) + '</div>'
-        + '<div class="sub" style="color:#f85149">Invalid bundled pack: ' + esc(pack.error) + '</div></div>';
+      return '<div class="card capability-card capability-invalid">'
+        + '<div class="identity-name">' + esc(pack.name) + '</div>'
+        + '<div class="sub capability-invalid-note">Invalid bundled pack: ' + esc(pack.error) + '</div></div>';
     }
     const blocked = !pack.compatible;
-    return '<div class="card" style="padding:12px;margin-bottom:10px">'
-      + '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">'
+    return '<div class="card capability-card">'
+      + '<div class="capability-head">'
       + '<div>'
-      + '<div style="font-weight:600">' + esc(pack.display_name || pack.name) + ' <span class="sub">v' + esc(pack.version) + '</span></div>'
+      + '<div class="identity-name">' + esc(pack.display_name || pack.name) + ' <span class="sub">v' + esc(pack.version) + '</span></div>'
       + '<div class="sub">' + esc(pack.description || '') + '</div>'
       + '<div class="sub">' + esc(pack.publisher || '') + ' &middot; first-party &middot; bundled &middot; '
       + pack.modules.length + ' module(s), ' + pack.workflows + ' workflow(s), ' + pack.knowledge + ' knowledge asset(s)</div>'
-      + (blocked ? '<div class="sub" style="color:#f85149">Incompatible: requires Sidekick ' + esc(pack.requires_sidekick || '') + '</div>' : '')
+      + (blocked ? '<div class="sub capability-invalid-note">Incompatible: requires Sidekick ' + esc(pack.requires_sidekick || '') + '</div>' : '')
       + '</div>'
-      + '<div style="display:flex;gap:6px;flex-wrap:wrap">'
-      + '<button class="btn btn-sm btn-outline" onclick="inspectBundledCapability(' + jsArg(pack.name) + ')"><i class="fas fa-magnifying-glass"></i> Inspect</button>'
-      + '<button class="btn btn-sm" ' + (blocked ? 'disabled' : '') + ' onclick="installBundledCapability(' + jsArg(pack.name) + ')"><i class="fas fa-download"></i> Install</button>'
+      + '<div class="capability-actions capability-action-buttons">'
+      + '<button class="btn btn-sm btn-outline" data-dashboard-action="callback" data-handler="inspectBundledCapability" data-id="' + attr(pack.name) + '"><i class="fas fa-magnifying-glass"></i> Inspect</button>'
+      + '<button class="btn btn-sm" ' + (blocked ? 'disabled' : '') + ' data-dashboard-action="callback" data-handler="installBundledCapability" data-id="' + attr(pack.name) + '"><i class="fas fa-download"></i> Install</button>'
       + '</div>'
       + '</div></div>';
   }).join('');
@@ -4758,11 +4788,11 @@ function capabilityAction(name, action) {
 async function capabilityDetail(name) {
   const el = $('capDetail-' + name);
   if (!el) return;
-  if (el.style.display !== 'none') { el.style.display = 'none'; return; }
+  if (el.classList.contains('is-visible')) { el.classList.remove('is-visible'); return; }
   const res = await authFetch('/api/capabilities/' + encodeURIComponent(name));
   const data = await res.json();
   el.textContent = JSON.stringify(data.pack || data, null, 2);
-  el.style.display = 'block';
+  el.classList.add('is-visible');
 }
 
 async function capabilityHealth(name) {
@@ -4771,7 +4801,7 @@ async function capabilityHealth(name) {
   const data = await res.json();
   if (el) {
     el.textContent = JSON.stringify(data.health || data, null, 2);
-    el.style.display = 'block';
+    el.classList.add('is-visible');
   }
   loadCapabilities();
 }
@@ -4791,7 +4821,7 @@ async function capabilityMaturity(name) {
         reasons: maturity.reasons || [],
         evidence: maturity.evidence || [],
       }, null, 2);
-      el.style.display = 'block';
+      el.classList.add('is-visible');
     }
   } catch (error) {
     capError('maturity: ' + error.message);
@@ -4879,11 +4909,11 @@ async function loadHandoffs() {
       const questions = Array.isArray(start.open_questions) ? start.open_questions : [];
       return '<div class="card mission-panel mission-panel-wide">' +
         '<div class="mission-panel-head"><div><div class="section-title">' + esc(start.objective || projection.title || projection.handoff_id) + '</div><div class="sub">' + esc(projection.handoff_id || '') + ' · v' + esc(String(projection.version || '')) + '</div></div>' +
-        '<div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end"><span class="metrics-status-pill ' + (lifecycleHealthy ? 'ok' : 'warn') + '" title="Authoritative handoff lifecycle">' + esc(lifecycle) + '</span>' +
+        '<div class="handoff-actions"><span class="metrics-status-pill ' + (lifecycleHealthy ? 'ok' : 'warn') + '" title="Authoritative handoff lifecycle">' + esc(lifecycle) + '</span>' +
         '<span class="metrics-status-pill ' + (readinessStatus === 'ready' ? 'ok' : 'warn') + '" title="Receiver resume readiness">Readiness: ' + esc(readinessStatus) + '</span></div></div>' +
         '<div class="mission-muted">Next: ' + esc(start.next_step || 'No next step recorded') + '</div>' +
         '<div class="mission-metrics"><div><span>Quality</span><strong>' + (quality.valid ? 'Ready' : 'Needs work') + '</strong></div><div><span>Evidence</span><strong>' + esc(String(evidence.fresh || 0)) + ' fresh / ' + esc(String(evidence.stale || 0)) + ' stale</strong></div><div><span>Blockers</span><strong>' + esc(String(blockers.length)) + '</strong></div><div><span>Questions</span><strong>' + esc(String(questions.length)) + '</strong></div></div>' +
-        '<details><summary>Receiver details</summary><pre class="agent-log" style="white-space:pre-wrap;max-height:320px;overflow:auto">' + esc(JSON.stringify({ completed_steps: projection.completed_steps || [], decisions: start.decisions || [], blockers, open_questions: questions, risks: start.risks || [], acceptance_criteria: projection.acceptance_criteria || [], artifacts: projection.artifacts || [], relationships: projection.relationships || [], reasons: readiness.reasons || quality.issues || [] }, null, 2)) + '</pre></details>' +
+        '<details><summary>Receiver details</summary><pre class="agent-log handoff-details">' + esc(JSON.stringify({ completed_steps: projection.completed_steps || [], decisions: start.decisions || [], blockers, open_questions: questions, risks: start.risks || [], acceptance_criteria: projection.acceptance_criteria || [], artifacts: projection.artifacts || [], relationships: projection.relationships || [], reasons: readiness.reasons || quality.issues || [] }, null, 2)) + '</pre></details>' +
         '</div>';
     }).join('');
   } catch (error) {

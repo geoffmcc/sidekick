@@ -7,6 +7,7 @@
 <link rel="stylesheet" href="/static/fontawesome/css/all.min.css">
 <link rel="stylesheet" href="/static/fonts/jetbrains-mono/jetbrains-mono.css">
 <link rel="stylesheet" href="/static/dashboard.css?v=dashboard-ux-preview-5">
+<link rel="stylesheet" href="/static/dashboard-theme.css?v=dashboard-redesign-1">
 </head>
 <body>
 <div class="app-shell">
@@ -55,7 +56,7 @@
           <div class="section-title">Attention</div>
           <div class="mission-muted">Failures, offline services, and resource pressure.</div>
         </div>
-        <button class="btn btn-sm btn-outline" onclick="loadMissionControl()"><i class="fas fa-sync"></i> Refresh</button>
+        <button class="btn btn-sm btn-outline" data-dashboard-action="refresh" data-handler="loadMissionControl"><i class="fas fa-sync"></i> Refresh</button>
       </div>
       <div id="missionAttention" class="mission-list"><div class="empty">Checking...</div></div>
     </div>
@@ -78,12 +79,12 @@
     <div class="card mission-panel mission-panel-wide">
       <div class="section-title">Quick Actions</div>
       <div class="mission-actions">
-        <button class="mission-action" onclick="runQuickAction('health-check')"><i class="fas fa-heart-pulse"></i><span>Run Health Check</span></button>
-        <button class="mission-action" onclick="runQuickAction('recent-failures')"><i class="fas fa-triangle-exclamation"></i><span>Recent Failures</span></button>
-        <button class="mission-action" onclick="runQuickAction('deployment')"><i class="fas fa-code-commit"></i><span>Deployment Info</span></button>
-        <button class="mission-action" onclick="runQuickAction('service-logs', { service: 'sidekick-mcp' })"><i class="fas fa-file-lines"></i><span>MCP Logs</span></button>
-        <button class="mission-action" onclick="runQuickAction('restart-agent')"><i class="fas fa-rotate"></i><span>Restart Agent</span></button>
-        <button class="mission-action" onclick="showPage('agent')"><i class="fas fa-robot"></i><span>Ask Agent</span></button>
+         <button class="mission-action" data-dashboard-action="quick-action" data-action="health-check"><i class="fas fa-heart-pulse"></i><span>Run Health Check</span></button>
+         <button class="mission-action" data-dashboard-action="quick-action" data-action="recent-failures"><i class="fas fa-triangle-exclamation"></i><span>Recent Failures</span></button>
+         <button class="mission-action" data-dashboard-action="quick-action" data-action="deployment"><i class="fas fa-code-commit"></i><span>Deployment Info</span></button>
+         <button class="mission-action" data-dashboard-action="quick-action" data-action="service-logs" data-service="sidekick-mcp"><i class="fas fa-file-lines"></i><span>MCP Logs</span></button>
+         <button class="mission-action" data-dashboard-action="quick-action" data-action="restart-agent"><i class="fas fa-rotate"></i><span>Restart Agent</span></button>
+         <button class="mission-action" data-dashboard-action="page" data-page="agent"><i class="fas fa-robot"></i><span>Ask Agent</span></button>
         <a class="mission-action" href="http://192.168.1.10:3000" target="_blank"><i class="fas fa-chart-line"></i><span>Grafana</span></a>
         <a class="mission-action" href="http://192.168.1.10:11434" target="_blank"><i class="fas fa-brain"></i><span>Ollama</span></a>
       </div>
@@ -107,36 +108,36 @@
 <!-- System Page -->
 <div class="page" id="page-system">
   <!-- Row 1: Health, Tool Stats, Storage -->
-  <div class="grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:12px">
-    <div class="card" style="padding:12px">
-      <div class="s-label" style="margin-bottom:6px">System Health</div>
-      <div style="display:flex;align-items:center;gap:12px">
-        <div id="healthScore" style="font-size:2rem;font-weight:700;color:#3fb950">--</div>
-        <div style="font-size:.75rem;color:#8b949e">
+  <div class="grid system-grid">
+    <div class="card system-card">
+      <div class="s-label system-card-heading">System Health</div>
+      <div class="system-health">
+        <div id="healthScore" class="system-health-score">--</div>
+        <div class="system-health-details">
           <div>LOAD 1m: <span id="healthCpu">--</span></div>
           <div>MEM: <span id="healthMem">--</span>%</div>
           <div>DISK: <span id="healthDisk">--</span>%</div>
         </div>
       </div>
     </div>
-    <div class="card" style="padding:12px">
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px">
+    <div class="card system-card">
+      <div class="system-card-heading-row">
         <div class="s-label">Tool Usage Today</div>
-        <select id="toolStatsWindow" onchange="setToolStatsWindow(this.value)" style="background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:4px 8px;font-size:.75rem">
+        <select id="toolStatsWindow" data-dashboard-action="tool-stats-window" aria-label="Tool usage time zone">
           <option value="local">Local day</option>
           <option value="utc">UTC day</option>
         </select>
       </div>
-      <div style="font-size:.85rem;color:#c9d1d9;line-height:1.6">
+      <div class="system-value-list">
         <div><span id="toolCalls">--</span> calls</div>
         <div><span id="toolSuccess">--</span>% success</div>
         <div><span id="toolAvg">--</span>ms avg</div>
       </div>
-      <div id="topTools" style="margin-top:8px;padding-top:8px;border-top:1px solid #21262d;font-size:.75rem;color:#8b949e"></div>
+      <div id="topTools" class="system-top-tools"></div>
     </div>
-    <div class="card" style="padding:12px">
-      <div class="s-label" style="margin-bottom:6px">Storage</div>
-      <div style="font-size:.85rem;color:#c9d1d9;line-height:1.6">
+    <div class="card system-card">
+      <div class="s-label system-card-heading">Storage</div>
+      <div class="system-value-list">
         <div>KV: <span id="storageKv">--</span> entries</div>
         <div>Logs: <span id="storageLogs">--</span></div>
         <div>Conversations: <span id="storageConv">--</span></div>
@@ -145,72 +146,72 @@
   </div>
   
   <!-- Row 2: Active Sessions, Recent Errors, Recent Deployments -->
-  <div class="grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:12px">
-    <div class="card" style="padding:12px">
-      <div class="s-label" style="margin-bottom:6px">Active Sessions</div>
-      <div style="font-size:.85rem;color:#c9d1d9;line-height:1.6">
+  <div class="grid system-grid">
+    <div class="card system-card">
+      <div class="s-label system-card-heading">Active Sessions</div>
+      <div class="system-value-list">
         <div>MCP: <span id="sessionMcp">--</span> clients</div>
         <div>Agent: <span id="sessionAgent">--</span></div>
         <div>Cron: <span id="sessionCron">--</span> jobs</div>
         <div>Watches: <span id="sessionWatches">--</span> active</div>
-        <div id="sessionDetails" class="session-details"><div class="empty" style="padding:2px 0">No MCP sessions</div></div>
+        <div id="sessionDetails" class="session-details"><div class="empty system-empty">No MCP sessions</div></div>
       </div>
     </div>
-    <div class="card" style="padding:12px">
-      <div class="s-label" style="margin-bottom:6px">Recent Errors</div>
-      <div id="recentErrors" style="font-size:.78rem;color:#f85149;line-height:1.5">
-        <div class="empty" style="padding:4px 0">No recent errors</div>
+    <div class="card system-card">
+      <div class="s-label system-card-heading">Recent Errors</div>
+      <div id="recentErrors" class="system-error-list">
+        <div class="empty system-empty">No recent errors</div>
       </div>
     </div>
-    <div class="card" style="padding:12px">
-      <div class="s-label" style="margin-bottom:6px">Recent Deployments</div>
-      <div id="recentDeployments" style="font-size:.78rem;color:#c9d1d9;line-height:1.5">
-        <div class="empty" style="padding:4px 0">No deployment info</div>
+    <div class="card system-card">
+      <div class="s-label system-card-heading">Recent Deployments</div>
+      <div id="recentDeployments" class="system-deployment-list">
+        <div class="empty system-empty">No deployment info</div>
       </div>
     </div>
   </div>
   
   <!-- Row 3: Compute inference registry (full width) -->
-  <div class="section-title" style="margin-bottom:8px">Compute Models</div>
+  <div class="section-title system-section-title">Compute Models</div>
   <div id="llmStatus"><div class="empty">Checking...</div></div>
 </div>
 
 <!-- Activity Page -->
 <div class="page" id="page-activity">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+  <div class="activity-header">
     <div>
-      <div class="section-title" style="margin:0">Activity (<span id="logCount">0</span>)</div>
+      <div class="section-title">Activity (<span id="logCount">0</span>)</div>
       <div class="sub">What Sidekick did, grouped into sessions by real IDs when present and deterministic time/source windows otherwise.</div>
     </div>
-    <div style="display:flex;gap:8px">
-      <button class="btn btn-sm btn-outline" onclick="clearData('logs')" title="Clear activity log"><i class="fas fa-trash"></i> Clear Log</button>
-      <button class="btn btn-sm btn-outline" onclick="clearData('all')" title="Clear all data"><i class="fas fa-trash-alt"></i> Clear All</button>
+    <div class="activity-actions">
+      <button class="btn btn-sm btn-outline" data-activity-action="clear-logs" title="Clear activity log"><i class="fas fa-trash"></i> Clear Log</button>
+      <button class="btn btn-sm btn-outline" data-activity-action="clear-all" title="Clear all data"><i class="fas fa-trash-alt"></i> Clear All</button>
     </div>
   </div>
   <div class="tab-switch" role="tablist" aria-label="Activity views">
-    <button class="active" id="activityViewSessions" onclick="setActivityView('sessions')" role="tab" aria-selected="true">Sessions</button>
-    <button id="activityViewRaw" onclick="setActivityView('raw')" role="tab" aria-selected="false">Raw Calls</button>
+    <button class="active" id="activityViewSessions" data-activity-view="sessions" role="tab" aria-selected="true">Sessions</button>
+    <button id="activityViewRaw" data-activity-view="raw" role="tab" aria-selected="false">Raw Calls</button>
   </div>
   <div class="metric-strip" id="activitySummary"></div>
   <div class="search-bar">
-    <input type="text" id="logSearch" placeholder="Search tool, args, output, project, session..." oninput="filterLogs()" aria-label="Search activity">
-    <select id="logSourceFilter" onchange="filterLogs()">
+    <input type="text" id="logSearch" placeholder="Search tool, args, output, project, session..." data-activity-filter aria-label="Search activity">
+    <select id="logSourceFilter" data-activity-filter>
       <option value="">All Sources</option>
       <option value="mcp">MCP</option>
       <option value="agent">Agent</option>
       <option value="dashboard">Dashboard</option>
       <option value="unknown">Unknown</option>
     </select>
-    <select id="logStatusFilter" onchange="filterLogs()">
+    <select id="logStatusFilter" data-activity-filter>
       <option value="">All Status</option>
       <option value="success">Success</option>
       <option value="failure">Failed</option>
     </select>
-    <input type="text" id="logToolFilter" placeholder="Tool" oninput="filterLogs()" aria-label="Filter by tool">
-    <input type="text" id="logProjectFilter" placeholder="Project" oninput="filterLogs()" aria-label="Filter by project">
-    <input type="text" id="logSessionFilter" placeholder="Session or task" oninput="filterLogs()" aria-label="Filter by session or task">
-    <input type="number" id="logMinDurationFilter" placeholder="Min ms" min="0" oninput="filterLogs()" aria-label="Minimum duration">
-    <label class="inline-check"><input type="checkbox" id="logErrorsOnly" onchange="filterLogs()"> Errors only</label>
+    <input type="text" id="logToolFilter" placeholder="Tool" data-activity-filter aria-label="Filter by tool">
+    <input type="text" id="logProjectFilter" placeholder="Project" data-activity-filter aria-label="Filter by project">
+    <input type="text" id="logSessionFilter" placeholder="Session or task" data-activity-filter aria-label="Filter by session or task">
+    <input type="number" id="logMinDurationFilter" placeholder="Min ms" min="0" data-activity-filter aria-label="Minimum duration">
+    <label class="inline-check"><input type="checkbox" id="logErrorsOnly" data-activity-filter> Errors only</label>
   </div>
   <div id="logList" class="activity-list"></div>
 </div>
@@ -232,14 +233,14 @@
         <option value="sidekick">Sidekick</option>
         <option value="repository">Repository</option>
       </select>
-      <button class="btn" onclick="startBlackboxCapture()"><i class="fas fa-camera"></i> Capture</button>
+      <button class="btn" data-dashboard-action="modal" data-handler="startBlackboxCapture"><i class="fas fa-camera"></i> Capture</button>
     </div>
   </div>
   <div id="blackboxProgress" class="blackbox-progress"><div class="empty">No capture running.</div></div>
   <div class="metric-strip" id="blackboxSummary"></div>
   <div class="search-bar">
-    <input type="text" id="blackboxSearch" placeholder="Search incidents, evidence, errors, services..." oninput="loadBlackbox()" aria-label="Search Black Box incidents">
-    <select id="blackboxStateFilter" onchange="loadBlackbox()">
+    <input type="text" id="blackboxSearch" placeholder="Search incidents, evidence, errors, services..." data-dashboard-input="loadBlackbox" aria-label="Search Black Box incidents">
+    <select id="blackboxStateFilter" data-dashboard-change="loadBlackbox">
       <option value="">All states</option>
       <option value="open">Open</option>
       <option value="investigating">Investigating</option>
@@ -247,7 +248,7 @@
       <option value="resolved">Resolved</option>
       <option value="archived">Archived</option>
     </select>
-    <button class="btn btn-sm btn-outline" onclick="loadBlackbox()"><i class="fas fa-sync"></i> Refresh</button>
+    <button class="btn btn-sm btn-outline" data-dashboard-action="modal" data-handler="loadBlackbox"><i class="fas fa-sync"></i> Refresh</button>
   </div>
   <div class="blackbox-layout">
     <div class="card blackbox-list-card">
@@ -262,28 +263,28 @@
 
 <!-- Data Page -->
 <div class="page" id="page-data">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+  <div class="dashboard-toolbar">
     <div>
-      <div class="section-title" style="margin:0">Stored Data (<span id="kvCount">0</span>)</div>
+      <div class="section-title">Stored Data (<span id="kvCount">0</span>)</div>
       <div class="sub">What Sidekick stores in persistent key-value data.</div>
     </div>
-    <div style="display:flex;gap:8px">
-      <button class="btn btn-sm" onclick="showNewEntryModal()" title="Create new KV entry"><i class="fas fa-plus"></i> New Entry</button>
-      <button class="btn btn-sm btn-outline" onclick="exportKV()" title="Export all KV data as JSON"><i class="fas fa-download"></i> Export</button>
-      <button class="btn btn-sm btn-outline" onclick="importKV()" title="Import KV data from JSON"><i class="fas fa-upload"></i> Import</button>
-      <button class="btn btn-sm btn-outline" onclick="clearData('kv')" title="Clear all KV data"><i class="fas fa-trash"></i> Clear KV</button>
+    <div class="control-row">
+       <button class="btn btn-sm" data-dashboard-action="modal" data-handler="showNewEntryModal" title="Create new KV entry"><i class="fas fa-plus"></i> New Entry</button>
+       <button class="btn btn-sm btn-outline" data-dashboard-action="modal" data-handler="exportKV" title="Export all KV data as JSON"><i class="fas fa-download"></i> Export</button>
+       <button class="btn btn-sm btn-outline" data-dashboard-action="modal" data-handler="importKV" title="Import KV data from JSON"><i class="fas fa-upload"></i> Import</button>
+       <button class="btn btn-sm btn-outline" data-dashboard-action="clear-data" data-type="kv" title="Clear all KV data"><i class="fas fa-trash"></i> Clear KV</button>
     </div>
   </div>
   <div class="metric-strip" id="kvSummary"></div>
   <div class="search-bar">
-    <input type="text" id="kvSearch" placeholder="Search keys, values, namespace..." oninput="filterKV()" aria-label="Search stored data">
-    <select id="kvProjectFilter" onchange="filterKV()">
+    <input type="text" id="kvSearch" placeholder="Search keys, values, namespace..." data-dashboard-input="filterKV" aria-label="Search stored data">
+    <select id="kvProjectFilter" data-dashboard-change="filterKV">
       <option value="">All Projects</option>
     </select>
-    <select id="kvNamespaceFilter" onchange="filterKV()">
+    <select id="kvNamespaceFilter" data-dashboard-change="filterKV">
       <option value="">All Namespaces</option>
     </select>
-    <select id="kvTypeFilter" onchange="filterKV()">
+    <select id="kvTypeFilter" data-dashboard-change="filterKV">
       <option value="">All Types</option>
       <option value="string">String</option>
       <option value="object">Object</option>
@@ -292,7 +293,7 @@
       <option value="boolean">Boolean</option>
       <option value="null">Null</option>
     </select>
-    <select id="kvAgeFilter" onchange="filterKV()">
+    <select id="kvAgeFilter" data-dashboard-change="filterKV">
       <option value="all">All Time</option>
       <option value="today">Today</option>
       <option value="week">This Week</option>
@@ -307,61 +308,61 @@
 
 <!-- Memory Page -->
 <div class="page" id="page-memory">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+  <div class="dashboard-toolbar">
     <div>
-      <div class="section-title" style="margin:0">Memory (<span id="memoryCount">0</span>)</div>
+      <div class="section-title">Memory (<span id="memoryCount">0</span>)</div>
       <div class="sub">What Sidekick learned and should remember. Operational tool-call records are available, but not selected by default.</div>
     </div>
-    <div style="display:flex;gap:8px">
-      <button class="btn btn-sm btn-outline" onclick="expireStaleMemories()" title="Disable memories not confirmed in 90 days"><i class="fas fa-clock"></i> Expire Stale</button>
-      <button class="btn btn-sm btn-outline" onclick="exportMemories()" title="Export memories as JSON"><i class="fas fa-download"></i> Export</button>
-      <button class="btn btn-sm btn-outline" onclick="importMemories()" title="Import memories from JSON"><i class="fas fa-upload"></i> Import</button>
+    <div class="control-row">
+       <button class="btn btn-sm btn-outline" data-dashboard-action="modal" data-handler="expireStaleMemories" title="Disable memories not confirmed in 90 days"><i class="fas fa-clock"></i> Expire Stale</button>
+       <button class="btn btn-sm btn-outline" data-dashboard-action="modal" data-handler="exportMemories" title="Export memories as JSON"><i class="fas fa-download"></i> Export</button>
+       <button class="btn btn-sm btn-outline" data-dashboard-action="modal" data-handler="importMemories" title="Import memories from JSON"><i class="fas fa-upload"></i> Import</button>
     </div>
   </div>
   <div class="tab-switch" role="tablist" aria-label="Memory categories">
-    <button class="active" id="memoryCategoryDurable" onclick="setMemoryCategory('durable')" role="tab" aria-selected="true">Durable</button>
-    <button id="memoryCategorySessions" onclick="setMemoryCategory('sessions')" role="tab" aria-selected="false">Sessions</button>
-    <button id="memoryCategoryUnresolved" onclick="setMemoryCategory('unresolved')" role="tab" aria-selected="false">Unresolved</button>
-    <button id="memoryCategoryOperational" onclick="setMemoryCategory('operational')" role="tab" aria-selected="false">Operational</button>
-    <button id="memoryCategoryAll" onclick="setMemoryCategory('all')" role="tab" aria-selected="false">All</button>
+    <button class="active" id="memoryCategoryDurable" data-dashboard-action="memory-category" data-value="durable" role="tab" aria-selected="true">Durable</button>
+    <button id="memoryCategorySessions" data-dashboard-action="memory-category" data-value="sessions" role="tab" aria-selected="false">Sessions</button>
+    <button id="memoryCategoryUnresolved" data-dashboard-action="memory-category" data-value="unresolved" role="tab" aria-selected="false">Unresolved</button>
+    <button id="memoryCategoryOperational" data-dashboard-action="memory-category" data-value="operational" role="tab" aria-selected="false">Operational</button>
+    <button id="memoryCategoryAll" data-dashboard-action="memory-category" data-value="all" role="tab" aria-selected="false">All</button>
   </div>
 
-  <div class="grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:12px">
-    <div class="card" style="padding:12px">
-      <div class="s-label" style="margin-bottom:4px">Loaded</div>
-      <div style="font-size:1.4rem;font-weight:700;color:#58a6ff" id="memStatsTotal">--</div>
+  <div class="grid memory-stats-grid">
+    <div class="card compact-card">
+      <div class="s-label compact-label">Loaded</div>
+      <div class="memory-stat-value accent" id="memStatsTotal">--</div>
     </div>
-    <div class="card" style="padding:12px">
-      <div class="s-label" style="margin-bottom:4px">Durable Active</div>
-      <div style="font-size:1.4rem;font-weight:700;color:#3fb950" id="memStatsActive">--</div>
+    <div class="card compact-card">
+      <div class="s-label compact-label">Durable Active</div>
+      <div class="memory-stat-value success" id="memStatsActive">--</div>
     </div>
-    <div class="card" style="padding:12px">
-      <div class="s-label" style="margin-bottom:4px">Operational</div>
-      <div style="font-size:1.4rem;font-weight:700;color:#8b949e" id="memStatsStale">--</div>
+    <div class="card compact-card">
+      <div class="s-label compact-label">Operational</div>
+      <div class="memory-stat-value muted" id="memStatsStale">--</div>
     </div>
-    <div class="card" style="padding:12px">
-      <div class="s-label" style="margin-bottom:4px">Avg Confidence</div>
-      <div style="font-size:1.4rem;font-weight:700;color:#c9d1d9" id="memStatsConfidence">--</div>
+    <div class="card compact-card">
+      <div class="s-label compact-label">Avg Confidence</div>
+      <div class="memory-stat-value" id="memStatsConfidence">--</div>
     </div>
   </div>
 
-  <div class="grid" style="grid-template-columns:1fr 1fr;margin-bottom:12px">
-    <div class="card" style="padding:12px">
-      <div class="s-label" style="margin-bottom:8px">By Type</div>
-      <div id="memStatsByType" style="font-size:.8rem;color:#c9d1d9;line-height:1.6">--</div>
+  <div class="grid memory-breakdown-grid">
+    <div class="card compact-card">
+      <div class="s-label breakdown-label">By Type</div>
+      <div id="memStatsByType" class="memory-breakdown">--</div>
     </div>
-    <div class="card" style="padding:12px">
-      <div class="s-label" style="margin-bottom:8px">By Project</div>
-      <div id="memStatsByProject" style="font-size:.8rem;color:#c9d1d9;line-height:1.6">--</div>
+    <div class="card compact-card">
+      <div class="s-label breakdown-label">By Project</div>
+      <div id="memStatsByProject" class="memory-breakdown">--</div>
     </div>
   </div>
 
   <div class="search-bar">
-    <input type="text" id="memorySearch" placeholder="Search memories, tags, source..." oninput="filterMemories()" aria-label="Search memories">
-    <select id="memoryProjectFilter" onchange="filterMemories()">
+    <input type="text" id="memorySearch" placeholder="Search memories, tags, source..." data-dashboard-input="filterMemories" aria-label="Search memories">
+    <select id="memoryProjectFilter" data-dashboard-change="filterMemories">
       <option value="">All Projects</option>
     </select>
-    <select id="memoryTypeFilter" onchange="filterMemories()">
+    <select id="memoryTypeFilter" data-dashboard-change="filterMemories">
       <option value="">All Types</option>
       <option value="fact">Fact</option>
       <option value="decision">Decision</option>
@@ -372,22 +373,22 @@
       <option value="session">Session</option>
       <option value="tool_call">Tool Call</option>
     </select>
-    <select id="memorySourceFilter" onchange="filterMemories()">
+    <select id="memorySourceFilter" data-dashboard-change="filterMemories">
       <option value="">All Sources</option>
     </select>
-    <select id="memoryImportanceFilter" onchange="filterMemories()">
+    <select id="memoryImportanceFilter" data-dashboard-change="filterMemories">
       <option value="">All Importance</option>
       <option value="high">High</option>
       <option value="normal">Normal</option>
       <option value="low">Low</option>
     </select>
-    <label class="inline-check"><input type="checkbox" id="memoryUnresolvedOnly" onchange="filterMemories()"> Unresolved only</label>
-    <label style="display:flex;align-items:center;gap:4px;font-size:.8rem;color:#8b949e">
-      <input type="checkbox" id="memoryIncludeDisabled" onchange="filterMemories()"> Include disabled
+    <label class="inline-check"><input type="checkbox" id="memoryUnresolvedOnly" data-dashboard-change="filterMemories"> Unresolved only</label>
+    <label class="inline-check">
+      <input type="checkbox" id="memoryIncludeDisabled" data-dashboard-change="filterMemories"> Include disabled
     </label>
   </div>
 
-  <div class="card" id="memoryList" style="max-height:700px;overflow-y:auto;padding:8px 16px">
+  <div class="card record-list" id="memoryList">
     <div class="empty">Loading memories...</div>
   </div>
 </div>
@@ -395,50 +396,50 @@
 <!-- Config Page -->
 <div class="page" id="page-config">
   <div class="section-title">Environment Configuration</div>
-  <div class="card" id="configList" style="max-height:600px;overflow-y:auto;padding:8px 16px"></div>
+  <div class="card record-list" id="configList"></div>
 </div>
 
 <!-- Research Page -->
 <div class="page" id="page-research">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:12px;flex-wrap:wrap">
+  <div class="dashboard-toolbar wrap">
     <div>
-      <div class="section-title" style="margin:0">Research Sources</div>
+      <div class="section-title">Research Sources</div>
       <div class="sub">Campaign-owned snapshots are immutable analysis inputs. Only bounded lifecycle metadata is shown here.</div>
     </div>
-    <button class="btn btn-sm btn-outline" onclick="loadResearchSources()"><i class="fas fa-sync"></i> Refresh</button>
+    <button class="btn btn-sm btn-outline" data-dashboard-action="refresh" data-handler="loadResearchSources"><i class="fas fa-sync"></i> Refresh</button>
   </div>
-  <div class="card" style="padding:12px;margin-bottom:12px" aria-live="polite">
+  <div class="card research-card" aria-live="polite">
     <div class="section-title">Workspace Readiness</div>
     <div id="researchReadiness" class="sub">Checking...</div>
   </div>
-  <div class="card" style="padding:12px;margin-bottom:12px">
+  <div class="card research-card">
     <div class="section-title">Campaign Repositories</div>
     <div id="researchRepositories" class="sub">Loading...</div>
   </div>
-  <details class="card" style="padding:12px;margin-bottom:12px" open>
-    <summary class="section-title" style="cursor:pointer">Snapshots and verification</summary>
-    <div id="researchSnapshots" class="sub" style="margin-top:10px">Select a repository to inspect snapshots.</div>
-    <div id="researchSnapshotDetail" style="margin-top:10px"></div>
+  <details class="card research-card" open>
+    <summary class="section-title interactive-summary">Snapshots and verification</summary>
+    <div id="researchSnapshots" class="sub research-detail">Select a repository to inspect snapshots.</div>
+    <div id="researchSnapshotDetail" class="research-detail"></div>
   </details>
-  <details class="card" style="padding:12px;margin-bottom:12px">
-    <summary class="section-title" style="cursor:pointer">Governed source actions</summary>
-    <div class="sub" style="margin:8px 0">Actions are dispatched through the governed research source tool. Remove, archive, and recovery require explicit confirmation.</div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap">
+  <details class="card research-card">
+    <summary class="section-title interactive-summary">Governed source actions</summary>
+    <div class="sub research-action-note">Actions are dispatched through the governed research source tool. Remove, archive, and recovery require explicit confirmation.</div>
+    <div class="control-row research-actions">
       <input id="researchImportPath" placeholder="Server directory for import" aria-label="Server directory for import">
-      <button class="btn btn-sm" onclick="researchImport()">Import directory</button>
-      <button class="btn btn-sm btn-outline" onclick="researchRecover()">Recover staging</button>
+      <button class="btn btn-sm" data-dashboard-action="modal" data-handler="researchImport">Import directory</button>
+      <button class="btn btn-sm btn-outline" data-dashboard-action="modal" data-handler="researchRecover">Recover staging</button>
     </div>
-    <div id="researchActionStatus" class="sub" aria-live="polite" style="margin-top:10px"></div>
+    <div id="researchActionStatus" class="sub research-detail" aria-live="polite"></div>
   </details>
-  <div class="card" style="margin-top:12px">
+  <div class="card research-results-card">
     <div class="section-title">Bounded Repository Research</div>
     <div class="sub">Semantic output is an untrusted discovery lead. Validate promising spans with exact source or governed runtime evidence before treating a conclusion as confirmed.</div>
     <label for="researchQuery">Bounded semantic query</label>
     <input id="researchQuery" type="text" maxlength="500" placeholder="authentication, callers, Perl package, ...">
-    <div style="margin-top:8px"><button class="btn" onclick="loadRepositoryResearch()">Search</button></div>
-    <div id="researchStatus" class="sub" aria-live="polite" style="margin-top:10px"></div>
-    <pre id="researchResults" class="agent-log" style="white-space:pre-wrap;max-height:520px;overflow:auto"></pre>
-    <button id="researchMore" class="btn btn-outline" onclick="loadRepositoryResearch(true)" hidden>Load next bounded page</button>
+    <div class="control-row"><button class="btn" data-dashboard-action="modal" data-handler="loadRepositoryResearch">Search</button></div>
+    <div id="researchStatus" class="sub research-detail" aria-live="polite"></div>
+    <pre id="researchResults" class="agent-log research-results"></pre>
+    <button id="researchMore" class="btn btn-outline" data-dashboard-action="research-more" hidden>Load next bounded page</button>
   </div>
 </div>
 
@@ -473,42 +474,42 @@
     <label for="agentFollowupGoal">Ask a follow-up</label>
     <textarea class="agent-goal" id="agentFollowupGoal" rows="3" placeholder="Continue this Agent session..." aria-describedby="agentFollowupHint"></textarea>
     <div id="agentFollowupHint" class="sub">Enter creates a new line. Ctrl+Enter or Cmd+Enter submits a governed child task.</div>
-    <div style="display:flex;gap:8px;margin-top:8px">
-      <button class="btn" id="agentFollowupGo" onclick="submitFollowup()">Send follow-up</button>
-      <button class="btn btn-outline" id="agentPause" onclick="pauseAgentTask()" disabled>Pause</button>
-      <button class="btn btn-outline" id="agentResume" onclick="resumeAgentTask()" disabled>Resume</button>
-      <button class="btn btn-danger" id="agentStop" onclick="stopAgent()" disabled>Stop</button>
-      <button class="btn btn-outline" id="agentNewTask" onclick="newAgentTask()">+ New Agent Task</button>
+    <div class="control-row agent-actions">
+      <button class="btn" id="agentFollowupGo" data-dashboard-action="agent" data-handler="submitFollowup">Send follow-up</button>
+      <button class="btn btn-outline" id="agentPause" data-dashboard-action="agent" data-handler="pauseAgentTask" disabled>Pause</button>
+      <button class="btn btn-outline" id="agentResume" data-dashboard-action="agent" data-handler="resumeAgentTask" disabled>Resume</button>
+      <button class="btn btn-danger" id="agentStop" data-dashboard-action="agent" data-handler="stopAgent" disabled>Stop</button>
+      <button class="btn btn-outline" id="agentNewTask" data-dashboard-action="agent" data-handler="newAgentTask">+ New Agent Task</button>
     </div>
   </div>
-  <div id="agentNewTaskArea" style="margin-top:12px">
+  <div id="agentNewTaskArea" class="agent-new-task-area">
     <label for="agentGoal" class="sub">New Agent Task</label>
     <textarea class="agent-goal" id="agentGoal" rows="3" placeholder="Describe what you want the agent to do...&#10;Example: check disk usage, store the result, and tell me the summary"></textarea>
-    <div style="display:flex;gap:8px;margin-top:8px">
-      <button class="btn" id="agentGo" onclick="runAgent()">Start task</button>
-      <button class="btn btn-outline" id="agentClear" onclick="clearAgent()">Clear</button>
+    <div class="control-row agent-actions">
+      <button class="btn" id="agentGo" data-dashboard-action="agent" data-handler="runAgent">Start task</button>
+      <button class="btn btn-outline" id="agentClear" data-dashboard-action="agent" data-handler="clearAgent">Clear</button>
     </div>
-    <label for="agentGuidance" class="sub" style="display:block;margin-top:10px">Live guidance</label>
+    <label for="agentGuidance" class="sub agent-guidance-label">Live guidance</label>
     <textarea class="agent-goal" id="agentGuidance" rows="2" placeholder="Add bounded guidance while the task runs..." aria-describedby="agentGuidanceHint"></textarea>
     <div id="agentGuidanceHint" class="sub">Guidance is stored as an authenticated task event and cannot expand policy or authority.</div>
-    <button class="btn btn-outline" id="agentGuidanceGo" onclick="sendAgentGuidance()">Add guidance</button>
+    <button class="btn btn-outline" id="agentGuidanceGo" data-dashboard-action="agent" data-handler="sendAgentGuidance">Add guidance</button>
   </div>
-  <div style="margin-top:16px">
-    <button class="section-title agent-history-toggle" id="agentHistoryToggle" type="button" aria-expanded="false" aria-controls="agentHistory" onclick="toggleHistory()">
+  <div class="agent-history-section">
+    <button class="section-title agent-history-toggle" id="agentHistoryToggle" type="button" aria-expanded="false" aria-controls="agentHistory" data-dashboard-action="agent" data-handler="toggleHistory">
       History <span id="agentHistoryChevron" aria-hidden="true">▼</span>
     </button>
-    <div id="agentHistory" style="display:none;margin-top:8px" aria-live="polite"></div>
+    <div id="agentHistory" class="agent-history" aria-live="polite"></div>
   </div>
 </div>
 
 <!-- Handoffs Page -->
 <div class="page" id="page-handoffs">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+  <div class="dashboard-toolbar">
     <div>
-      <div class="section-title" style="margin:0">Handoff Receiver View</div>
+      <div class="section-title">Handoff Receiver View</div>
       <div class="sub">Continuity state, evidence freshness, blockers, decisions, and the next safe action.</div>
     </div>
-    <button class="btn btn-sm btn-outline" onclick="loadHandoffs()"><i class="fas fa-sync"></i> Refresh</button>
+     <button class="btn btn-sm btn-outline" data-dashboard-action="refresh" data-handler="loadHandoffs"><i class="fas fa-sync"></i> Refresh</button>
   </div>
   <div id="handoffStatus" class="sub" aria-live="polite">Loading handoffs...</div>
   <div id="handoffList" class="mission-grid" aria-live="polite"></div>
@@ -516,14 +517,14 @@
 
 <!-- Approvals Page -->
 <div class="page" id="page-approvals">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-    <div class="section-title" style="margin:0">Approval Inbox (<span id="approvalCount">0</span>)</div>
-    <div style="display:flex;gap:8px">
-      <button class="btn btn-sm btn-outline" onclick="loadApprovals()" title="Refresh approvals"><i class="fas fa-sync"></i> Refresh</button>
+  <div class="dashboard-toolbar">
+    <div class="section-title">Approval Inbox (<span id="approvalCount">0</span>)</div>
+    <div class="activity-actions">
+       <button class="btn btn-sm btn-outline" data-dashboard-action="refresh" data-handler="loadApprovals" title="Refresh approvals"><i class="fas fa-sync"></i> Refresh</button>
     </div>
   </div>
   <div class="search-bar">
-    <select id="approvalStatusFilter" onchange="loadApprovals()">
+     <select id="approvalStatusFilter" data-dashboard-change="loadApprovals">
       <option value="pending">Pending</option>
       <option value="">All Statuses</option>
       <option value="approved">Approved</option>
@@ -531,7 +532,7 @@
       <option value="failed">Failed</option>
     </select>
   </div>
-  <div class="card" id="approvalList" style="max-height:650px;overflow-y:auto;padding:8px 16px">
+  <div class="card record-list" id="approvalList">
     <div class="empty">No pending approvals</div>
   </div>
 
@@ -544,20 +545,20 @@
     Presenting that next to ordinary pending approvals would invite treating it
     like one. See docs/adr-approval-continuation.md §8.2.
   -->
-  <div id="reconciliationSection" style="display:none;margin-top:24px">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-      <div class="section-title" style="margin:0;color:#f0883e">
+  <div id="reconciliationSection" class="reconciliation-section">
+    <div class="dashboard-toolbar">
+      <div class="section-title reconciliation-title">
         <i class="fas fa-triangle-exclamation"></i>
         Ambiguous Executions (<span id="reconciliationCount">0</span>)
       </div>
-      <button class="btn btn-sm btn-outline" onclick="loadReconciliations()" title="Refresh reconciliations"><i class="fas fa-sync"></i> Refresh</button>
+       <button class="btn btn-sm btn-outline" data-dashboard-action="refresh" data-handler="loadReconciliations" title="Refresh reconciliations"><i class="fas fa-sync"></i> Refresh</button>
     </div>
-    <div style="font-size:.8rem;color:#8b949e;line-height:1.6;margin-bottom:12px;padding:10px 12px;border-left:3px solid #f0883e;background:#161b22">
+    <div class="reconciliation-notice">
       A runner claimed one of these high-risk steps and stopped before recording a result.
       <strong>Whether the tool actually ran is unknown</strong> — that is why no outcome was recorded and why
       nothing will resume it automatically. Each task waits here for a person to decide.
     </div>
-    <div class="card" id="reconciliationList" style="max-height:650px;overflow-y:auto;padding:8px 16px">
+    <div class="card record-list" id="reconciliationList">
       <div class="empty">Nothing awaiting reconciliation</div>
     </div>
   </div>
@@ -565,94 +566,94 @@
 
 <!-- Database Page -->
 <div class="page" id="page-database">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-    <div class="section-title" style="margin:0">Database Management</div>
-    <div style="display:flex;gap:8px">
-      <button class="btn btn-sm btn-outline" onclick="loadDbStats()" title="Refresh stats"><i class="fas fa-sync"></i> Refresh</button>
-      <button class="btn btn-sm btn-outline" onclick="createBackup()" title="Create backup"><i class="fas fa-download"></i> Backup</button>
+  <div class="dashboard-toolbar">
+    <div class="section-title">Database Management</div>
+    <div class="activity-actions">
+       <button class="btn btn-sm btn-outline" data-dashboard-action="refresh" data-handler="loadDbStats" title="Refresh stats"><i class="fas fa-sync"></i> Refresh</button>
+       <button class="btn btn-sm btn-outline" data-dashboard-action="database" data-handler="createBackup" title="Create backup"><i class="fas fa-download"></i> Backup</button>
     </div>
   </div>
   
-  <div class="grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:12px">
-    <div class="card" style="padding:12px">
-      <div class="s-label" style="margin-bottom:6px">Database Size</div>
-      <div style="font-size:1.5rem;font-weight:700;color:#58a6ff" id="dbSize">--</div>
+  <div class="grid database-stats-grid">
+    <div class="card compact-card">
+      <div class="s-label database-label">Database Size</div>
+      <div class="database-stat-value accent" id="dbSize">--</div>
     </div>
-    <div class="card" style="padding:12px">
-      <div class="s-label" style="margin-bottom:6px">Tables</div>
-      <div style="font-size:1.5rem;font-weight:700;color:#3fb950" id="dbTables">--</div>
+    <div class="card compact-card">
+      <div class="s-label database-label">Tables</div>
+      <div class="database-stat-value success" id="dbTables">--</div>
     </div>
-    <div class="card" style="padding:12px">
-      <div class="s-label" style="margin-bottom:6px">WAL Mode</div>
-      <div style="font-size:1.5rem;font-weight:700;color:#3fb950" id="dbWal">--</div>
+    <div class="card compact-card">
+      <div class="s-label database-label">WAL Mode</div>
+      <div class="database-stat-value success" id="dbWal">--</div>
     </div>
-    <div class="card" style="padding:12px">
-      <div class="s-label" style="margin-bottom:6px">Cache Hit</div>
-      <div style="font-size:1.5rem;font-weight:700;color:#3fb950" id="dbCache">--</div>
+    <div class="card compact-card">
+      <div class="s-label database-label">Cache Hit</div>
+      <div class="database-stat-value success" id="dbCache">--</div>
     </div>
   </div>
   
-  <div class="section-title" style="margin-bottom:8px">Schema Browser</div>
-  <div class="card" style="padding:16px;margin-bottom:16px;max-height:400px;overflow-y:auto" id="dbSchema"></div>
+  <div class="section-title database-section-title">Schema Browser</div>
+  <div class="card database-panel database-schema" id="dbSchema"></div>
   
-  <div class="section-title" style="margin-bottom:8px">Query Editor</div>
-  <div class="card" style="padding:16px;margin-bottom:16px">
-    <textarea id="dbQuery" rows="4" placeholder="SELECT * FROM kv_store LIMIT 10" style="width:100%;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;padding:8px;font-family:var(--font);font-size:13px;resize:vertical"></textarea>
-    <div style="display:flex;gap:8px;margin-top:8px;align-items:center">
-      <button class="btn" onclick="runQuery()">Run Query</button>
-      <label style="display:flex;align-items:center;gap:6px;color:#8b949e;font-size:.85rem">
+  <div class="section-title database-section-title">Query Editor</div>
+  <div class="card database-panel">
+    <textarea id="dbQuery" class="database-query" rows="4" placeholder="SELECT * FROM kv_store LIMIT 10"></textarea>
+    <div class="control-row database-query-actions">
+       <button class="btn" data-dashboard-action="database" data-handler="runQuery">Run Query</button>
+      <label class="database-readonly-label">
         <input type="checkbox" id="dbReadonly" checked> Readonly
       </label>
     </div>
-    <div id="dbQueryResult" style="margin-top:12px;max-height:400px;overflow:auto"></div>
+    <div id="dbQueryResult" class="database-result"></div>
   </div>
   
-  <div class="section-title" style="margin-bottom:8px">Full-Text Search</div>
-  <div class="card" style="padding:16px;margin-bottom:16px">
-    <div style="display:flex;gap:8px">
-      <input type="text" id="dbSearchQuery" placeholder="Search terms..." style="flex:1;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;padding:8px;font-family:var(--font)">
-      <button class="btn" onclick="runDbSearch()">Search</button>
+  <div class="section-title database-section-title">Full-Text Search</div>
+  <div class="card database-panel">
+    <div class="database-search-row">
+      <input type="text" id="dbSearchQuery" class="database-search-input" placeholder="Search terms...">
+       <button class="btn" data-dashboard-action="database" data-handler="runDbSearch">Search</button>
     </div>
-    <div id="dbSearchResult" style="margin-top:12px;max-height:400px;overflow:auto"></div>
+    <div id="dbSearchResult" class="database-result"></div>
   </div>
   
-  <div class="section-title" style="margin-bottom:8px">Migrations</div>
-  <div class="card" style="padding:16px" id="dbMigrations"></div>
+  <div class="section-title database-section-title">Migrations</div>
+  <div class="card database-panel database-migrations" id="dbMigrations"></div>
 </div>
 
 <!-- Tools Page -->
 <div class="page" id="page-tools">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-    <div class="section-title" style="margin:0">Tool Catalog (<span id="toolCount">0</span>)</div>
+  <div class="dashboard-toolbar">
+    <div class="section-title">Tool Catalog (<span id="toolCount">0</span>)</div>
   </div>
-  <div class="grid tool-summary-grid" style="margin-bottom:12px">
+  <div class="grid tool-summary-grid">
     <div class="card tool-summary-card">
-      <div class="s-label" style="margin-bottom:4px">Visible</div>
+      <div class="s-label compact-label">Visible</div>
       <div class="tool-summary-value" id="toolSummaryVisible">0</div>
     </div>
     <div class="card tool-summary-card">
-      <div class="s-label" style="margin-bottom:4px">Blocked</div>
+      <div class="s-label compact-label">Blocked</div>
       <div class="tool-summary-value blocked" id="toolSummaryBlocked">0</div>
     </div>
     <div class="card tool-summary-card">
-      <div class="s-label" style="margin-bottom:4px">Approvals Required</div>
+      <div class="s-label compact-label">Approvals Required</div>
       <div class="tool-summary-value approval" id="toolSummaryApproval" title="Approval requests currently pending review">0</div>
     </div>
     <div class="card tool-summary-card">
-      <div class="s-label" style="margin-bottom:4px">High Risk</div>
+      <div class="s-label compact-label">High Risk</div>
       <div class="tool-summary-value risk" id="toolSummaryHighRisk">0</div>
     </div>
     <div class="card tool-summary-card">
-      <div class="s-label" style="margin-bottom:4px">Tools Requiring Approval</div>
+      <div class="s-label compact-label">Tools Requiring Approval</div>
       <div class="tool-summary-value" id="toolSummaryApprovalGated" title="Tools whose policy gates every call behind an approval">0</div>
     </div>
   </div>
   <div class="search-bar">
-    <input type="text" id="toolSearch" placeholder="Search tools by name or description..." oninput="filterTools()">
-    <select id="toolCategoryFilter" onchange="filterTools()">
+    <input type="text" id="toolSearch" placeholder="Search tools by name or description..." data-dashboard-input="filterTools">
+    <select id="toolCategoryFilter" data-dashboard-change="filterTools">
       <option value="">All Categories</option>
     </select>
-    <select id="toolPolicyFilter" onchange="filterTools()">
+    <select id="toolPolicyFilter" data-dashboard-change="filterTools">
       <option value="">All Policy States</option>
       <option value="enabled">Enabled</option>
       <option value="blocked">Blocked</option>
@@ -665,12 +666,12 @@
 
 <!-- Evolve Page -->
 <div class="page" id="page-evolve">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+  <div class="dashboard-toolbar">
     <div>
-      <div class="section-title" style="margin:0">Evolve Workflow Learning (<span id="evolveCount">0</span>)</div>
-      <div style="color:#8b949e;font-size:.82rem;margin-top:4px">Candidates are evidence-backed workflows. Only trial/active generated tools are callable MCP tools.</div>
+      <div class="section-title">Evolve Workflow Learning (<span id="evolveCount">0</span>)</div>
+      <div class="page-note">Candidates are evidence-backed workflows. Only trial/active generated tools are callable MCP tools.</div>
     </div>
-    <button class="btn btn-sm" onclick="runEvolveAnalyze()"><i class="fas fa-magnifying-glass-chart"></i> Analyze Logs</button>
+    <button class="btn btn-sm" data-dashboard-action="modal" data-handler="runEvolveAnalyze"><i class="fas fa-magnifying-glass-chart"></i> Analyze Logs</button>
   </div>
   <div id="evolveExecutionWatch"></div>
   <div id="evolveList"></div>
@@ -678,12 +679,12 @@
 
 <!-- Capabilities Page -->
 <div class="page" id="page-capabilities">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+  <div class="dashboard-toolbar">
     <div>
-      <div class="section-title" style="margin:0">Capability Packs (<span id="capCount">0</span>)</div>
-      <div style="color:#8b949e;font-size:.82rem;margin-top:4px">A capability pack is an installable area of competence: modules, workflows, knowledge and configuration. Installing or enabling a pack activates executable module code inside Sidekick — there is no process sandbox, only integrity and lifecycle controls. Maturity is evidence-bound: foundation, operational, integrated, then certified.</div>
+      <div class="section-title">Capability Packs (<span id="capCount">0</span>)</div>
+      <div class="page-note">A capability pack is an installable area of competence: modules, workflows, knowledge and configuration. Installing or enabling a pack activates executable module code inside Sidekick — there is no process sandbox, only integrity and lifecycle controls. Maturity is evidence-bound: foundation, operational, integrated, then certified.</div>
     </div>
-    <button class="btn btn-sm" onclick="loadCapabilities()"><i class="fas fa-sync"></i> Refresh</button>
+    <button class="btn btn-sm" data-dashboard-action="refresh" data-handler="loadCapabilities"><i class="fas fa-sync"></i> Refresh</button>
   </div>
 
   <div id="capError"></div>
@@ -691,37 +692,37 @@
   <div class="section-title">Installed</div>
   <div id="capInstalled"></div>
 
-  <div class="section-title" style="margin-top:20px">Available (bundled with this Sidekick release)</div>
+  <div class="section-title section-spaced">Available (bundled with this Sidekick release)</div>
   <div id="capAvailable"></div>
 
-  <div class="section-title" style="margin-top:20px">Inspect / install a server-local package</div>
-  <div class="card" style="padding:12px">
-    <div style="color:#8b949e;font-size:.82rem;margin-bottom:8px">Paths are resolved on the Sidekick server. The browser cannot browse server files; enter a path the server can read. Remote/marketplace installation is not available.</div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap">
-      <input id="capLocalPath" placeholder="/absolute/path/to/pack" style="flex:1;min-width:280px">
-      <button class="btn btn-sm" onclick="inspectLocalCapability()"><i class="fas fa-magnifying-glass"></i> Inspect</button>
-      <button class="btn btn-sm btn-outline" onclick="installLocalCapability()"><i class="fas fa-download"></i> Install</button>
+  <div class="section-title section-spaced">Inspect / install a server-local package</div>
+  <div class="card compact-card">
+    <div class="page-note capability-note">Paths are resolved on the Sidekick server. The browser cannot browse server files; enter a path the server can read. Remote/marketplace installation is not available.</div>
+    <div class="control-row">
+      <input id="capLocalPath" class="capability-path" placeholder="/absolute/path/to/pack">
+       <button class="btn btn-sm" data-dashboard-action="modal" data-handler="inspectLocalCapability"><i class="fas fa-magnifying-glass"></i> Inspect</button>
+       <button class="btn btn-sm btn-outline" data-dashboard-action="modal" data-handler="installLocalCapability"><i class="fas fa-download"></i> Install</button>
     </div>
-    <pre id="capInspect" style="margin-top:10px;display:none;max-height:400px;overflow:auto"></pre>
+    <pre id="capInspect" class="capability-inspect"></pre>
   </div>
 </div>
 
 <!-- Network Scopes Page -->
 <div class="page" id="page-network-scopes">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+  <div class="dashboard-toolbar">
     <div>
-      <div class="section-title" style="margin:0">Outbound Network Scopes (<span id="networkScopeCount">0</span>)</div>
-      <div style="color:#8b949e;font-size:.82rem;margin-top:4px">Named, operator-managed allowlists for private browser and HTTP access. Mutations require an administrator.</div>
+      <div class="section-title">Outbound Network Scopes (<span id="networkScopeCount">0</span>)</div>
+      <div class="page-note">Named, operator-managed allowlists for private browser and HTTP access. Mutations require an administrator.</div>
     </div>
-    <button class="btn btn-sm" onclick="loadNetworkScopes()"><i class="fas fa-sync"></i> Refresh</button>
+    <button class="btn btn-sm" data-dashboard-action="refresh" data-handler="loadNetworkScopes"><i class="fas fa-sync"></i> Refresh</button>
   </div>
   <div id="networkScopeError"></div>
-  <div class="card" style="padding:12px;margin-bottom:14px">
+  <div class="card form-card">
     <div class="section-title">Create scope</div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
-      <input id="networkScopeName" placeholder="name (for example lab-browser)" style="min-width:240px">
-      <textarea id="networkScopePolicy" rows="5" style="flex:1;min-width:360px;font-family:inherit" placeholder='{"allowed_hosts":["lab.example.test"],"allowed_protocols":["https"],"allowed_ports":[443]}'></textarea>
-      <button class="btn btn-sm" onclick="createNetworkScope()">Create</button>
+    <div class="control-row form-row">
+      <input id="networkScopeName" class="scope-name" placeholder="name (for example lab-browser)">
+      <textarea id="networkScopePolicy" class="scope-policy" rows="5" placeholder='{"allowed_hosts":["lab.example.test"],"allowed_protocols":["https"],"allowed_ports":[443]}'></textarea>
+       <button class="btn btn-sm" data-dashboard-action="modal" data-handler="createNetworkScope">Create</button>
     </div>
   </div>
   <div id="networkScopeList"><div class="empty">Loading network scopes...</div></div>
@@ -729,22 +730,22 @@
 
 <!-- Identity Page -->
 <div class="page" id="page-identity">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+  <div class="dashboard-toolbar">
     <div>
-      <div class="section-title" style="margin:0">Identity Administration (<span id="identityCount">0</span>)</div>
-      <div style="color:#8b949e;font-size:.82rem;margin-top:4px">Principals, roles, and account state in this Sidekick trust domain. Authorization remains enforced by Core on every request.</div>
+      <div class="section-title">Identity Administration (<span id="identityCount">0</span>)</div>
+      <div class="page-note">Principals, roles, and account state in this Sidekick trust domain. Authorization remains enforced by Core on every request.</div>
     </div>
-    <button class="btn btn-sm" onclick="loadIdentityAdmin()"><i class="fas fa-sync"></i> Refresh</button>
+    <button class="btn btn-sm" data-dashboard-action="refresh" data-handler="loadIdentityAdmin"><i class="fas fa-sync"></i> Refresh</button>
   </div>
   <div id="identityError"></div>
-  <div class="card" style="padding:12px;margin-bottom:14px">
+  <div class="card form-card">
     <div class="section-title">Create human account</div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+    <div class="control-row form-row">
       <input id="identityNewUsername" placeholder="username" autocomplete="off">
       <input id="identityNewDisplayName" placeholder="display name" autocomplete="off">
       <input id="identityNewPassword" type="password" placeholder="temporary password" autocomplete="new-password">
       <select id="identityNewRole"><option value="viewer">Viewer</option><option value="operator">Operator</option><option value="auditor">Auditor</option><option value="administrator">Administrator</option></select>
-      <button class="btn btn-sm" onclick="createIdentityUser()">Create user</button>
+       <button class="btn btn-sm" data-dashboard-action="modal" data-handler="createIdentityUser">Create user</button>
     </div>
   </div>
   <div id="identityList"><div class="empty">Loading identity...</div></div>
@@ -759,8 +760,8 @@
       <p>Enroll local GPUs and CPUs as trusted workers, watch jobs move through the queue, and control stuck or retired nodes from one place.</p>
     </div>
     <div class="compute-actions">
-      <button class="btn" onclick="createComputeEnrollment()"><i class="fas fa-key"></i> Create Enrollment</button>
-      <button class="btn btn-outline" onclick="loadCompute()"><i class="fas fa-sync"></i> Refresh</button>
+       <button class="btn" data-dashboard-action="modal" data-handler="createComputeEnrollment"><i class="fas fa-key"></i> Create Enrollment</button>
+       <button class="btn btn-outline" data-dashboard-action="refresh" data-handler="loadCompute"><i class="fas fa-sync"></i> Refresh</button>
       <span class="sub" id="computeLastUpdate"></span>
     </div>
   </div>
@@ -798,7 +799,7 @@
           <div class="sub">Recent queue, lease, progress, retry, cancellation, and artifact status.</div>
         </div>
         <div class="search-bar compact">
-          <select id="computeJobStatus" onchange="loadComputeJobs()">
+           <select id="computeJobStatus" data-dashboard-change="loadComputeJobs">
             <option value="">All statuses</option>
             <option value="created">Created</option>
             <option value="waiting_for_approval">Waiting for approval</option>
@@ -814,7 +815,7 @@
             <option value="cancelled">Cancelled</option>
             <option value="dead_letter">Dead letter</option>
           </select>
-          <button class="btn btn-sm btn-outline" onclick="recoverComputeJobs()">Recover Leases</button>
+           <button class="btn btn-sm btn-outline" data-dashboard-action="modal" data-handler="recoverComputeJobs">Recover Leases</button>
         </div>
       </div>
       <div id="computeJobs" class="compute-list"><div class="empty">Loading jobs...</div></div>
@@ -825,28 +826,28 @@
 
 <!-- Predict Page -->
 <div class="page" id="page-predict">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+  <div class="dashboard-toolbar">
     <div>
-      <div class="section-title" style="margin:0">Prediction Engine (<span id="predictCount">0</span>)</div>
-      <div style="color:#8b949e;font-size:.82rem;margin-top:4px">Evidence-backed predictions from correlated tool history, incidents, and workflows within an explicit scope.</div>
+      <div class="section-title">Prediction Engine (<span id="predictCount">0</span>)</div>
+      <div class="page-note">Evidence-backed predictions from correlated tool history, incidents, and workflows within an explicit scope.</div>
     </div>
-    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-      <select id="predictScope" style="background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;padding:6px 10px;font-size:.85rem" title="Analysis scope">
+    <div class="control-row">
+      <select id="predictScope" class="compact-control" title="Analysis scope">
         <option value="project" selected>Current project</option>
         <option value="session">Session</option>
         <option value="task">Task</option>
         <option value="global">All projects (global)</option>
       </select>
-      <input id="predictScopeValue" placeholder="project name" style="background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;padding:6px 10px;font-size:.85rem;width:170px" />
-      <button class="btn btn-sm" onclick="runPredictAnalyze()"><i class="fas fa-magnifying-glass-chart"></i> Analyze</button>
-      <button class="btn btn-sm" onclick="loadPredictStatus()"><i class="fas fa-arrows-rotate"></i> Refresh</button>
-      <button class="btn btn-sm btn-outline" onclick="runPredictPurgePreview()" title="Preview retention cleanup (read-only)"><i class="fas fa-broom"></i> Purge preview</button>
+      <input id="predictScopeValue" class="predict-scope-value" placeholder="project name" />
+       <button class="btn btn-sm" data-dashboard-action="modal" data-handler="runPredictAnalyze"><i class="fas fa-magnifying-glass-chart"></i> Analyze</button>
+       <button class="btn btn-sm" data-dashboard-action="refresh" data-handler="loadPredictStatus"><i class="fas fa-arrows-rotate"></i> Refresh</button>
+       <button class="btn btn-sm btn-outline" data-dashboard-action="modal" data-handler="runPredictPurgePreview" title="Preview retention cleanup (read-only)"><i class="fas fa-broom"></i> Purge preview</button>
     </div>
   </div>
-  <div id="predictStatus" style="margin-bottom:12px"></div>
-  <div id="predictAnalyzeResult" style="margin-bottom:12px"></div>
-  <div id="predictFilters" style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
-    <select id="predictStatusFilter" onchange="loadPredict()" style="background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;padding:6px 10px;font-size:.85rem">
+  <div id="predictStatus" class="result-block"></div>
+  <div id="predictAnalyzeResult" class="result-block"></div>
+  <div id="predictFilters" class="control-row filter-row">
+     <select id="predictStatusFilter" data-dashboard-change="loadPredict">
       <option value="">All statuses</option>
       <option value="active" selected>Active</option>
       <option value="expired">Expired</option>
@@ -855,7 +856,7 @@
       <option value="did_not_occur">Did Not Occur</option>
       <option value="superseded">Superseded</option>
     </select>
-    <select id="predictTypeFilter" onchange="loadPredict()" style="background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;padding:6px 10px;font-size:.85rem">
+     <select id="predictTypeFilter" data-dashboard-change="loadPredict">
       <option value="">All types</option>
       <option value="next_action">Next Action</option>
       <option value="likely_failure">Likely Failure</option>
@@ -865,7 +866,7 @@
       <option value="workflow_opportunity">Workflow Opportunity</option>
       <option value="stale_or_contradicted">Stale / Contradicted</option>
     </select>
-    <select id="predictConfidenceFilter" onchange="loadPredict()" style="background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;padding:6px 10px;font-size:.85rem">
+     <select id="predictConfidenceFilter" data-dashboard-change="loadPredict">
       <option value="">All confidence</option>
       <option value="very_high">Very High</option>
       <option value="high">High</option>
@@ -875,54 +876,54 @@
     </select>
   </div>
   <div id="predictList"></div>
-  <div id="predictDetail" style="display:none"></div>
+  <div id="predictDetail"></div>
 </div>
 
 <!-- Brain v3 Page -->
 <div class="page" id="page-brain">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:12px;flex-wrap:wrap">
+  <div class="dashboard-toolbar wrap">
     <div>
       <div class="mission-kicker">Brain v3 Control Room</div>
-      <h2 style="margin:4px 0 6px">Evidence Graph and Gates</h2>
+      <h2 class="brain-heading">Evidence Graph and Gates</h2>
       <div class="sub">Read-only projections of durable task metadata. Every value is scoped to the selected task and remains subject to the existing Agent authorization boundary.</div>
     </div>
-    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    <div class="control-row">
       <input id="brainTaskId" type="text" maxlength="80" placeholder="task id" aria-label="Brain task id">
-      <button class="btn btn-sm" onclick="loadBrainControlRoom()"><i class="fas fa-sync"></i> Load task</button>
+       <button class="btn btn-sm" data-dashboard-action="refresh" data-handler="loadBrainControlRoom"><i class="fas fa-sync"></i> Load task</button>
     </div>
   </div>
   <div id="brainStatus" class="sub" aria-live="polite">Select a task to inspect Brain v3 metadata.</div>
   <div class="metric-strip" id="brainSummary"></div>
-  <div class="grid" style="grid-template-columns:repeat(2,minmax(0,1fr));gap:12px">
-    <div class="card" style="padding:12px">
+  <div class="grid brain-grid">
+    <div class="card compact-card">
       <div class="section-title">Task Specification</div>
       <div id="brainTaskSpec" class="brain-projection"><div class="empty">No task loaded.</div></div>
     </div>
-    <div class="card" style="padding:12px">
+    <div class="card compact-card">
       <div class="section-title">Belief State</div>
       <div id="brainBeliefState" class="brain-projection"><div class="empty">No task loaded.</div></div>
     </div>
-    <div class="card" style="padding:12px;grid-column:1 / -1">
+    <div class="card compact-card brain-wide">
       <div class="section-title">Recent Cognitive Activity</div>
-      <div class="sub" style="margin-bottom:8px">Bounded operational events only. Private reasoning and raw prompts are not stored.</div>
+      <div class="sub compact-note">Bounded operational events only. Private reasoning and raw prompts are not stored.</div>
       <div id="brainTraceActivity" class="brain-projection"><div class="empty">No task loaded.</div></div>
     </div>
-    <div class="card" style="padding:12px">
+    <div class="card compact-card">
       <div class="section-title">Graph Coverage</div>
       <div id="brainGraphCoverage" class="brain-projection"><div class="empty">No task loaded.</div></div>
     </div>
-    <div class="card" style="padding:12px">
+    <div class="card compact-card">
       <div class="section-title">Verification Gates</div>
       <div id="brainVerificationGates" class="brain-projection"><div class="empty">No task loaded.</div></div>
     </div>
-    <div class="card" style="padding:12px">
+    <div class="card compact-card">
       <div class="section-title">Role Routing Decisions</div>
-      <div class="sub" style="margin-bottom:8px">Recorded placement decisions only. Missing metadata is not inferred.</div>
+      <div class="sub compact-note">Recorded placement decisions only. Missing metadata is not inferred.</div>
       <div id="brainRoleRouting" class="brain-projection"><div class="empty">No task loaded.</div></div>
     </div>
-    <div class="card" style="padding:12px">
+    <div class="card compact-card">
       <div class="section-title">Governed Learning Candidates</div>
-      <div class="sub" style="margin-bottom:8px">Project-scoped proposals remain inactive until reviewed through the existing Agent controls.</div>
+      <div class="sub compact-note">Project-scoped proposals remain inactive until reviewed through the existing Agent controls.</div>
       <div id="brainLearningCandidates" class="brain-projection"><div class="empty">No task loaded.</div></div>
     </div>
   </div>
@@ -930,24 +931,24 @@
 
 <!-- Metrics Page -->
 <div class="page" id="page-metrics">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-    <div class="section-title" style="margin:0">Grafana Dashboards</div>
-    <div style="display:flex;gap:8px;align-items:center">
-      <select id="grafanaDashboard" onchange="loadGrafanaDashboard()" style="background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;padding:6px 10px;font-family:var(--font);font-size:.85rem">
+  <div class="dashboard-toolbar">
+    <div class="section-title">Grafana Dashboards</div>
+    <div class="control-row">
+       <select id="grafanaDashboard" data-dashboard-change="loadGrafanaDashboard">
         <option value="sidekick-overview">Sidekick Overview</option>
         <option value="tool-analytics">Tool Analytics</option>
         <option value="system-health">System Health</option>
         <option value="database-performance">Database Performance</option>
         <option value="docker-containers">Docker Containers</option>
       </select>
-      <a href="/grafana/" target="_blank" class="btn btn-outline" style="font-size:.85rem;padding:6px 12px">
+      <a href="/grafana/" target="_blank" class="btn btn-outline compact-button">
         <i class="fas fa-external-link-alt"></i> Open Grafana
       </a>
     </div>
   </div>
-  <div class="card" id="metricsStatus" style="padding:12px;margin-bottom:12px"><div class="empty">Checking metrics status...</div></div>
-  <div class="card" style="padding:0;height:calc(100vh - 250px);overflow:hidden">
-    <iframe id="grafanaFrame" src="/grafana/d/sidekick-overview?orgId=1&kiosk" style="width:100%;height:100%;border:none"></iframe>
+  <div class="card research-card" id="metricsStatus"><div class="empty">Checking metrics status...</div></div>
+  <div class="card grafana-frame-card">
+    <iframe id="grafanaFrame" src="/grafana/d/sidekick-overview?orgId=1&kiosk"></iframe>
   </div>
 </div>
 
@@ -955,12 +956,12 @@
 <div class="modal-overlay" id="editModal">
   <div class="modal">
     <h3>Edit KV Entry</h3>
-    <div style="margin-bottom:8px;color:#8b949e;font-size:.82rem">Key: <span id="editKey" style="color:#ffa657;font-family:var(--font)"></span></div>
-    <div style="margin-bottom:8px;color:#8b949e;font-size:.82rem">Project: <input type="text" id="editProject" placeholder="Global (leave empty)" style="background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;padding:4px 8px;font-family:var(--font);font-size:.82rem;margin-left:8px"></div>
+    <div class="modal-meta">Key: <span id="editKey" class="modal-key"></span></div>
+    <div class="modal-meta">Project: <input type="text" id="editProject" class="modal-project-input" placeholder="Global (leave empty)"></div>
     <textarea id="editValue"></textarea>
     <div class="modal-actions">
-      <button class="btn btn-outline" onclick="closeEditModal()">Cancel</button>
-      <button class="btn" onclick="saveKVEdit()">Save</button>
+       <button class="btn btn-outline" data-dashboard-action="modal" data-handler="closeEditModal">Cancel</button>
+       <button class="btn" data-dashboard-action="modal" data-handler="saveKVEdit">Save</button>
     </div>
   </div>
 </div>
@@ -968,16 +969,16 @@
 <!-- Confirmation Modal -->
 <div class="modal-overlay" id="confirmModal">
   <div class="modal">
-    <h3 id="confirmTitle" style="color:#f85149">Confirm Deletion</h3>
-    <div id="confirmMessage" style="margin:16px 0;color:#c9d1d9;font-size:.9rem;line-height:1.5"></div>
-    <div id="confirmDetails" style="margin:16px 0;padding:12px;background:#161b22;border:1px solid #30363d;border-radius:6px;font-size:.85rem;color:#8b949e"></div>
-    <div id="confirmTypingSection" style="display:none;margin:16px 0">
-      <div style="margin-bottom:8px;color:#f85149;font-size:.85rem">Type <span id="confirmRequiredText" style="font-family:var(--font);font-weight:600;color:#ffa657"></span> to confirm:</div>
-      <input type="text" id="confirmInput" style="width:100%;padding:8px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-family:var(--font)" oninput="checkConfirmInput()">
+    <h3 id="confirmTitle" class="danger-heading">Confirm Deletion</h3>
+    <div id="confirmMessage" class="confirm-message"></div>
+    <div id="confirmDetails" class="confirm-details"></div>
+    <div id="confirmTypingSection" class="confirm-typing">
+      <div class="confirm-label">Type <span id="confirmRequiredText" class="confirm-required"></span> to confirm:</div>
+     <input type="text" id="confirmInput" class="modal-input" data-dashboard-input="checkConfirmInput">
     </div>
     <div class="modal-actions">
-      <button class="btn btn-outline" onclick="closeConfirmModal()">Cancel</button>
-      <button class="btn btn-danger" id="confirmButton" onclick="executeConfirmAction()" disabled>Delete</button>
+       <button class="btn btn-outline" data-dashboard-action="modal" data-handler="closeConfirmModal">Cancel</button>
+       <button class="btn btn-danger" id="confirmButton" data-dashboard-action="modal" data-handler="executeConfirmAction" disabled>Delete</button>
     </div>
   </div>
 </div>
@@ -985,22 +986,22 @@
 <!-- New Entry Modal -->
 <div class="modal-overlay" id="newEntryModal">
   <div class="modal">
-    <h3 style="color:#58a6ff">New KV Entry</h3>
-    <div style="margin-bottom:12px">
-      <label style="display:block;margin-bottom:4px;color:#8b949e;font-size:.85rem">Key</label>
-      <input type="text" id="newEntryKey" placeholder="e.g., config:api_key" style="width:100%;padding:8px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-family:var(--font)">
+    <h3 class="accent-heading">New KV Entry</h3>
+    <div class="modal-field">
+      <label>Key</label>
+      <input type="text" id="newEntryKey" placeholder="e.g., config:api_key">
     </div>
-    <div style="margin-bottom:12px">
-      <label style="display:block;margin-bottom:4px;color:#8b949e;font-size:.85rem">Project (optional)</label>
-      <input type="text" id="newEntryProject" placeholder="e.g., myproject" style="width:100%;padding:8px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-family:var(--font)">
+    <div class="modal-field">
+      <label>Project (optional)</label>
+      <input type="text" id="newEntryProject" placeholder="e.g., myproject">
     </div>
-    <div style="margin-bottom:12px">
-      <label style="display:block;margin-bottom:4px;color:#8b949e;font-size:.85rem">Value</label>
-      <textarea id="newEntryValue" placeholder="Enter value..." style="width:100%;min-height:150px;padding:10px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#c9d1d9;font-family:var(--font);font-size:.85rem;resize:vertical"></textarea>
+    <div class="modal-field">
+      <label>Value</label>
+      <textarea id="newEntryValue" class="modal-value" placeholder="Enter value..."></textarea>
     </div>
     <div class="modal-actions">
-      <button class="btn btn-outline" onclick="closeNewEntryModal()">Cancel</button>
-      <button class="btn" onclick="saveNewEntry()">Create</button>
+       <button class="btn btn-outline" data-dashboard-action="modal" data-handler="closeNewEntryModal">Cancel</button>
+       <button class="btn" data-dashboard-action="modal" data-handler="saveNewEntry">Create</button>
     </div>
   </div>
 </div>
@@ -1016,5 +1017,8 @@
 </dialog>
 
 <script src="/static/dashboard.js?v=dashboard-ux-preview-6"></script>
+<script src="/static/dashboard-system.js?v=dashboard-redesign-1"></script>
+<script src="/static/dashboard-activity.js?v=dashboard-redesign-1"></script>
+<script src="/static/dashboard-controls.js?v=dashboard-redesign-1"></script>
 </body>
 </html>

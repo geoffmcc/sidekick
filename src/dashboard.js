@@ -54,6 +54,7 @@ const { registerBlackboxRoutes } = require("./dashboard/blackbox-routes");
 const { registerPredictRoutes } = require("./dashboard/predict-routes");
 const { registerCapabilityRoutes } = require("./dashboard/capability-routes");
 const { registerEvolveRoutes } = require("./dashboard/evolve-routes");
+const { registerProjectRoutes } = require("./dashboard/project-routes");
 const { runDoctor, formatDoctorText, createSupportBundle } = require("./doctor");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
@@ -1348,6 +1349,7 @@ registerKvRoutes({
   auditLog,
   requireIdentityAdministrator,
 });
+registerProjectRoutes({ app, platformKernel });
 
 registerStatsToolsRoutes({ app, dbStore, getToolDefsForSource });
 

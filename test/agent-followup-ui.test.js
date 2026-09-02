@@ -191,7 +191,7 @@ ok("history control exposes and updates real expanded state", () => {
 });
 
 ok("history control is wired to its real toggle handler", () => {
-  assert.match(dashHtml, /id="agentHistoryToggle"[^>]*onclick="toggleHistory\(\)"/, "button invokes toggleHistory");
+  assert.match(dashHtml, /id="agentHistoryToggle"[^>]*data-dashboard-action="agent"[^>]*data-handler="toggleHistory"/, "button delegates to toggleHistory");
 });
 
 console.log("\nAll " + passed + " follow-up UI tests passed.\n");

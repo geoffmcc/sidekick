@@ -14,8 +14,9 @@ links; refresh, browser history, and direct links preserve the active page.
 The sidebar collapse preference is stored locally as presentation state only,
 and the mobile drawer never changes authorization or API scope.
 
-The Projects workspace is intentionally evidence-bound. It currently derives
-project cards from explicit `project` metadata returned by `/api/kv`; it does
+The Projects workspace is intentionally evidence-bound. Its cards come from
+the authenticated `GET /api/projects` projection over the canonical platform
+project registry, including recorded sources and a workspace summary. It does
 not infer ownership from key names, timestamps, or activity. Unscoped records
 remain available from their specialist pages.
 
@@ -37,7 +38,14 @@ should use progressive disclosure.
 
 ## Main UI areas
 
-The dashboard frontend is split across `src/dashboard.html`, `static/dashboard.css`, and `static/dashboard.js`. `src/dashboard.js` serves the private HTML shell from the authenticated root route and serves only CSS/JS/font assets through `/static`. The browser controller preserves the existing domain controllers while the shell supplies shared navigation, project context, responsive behavior, URL routing, and command search. Approvals are surfaced from Mission Control when pending.
+The dashboard frontend is split across `src/dashboard.html`, `static/dashboard.css`, `static/dashboard-theme.css`, `static/dashboard.js`, and focused controllers such as `static/dashboard-controls.js`, `static/dashboard-system.js`, and `static/dashboard-activity.js`. `src/dashboard.js` serves the private HTML shell from the authenticated root route and serves only CSS/JS/font assets through `/static`. The browser controller preserves the existing domain controllers while shared files supply navigation, project context, responsive behavior, URL routing, command search, delegated actions, and page primitives. Approvals are surfaced from Mission Control when pending.
+
+Page markup is inert: controls use `data-dashboard-*` attributes and the
+delegated controller invokes existing named functions rather than evaluating
+strings or accepting arbitrary actions. Dynamic records continue to use the
+existing escaped renderers. Prediction probabilities use native progress
+elements so dynamic values remain semantic and static styling belongs in the
+theme sheet.
 
 Typical dashboard functions:
 
