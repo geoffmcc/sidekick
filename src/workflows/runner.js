@@ -32,6 +32,7 @@ const toolContext = require("../tools/context");
 const authorization = require("../core/authorization");
 const definitionRepository = require("./repository");
 const { validateInputs, resolveValue, isTruthy } = require("./definition");
+const { canonicalStatus } = require("../tools/result");
 const {
   createScheduledPlatformExecution,
   transitionScheduledPlatformExecution,
@@ -70,8 +71,10 @@ function parseJsonResult(text) {
 function projectStepResult(result, expect) {
   const raw = resultText(result);
   const bounded = truncate(raw);
-  const ok = !result?.isError;
-  const projection = { ok, text: bounded.text, truncated: bounded.truncated, json: null };
+  const parsed = parseJsonResult(raw);
+  const status = canonicalStatus(result?.status || result?.result_status || parsed?.status || parsed?.result_status || parsed?.state, result?.isError || parsed?.ok === false ? "failed" : "succeeded");
+  const ok = status === "succeeded" || status === "partial";
+  const projection = { ok, status, code: result?.code || parsed?.code || null, retry_safe: result?.retry_safe ?? parsed?.retry_safe ?? result?.retryable ?? false, warnings: parsed?.warnings || result?.warnings || [], limitations: parsed?.limitations || result?.limitations || [], dependency_results: parsed?.dependency_results || result?.dependency_results || [], approval_state: parsed?.approval_state || result?.approval_state || (status === "approval_required" ? "required" : "not_required"), recovery: parsed?.recovery || result?.recovery || null, text: bounded.text, truncated: bounded.truncated, json: null };
   if (expect === "json") projection.json = parseJsonResult(raw);
   else if (ok) projection.json = parseJsonResult(raw);
   return projection;
@@ -172,7 +175,7 @@ async function runWorkflowDefinition(name, inputs = {}, options = {}) {
       totalSteps: definition.steps.length,
     };
     executionId = workflow.execution_id || null;
-    if (workflow.state === "paused") platformKernel.startWorkflow(workflow.workflow_id, { source: "workflow-runner" });
+    if (["paused", "defined"].includes(workflow.state)) platformKernel.startWorkflow(workflow.workflow_id, { source: "workflow-runner" });
   } else {
     const validated = validateInputs(definition, inputs);
     if (!validated.ok) {
@@ -234,7 +237,8 @@ async function runWorkflowDefinition(name, inputs = {}, options = {}) {
   const claimResult = executionId
     ? platformKernel.claimExecution({ execution_id: executionId, claimed_by: `workflow-run:${process.pid}`, lease_ms: RUN_CLAIM_LEASE_MS })
     : { ok: true, claim: null };
-  const claim = claimResult.ok ? claimResult.claim : null;
+  if (!claimResult.ok) return { ok: false, status: "failed", result_status: "failed", code: "execution_claim_unavailable", error: "Workflow execution could not acquire its exclusive claim", retry_safe: true, recovery: "Wait for the current claimant to finish, then resume the workflow" };
+  const claim = claimResult.claim;
 
   const runItem = { id: workflow.workflow_id, platform_execution_id: executionId };
   // A runner is a durable execution identity, not an authorization bypass.
@@ -450,6 +454,7 @@ async function runWorkflowDefinition(name, inputs = {}, options = {}) {
 
   return {
     ok: verdict === "completed",
+    result_status: verdict === "completed" ? "succeeded" : verdict === "awaiting_approval" ? "approval_required" : verdict === "cancelled" ? "cancelled" : "failed",
     status: verdict,
     workflow: definition.name,
     version: definition.version,

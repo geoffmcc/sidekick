@@ -2,7 +2,7 @@
 
 Sidekick is a self-hosted Model Context Protocol server and autonomous assistant platform that gives compatible clients and agents a persistent remote working environment. These docs describe the current source tree and migrations, while runtime operational knowledge lives in the SQLite-backed knowledge base.
 
-The project currently exposes three core Node.js services and a dynamically discovered MCP tool catalog. Core, module, capability-pack, and approved generated tools share one registry; the live `tools` manifest is authoritative for metadata, categories, risk labels, enabled/deprecated state, and current counts. The repository currently contains 27 bundled first-party capability-pack manifests, but the installed and enabled set is deployment-specific. Tool logs, key-value data, structured memories, and the knowledge base are stored in SQLite.
+The project currently exposes three core Node.js services and a dynamically discovered MCP tool catalog. Core, module, capability-pack, and approved generated tools share one registry; the live `tools` manifest is authoritative for metadata, categories, risk labels, enabled/deprecated state, and current counts. The repository currently contains 27 bundled first-party capability-pack manifests, but the installed and enabled set is deployment-specific. The generated `compatibility-pack-inventory.json` is the source-derived pack maturity matrix and includes a verified commit/date and deterministic source fingerprint. Tool logs, key-value data, structured memories, and the knowledge base are stored in SQLite.
 
 The tool execution boundary is modular and authoritative under `src/tools/`, and handler extraction is complete: every built-in handler is owned by a descriptor family, the `data-utilities` module, or the Compute subsystem, with `src/tools-legacy.js` retaining only policy/approval/audit machinery, ordering anchors, and compatibility exports. See `tool-architecture.md` for the boundary details.
 
@@ -129,7 +129,9 @@ useful for focused work but are not part of the primary reading path above:
 
 | File | Purpose |
 |---|---|
-| `platform-convergence-audit.md` | Verified capability reality matrix: production-used versus foundation-only, per area. |
+| `platform-convergence-audit.md` | Historical convergence measurements only; superseded current-state claims must not guide implementation. |
+| `compatibility-pack-inventory.json` | Generated current bundled-pack inventory, lifecycle matrix, contract facts, and evidence gaps. |
+| `capability-result-contract.md` | Current canonical capability-pack and workflow result semantics. |
 | `platform-roadmap.md` | Residual convergence roadmap (tracks A–D) and current next work. |
 | `platform-target-architecture.md` | Accepted converged runtime boundaries and dependency directions. |
 | `module-system-design.md` | Module contract and complete first-party/third-party lifecycle; installation remains trusted in-process code execution. |

@@ -104,7 +104,7 @@
   ],
   "requires": {
     "tools": [],
-    "optional_tools": ["secret", "netdiag"]
+    "optional_tools": ["secret", "netdiag", "bash"]
   },
   "permissions": [
     { "tool": "bash", "risk": "critical" }

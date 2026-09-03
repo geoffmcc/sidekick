@@ -4467,12 +4467,18 @@ function capError(message) {
     : '';
 }
 
+let capabilityLoadGeneration = 0;
 async function loadCapabilities() {
+  const generation = ++capabilityLoadGeneration;
   capError('');
   try {
-    const res = await authFetch('/api/capabilities');
+    const [res, catalogRes] = await Promise.all([authFetch('/api/capabilities'), authFetch('/api/capabilities/catalog?kind=pack&limit=500')]);
     const data = await res.json();
+    const catalog = catalogRes.ok ? await catalogRes.json() : { entries: [] };
+    if (generation !== capabilityLoadGeneration) return;
     if (!data.ok) { capError(data.error || 'Failed to load capability packs'); return; }
+    const readiness = new Map((catalog.entries || []).map(entry => [entry.name, entry]));
+    (data.installed || []).forEach(pack => { pack.readiness = readiness.get(pack.name) || null; });
     renderInstalledCapabilities(data.installed || []);
     renderAvailableCapabilities(data.available_bundled || []);
     $('capCount').textContent = (data.installed || []).length;
@@ -4555,6 +4561,7 @@ function renderInstalledCapabilities(packs) {
     actions.push('<button class="btn btn-sm" data-dashboard-action="callback" data-handler="capabilityDetail" data-id="' + attr(pack.name) + '"><i class="fas fa-circle-info"></i> Details</button>');
     actions.push('<button class="btn btn-sm" data-dashboard-action="callback" data-handler="capabilityHealth" data-id="' + attr(pack.name) + '"><i class="fas fa-stethoscope"></i> Health Check</button>');
     actions.push('<button class="btn btn-sm btn-outline" data-dashboard-action="callback" data-handler="capabilityMaturity" data-id="' + attr(pack.name) + '"><i class="fas fa-certificate"></i> Maturity</button>');
+    actions.push('<button class="btn btn-sm btn-outline" data-dashboard-action="callback" data-handler="capabilityDoctor" data-id="' + attr(pack.name) + '"><i class="fas fa-kit-medical"></i> Diagnose</button>');
     if (pack.enabled) {
       actions.push('<button class="btn btn-sm btn-outline" data-dashboard-action="callback" data-handler="capabilityAction" data-id="' + attr(pack.name) + '" data-value="disable"><i class="fas fa-pause"></i> Disable</button>');
     } else {
@@ -4580,6 +4587,7 @@ function renderInstalledCapabilities(packs) {
       + ' &middot; Workflows: ' + pack.workflows.length
       + ' &middot; Knowledge: ' + pack.knowledge
       + '</div>'
+      + (pack.readiness ? '<div class="sub capability-readiness">Dispatch: ' + capPill(pack.readiness.available ? 'available' : 'unavailable') + (pack.readiness.availability && pack.readiness.availability.reasons && pack.readiness.availability.reasons.length ? ' ' + esc(pack.readiness.availability.reasons.join(', ')) : '') + '</div>' : '')
       + '<div class="capability-actions">' + actions.join('') + '</div>'
       + '<pre id="capDetail-' + attr(pack.name) + '" class="capability-detail"></pre>'
       + '</div>';
@@ -4682,6 +4690,19 @@ async function capabilityMaturity(name) {
   } catch (error) {
     capError('maturity: ' + error.message);
   }
+}
+
+async function capabilityDoctor(name) {
+  const el = $('capDetail-' + name);
+  try {
+    const res = await authFetch('/api/capabilities/' + encodeURIComponent(name) + '/doctor');
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || 'diagnostic unavailable');
+    if (el) {
+      el.textContent = JSON.stringify(data.doctor || data, null, 2);
+      el.classList.add('is-visible');
+    }
+  } catch (error) { capError('diagnose: ' + error.message); }
 }
 
 function capabilityUpgrade(name) {

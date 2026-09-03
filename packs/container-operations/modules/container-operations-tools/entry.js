@@ -28,7 +28,7 @@ async function handleContainers(services, args, runtime) {
       case "inspect": data = { container: await operations.inspect(client, args.target) }; break;
       case "health": { const summary = await operations.summary(client); data = { status: summary.health, evidence: summary }; break; }
       case "stats": data = { stats: await operations.stats(client, args.target) }; break;
-      case "logs": data = { logs: await operations.logs(client, args.target, args) }; break;
+      case "logs": data = { logs: await operations.logs(client, args.target, { ...config, ...args, max_bytes: args.max_bytes || config.max_log_bytes, max_lines: args.max_lines || config.max_log_lines }) }; break;
       case "images": data = { images: await operations.images(client) }; break;
       case "networks": data = { networks: await operations.networks(client) }; break;
       case "volumes": data = { volumes: await operations.volumes(client) }; break;
