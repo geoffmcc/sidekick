@@ -123,10 +123,10 @@ function terminate(child) {
   });
 }
 
-function executeSuite(suite, { cwd, stream, testNamePattern, signal }) {
+function executeSuite(suite, { cwd, stream, testNamePattern, signal, coverage = false }) {
   return new Promise(resolve => {
     const started = Date.now();
-    const args = ["--test"];
+    const args = coverage ? ["--experimental-test-coverage", "--test"] : ["--test"];
     if (testNamePattern) args.push("--test-name-pattern", testNamePattern);
     args.push(path.resolve(cwd, suite.file));
     const child = spawn(process.execPath, args, { cwd, detached: process.platform !== "win32", env: { ...process.env, NODE_ENV: "test", SIDEKICK_TEST_SUITE_ID: suite.id }, stdio: ["ignore", "pipe", "pipe"] });
@@ -145,7 +145,7 @@ function executeSuite(suite, { cwd, stream, testNamePattern, signal }) {
   });
 }
 
-async function runSuites({ requested = [], cwd = root, domain, tier, concurrency = Number(process.env.SIDEKICK_TEST_CONCURRENCY) || 4, stream = false, failFast = false, testNamePattern, signal, overallTimeoutMs = Number(process.env.SIDEKICK_TEST_OVERALL_TIMEOUT_MS) || 30 * 60 * 1000, output = console } = {}) {
+async function runSuites({ requested = [], cwd = root, domain, tier, concurrency = Number(process.env.SIDEKICK_TEST_CONCURRENCY) || 4, stream = false, failFast = false, testNamePattern, coverage = false, signal, overallTimeoutMs = Number(process.env.SIDEKICK_TEST_OVERALL_TIMEOUT_MS) || 30 * 60 * 1000, output = console } = {}) {
   let allSuites;
   try { allSuites = discoverSuites(cwd); } catch (error) { output.error(error.message); return { passed: 0, failed: 1, skipped: 0, exitCode: CONFIG_EXIT_CODE, failures: [], results: [], error: error.message }; }
   const selection = selectSuites(allSuites, requested, { domain, tier });
@@ -163,7 +163,7 @@ async function runSuites({ requested = [], cwd = root, domain, tier, concurrency
       const release = await locks.acquire(suite.resources);
       try {
         if (controller.signal.aborted) continue;
-        const result = await executeSuite(suite, { cwd, stream, testNamePattern, signal: controller.signal });
+        const result = await executeSuite(suite, { cwd, stream, testNamePattern, coverage, signal: controller.signal });
         results.push(result);
         if (result.status === "failed" || result.status === "timeout" || result.status === "cancelled") stopped = stopped || failFast;
       } finally { release(); }
