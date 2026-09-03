@@ -151,7 +151,10 @@ function buildFixtureRepository() {
     assert.strictEqual(typeof profile.repository.working_tree.clean, 'boolean');
 
     // Mechanically detected facts about THIS repository.
-    assert.ok(profile.languages.some(entry => entry.language === 'JavaScript' && entry.file_count > 50), JSON.stringify(profile.languages));
+    // The count varies with checkout contents (for example, generated files
+    // are absent in a clean CI checkout), but the repository must still report
+    // a substantial JavaScript source set.
+    assert.ok(profile.languages.some(entry => entry.language === 'JavaScript' && entry.file_count >= 50), JSON.stringify(profile.languages));
     assert.deepStrictEqual(profile.ecosystems.map(e => e.ecosystem), ['node']);
     assert.deepStrictEqual(profile.package_managers.map(m => m.manager), ['npm']);
     assert.strictEqual(profile.package_managers[0].install_command, 'npm ci');

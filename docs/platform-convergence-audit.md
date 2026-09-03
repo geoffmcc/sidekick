@@ -1,10 +1,16 @@
-# Platform Convergence Audit
+# Platform Convergence Audit (Historical)
 
-Status: Current-state audit (post-handoff convergence campaign)
-Verified commit: 389a9698f7b66bbb5edb37b331e252f62e8c44f9
-Verified date: 2026-08-14
+Status: **Superseded historical record.** This document preserves the earlier
+convergence measurements for milestone context; it is not the current source
+of truth for pack readiness, project isolation, artifact access, or tool
+counts. Current bundled-pack facts are generated in
+`docs/compatibility-pack-inventory.json` from the pack tree and verified by
+`npm run check:docs`.
+Historical verified commit: 389a9698f7b66bbb5edb37b331e252f62e8c44f9
+Historical verified date: 2026-08-14
 Supersedes: the 2026-08-11 audit pinned to `a88ea84` (10 PRs stale) and the
-2026-08-05 audit pinned to `d2db2658`.
+2026-08-05 audit pinned to `d2db2658`. Superseded by the current repository
+source and generated pack inventory.
 
 ## Method
 
@@ -68,9 +74,9 @@ boundaries.
 | `platform_extensions` registry | **duplicated** | Kernel `platform_extensions` CRUD (`kernel.js:1759-1825`) is a second module-ish lifecycle, unconnected to `platform_modules`. | Converge or retire. |
 | Projects — canonical identity | **foundation-only (B3-1 landed)** | B3-1 (#246) added `src/core/project-identity.js` (`canonicalizeProjectName`: lowercase, non-`[a-z0-9_]` runs → `_`, trim underscores) and a `normalizeProjectId` choke point in the kernel registry functions, with display-name/original-spelling preservation on first registration. Registry still has **zero production callers**; kernel writers (`startExecution`, `appendEvent`, `createProjectWorkspace`) still accept raw `project_id`; `backfillProjectSources` still has no invocation surface; pre-B3-1 mixed-case registry rows are not converged; `createScopeSnapshot` does not canonicalize. | Remaining B3 slices: real callers in kernel/memory/KV writers; adapters replacing the three inference derivations; backfill invocation surface; legacy-row convergence; boundary policy for unvalidated tool schemas. |
 | Projects — production identity | **duplicated** | Free-text `project` string assigned by NL regex (`inferProjectFromText`, `memory.js:160`), three independent derivations (`memory.js`, `agent.js:927`, `context.js:37`). Live list = `kv_store.project` DISTINCT scan. Parallel: `ctx.projects{}` JSON doc, plus per-feature project columns. | Converge on the canonical projection via adapters. |
-| Cross-project isolation | **missing** | Per-query opt-in `WHERE project = ?` only; no enforcement boundary; `checkCapability`/`platformGuard` capability path is dead in production (no call site passes `capability`+`actor_id`). | Enforcement boundary + isolation tests. |
+| Cross-project isolation | **implemented at current identity boundaries** | Current project identity, principal authorization, workspace ownership, artifact project filtering, and cross-project regression suites are implemented in the current source. | Revalidate deployment-specific policy and provider configuration; this historical row must not be used as a current gap statement. |
 | Workspaces + encrypted secrets | **production-complete impl, foundation-only deployment** | Fail-closed envelopes, plaintext writers closed, loss-averse backfill. Zero production callers. | Wire to a tool/route; trigger backfill. |
-| Identity / teams / memberships | **foundation-only (below the bar)** | PR #235 = 19-line in-memory `Map`s, no migration/tables, no auth/authz integration, `authorize()` ignores `project_id`, no audit events. Its test is now registered in CI (#236). | Durable tables (mig 036), single-operator bootstrap, capability bridge, API/UI. |
+| Identity / teams / memberships | **durable and governed in current source** | Durable principals, users, memberships, authorization, sessions, audit events, and project scope are implemented and covered by identity/security suites. | Deployment bootstrap and operator configuration remain environment-specific. |
 | Deployment profiles | **foundation-only + duplicated** | In-memory, `required_checks` never evaluated. `MISSION_PROFILES` (`tools-legacy.js:6786`) is a separate, production-wired profile vocabulary. | Make profiles enforce runtime behavior; reconcile with mission profiles. |
 | Single-operator auth | **production-complete** | Shared bearer key (MCP), env-var dashboard user (fails closed correctly), per-worker credentials, `meta.user_id` (memory sync). | Bootstrap path to a durable owner user when identity lands. |
 | Durable executions | **production-usable but partial (projection)** | `platform_executions` written by 8 producers, all best-effort/try-catch-swallowed; authoritative state lives in per-feature JSON/tables. Recovery (`recoverOrphaned*`) is the load-bearing exception. | Make the ledger authoritative for ≥1 runner. |
@@ -84,7 +90,7 @@ boundaries.
 | Events — operational hazard | **fixed (B5)** | Fan-out probes undelivered depth (`pending`/`retry`/`in_flight`, bounded `LIMIT cap + 1`) and auto-pauses the subscription at `SIDEKICK_EVENT_BACKLOG_CAP` (default 10000), recording `auto_pause_reason`. Publishers are never blocked or failed by a stalled consumer. Deliveries with no registered handler are left `pending` and counted, never acked. | — |
 | Artifacts — kernel custody | **production-complete (write path)** | Insert-only identity, digest regex, role/lineage invariants (`kernel.js:874-883`). No recursive-lineage read API; no `storage_ref` byte resolver. | Lineage read API; retention (no sweeper/`deleted_at` writer exists). |
 | Artifacts — convergence | **converged for the worker path (B6)** | Re-measured before the fix: **10 of 10** production `compute_artifacts` arrived via the worker HTTP upload path and **0** were in the kernel; the inline mirror the audit flagged had executed **zero** times in production, so its empty `catch {}` was not the live gap. `finalizeArtifact` now registers with the kernel through `src/compute/artifact-custody.js` under the compute artifact id (idempotent via primary key); failures are recorded on the row, published as `compute.artifact_custody_failed`, and logged. Dry-run-first orphan reconciler via `compute_jobs action="reconcile_artifact_custody"`. | `compute_artifacts` schema still duplicated in migrations + `job-manager.js`; blackbox files and session JSON remain separate models. |
-| Artifacts — access auth | **network-gated; project scoping missing** | `GET /api/artifacts` has no per-route auth, but the blanket dashboard auth middleware (`dashboard.js:373`, active whenever `DASHBOARD_USER`/`DASHBOARD_PASS` are set — they are in production) gates every route, so it is not an open endpoint. It has no `project_id` scoping and never invokes `checkCapability`. | Project scoping / capability check (deferred; not an auth bypass). |
+| Artifacts — access auth | **durable project/principal scoped** | Current artifact projections apply authenticated Dashboard access and explicit project/principal/resource filtering; artifact-resource-scope and identity-resource-authority suites cover the boundary. | Provider-specific deployment policy still requires independent verification. |
 | Connectors — lifecycle | **production-complete (records)** | Registration/config/state-machine/redaction-on-write + REST endpoints. | — |
 | Connectors — integrations | **production-usable but partial (B7 keystone)** | GitHub is registered as a managed connector; the `github` tool routes endpoint and secret references through the connector authority, and `connector` provides read-only inspection. Health checks, mutating connector management, and broader provider coverage remain follow-up work. | Extend governed connector traffic and dashboard coverage without creating a parallel provider authority. |
 | Compute — providers/models/workers/jobs/placement | **production-complete** | provider-registry (circuit breaker), model-registry, worker lifecycle 022/023/024, transactional job claim, placement decision core, OpenVINO manifest. **Do not rewrite.** | — |

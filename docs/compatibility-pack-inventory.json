@@ -1,6 +1,9 @@
 {
   "schema": "sidekick.compatibility-pack-inventory.v1",
   "source": "bundled pack manifests and repository files",
+  "source_commit": "56e003086dd709b51bde174a64ecdb89f0bb700a",
+  "source_commit_date": "2026-09-03T07:47:22-04:00",
+  "source_fingerprint": "sha256:84974ce7c331fe675fdf4850840eaa2eab853ae5da57368523ee1ea019c0bd78",
   "pack_count": 27,
   "packs": [
     {
@@ -527,15 +530,15 @@
       "permissions": [
         {
           "tool": "context",
-          "risk": "low"
+          "risk": "medium"
         },
         {
           "tool": "memory",
-          "risk": "low"
+          "risk": "medium"
         },
         {
           "tool": "handoff",
-          "risk": "low"
+          "risk": "medium"
         }
       ],
       "network_scopes": [],
@@ -567,15 +570,15 @@
           "permissions": [
             {
               "tool": "context",
-              "risk": "low"
+              "risk": "medium"
             },
             {
               "tool": "memory",
-              "risk": "low"
+              "risk": "medium"
             },
             {
               "tool": "handoff",
-              "risk": "low"
+              "risk": "medium"
             }
           ],
           "operations": [
@@ -2117,7 +2120,7 @@
         "source_files": [
           "packs/change-impact/modules/change-impact-tools/entry.js"
         ],
-        "behavior": "not_observed_in_module_source"
+        "behavior": "explicit_unavailable_or_degraded_states"
       },
       "current_tests": [
         "test/cross-pack-workflow-fixtures.test.js",
@@ -5539,11 +5542,11 @@
         "packs": []
       },
       "declared_requirements": {
-        "tools": [
+        "tools": [],
+        "optional_tools": [
           "compose",
           "parse"
-        ],
-        "optional_tools": []
+        ]
       },
       "permissions": [
         {
@@ -10263,7 +10266,7 @@
         },
         {
           "tool": "handoff",
-          "risk": "low"
+          "risk": "medium"
         }
       ],
       "network_scopes": [],
@@ -10302,7 +10305,7 @@
             },
             {
               "tool": "handoff",
-              "risk": "low"
+              "risk": "medium"
             }
           ],
           "operations": [
@@ -10947,7 +10950,8 @@
         "tools": [],
         "optional_tools": [
           "secret",
-          "netdiag"
+          "netdiag",
+          "bash"
         ]
       },
       "permissions": [
@@ -13627,7 +13631,7 @@
         },
         {
           "tool": "health",
-          "risk": "low"
+          "risk": "high"
         },
         {
           "tool": "snapshot",
@@ -13675,7 +13679,7 @@
             },
             {
               "tool": "health",
-              "risk": "low"
+              "risk": "high"
             },
             {
               "tool": "snapshot",
@@ -13703,7 +13707,7 @@
               "read_only": true,
               "mutating": false,
               "external": false,
-              "security_sensitive": false
+              "security_sensitive": true
             },
             {
               "read_only": true,

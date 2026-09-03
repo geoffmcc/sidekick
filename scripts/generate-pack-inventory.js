@@ -4,6 +4,8 @@
 // evidence gaps instead of inferring maturity from filenames or manifest shape.
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
+const { execFileSync } = require("child_process");
 
 const root = path.resolve(__dirname, "..");
 const packsRoot = path.join(root, "packs");
@@ -12,6 +14,13 @@ const output = path.join(root, "docs", "compatibility-pack-inventory.json");
 
 function readJson(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
+}
+
+function sourceFingerprint() {
+  const files = walk(packsRoot).filter(file => fs.statSync(file).isFile()).sort();
+  const hash = crypto.createHash("sha256");
+  for (const file of files) hash.update(relative(file)).update("\0").update(fs.readFileSync(file)).update("\0");
+  return `sha256:${hash.digest("hex")}`;
 }
 
 function walk(dir) {
@@ -224,6 +233,12 @@ const packs = manifestPaths.map(file => inventoryPack(path.dirname(file))).sort(
 for (const pack of packs) {
   pack.overlaps = packs.filter(other => other.name !== pack.name && pack.tools.some(tool => other.tools.includes(tool))).map(other => other.name).sort();
 }
-const report = { schema: "sidekick.compatibility-pack-inventory.v1", source: "bundled pack manifests and repository files", pack_count: packs.length, packs };
+let source_commit = "working-tree";
+let source_commit_date = null;
+try {
+  source_commit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+  source_commit_date = execFileSync("git", ["show", "-s", "--format=%cI", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+} catch {}
+const report = { schema: "sidekick.compatibility-pack-inventory.v1", source: "bundled pack manifests and repository files", source_commit, source_commit_date, source_fingerprint: sourceFingerprint(), pack_count: packs.length, packs };
 fs.writeFileSync(output, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });
 process.stdout.write(JSON.stringify({ ok: true, output: relative(output), pack_count: packs.length, knowledge_assets: packs.reduce((sum, pack) => sum + pack.knowledge.length, 0), workflows: packs.reduce((sum, pack) => sum + pack.workflows.length, 0) }) + "\n");

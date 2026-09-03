@@ -31,7 +31,7 @@ function buildDescriptors(services) {
         if (!safePath(args.snapshot_a) || !safePath(args.snapshot_b)) return failure("invalid_path", "snapshot paths contain traversal or control characters");
         try {
           const comparison = await services.dispatch("db_diff", args);
-          if (comparison?.isError) return failure("comparison_failed", "snapshot comparison dependency failed");
+           if (comparison?.isError) return failure(comparison.code || "comparison_failed", "snapshot comparison dependency failed");
           return { content: [{ type: "text", text: JSON.stringify({ ok: true, action: "preflight", comparison, restore: { attempted: false, authorization: "separate critical operation", recommendation: "review differences and verify the candidate before restore" }, provenance: { source: "db_diff", snapshot_a: args.snapshot_a, snapshot_b: args.snapshot_b } }, null, 2) }] };
         } catch (error) { return failure("comparison_failed", String(error.message || error).slice(0, 300)); }
       },
@@ -39,7 +39,7 @@ function buildDescriptors(services) {
     {
       name: "backup_dr_readiness", description: "Inspect Proxmox backup coverage, history, and verification evidence without changing the environment.",
       schema: z.object({ profile: z.string().regex(identifier).or(z.literal("")).optional() }).strict(), args: { profile: "string" }, risk: "low", category: "Backup and DR",
-      handler: async args => { const read = async action => { try { return await services.dispatch("proxmox", { action, profile: args.profile }); } catch (error) { return { state: "unavailable", code: error.code || "provider_unavailable", error: String(error.message || error).slice(0, 300) }; } }; return { content: [{ type: "text", text: JSON.stringify({ coverage: await read("backup_coverage"), history: await read("backup_history"), verification: await read("backup_verification_audit") }, null, 2) }] }; },
+       handler: async args => { const read = async action => { try { return await services.dispatch("proxmox", { action, profile: args.profile }); } catch (error) { return { ok: false, status: "unavailable", state: "unavailable", code: error.code || "provider_unavailable", error: String(error.message || error).slice(0, 300) }; } }; const data = { coverage: await read("backup_coverage"), history: await read("backup_history"), verification: await read("backup_verification_audit") }; const unavailable = Object.entries(data).filter(([, value]) => value?.isError || value?.ok === false || value?.state === "unavailable").map(([key]) => key); return { content: [{ type: "text", text: JSON.stringify({ ok: unavailable.length === 0, status: unavailable.length === 3 ? "unavailable" : unavailable.length ? "partial" : "succeeded", coverage: data.coverage, history: data.history, verification: data.verification, warnings: unavailable.map(key => `${key} is unavailable`) }, null, 2) }] }; },
     },
   ];
 }

@@ -5,9 +5,10 @@ const result = value => ({ content: [{ type: "text", text: JSON.stringify(value,
 const failure = (error, code = "invalid_input") => ({ content: [{ type: "text", text: JSON.stringify({ ok: false, error, code }, null, 2) }], isError: true });
 async function analyze(services, args) {
   const summary = await services.dispatch("dev_change_summary", { path: args.path, base: args.base, staged: args.staged, max_diff_chars: args.max_diff_chars });
-  const semantic = await services.dispatch("semantic_repo", { path: args.path, action: "query", query: args.query || "changed callers callees dependencies", level: 2, limit: args.limit || 40, max_chars: args.max_chars || 12000 });
+  const maxFiles = Math.max(1, Math.min(2000, Number(services.config?.max_files) || 500));
+  const semantic = await services.dispatch("semantic_repo", { path: args.path, action: "query", query: args.query || "changed callers callees dependencies", level: 2, limit: Math.min(args.limit || 40, maxFiles), max_chars: args.max_chars || 12000 });
   const ok = !summary?.isError && !semantic?.isError;
-  return { ...result({ ok, tool: "change_impact", read_only: true, evidence: { change_summary: summary, semantic_index: semantic }, limitations: ["Blast radius is repository-derived; runtime topology and unreferenced consumers require separate evidence."], deterministic: true }), isError: !ok };
+  return { ...result({ ok, status: ok ? "succeeded" : "unavailable", tool: "change_impact", read_only: true, bounded: { max_files: maxFiles }, evidence: { change_summary: summary, semantic_index: semantic }, limitations: ["Blast radius is repository-derived; runtime topology and unreferenced consumers require separate evidence."], deterministic: true }), isError: !ok };
 }
 async function gate(services, args) {
   const packet = await analyze(services, args);

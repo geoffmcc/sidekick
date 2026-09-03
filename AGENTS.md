@@ -46,6 +46,13 @@ The canonical knowledge entries are:
 - `Sidekick Capability Map and Live Discovery`
 - `Durable Agent Task Execution and Recovery`
 
+For capability-pack result semantics, use `docs/capability-result-contract.md`
+and `src/tools/result.js`. For the current bundled-pack count, lifecycle
+coverage, and source fingerprint, use the generated
+`docs/compatibility-pack-inventory.json` and verify it with `npm run check:docs`.
+`docs/platform-convergence-audit.md` is historical and must not be treated as
+the current architecture report.
+
 Markdown is appropriate when editing documentation or when the database entry
 is missing or stale. Do not maintain competing detailed capability inventories
 here.
