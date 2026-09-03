@@ -16,7 +16,7 @@ Sidekick stores core persistent state in SQLite (`sidekick.db`) under `SIDEKICK_
 
 ## SQLite schema
 
-Migrations live under `migrations/` and run automatically when the MCP server starts. The current schema version is stored in `meta.schema_version`. The tree currently has 53 ordered migrations; migrations are self-contained (a fresh database builds from migrations alone), and the runtime schema-ensure path is idempotent across processes.
+Migrations live under `migrations/` and run automatically when the MCP server starts. The current schema version is stored in `meta.schema_version`. The tree currently has 78 ordered migrations, through `078_compatibility_pack_tool_categories.sql`; migrations are self-contained (a fresh database builds from migrations alone), and the runtime schema-ensure path is idempotent across processes.
 
 Core tables:
 

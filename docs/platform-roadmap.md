@@ -107,7 +107,7 @@ Delivered:
 - **Workflow definitions** — `platform_workflow_definitions` plus a runner that
   drives the EXISTING kernel workflow/execution primitives and the single tool
   dispatcher. Not a second engine.
-- **Developer pack** — 3 tools, 7 runnable workflows, 8 knowledge assets,
+- **Developer pack** — 4 tools, 7 runnable workflows, 10 knowledge assets,
   proven against real git repositories.
 
 Migration `036_capability_packs.sql` (schema_version 36, platform kernel schema

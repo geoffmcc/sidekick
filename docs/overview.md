@@ -36,6 +36,15 @@ Sidekick is broad by design. The current codebase includes tools for:
 - learned procedures and approval-gated generated tools;
 - allowlisted `chat`, `generate`, and `embeddings` jobs routed through enrolled Compute workers, providers, and models.
 
+Bundled capability packs extend these foundations with API contract testing,
+repository intelligence, browser automation, container and infrastructure
+operations, database and storage administration, Jellyfin and Proxmox
+integrations, networking, observability and incident response, security
+research, supply-chain and reproducibility checks, testing and release
+engineering, and continuity/proving workflows. The live `capability` and
+`workflow` catalogs are authoritative for what a deployment has installed and
+enabled.
+
 ## Main components
 
 | Component | Role |

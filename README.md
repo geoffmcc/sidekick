@@ -351,7 +351,7 @@ Sidekick has used its own tools to test storage and recall behavior, investigate
 
 | Service | Port | Description |
 |---------|------|-------------|
-| **MCP Server** | 4097 | Dynamically discovered built-in, module, pack, and approved generated tools across 20 categories |
+| **MCP Server** | 4097 | Dynamically discovered built-in, module, pack, and approved generated tools across the live registry |
 | **Dashboard** | 4098 | Web UI for system health, activity, data, memory, approvals, tools, Compute, agent tasks, and metrics |
 | **Agent Bridge** | 4099 | AI agent loop — LLM plans and calls MCP tools autonomously |
 | **Ollama** | 11434 | Local LLM inference (qwen2.5-coder:7b, llama3.1:8b, nomic-embed-text) |
@@ -364,7 +364,7 @@ All tools are exposed via the MCP server at `http://YOUR_REMOTE_IP:4097/mcp`.
 
 ### Tool Categories
 
-The tool catalog is organized into 20 categories. Core, module, capability-pack, and approved generated tools share one live registry; use `tools action="overview"` or the database catalog for the current count and enabled state. Installing a capability pack adds its tools to the same registry — the Developer pack adds `dev_repo_profile`, `dev_change_summary` and `dev_verify`:
+Core, module, capability-pack, and approved generated tools share one live registry. Use `tools action="overview"`, `tools action="search"`, or `GET /api/tools` for the current count, categories, schemas, risk, policy, and enabled state. Installing a capability pack adds its tools to the same registry. The repository includes these broad catalog families:
 - **Core** — bash, tools, read, write, list, search, web_fetch, llm, respond
 - **Storage** — store, get, delete, resume, list_projects, get_by_project, redis
 - **Database** — db_schema, db_query, db_stats, db_backup, db_restore, db_export, log_query, db_search, db_migrate, db_diff, analytics
@@ -424,13 +424,14 @@ through the module lifecycle, pack workflows register in the workflow
 definition registry, and pack knowledge lands in the ordinary knowledge base.
 There is no second plugin runtime and no remote marketplace.
 
-Seven first-party packs ship bundled: the **Developer / Software Engineering**
-pack, the **Jellyfin** pack, the **Proxmox VE** pack, the **Container
-Operations (Docker / Podman)** pack, the **Security Research** pack, and the
-**Governed Browser Automation** pack. They provide structured repository work,
-named-profile media operations, guarded infrastructure, independent container
-operations, governed research, and task-level browser workflows respectively.
-See
+The repository currently ships 27 bundled first-party packs, including
+**Developer / Software Engineering**, **API Engineering**, **Backup and DR**,
+**Browser Automation**, **Container Operations**, **Database Administration**,
+**Documentation and Knowledge**, **Jellyfin**, **Network and Firewall**,
+**Proxmox VE**, **Security Research**, and **Testing and Quality**. The exact
+installed, enabled, available, and healthy set is deployment-specific; use
+`capability action="list"` or `capability action="catalog"` rather than
+copying a fixed inventory. See
 [`docs/capability-packs.md`](docs/capability-packs.md),
 [`docs/developer-pack.md`](docs/developer-pack.md),
 [`docs/jellyfin-pack.md`](docs/jellyfin-pack.md),
@@ -491,7 +492,7 @@ To avoid confusion, it's important to understand what each component is:
 - **Sidekick Compute** = The allowlisted worker/provider/model/job system for distributed inference workloads
 - **Module** = A runtime implementation contributed to Sidekick: code that builds tool descriptors and reports health, managed through a full install/configure/enable/upgrade/uninstall lifecycle
 - **Workflow** = A durable, reusable multi-step execution defined as data and run through the tool dispatcher, with checkpoints, project identity, cancellation and approval continuation
-- **Capability Pack** = An installable *area of competence* composed from modules, workflows, knowledge and configuration. Seven first-party packs ship bundled; use live capability discovery for exact installed state. See `docs/capability-packs.md`.
+- **Capability Pack** = An installable *area of competence* composed from modules, workflows, knowledge and configuration. The repository currently bundles 27 first-party packs; use live capability discovery for exact installed state. See `docs/capability-packs.md` and `docs/pack-proving.md`.
 - **Connector** = A managed relationship with an external service or system. GitHub is the current governed provider; broader connector health, mutation, dashboard coverage, and additional providers remain future work.
 - **Metrics System** = InfluxDB + Grafana for system health, tool usage, and service monitoring
 
