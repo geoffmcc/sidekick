@@ -23,7 +23,9 @@ const CREATE_TRUST_FLOOR = Object.freeze({
 const PROMOTION_FIELDS = ["trust_level", "data_classifications"];
 
 function ok(data, runtime = {}) {
-  const payload = typeof data === "string" ? data : { ...data, ok: true, result_status: "succeeded" };
+  const payload = typeof data === "string" || Array.isArray(data)
+    ? data
+    : { ...data, ok: true, result_status: "succeeded" };
   return { content: [{ type: "text", text: typeof payload === "string" ? payload : JSON.stringify(payload, null, 2) }] };
 }
 function err(msg) {
