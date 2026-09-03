@@ -77,7 +77,7 @@ Flat aliases (all explicitly authenticated, kept for compatibility): `POST /comp
 
 ### Capabilities (capability packs)
 
-`GET /api/capabilities`, `GET /api/capabilities/:name`, `GET /api/capabilities/:name/health`, `GET /api/capabilities/:name/workflows`, `POST /api/capabilities/inspect`, `POST /api/capabilities/install`, `POST /api/capabilities/:name/configure|enable|disable|upgrade|uninstall`.
+`GET /api/capabilities`, `GET /api/capabilities/:name`, `GET /api/capabilities/:name/health|maturity|workflows`, `POST /api/capabilities/inspect`, `POST /api/capabilities/install`, `POST /api/capabilities/:name/prove`, `POST /api/capabilities/:name/configure|enable|disable|upgrade|uninstall`.
 
 Every route dispatches the governed `capability` tool through `callDashboardTool`, so pack operations carry the same policy, approval, redaction and audit path as an MCP call; browser code never mutates pack state directly. Installing or enabling a pack activates executable module code in the Sidekick process. See `docs/capability-packs.md`.
 
@@ -85,7 +85,10 @@ Every route dispatches the governed `capability` tool through `callDashboardTool
 
 `GET /api/artifacts` (custody metadata only), `GET /api/event-deliveries`, `POST /api/event-subscriptions`, `POST /api/event-subscriptions/:subscriptionId/:action` (pause/resume), `POST /api/event-deliveries/:deliveryId/requeue`, `GET /api/connectors`, `POST /api/connectors`, `GET /api/connectors/:connectorId`, `GET /api/connectors/:connectorId/health|events`, `POST /api/connectors/:connectorId/configure`, `POST /api/connectors/:connectorId/:action` (enable/disable/retire), `GET /api/scope-snapshots`, `POST /api/scope-snapshots`, `POST /api/scope-guard/evaluate`.
 
-Note: creating an event subscription starts delivery fan-out, but no production consumer drains deliveries yet — an active subscription accumulates pending rows until paused (see `platform-convergence-audit.md`).
+Event subscriptions are drained by the MCP process through the event delivery
+drainer. An undrained or failing subscription is bounded by the configured
+backlog cap and can be auto-paused; delivery and handler state remain subject
+to the platform event evidence and policy boundaries.
 
 ### Quick actions, Grafana proxy, and agent proxy
 

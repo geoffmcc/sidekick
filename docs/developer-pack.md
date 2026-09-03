@@ -1,14 +1,14 @@
 # Developer / Software Engineering Pack
 
-Status: shipped (v1.0.0), bundled first-party
+Status: shipped (v1.0.1), bundled first-party
 Package: `packs/developer/`
 
 > Make Sidekick substantially better at understanding, investigating,
 > modifying, verifying and maintaining software projects.
 
 The Developer pack is the first-party consumer that proves the Capability Packs
-platform. It contributes one module (three tools), seven runnable workflows and
-eight knowledge assets, and it is installed, enabled, configured, upgraded and
+platform. It contributes one module (four tools), seven runnable workflows and
+ten knowledge assets, and it is installed, enabled, configured, upgraded and
 uninstalled through exactly the same lifecycle a third-party pack uses.
 
 ## Install
@@ -25,7 +25,7 @@ repository.
 
 ## Tools
 
-All three are contributed by the `developer-tools` module and dispatch through
+All four are contributed by the `developer-tools` module and dispatch through
 the canonical registry, so they inherit schema validation, tool policy,
 approvals, timeouts, redaction and audit logging.
 
@@ -51,6 +51,13 @@ documentation; agent instruction files (`AGENTS.md`, `CLAUDE.md`, …); and
 candidate verification commands, **each with the evidence that produced it**.
 
 Git facts are read through Sidekick's `git` tool, not by shelling out.
+
+### `semantic_repo` (risk `low`)
+
+Builds and queries a deterministic, hash-verifiable semantic repository index
+without executing repository code. Use `action="profile"`, `action="query"`,
+or `action="verify"`; queries are bounded by `level`, `limit`, `max_chars`, and
+an optional continuation cursor.
 
 ### `dev_change_summary` (risk `low`, alias `change_summary`)
 
@@ -140,7 +147,7 @@ Two deliberate boundaries:
 
 ## Knowledge
 
-Eight entries in the `development` category, tagged `pack:developer`,
+Ten entries in the `development` category, tagged `pack:developer`,
 searchable through the ordinary `knowledge` tool: repository reconnaissance,
 change discipline, verification strategy, issue investigation, CI triage, pull
 request review, dependency upgrades and release preparation, and handoff

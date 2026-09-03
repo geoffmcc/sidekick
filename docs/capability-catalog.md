@@ -32,14 +32,21 @@ Pack maturity is a projection, not a manifest claim:
 | `certified` | Fresh integrated evidence additionally proves a safe single-pack task, a cross-pack task, and independent skeptical verification. |
 
 Evidence is stored in the existing pack repository metadata and is bound to a
-fingerprint of the installed package, version, and configuration. It expires
-after 30 days and becomes invalid immediately when that fingerprint changes.
-The `capability` tool exposes the projection with `action="maturity"`; the
-Dashboard exposes it at `GET /api/capabilities/:name/maturity`. Recording
-evidence requires an attributed source and a checks object and never elevates a
-pack by declaration alone. Optional providers are reported as
-`not_required` or `not_verified`, and do not turn into a false failure or a
-certification claim.
+fingerprint of the installed package, version, configuration, lifecycle epoch,
+and health state. It expires after 30 days and becomes invalid immediately when
+that fingerprint changes. The `capability` tool exposes the projection with
+`action="maturity"`; the Dashboard exposes it at
+`GET /api/capabilities/:name/maturity`.
+
+Evidence can be requested or recorded with `capability action="prove"` and
+`capability action="record_verification"`, or through
+`POST /api/capabilities/:name/prove`. Recording requires server-verifiable
+evidence references, an attributed actor, a project/pack binding, and checks
+that match the installed package and current health/configuration fingerprints.
+Caller-supplied booleans or declarations are not certification evidence.
+Optional providers are reported as `not_required` or `not_verified`, and do not
+turn into a false failure or a certification claim. The proving contract and
+recipe boundaries are documented in `pack-proving.md`.
 
 The Dashboard exposes the same projection at
 `GET /api/capabilities/catalog`; its request is dispatched as the Dashboard

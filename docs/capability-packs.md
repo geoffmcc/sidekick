@@ -1,6 +1,6 @@
 # Capability Packs
 
-Status: shipped (Capability Packs v1)
+Status: shipped (Capability Packs v1; maturity and proving available)
 Depends on: B9 third-party module lifecycle (complete)
 
 Sidekick Core no longer has to absorb every future area of functionality. A
@@ -149,7 +149,10 @@ inspect → install → configure → enable → health
 ```
 
 Run through the `capability` tool (MCP/agent) or the dashboard **Capabilities**
-page. Both go through the same governed path.
+page. Both go through the same governed path. Use `capability action="maturity"`
+for the derived maturity projection and `prove`/`record_verification` to work
+with fresh, attributed, server-verifiable evidence. See
+[`pack-proving.md`](pack-proving.md) for the certification contract.
 
 ### Inspect
 

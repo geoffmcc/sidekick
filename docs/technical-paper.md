@@ -111,7 +111,7 @@ Later migrations extend `memories` with lifecycle, sync, and deferred-review fie
 - `005_sync_support.sql`: origin machine/user identifiers, sync versioning, and last-sync timestamps.
 - `006_memory_deferred.sql`: state, confirmation requirements, confirmer identity, soft delete, and expiration timestamps.
 
-The `meta` table stores `schema_version`. Migration files live in `migrations/` and use numeric prefixes; the current tree has 53 ordered migrations, `001_initial_schema.sql` through `053_handoff_v2_remove_legacy_key.sql`. Beyond the memory migrations described above, later migrations add memory intelligence (009), Black Box incident evidence (010), the platform kernel (011, 026–028, 030–032), Sidekick Compute (013–024), durable approval continuation (025), platform modules (029), project identity projection (027), security-research record foundations (033–035), capability packs and runtime convergence (036–037), handoff versioning and resume packets (038–040), identity and authorization foundations (041–048), knowledge provenance and infrastructure categories (049–052), and handoff v2 cleanup (053).
+The `meta` table stores `schema_version`. Migration files live in `migrations/` and use numeric prefixes; the current tree has 78 ordered migrations, `001_initial_schema.sql` through `078_compatibility_pack_tool_categories.sql`. Later migrations add memory intelligence, Black Box incident evidence, the platform kernel, Sidekick Compute, approval continuation, modules, project identity, security-research records, capability packs, handoff versioning, identity and authorization, knowledge provenance, infrastructure categories, Agent Bridge durability, execution nodes, research snapshots, named network scopes, pack proving, Brain v3 foundations, knowledge FTS, and compatibility-pack categories. Use `db_migrate action="status"` for the deployed schema rather than relying on this historical summary.
 
 On MCP startup, `src/index.js` calls:
 
@@ -214,7 +214,7 @@ Current search is a SQLite `LIKE` search across title, content, and tags. It is 
 
 ## 7. Tool System
 
-Current `main` exposes a dynamically discovered catalog across 20 categories. Core, module, capability-pack, and approved generated tools share one governed registry. Canonical MCP names are unprefixed; older `sidekick_`-prefixed forms are compatibility aliases. Query the live `tools` manifest for the current count and enabled state.
+The runtime exposes a dynamically discovered catalog whose current categories and count are deployment data. Core, module, capability-pack, and approved generated tools share one governed registry. Canonical MCP names are unprefixed; older `sidekick_`-prefixed forms are compatibility aliases. Query the live `tools` manifest for the current count and enabled state.
 
 The authoritative execution path is descriptor- and dispatcher-based:
 
@@ -226,7 +226,11 @@ The authoritative execution path is descriptor- and dispatcher-based:
 
 `src/tools.js` is a compatibility re-export to `src/tools/index.js`. The canonical registry in `src/tools/canonical-registry.js` owns all built-in descriptors and ordering, including the Compute family. Handler decomposition is complete: every built-in handler is owned by a descriptor family, the `data-utilities` module, or the Compute subsystem. `src/tools-legacy.js`, `legacy-catalog.js`, and `legacy-tool-map.js` retain only compatibility machinery and derived projections.
 
-Built-in categories are Core, Storage, Database, Git & GitHub, Services, Scheduling, Communication, Context & Learning, Data Pipeline, Monitoring, Workflow, Meta, Efficiency, Security, Networking, Development, Reliability, Archive, Media, and Compute.
+The repository defines core catalog families including Core, Storage, Database,
+Git & GitHub, Services, Scheduling, Communication, Context & Learning, Data
+Pipeline, Monitoring, Workflow, Meta, Efficiency, Security, Networking,
+Development, Reliability, Archive, Media, and Compute. Pack and generated-tool
+categories are also registry data and may extend the projection.
 
 Built-in risk metadata is explicit and registry construction fails when it is missing. Generated tools also fail closed when their risk is absent or invalid; they do not inherit a permissive default.
 

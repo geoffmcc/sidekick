@@ -150,10 +150,11 @@ The list below records features as they were added (tool names use the older
   plus a runner over the existing kernel workflow/execution primitives; every
   step is a governed tool call.
 - **Developer / Software Engineering pack (bundled, first-party):**
-  `dev_repo_profile`, `dev_change_summary`, `dev_verify`; seven runnable
+  `dev_repo_profile`, `semantic_repo`, `dev_change_summary`, `dev_verify`; seven runnable
   workflows (repository reconnaissance, issue investigation, implement change,
   CI triage, pull request review, dependency upgrade, release preparation);
-  eight knowledge assets; twelve configuration options.
+  ten knowledge assets; configuration for verification discovery, commands,
+  output bounds, timeouts, failure behavior, and repository roots.
 - **New tools:** `capability` (critical) and `workflow` (high).
 - **Dashboard:** a first-class **Capabilities** page.
 - Migration `036_capability_packs.sql`.

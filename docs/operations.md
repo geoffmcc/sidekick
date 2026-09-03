@@ -89,7 +89,12 @@ The MCP server intentionally rejects GET/DELETE without a valid `mcp-session-id`
 
 ### Agent tasks do not progress
 
-Check Agent Bridge logs, `SIDEKICK_MAX_ITERATIONS`, LLM provider availability, and whether the agent can call tools. If using Groq, verify `GROQ_API_KEY`. If using Ollama, verify the model service is reachable at `OLLAMA_URL`.
+Check Agent Bridge logs, `SIDEKICK_MAX_ITERATIONS`, Compute provider/model
+readiness, and whether the agent can call tools. Use `compute_providers action="health_all"`,
+`model_readiness`, and `model_route_explain` rather than assuming a provider or
+direct endpoint. Ollama, OpenAI-compatible, vLLM, llama.cpp, and MLX providers
+are selected only when registered, healthy, trusted, and permitted for the
+request's data classification.
 
 ## Backups
 

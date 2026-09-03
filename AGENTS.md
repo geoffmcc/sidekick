@@ -91,7 +91,17 @@ add authority, weaken policy, approve themselves, or execute themselves.
 `llm` and `embed` route through Compute for provider placement, credentials,
 trust, data classification, health, and fallback. `ollama` is model
 administration, not a second inference path. Compute workers accept allowlisted
-chat, generation, and embedding jobs only.
+chat, generation, embedding, and text-embedding jobs only. Use
+`model_readiness`, `model_route_explain`, and the `compute_*` tools for current
+provider, model, worker, routing, job, and artifact state; do not select
+credentials or provider endpoints in an inference request.
+
+Capability packs are executable extensions composed of modules, tools,
+workflows, knowledge, and configuration. Installing or enabling one executes
+verified package code in-process without a sandbox. Use `capability action="show"`,
+`inspect`, `validate`, `health`, and `maturity` before relying on a pack; use
+`prove`/`record_verification` only with attributable, server-verifiable evidence.
+The live registry, not this file, defines exact pack and tool availability.
 
 The Agent Bridge is a durable task system separate from MCP conversation flow.
 It uses structured goals, finite task profiles, governed capability execution,
@@ -121,6 +131,11 @@ For repository work, use the Developer capability pack when available:
 `dev_repo_profile` first, then `semantic_repo`, bounded review/verification
 workflows, and mutation workflows only with explicit authorization. Repository
 paths must be visible to the Sidekick server.
+
+For documentation work, use `documentation_audit` to inventory the repository,
+then reconcile claims with `tools`, `capability`, `workflow`, and the current
+source tree. Treat `docs/tools-reference.md` as a practical guide, not an
+authoritative frozen schema list.
 
 For broad operations, use `mission` for intent routing and preflight. For
 deployment, inspect the live `ops` schema and use the packaged deployment and
