@@ -1,0 +1,12 @@
+{
+  "domain": "packs",
+  "priority": 80,
+  "tier": "contract",
+  "criticality": "required",
+  "resources": ["sqlite", "filesystem", "environment"],
+  "timeout_ms": 240000,
+  "platforms": ["linux", "win32", "darwin"],
+  "live": false,
+  "owner": "capability-packs",
+  "patterns": ["test/*pack*.test.{js,cjs}", "test/modules-*.test.{js,cjs}", "test/capability-*.test.{js,cjs}", "test/cross-pack-*.test.{js,cjs}", "test/workflow-*.test.{js,cjs}", "test/pack-*.test.{js,cjs}", "test/developer-pack.test.js", "test/packs/**/*.test.{js,cjs}"]
+}

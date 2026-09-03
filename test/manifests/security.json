@@ -1,0 +1,12 @@
+{
+  "domain": "security",
+  "priority": 100,
+  "tier": "security",
+  "criticality": "required",
+  "resources": ["pure", "environment"],
+  "timeout_ms": 180000,
+  "platforms": ["linux", "win32", "darwin"],
+  "live": false,
+  "owner": "security",
+  "patterns": ["test/security*.test.{js,cjs}", "test/*security*.test.{js,cjs}", "test/identity-*.test.{js,cjs}", "test/approval.test.js", "test/per-action-risk.test.js", "test/sensitive-result-boundary.test.js", "test/security/**/*.test.{js,cjs}"]
+}

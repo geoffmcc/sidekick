@@ -1,0 +1,12 @@
+{
+  "domain": "platforms",
+  "priority": 50,
+  "tier": "integration",
+  "criticality": "required",
+  "resources": ["sqlite", "filesystem", "subprocess", "git", "environment"],
+  "timeout_ms": 240000,
+  "platforms": ["linux", "win32", "darwin"],
+  "live": false,
+  "owner": "platform",
+  "patterns": ["test/{dashboard*,browser*,mcp-*,local-stdio*,git-*,deploy-*,release-*,backup-*,execution-*,scheduler-*,queue-*,scheduling-*,project-*,workspace-*,memory-*,handoff-*,automatic-memory*,blackbox*,predict*,evolve*,insight-report*,metrics-*,connector*,ci-status*,certification*,invariants-doctor*,integration*}.test.{js,cjs}"]
+}

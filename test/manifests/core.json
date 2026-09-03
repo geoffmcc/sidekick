@@ -1,0 +1,12 @@
+{
+  "domain": "core",
+  "priority": 40,
+  "tier": "unit",
+  "criticality": "required",
+  "resources": ["pure", "environment"],
+  "timeout_ms": 120000,
+  "platforms": ["linux", "win32", "darwin"],
+  "live": false,
+  "owner": "core",
+  "patterns": ["test/{tools,tool-*,dispatcher*,platform-*,config-*,architecture-*,static-code-quality*,result-*,timestamp-format*,health*,platform-errors*,bash-tool*,command-execution*,cron-safety*,outbound-url-security*,provider-outbound-security*,storage-isolation-security*,security-scan*,subprocess-security*,structured-tools-security*,path-policy*}.test.{js,cjs}", "test/core/**/*.test.{js,cjs}"]
+}
