@@ -1,6 +1,6 @@
-# Handoff v2
+# Handoff v3
 
-Handoff v2 keeps the existing prose `content` field and adds an optional, versioned `packet`.
+Handoff v3 keeps the existing prose `content` field and uses a required, versioned `packet` for new records.
 Packet changes are preserved in the same append-only history as content changes, so updating
 structured state cannot silently overwrite the previous resume state.
 
@@ -31,8 +31,11 @@ structured state cannot silently overwrite the previous resume state.
 }
 ```
 
-The packet is optional when reading historical records. New handoffs should provide at least an
-`objective` or `summary`, a `status`, and a concrete `next_step`.
+The packet is optional when reading historical records. New handoffs must provide an
+`objective` or `summary`, a `status`, and a concrete `next_step`; older `state`, `next_steps`,
+`work_completed`, and `tests_and_evidence` aliases are normalized when read or updated.
+Migration 077 applies the same bounded normalization to existing structured records without
+inventing checkpoints, provenance, or verification evidence.
 Blocked packets should explain their blockers; completed packets should include acceptance
 criteria.
 

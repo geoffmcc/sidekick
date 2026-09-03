@@ -1,10 +1,16 @@
+const authorization = require("../core/authorization");
+
 function registerHandoffReadRoutes({ app, dbStore }) {
   function canRead(req, handoff) {
     const principal = req.authPrincipal;
     if (!principal?.principal_id || !handoff) return false;
     if (handoff.owner_principal_id === principal.principal_id || handoff.created_by_principal_id === principal.principal_id) return true;
-    const roles = Array.isArray(principal.roles) ? principal.roles : [];
-    return roles.some(role => ["owner", "administrator"].includes(String(role).toLowerCase()));
+    return authorization.authorize({
+      principalId: principal.principal_id,
+      permission: "principals.manage",
+      credentialScopes: principal.scopes,
+      delegationId: principal.delegation_id || null,
+    }).ok;
   }
 
   function requireHandoff(req, res) {
@@ -53,7 +59,7 @@ function registerHandoffReadRoutes({ app, dbStore }) {
   app.get("/api/handoffs/:id/events", (req, res) => {
     try {
       if (!requireHandoff(req, res)) return;
-      res.json({ ok: true, handoff_id: req.params.id, events: dbStore.listHandoffEvents(req.params.id, req.query.limit || 100) });
+      res.json({ ok: true, handoff_id: req.params.id, events: dbStore.listHandoffEvents(req.params.id, req.query.limit || 100), integrity: dbStore.verifyHandoffEventChain(req.params.id) });
     } catch (error) { res.status(400).json({ ok: false, error: error.message }); }
   });
 
@@ -70,6 +76,17 @@ function registerHandoffReadRoutes({ app, dbStore }) {
     try {
       const memory = dbStore.getMemoryById(req.params.id, { includeDisabled: true });
       if (!memory) return res.status(404).json({ ok: false, error: "Memory not found" });
+      const handoff = memory.source_ref ? dbStore.getHandoff(memory.source_ref) : null;
+      const principal = req.authPrincipal;
+      const authorized = principal?.principal_id && (handoff
+        ? canRead(req, handoff)
+        : authorization.authorize({
+          principalId: principal.principal_id,
+          permission: "principals.manage",
+          credentialScopes: principal.scopes,
+          delegationId: principal.delegation_id || null,
+        }).ok);
+      if (!authorized) return res.status(404).json({ ok: false, error: "Memory not found" });
       res.json({ ok: true, memory, evidence: dbStore.getMemoryEvidence(req.params.id) });
     } catch (error) { res.json({ ok: false, error: error.message }); }
   });

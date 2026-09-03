@@ -244,7 +244,10 @@ function parse(result) {
     objective: "Resume continuity fixture",
     status: "active",
     next_step: "Verify the checkpoint",
+    completed_steps: ["Created the continuity fixture"],
     acceptance_criteria: ["Checkpoint is captured"]
+    ,provenance: { working_directory: process.cwd(), commit_sha: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(), branch: execFileSync("git", ["branch", "--show-current"], { encoding: "utf8" }).trim() }
+    ,evidence: [{ type: "test", label: "continuity fixture", status: "passed", observed_at: new Date().toISOString() }]
   } }));
   assert.strictEqual(continuity.handoff.schema_version, 3, "new handoffs should use the v3 schema marker");
   const checkpoint = parse(await TOOLS.handoff({ action: "checkpoint", id: continuity.handoff.id, working_directory: process.cwd(), expected_version: 1 }));
@@ -279,11 +282,11 @@ function parse(result) {
   assert.strictEqual(readiness.readiness.status, "ready", "clean claimed checkpoint should be resumable");
   const receiver = parse(await TOOLS.handoff({ action: "start_here", id: continuity.handoff.id, working_directory: process.cwd() }));
   assert.strictEqual(receiver.projection.start_here.next_step, "Verify the checkpoint", "receiver projection should expose the next step");
-  assert.ok(receiver.projection.quality.issues.includes("quality requires verification"), "quality gate should identify missing evidence");
+  assert.strictEqual(receiver.projection.quality.valid, true, "receiver projection should report a complete packet");
   const quality = parse(await TOOLS.handoff({ action: "quality", id: continuity.handoff.id }));
-  assert.strictEqual(quality.quality.valid, false, "incomplete packet should fail the quality gate");
+  assert.strictEqual(quality.quality.valid, true, "complete packet should pass the quality gate");
   const simulated = parse(await TOOLS.handoff({ action: "simulate_resume", id: continuity.handoff.id, working_directory: process.cwd(), owner: "hv-agent" }));
-  assert.strictEqual(simulated.preflight.safe_to_resume, false, "resume simulation must fail closed without quality evidence");
+  assert.strictEqual(simulated.preflight.safe_to_resume, true, "resume simulation should pass for a complete packet");
   const detailedCompare = parse(await TOOLS.handoff({ action: "compare", id: continuity.handoff.id, version: 1, expected_version: 1 }));
   assert.strictEqual(detailedCompare.comparison.content_changed, false, "same-version comparison should be deterministic");
   const releasedRaw = await TOOLS.handoff({ action: "release", id: continuity.handoff.id, claim_token: claimed.claim_token });

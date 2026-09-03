@@ -4746,13 +4746,20 @@ async function loadHandoffs() {
     const response = await authFetch('/api/handoffs?limit=50');
     const data = await response.json();
     if (!response.ok || !data.ok) throw new Error(data.error || 'handoff request failed');
-    const projections = await Promise.all((data.handoffs || []).map(async handoff => {
-      const result = await authFetch('/api/handoffs/' + encodeURIComponent(handoff.id) + '/start-here');
-      const body = await result.json();
-      return body.projection || { handoff_id: handoff.id, title: handoff.title, lifecycle_state: handoff.lifecycle_state, start_here: {} };
+    const results = await Promise.all((data.handoffs || []).map(async handoff => {
+      try {
+        const result = await authFetch('/api/handoffs/' + encodeURIComponent(handoff.id) + '/start-here');
+        const body = await result.json();
+        if (!result.ok || !body.ok || !body.projection) throw new Error(body.error || 'handoff receiver request failed');
+        return { projection: body.projection };
+      } catch (error) {
+        return { handoff, error: error.message || 'handoff receiver request failed' };
+      }
     }));
-    status.textContent = projections.length + ' handoff' + (projections.length === 1 ? '' : 's');
-    if (!projections.length) { list.innerHTML = '<div class="card"><div class="empty">No handoffs found.</div></div>'; return; }
+    const projections = results.filter(result => result.projection).map(result => result.projection);
+    const failures = results.filter(result => result.error);
+    status.textContent = projections.length + ' handoff' + (projections.length === 1 ? '' : 's') + (failures.length ? ' · ' + failures.length + ' unavailable' : '');
+    if (!projections.length) { list.innerHTML = '<div class="card"><div class="empty">Handoff receiver data unavailable.</div></div>'; return; }
     list.innerHTML = projections.map(projection => {
       const start = projection.start_here || {};
       const evidence = projection.evidence || {};
@@ -4768,10 +4775,10 @@ async function loadHandoffs() {
         '<div class="handoff-actions"><span class="metrics-status-pill ' + (lifecycleHealthy ? 'ok' : 'warn') + '" title="Authoritative handoff lifecycle">' + esc(lifecycle) + '</span>' +
         '<span class="metrics-status-pill ' + (readinessStatus === 'ready' ? 'ok' : 'warn') + '" title="Receiver resume readiness">Readiness: ' + esc(readinessStatus) + '</span></div></div>' +
         '<div class="mission-muted">Next: ' + esc(start.next_step || 'No next step recorded') + '</div>' +
-        '<div class="mission-metrics"><div><span>Quality</span><strong>' + (quality.valid ? 'Ready' : 'Needs work') + '</strong></div><div><span>Evidence</span><strong>' + esc(String(evidence.fresh || 0)) + ' fresh / ' + esc(String(evidence.stale || 0)) + ' stale</strong></div><div><span>Blockers</span><strong>' + esc(String(blockers.length)) + '</strong></div><div><span>Questions</span><strong>' + esc(String(questions.length)) + '</strong></div></div>' +
-        '<details><summary>Receiver details</summary><pre class="agent-log handoff-details">' + esc(JSON.stringify({ completed_steps: projection.completed_steps || [], decisions: start.decisions || [], blockers, open_questions: questions, risks: start.risks || [], acceptance_criteria: projection.acceptance_criteria || [], artifacts: projection.artifacts || [], relationships: projection.relationships || [], reasons: readiness.reasons || quality.issues || [] }, null, 2)) + '</pre></details>' +
+         '<div class="mission-metrics"><div><span>Quality</span><strong>' + (quality.valid ? 'Ready' : 'Needs work') + '</strong></div><div><span>Evidence</span><strong>' + esc(String(evidence.fresh || 0)) + ' fresh / ' + esc(String(evidence.stale || 0)) + ' stale / ' + esc(String((evidence.unknown || 0) + (evidence.invalid || 0))) + ' unresolved</strong></div><div><span>Blockers</span><strong>' + esc(String(blockers.length)) + '</strong></div><div><span>Questions</span><strong>' + esc(String(questions.length)) + '</strong></div></div>' +
+         '<details><summary>Receiver details</summary><pre class="agent-log handoff-details">' + esc(JSON.stringify({ current_state: start.current_state || null, completed_steps: projection.completed_steps || [], decisions: start.decisions || [], blockers, open_questions: questions, risks: start.risks || [], acceptance_criteria: projection.acceptance_criteria || [], artifacts: projection.artifacts || [], relationships: projection.relationships || [], provenance: projection.provenance || null, evidence: evidence.items || [], claim: projection.claim || null, reasons: readiness.reasons || quality.issues || [] }, null, 2)) + '</pre></details>' +
         '</div>';
-    }).join('');
+     }).join('') + (failures.length ? '<div class="card"><div class="empty">' + esc(String(failures.length)) + ' handoff receiver record' + (failures.length === 1 ? '' : 's') + ' could not be loaded. Refresh to retry.</div></div>' : '');
   } catch (error) {
     status.textContent = 'Unable to load handoffs: ' + error.message;
     list.innerHTML = '<div class="card"><div class="empty">Handoff receiver data unavailable.</div></div>';

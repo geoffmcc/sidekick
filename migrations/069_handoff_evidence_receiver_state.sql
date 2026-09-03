@@ -12,4 +12,6 @@ CREATE TABLE IF NOT EXISTS memory_handoff_evidence_state (
   PRIMARY KEY (handoff_id, version, evidence_key)
 );
 CREATE INDEX IF NOT EXISTS idx_handoff_evidence_state ON memory_handoff_evidence_state(handoff_id, version, state);
-INSERT OR REPLACE INTO meta (key, value) VALUES ('handoff_schema_version', '4');
+-- Evidence freshness is part of Handoff v3; this migration does not introduce
+-- a separate packet contract version.
+INSERT OR REPLACE INTO meta (key, value) VALUES ('handoff_schema_version', '3');

@@ -6,7 +6,7 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
   const HANDOFF_PACKET_STATUSES = new Set(["active", "blocked", "ready", "completed", "abandoned"]);
   const HANDOFF_LIFECYCLE = new Set(["draft", "ready", "claimed", "verifying", "reconciliation_required", "active", "released", "superseded", "revoked", "completed", "expired", "invalid"]);
   const TRANSITIONS = {
-    draft: new Set(["ready", "invalid", "revoked"]),
+    draft: new Set(["ready", "active", "completed", "invalid", "revoked"]),
     ready: new Set(["claimed", "active", "revoked", "superseded"]),
     claimed: new Set(["verifying", "active", "released", "expired", "reconciliation_required", "revoked"]),
     verifying: new Set(["active", "reconciliation_required", "released", "revoked"]),
@@ -47,7 +47,7 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
   function gitCheckpoint(workingDirectory) {
     const root = String(workingDirectory || "");
     if (!root || !fs.existsSync(root)) return { workspace: { root: root || null, visible: false }, repository: null };
-    const git = (args) => execFileSync("git", ["-C", root, ...args], { encoding: "utf8", env: childProcessEnv(), maxBuffer: 1024 * 1024 }).trim();
+    const git = (args) => execFileSync("git", ["-C", root, ...args], { encoding: "utf8", env: childProcessEnv(), maxBuffer: 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] }).trim();
     try {
       const repositoryRoot = git(["rev-parse", "--show-toplevel"]);
       const status = execFileSync("git", ["-C", root, "status", "--porcelain=v1", "-z"], { encoding: "utf8", env: childProcessEnv(), maxBuffer: 1024 * 1024 }).split("\0").filter(Boolean).slice(0, 2000);
@@ -71,6 +71,14 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
       throw new Error("Handoff packet must be an object");
     }
     const normalized = { ...packet };
+    // Older producers used `state` and `next_steps`. Normalize those aliases
+    // at the persistence boundary so every reader consumes one contract.
+    if (normalized.status === undefined && HANDOFF_PACKET_STATUSES.has(String(normalized.state || ""))) normalized.status = String(normalized.state);
+    if (!normalized.next_step && Array.isArray(normalized.next_steps) && normalized.next_steps.length) normalized.next_step = String(normalized.next_steps[0]);
+    if (!Array.isArray(normalized.completed_steps) && Array.isArray(normalized.work_completed)) normalized.completed_steps = normalized.work_completed;
+    if (!Array.isArray(normalized.evidence) && Array.isArray(normalized.tests_and_evidence)) {
+      normalized.evidence = normalized.tests_and_evidence.map((item, index) => typeof item === "object" ? item : { type: "reported", label: `Reported evidence ${index + 1}`, status: "recorded", description: String(item) });
+    }
     if (normalized.status !== undefined && !HANDOFF_PACKET_STATUSES.has(String(normalized.status))) {
       throw new Error(`Handoff packet status must be one of: ${Array.from(HANDOFF_PACKET_STATUSES).join(", ")}`);
     }
@@ -91,6 +99,12 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
       throw new Error("Handoff packet provenance must be an object");
     }
     return normalized;
+  }
+
+  function redactPacket(value) {
+    if (Array.isArray(value)) return value.map(redactPacket);
+    if (value && typeof value === "object") return Object.keys(value).reduce((out, key) => { out[key] = redactPacket(value[key]); return out; }, {});
+    return typeof value === "string" ? redactSensitive(value) : value;
   }
 
   function parseHandoffPacket(value) {
@@ -122,6 +136,7 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
     const value = normalizeHandoffPacket(packet || {});
     const issues = [];
     if (!value.objective && !value.summary) issues.push("packet requires objective or summary");
+    if (requireResume && !value.status) issues.push("packet requires status before resume");
     if (requireResume && !value.next_step && value.status !== "completed" && value.status !== "abandoned") issues.push("packet requires next_step before resume");
     if (value.status === "blocked" && (!Array.isArray(value.blockers) || value.blockers.length === 0)) issues.push("blocked packet requires at least one blocker");
     if (value.status === "completed" && (!Array.isArray(value.acceptance_criteria) || value.acceptance_criteria.length === 0)) issues.push("completed packet requires acceptance_criteria");
@@ -149,7 +164,7 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
     return evidence.map((item, index) => {
       const stamp = item.observed_at || item.verified_at || item.created_at || null;
       const ageMs = stamp ? Math.max(0, now - Date.parse(stamp)) : null;
-      const valid = item.status === "failed" || item.status === "invalid" ? false : ageMs !== null && Number.isFinite(ageMs) && ageMs <= maxAgeMs;
+      const valid = ["passed", "verified"].includes(String(item.status || "").toLowerCase()) && ageMs !== null && Number.isFinite(ageMs) && ageMs <= maxAgeMs;
       return { index, type: item.type || null, label: item.label || null, status: item.status || "unknown", observed_at: stamp, age_ms: ageMs, freshness: valid ? "fresh" : stamp ? "stale" : "unknown", valid };
     });
   }
@@ -175,8 +190,8 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
     const states = items.map((item, index) => {
       const stamp = item.observed_at || item.verified_at || item.created_at || null;
       const ageMs = stamp ? Math.max(0, now - Date.parse(stamp)) : null;
-      let state = item.status === "failed" || item.status === "invalid" ? "invalid" : stamp && Number.isFinite(ageMs) && ageMs <= maxAgeMs ? "fresh" : stamp ? "stale" : "unknown";
-      let reason = state === "fresh" ? "within freshness window" : state === "stale" ? "outside freshness window" : state === "unknown" ? "no evidence timestamp" : "evidence reports failure or invalidity";
+      let state = ["passed", "verified"].includes(String(item.status || "").toLowerCase()) && stamp && Number.isFinite(ageMs) && ageMs <= maxAgeMs ? "fresh" : item.status === "failed" || item.status === "invalid" ? "invalid" : stamp ? "stale" : "unknown";
+      let reason = state === "fresh" ? "within freshness window" : state === "stale" ? "outside freshness window or not independently verified" : state === "unknown" ? "no evidence timestamp" : "evidence reports failure or invalidity";
       let sourceHash = item.content_hash || item.sha256 || null;
       if (item.artifact_id && hasTable("platform_artifacts")) {
         const artifact = db.prepare("SELECT artifact_id, content_hash, deleted_at FROM platform_artifacts WHERE artifact_id = ?").get(String(item.artifact_id));
@@ -357,7 +372,7 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
     const ts = nowIso();
   const redacted = redactSensitive(String(content || ""));
     const hash = stableHash(redacted);
-    const packetValue = normalizeHandoffPacket(packet);
+    const packetValue = packet === undefined || packet === null ? null : redactPacket(normalizeHandoffPacket(packet));
     const packetJson = packetValue === null ? null : JSON.stringify(packetValue);
 
     const existing = id ? db.prepare("SELECT * FROM memory_handoffs WHERE id = ?").get(id) : null;
@@ -533,7 +548,7 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
       content_hash: row.content_hash,
       content: row.content,
       redacted_content: row.redacted_content,
-      packet: parseHandoffPacket(row.packet_json),
+      packet: normalizeHandoffPacket(parseHandoffPacket(row.packet_json)),
       created_at: row.created_at,
       superseded_at: row.superseded_at,
       current: false,
@@ -590,7 +605,10 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
     if (!hasTable("memory_handoff_versions")) throw new Error("memory_handoff_versions table is not available; run migrations");
     const row = db.prepare("SELECT content_hash FROM memory_handoff_versions WHERE handoff_id = ? AND version = ?").get(current.id, Number(version));
     if (!row) throw new Error(`Handoff "${current.id}" has no historical version ${version}`);
-    db.prepare("DELETE FROM memory_handoff_versions WHERE handoff_id = ? AND version = ?").run(current.id, Number(version));
+    db.transaction(() => {
+      db.prepare("DELETE FROM memory_handoff_links WHERE handoff_id = ? AND version = ?").run(current.id, Number(version));
+      db.prepare("DELETE FROM memory_handoff_versions WHERE handoff_id = ? AND version = ?").run(current.id, Number(version));
+    })();
     auditMemoryEvent("handoff_version_purged", "handoff", current.id, { version: Number(version), content_hash: row.content_hash, reason: String(reason || "unspecified").slice(0, 300) }, source || "system");
     return { purged: true, handoff_id: current.id, version: Number(version), content_hash: row.content_hash };
   }
@@ -613,7 +631,7 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
       extraction_version: row.extraction_version,
       schema_version: row.schema_version || 2,
       lifecycle_state: row.lifecycle_state || "draft",
-      checkpoint: parseJson(row.checkpoint_json, null),
+      checkpoint: row.checkpoint_json && row.checkpoint_json !== "{}" ? parseJson(row.checkpoint_json, null) : null,
       checkpoint_hash: row.checkpoint_hash || null,
       claim: row.claim_owner ? { owner: row.claim_owner, expires_at: row.claim_expires_at, active: !!row.claim_expires_at && new Date(row.claim_expires_at).getTime() > Date.now() } : null,
       sealed_at: row.sealed_at || null,
@@ -642,6 +660,21 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
     return db.prepare("SELECT * FROM memory_handoff_events WHERE handoff_id = ? ORDER BY event_seq DESC LIMIT ?").all(handoffId, Math.max(1, Math.min(Number(limit) || 100, 500))).map(row => ({ id: row.id, handoff_id: row.handoff_id, event_seq: row.event_seq, version: row.version, event_type: row.event_type, actor: row.actor, source: row.source, payload: parseJson(row.payload_json, {}), previous_hash: row.previous_hash, event_hash: row.event_hash, created_at: row.created_at }));
   }
 
+  function verifyHandoffEventChain(handoffId) {
+    if (!hasTable("memory_handoff_events")) return { valid: true, checked: 0, issues: [] };
+    const rows = db.prepare("SELECT * FROM memory_handoff_events WHERE handoff_id = ? ORDER BY event_seq ASC").all(handoffId);
+    const issues = [];
+    let previousHash = null;
+    rows.forEach((row, index) => {
+      if (Number(row.event_seq) !== index + 1) issues.push(`event sequence gap at ${row.event_seq}`);
+      if ((row.previous_hash || null) !== previousHash) issues.push(`event ${row.event_seq} previous hash mismatch`);
+      const event = { handoff_id: row.handoff_id, event_seq: row.event_seq, version: row.version, event_type: row.event_type, actor: String(row.actor || "system"), source: String(row.source || "handoff"), payload: canonicalize(parseJson(row.payload_json, {})), previous_hash: row.previous_hash || null };
+      if (continuityHash(event) !== row.event_hash) issues.push(`event ${row.event_seq} hash mismatch`);
+      previousHash = row.event_hash;
+    });
+    return { valid: issues.length === 0, checked: rows.length, issues };
+  }
+
   function captureHandoffCheckpoint(id, { working_directory, expectedVersion, actor = "system", source = "handoff", metadata = null } = {}) {
     const handoff = getHandoff(id);
     if (!handoff) throw new Error(`Handoff not found: ${id}`);
@@ -661,9 +694,16 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
     const reasons = [...validation.issues];
     if (!["ready", "claimed", "verifying", "active", "released", "completed"].includes(handoff.lifecycle_state)) reasons.push(`lifecycle state is ${handoff.lifecycle_state}`);
     const drift = handoff.checkpoint ? checkpointDrift(handoff.checkpoint, working_directory) : { status: "unknown", severity: "blocking", reasons: ["no checkpoint captured"] };
+    if (handoff.checkpoint && handoff.checkpoint_hash && continuityHash(handoff.checkpoint) !== handoff.checkpoint_hash) {
+      drift.status = "invalid";
+      drift.severity = "blocking";
+      drift.reasons = ["checkpoint integrity hash does not match stored state"];
+    }
+    const journal = verifyHandoffEventChain(id);
+    if (!journal.valid) reasons.push("handoff event journal integrity verification failed");
     if (drift.severity === "blocking" || drift.severity === "material") reasons.push(...(drift.reasons || ["checkpoint drift requires reconciliation"]));
     const status = reasons.length ? (drift.severity === "blocking" ? "blocked" : "reconciliation_required") : "ready";
-    return { status, reasons, handoff_id: id, version: handoff.version, lifecycle_state: handoff.lifecycle_state, recipient: recipient || null, checkpoint: { hash: handoff.checkpoint_hash, drift } };
+    return { status, reasons, handoff_id: id, version: handoff.version, lifecycle_state: handoff.lifecycle_state, recipient: recipient || null, checkpoint: { hash: handoff.checkpoint_hash, drift }, journal };
   }
 
   function transitionHandoff(id, target, { expectedVersion, actor = "system", source = "handoff", reason } = {}) {
@@ -676,6 +716,10 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
     if (target === "ready" || target === "completed") {
       const validation = validateHandoffPacket(current.packet, { requireResume: true });
       if (!validation.valid) throw new Error(`Handoff cannot transition to ${target}: ${validation.issues.join("; ")}`);
+      if (target === "ready") {
+        const quality = evaluateHandoffQuality(current.packet);
+        if (!quality.valid) throw new Error(`Handoff cannot transition to ready: ${quality.issues.join("; ")}`);
+      }
       if (target === "ready" && !current.checkpoint_hash) throw new Error("Handoff cannot transition to ready without a checkpoint");
     }
     const ts = nowIso();
@@ -713,6 +757,7 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
     const claimRow = db.prepare("SELECT claim_token FROM memory_handoffs WHERE id = ?").get(id);
     const tokenHash = continuityHash({ domain: "claim", token: claim_token });
     if (!claimRow || claimRow.claim_token !== tokenHash) throw new Error("handoff claim token is invalid");
+    if (!current.claim?.active) throw new Error("handoff claim is expired");
     const result = db.prepare("UPDATE memory_handoffs SET lifecycle_state = 'released', claim_owner = NULL, claim_token = NULL, claim_expires_at = NULL, updated_at = ? WHERE id = ? AND claim_token = ?").run(nowIso(), id, tokenHash);
     if (!result.changes) throw new Error(`Handoff "${id}" changed concurrently during release`);
     appendHandoffEvent(id, current.version, "released", { reason: String(reason || "").slice(0, 300) }, { actor, source });
