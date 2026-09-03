@@ -62,7 +62,7 @@ jobs:
         run: node scripts/run-tests.js --domain=${{ matrix.domain }}
       - name: Upload bounded result summary
         if: always()
-        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1, Node 24
         with:
           name: test-results-${{ matrix.domain }}-${{ matrix.node-version }}
           path: artifacts/test-results.json
@@ -130,7 +130,7 @@ jobs:
       - run: npm run test:coverage
       - name: Upload coverage summary
         if: always()
-        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1, Node 24
         with:
           name: coverage-summary
           path: artifacts/coverage-summary.json
