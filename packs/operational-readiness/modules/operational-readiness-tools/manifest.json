@@ -10,6 +10,6 @@
   "capabilities": ["operational-readiness", "evidence-gated-readiness"],
   "configSchema": { "type": "object", "properties": { "minimum_evidence": { "type": "integer", "minimum": 1, "maximum": 20 } }, "additionalProperties": false },
   "tools": { "operational_readiness": { "risk": "medium", "category": "Operations", "aliases": ["readiness"] } },
-  "permissions": [{ "tool": "research_evidence", "risk": "medium" }, { "tool": "health", "risk": "low" }, { "tool": "dev_repo_profile", "risk": "low" }, { "tool": "handoff", "risk": "low" }],
+  "permissions": [{ "tool": "research_evidence", "risk": "medium" }, { "tool": "health", "risk": "low" }, { "tool": "dev_repo_profile", "risk": "low" }, { "tool": "handoff", "risk": "medium" }],
   "lifecycle": { "disable": "stop_new_work", "uninstall": "retain_data" }
 }
