@@ -11,6 +11,6 @@
   "workflows": [{ "path": "workflows/identify-gaps.json" }, { "path": "workflows/evidence-snapshot.json" }],
   "knowledge": [{ "path": "knowledge/gaps.md", "title": "Assumptions and unknowns", "category": "reasoning", "tags": ["assumptions", "unknowns", "evidence"] }, { "path": "knowledge/usage-reference.md", "title": "Assumptions and Unknowns: source and resolution guide", "category": "reasoning", "tags": ["assumptions", "unknowns", "context", "evidence"] }],
   "requires": { "tools": ["context", "memory", "handoff"], "optional_tools": ["dev_repo_profile", "research_evidence"] },
-  "permissions": [{ "tool": "context", "risk": "low" }, { "tool": "memory", "risk": "low" }, { "tool": "handoff", "risk": "low" }],
+  "permissions": [{ "tool": "context", "risk": "medium" }, { "tool": "memory", "risk": "medium" }, { "tool": "handoff", "risk": "medium" }],
   "configuration": { "schema": { "type": "object", "additionalProperties": false }, "defaults": {} }
 }
