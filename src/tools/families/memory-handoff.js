@@ -90,6 +90,16 @@ async function sidekick_handoff({ action, id, key, project, title, content, sour
       ? content
       : existing?.content;
     if (!handoffContent) return { content: [{ type: "text", text: "content required, or provide id for an existing handoff" }], isError: true };
+    if (action === "create" && packet === undefined) {
+      packet = {
+        objective: title || project || "Handoff",
+        summary: String(handoffContent).slice(0, 20000),
+        status: "active",
+        next_step: "Review the handoff and define the next safe action",
+        completed_steps: [], blockers: [], acceptance_criteria: [], evidence: [], artifacts: [], relationships: [],
+        provenance: {},
+      };
+    }
     // create and update are distinct intents: update must never silently mint
     // a new handoff (a typo'd id would fork the plan), and create must never
     // silently overwrite an existing one.
@@ -99,9 +109,9 @@ async function sidekick_handoff({ action, id, key, project, title, content, sour
     if (action === "create" && existing) {
       return { content: [{ type: "text", text: `Handoff "${existing.id}" already exists (v${existing.version}). Use update to add a new version.` }], isError: true };
     }
-    if (packet !== undefined) {
-      try {
-        const validation = dbStore.validateHandoffPacket(packet);
+     if (packet !== undefined) {
+       try {
+         const validation = dbStore.validateHandoffPacket(packet, { requireResume: action === "create" });
         if (!validation.valid) return { content: [{ type: "text", text: `invalid handoff packet: ${validation.issues.join("; ")}` }], isError: true };
       } catch (error) {
         return { content: [{ type: "text", text: String(error && error.message ? error.message : error) }], isError: true };

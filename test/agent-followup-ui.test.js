@@ -184,6 +184,12 @@ ok("Handoff cards distinguish lifecycle from receiver readiness", () => {
   assert.ok(clientJs.includes("Readiness: ' + esc(readinessStatus)"), "readiness is rendered separately from lifecycle");
 });
 
+ok("handoff receiver errors are not rendered as fabricated cards", () => {
+  assert.match(clientJs, /!result\.ok \|\| !body\.ok \|\| !body\.projection/, "receiver response status is checked");
+  assert.match(clientJs, /throw new Error\(body\.error \|\| 'handoff receiver request failed'\)/, "receiver errors stop fallback projection rendering");
+  assert.doesNotMatch(clientJs, /body\.projection \|\| \{ handoff_id: handoff\.id/, "failed responses do not become empty handoff cards");
+});
+
 ok("history control exposes and updates real expanded state", () => {
   const body = fnBody(clientJs, "toggleHistory");
   assert.match(body, /agentHistoryToggle/, "uses the semantic history button");

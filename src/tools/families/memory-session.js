@@ -7,6 +7,7 @@ const { redactSensitive } = require("../../redact");
 const { buildMemoryBrief } = require("../../memory");
 const toolContext = require("../context");
 const { canonicalizeProjectName } = require("../../core/project-identity");
+const authorization = require("../../core/authorization");
 
 function jsonText(value) {
   return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }] };
@@ -70,6 +71,12 @@ function buildScopedMemoryBrief(goal, project, options = {}) {
   return { goal: goal || null, project: project || null, selected: current.slice(0, options.limit || 10), sections: legacyBrief, excluded_policy: "Expired, deleted, disabled, superseded, and unrelated project memories are excluded from normal recall.", generated_at: new Date().toISOString() };
 }
 
+function canManageSession(session, authIdentity) {
+  if (!authIdentity?.principal_id) return true;
+  if (session.owner_principal_id === (authIdentity.acting_for_principal_id || authIdentity.principal_id) || session.created_by_principal_id === authIdentity.principal_id) return true;
+  return authorization.authorize({ principalId: authIdentity.principal_id, permission: "principals.manage", credentialScopes: authIdentity.scopes, delegationId: authIdentity.delegation_id || null }).ok;
+}
+
 function buildContinuationPacket(existing, input = {}) {
   const reports = Array.isArray(input.reports) ? input.reports : [];
   const priorPacket = input.handoff?.packet || {};
@@ -90,19 +97,26 @@ function buildContinuationPacket(existing, input = {}) {
     contextArtifacts,
     reportArtifacts
   );
-  const evidenceItems = (Array.isArray(input.evidence) ? input.evidence : input.evidence ? [input.evidence] : []).map((item, index) => ({
+    const evidenceItems = (Array.isArray(input.evidence) ? input.evidence : input.evidence ? [input.evidence] : []).map((item, index) => ({
     type: "session",
     label: `Session evidence ${index + 1}`,
     status: "recorded",
     content: redactSensitive(String(item)),
     source_task_id: existing.id,
   }));
-  const evidence = mergePacketEntries(priorPacket.evidence, evidenceItems);
+    const reportedVerification = (Array.isArray(input.verified_facts) ? input.verified_facts : []).map((item, index) => ({
+      type: "verified_fact",
+      label: `Verified fact ${index + 1}`,
+      status: "recorded",
+      content: redactSensitive(String(item)),
+      source_task_id: existing.id,
+    }));
+    const evidence = mergePacketEntries(priorPacket.evidence, evidenceItems, reportedVerification);
   const acceptance = input.acceptance_state || existing.acceptance_state;
   const priorProvenance = priorPacket.provenance || {};
-  const acceptanceCriteria = mergePacketEntries(
-    priorPacket.acceptance_criteria,
-    acceptance ? [`Session acceptance: ${acceptance}`] : []
+    const acceptanceCriteria = mergePacketEntries(
+      priorPacket.acceptance_criteria,
+      acceptance && !priorPacket.acceptance_criteria?.length ? [`Session acceptance: ${acceptance}`] : []
   );
   return {
     objective: existing.goal,
@@ -157,6 +171,7 @@ async function sidekick_session({ action, id, goal, project, source, working_dir
     if (!id) return { content: [{ type: "text", text: "id required" }], isError: true };
     const existing = dbStore.getTaskSession(id);
     if (!existing) return { content: [{ type: "text", text: "Task session not found: " + id }], isError: true };
+    if (!canManageSession(existing, authIdentity)) return { content: [{ type: "text", text: "Task session not found: " + id }], isError: true };
     const session = dbStore.saveTaskSession({ ...existing, current_plan, completed_steps: completed_steps || existing.completed_steps, current_hypothesis, blockers: blockers || existing.blockers, next_step, artifacts: artifacts || existing.artifacts, state: "active", owner_principal_id: existing.owner_principal_id || ownerPrincipalId, created_by_principal_id: existing.created_by_principal_id || actorPrincipalId });
     recordPlatformMemoryEvent(action === "checkpoint" ? "memory.session_checkpointed" : "memory.session_updated", { session_id: session.id, project: session.project, action, completed_steps: Array.isArray(session.completed_steps) ? session.completed_steps.length : 0 }, { subjectType: "memory_task_session", subjectId: session.id, project: session.project, taskId: session.id });
     return jsonText({ ok: true, session, checkpoint: action === "checkpoint" });
@@ -165,12 +180,13 @@ async function sidekick_session({ action, id, goal, project, source, working_dir
     if (!id) return { content: [{ type: "text", text: "id required" }], isError: true };
     const existing = dbStore.getTaskSession(id);
     if (!existing) return { content: [{ type: "text", text: "Task session not found: " + id }], isError: true };
+    if (!canManageSession(existing, authIdentity)) return { content: [{ type: "text", text: "Task session not found: " + id }], isError: true };
     const state = action === "abandon" ? "abandoned" : "completed";
     const linkedHandoff = handoff_id ? dbStore.getHandoff(handoff_id) : null;
     if (handoff_id && (!linkedHandoff || (existing.project && canonicalizeProjectName(linkedHandoff.project) !== canonicalizeProjectName(existing.project)))) {
       return { content: [{ type: "text", text: `handoff quality gate failed: handoff "${handoff_id}" was not found in the session project` }], isError: true };
     }
-    const continuationPacket = handoff_id ? buildContinuationPacket(existing, { handoff: linkedHandoff, state, evidence, artifacts, reports, risks, relationships, do_not_repeat, outcome, final_summary, user_visible_result, acceptance_state, decisions, failed_approaches, next_step, completed_steps, blockers }) : null;
+    const continuationPacket = handoff_id ? buildContinuationPacket(existing, { handoff: linkedHandoff, state, evidence, artifacts, reports, risks, relationships, do_not_repeat, outcome, final_summary, user_visible_result, acceptance_state, decisions, verified_facts, failed_approaches, next_step, completed_steps, blockers }) : null;
     let finalizedHandoff = null;
     let session;
     if (handoff_id) {
@@ -181,7 +197,9 @@ async function sidekick_session({ action, id, goal, project, source, working_dir
       }
       try {
         const finalize = dbStore.getDb().transaction(() => {
-          finalizedHandoff = dbStore.saveHandoff({ id: linkedHandoff.id, project: linkedHandoff.project, title: linkedHandoff.title, source: linkedHandoff.source, task_id: id, content: continuationPacket.summary, packet: continuationPacket, extraction_state: "pending", expectedVersion: linkedHandoff.version, owner_principal_id: linkedHandoff.owner_principal_id || ownerPrincipalId, created_by_principal_id: linkedHandoff.created_by_principal_id || actorPrincipalId });
+           finalizedHandoff = dbStore.saveHandoff({ id: linkedHandoff.id, project: linkedHandoff.project, title: linkedHandoff.title, source: linkedHandoff.source, task_id: id, content: continuationPacket.summary, packet: continuationPacket, extraction_state: "pending", expectedVersion: linkedHandoff.version, owner_principal_id: linkedHandoff.owner_principal_id || ownerPrincipalId, created_by_principal_id: linkedHandoff.created_by_principal_id || actorPrincipalId });
+           dbStore.captureHandoffCheckpoint(linkedHandoff.id, { working_directory: existing.working_directory || continuationPacket.provenance.working_directory || process.cwd(), actor: actorPrincipalId || ownerPrincipalId || "system", source: "session", metadata: { session_id: id, boundary: action === "abandon" ? "session.abandoned" : "session.completed" } });
+           dbStore.transitionHandoff(linkedHandoff.id, action === "abandon" ? "revoked" : "completed", { expectedVersion: finalizedHandoff.version, actor: actorPrincipalId || ownerPrincipalId || "system", source: "session", reason: action === "abandon" ? "session abandoned" : "session completed" });
           return dbStore.saveTaskSession({ ...existing, artifacts: continuationPacket.artifacts, outcome, final_summary: redactSensitive(final_summary || user_visible_result || outcome || ""), acceptance_state, state, ended_at: new Date().toISOString(), owner_principal_id: existing.owner_principal_id || ownerPrincipalId, created_by_principal_id: existing.created_by_principal_id || actorPrincipalId });
         });
         session = finalize();
@@ -219,6 +237,7 @@ async function sidekick_session({ action, id, goal, project, source, working_dir
     if (!id) return { content: [{ type: "text", text: "id or project is required for session status" }], isError: true };
     const session = dbStore.getTaskSession(id);
     if (!session) return { content: [{ type: "text", text: "Task session not found: " + id }], isError: true };
+    if (!canManageSession(session, authIdentity)) return { content: [{ type: "text", text: "Task session not found: " + id }], isError: true };
     if (action === "resume" && session.state === "completed" && (session.outcome === "partial" || ["partial", "blocked"].includes(String(session.acceptance_state || "").toLowerCase()))) {
       dbStore.getDb().prepare("UPDATE memory_task_sessions SET state = 'active', ended_at = NULL, updated_at = ? WHERE id = ?").run(new Date().toISOString(), id);
       session.state = "active";

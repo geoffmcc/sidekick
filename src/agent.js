@@ -172,7 +172,7 @@ dbStore.runPendingMigrations();
 const durableReceiptStore = require("./agent/receipt-store");
 const durableWorkspaceTransactions = require("./agent/workspace-transactions");
 const durableOperations = require("./agent/durable-operations");
-const handoffContinuity = createHandoffContinuity({ getTask: durableTaskStore.getTask, getHandoff: dbStore.getHandoff, captureHandoffCheckpoint: dbStore.captureHandoffCheckpoint });
+const handoffContinuity = createHandoffContinuity({ getTask: durableTaskStore.getTask, getHandoff: dbStore.getHandoff, captureHandoffCheckpoint: dbStore.captureHandoffCheckpoint, saveHandoff: dbStore.saveHandoff, transitionHandoff: dbStore.transitionHandoff });
 const { determineEffect, decideAutonomy, intersectEnvelope, governedTargetRef } = require("./agent/authority");
 const { recoverDurableAgentTasks } = require("./agent/recovery-scan");
 const { verifyTaskResult, successfulFreshOutcome, applyRecipeGates, applyReceiptGates, applyPlanGates, runVerificationRepair } = require("./agent/verification");
