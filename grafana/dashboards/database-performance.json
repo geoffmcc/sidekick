@@ -81,7 +81,7 @@
             "type": "influxdb",
             "uid": "InfluxDB"
           },
-          "query": "from(bucket: \"sidekick\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"database_performance\")\n  |> filter(fn: (r) => r[\"_field\"] == \"query_time_ms\")\n  |> filter(fn: (r) => r[\"database\"] == \"${database}\")\n  |> group()\n  |> mean()",
+          "query": "from(bucket: \"sidekick\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"database_performance\")\n  |> filter(fn: (r) => r[\"_field\"] == \"query_time_ms\")\n  |> filter(fn: (r) => r[\"database\"] =~ /^${database:regex}$/)\n  |> group()\n  |> mean()",
           "refId": "A"
         }
       ],
@@ -139,7 +139,7 @@
             "type": "influxdb",
             "uid": "InfluxDB"
           },
-          "query": "from(bucket: \"sidekick\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"database_performance\")\n  |> filter(fn: (r) => r[\"_field\"] == \"query_count\")\n  |> filter(fn: (r) => r[\"database\"] == \"${database}\")\n  |> group()\n  |> sum()",
+          "query": "from(bucket: \"sidekick\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"database_performance\")\n  |> filter(fn: (r) => r[\"_field\"] == \"query_count\")\n  |> filter(fn: (r) => r[\"database\"] =~ /^${database:regex}$/)\n  |> group()\n  |> sum()",
           "refId": "A"
         }
       ],
@@ -206,7 +206,7 @@
             "type": "influxdb",
             "uid": "InfluxDB"
           },
-          "query": "from(bucket: \"sidekick\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"database_performance\")\n  |> filter(fn: (r) => r[\"_field\"] == \"cache_hit_ratio\")\n  |> filter(fn: (r) => r[\"database\"] == \"${database}\")\n  |> group()\n  |> mean()",
+          "query": "from(bucket: \"sidekick\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"database_performance\")\n  |> filter(fn: (r) => r[\"_field\"] == \"cache_hit_ratio\")\n  |> filter(fn: (r) => r[\"database\"] =~ /^${database:regex}$/)\n  |> group()\n  |> mean()",
           "refId": "A"
         }
       ],
@@ -295,7 +295,7 @@
             "type": "influxdb",
             "uid": "InfluxDB"
           },
-          "query": "from(bucket: \"sidekick\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"database_performance\")\n  |> filter(fn: (r) => r[\"_field\"] == \"query_time_ms\")\n  |> filter(fn: (r) => r[\"database\"] == \"${database}\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"mean\")",
+          "query": "from(bucket: \"sidekick\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"database_performance\")\n  |> filter(fn: (r) => r[\"_field\"] == \"query_time_ms\")\n  |> filter(fn: (r) => r[\"database\"] =~ /^${database:regex}$/)\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"mean\")",
           "refId": "A"
         }
       ],
@@ -383,7 +383,7 @@
             "type": "influxdb",
             "uid": "InfluxDB"
           },
-          "query": "from(bucket: \"sidekick\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"database_performance\")\n  |> filter(fn: (r) => r[\"_field\"] == \"query_count\")\n  |> filter(fn: (r) => r[\"database\"] == \"${database}\")\n  |> aggregateWindow(every: v.windowPeriod, fn: sum, createEmpty: false)\n  |> yield(name: \"sum\")",
+          "query": "from(bucket: \"sidekick\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"database_performance\")\n  |> filter(fn: (r) => r[\"_field\"] == \"query_count\")\n  |> filter(fn: (r) => r[\"database\"] =~ /^${database:regex}$/)\n  |> aggregateWindow(every: v.windowPeriod, fn: sum, createEmpty: false)\n  |> yield(name: \"sum\")",
           "refId": "A"
         }
       ],
@@ -472,7 +472,7 @@
             "type": "influxdb",
             "uid": "InfluxDB"
           },
-          "query": "from(bucket: \"sidekick\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"database_performance\")\n  |> filter(fn: (r) => r[\"_field\"] == \"active_connections\")\n  |> filter(fn: (r) => r[\"database\"] == \"${database}\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"mean\")",
+          "query": "from(bucket: \"sidekick\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"database_performance\")\n  |> filter(fn: (r) => r[\"_field\"] == \"active_connections\")\n  |> filter(fn: (r) => r[\"database\"] =~ /^${database:regex}$/)\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"mean\")",
           "refId": "A"
         }
       ],
@@ -561,7 +561,7 @@
             "type": "influxdb",
             "uid": "InfluxDB"
           },
-          "query": "from(bucket: \"sidekick\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"database_performance\")\n  |> filter(fn: (r) => r[\"_field\"] == \"cache_hit_ratio\")\n  |> filter(fn: (r) => r[\"database\"] == \"${database}\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"mean\")",
+          "query": "from(bucket: \"sidekick\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"database_performance\")\n  |> filter(fn: (r) => r[\"_field\"] == \"cache_hit_ratio\")\n  |> filter(fn: (r) => r[\"database\"] =~ /^${database:regex}$/)\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"mean\")",
           "refId": "A"
         }
       ],
@@ -577,9 +577,9 @@
     "list": [
       {
         "current": {
-          "selected": false,
-          "text": "sqlite",
-          "value": "sqlite"
+          "selected": true,
+          "text": "All",
+          "value": ["$__all"]
         },
         "datasource": {
           "type": "influxdb",
@@ -587,9 +587,10 @@
         },
         "definition": "from(bucket: \"sidekick\")\n  |> range(start: -30d)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"database_performance\")\n  |> keep(columns: [\"database\"])\n  |> distinct(column: \"database\")",
         "hide": 0,
-        "includeAll": false,
+        "includeAll": true,
+        "allValue": ".*",
         "label": "Database",
-        "multi": false,
+        "multi": true,
         "name": "database",
         "options": [],
         "query": "from(bucket: \"sidekick\")\n  |> range(start: -30d)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"database_performance\")\n  |> keep(columns: [\"database\"])\n  |> distinct(column: \"database\")",

@@ -187,7 +187,11 @@ function collectDatabaseMetrics() {
         AVG(duration_ms) as query_time_ms,
         SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) * 100.0 / COUNT(*) as cache_hit_ratio
       FROM tool_logs
-      WHERE (tool_name LIKE 'db_%' OR tool_name LIKE 'sidekick_db_%') AND timestamp >= ?
+      WHERE (
+        tool_name = 'database_admin'
+        OR tool_name LIKE 'db_%'
+        OR tool_name LIKE 'sidekick_db_%'
+      ) AND timestamp >= ?
     `).get(oneHourAgo);
     
     db.close();

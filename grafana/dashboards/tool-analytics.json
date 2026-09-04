@@ -72,7 +72,7 @@
             "type": "influxdb",
             "uid": "InfluxDB"
           },
-          "query": "from(bucket: \"sidekick\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"tool_calls\")\n  |> filter(fn: (r) => r[\"_field\"] == \"count\")\n  |> filter(fn: (r) => r[\"tool_name\"] == \"${tool}\")\n  |> group()\n  |> sum()",
+          "query": "from(bucket: \"sidekick\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"tool_calls\")\n  |> filter(fn: (r) => r[\"_field\"] == \"count\")\n  |> filter(fn: (r) => r[\"tool_name\"] =~ /^${tool:regex}$/)\n  |> group()\n  |> sum()",
           "refId": "A"
         }
       ],
@@ -135,7 +135,7 @@
             "type": "influxdb",
             "uid": "InfluxDB"
           },
-          "query": "from(bucket: \"sidekick\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"tool_calls\")\n  |> filter(fn: (r) => r[\"_field\"] == \"success_rate\")\n  |> filter(fn: (r) => r[\"tool_name\"] == \"${tool}\")\n  |> group()\n  |> mean()",
+          "query": "from(bucket: \"sidekick\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"tool_calls\")\n  |> filter(fn: (r) => r[\"_field\"] == \"success_rate\")\n  |> filter(fn: (r) => r[\"tool_name\"] =~ /^${tool:regex}$/)\n  |> group()\n  |> mean()",
           "refId": "A"
         }
       ],
@@ -202,7 +202,7 @@
             "type": "influxdb",
             "uid": "InfluxDB"
           },
-          "query": "from(bucket: \"sidekick\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"tool_calls\")\n  |> filter(fn: (r) => r[\"_field\"] == \"duration_ms\")\n  |> filter(fn: (r) => r[\"tool_name\"] == \"${tool}\")\n  |> group()\n  |> mean()",
+          "query": "from(bucket: \"sidekick\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"tool_calls\")\n  |> filter(fn: (r) => r[\"_field\"] == \"duration_ms\")\n  |> filter(fn: (r) => r[\"tool_name\"] =~ /^${tool:regex}$/)\n  |> group()\n  |> mean()",
           "refId": "A"
         }
       ],
@@ -264,7 +264,7 @@
             "type": "influxdb",
             "uid": "InfluxDB"
           },
-          "query": "from(bucket: \"sidekick\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"tool_calls\")\n  |> filter(fn: (r) => r[\"_field\"] == \"error_count\")\n  |> filter(fn: (r) => r[\"tool_name\"] == \"${tool}\")\n  |> group()\n  |> sum()",
+          "query": "from(bucket: \"sidekick\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"tool_calls\")\n  |> filter(fn: (r) => r[\"_field\"] == \"error_count\")\n  |> filter(fn: (r) => r[\"tool_name\"] =~ /^${tool:regex}$/)\n  |> group()\n  |> sum()",
           "refId": "A"
         }
       ],
@@ -350,7 +350,7 @@
             "type": "influxdb",
             "uid": "InfluxDB"
           },
-          "query": "from(bucket: \"sidekick\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"tool_calls\")\n  |> filter(fn: (r) => r[\"_field\"] == \"count\")\n  |> filter(fn: (r) => r[\"tool_name\"] == \"${tool}\")\n  |> aggregateWindow(every: v.windowPeriod, fn: sum, createEmpty: false)\n  |> yield(name: \"count\")",
+          "query": "from(bucket: \"sidekick\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"tool_calls\")\n  |> filter(fn: (r) => r[\"_field\"] == \"count\")\n  |> filter(fn: (r) => r[\"tool_name\"] =~ /^${tool:regex}$/)\n  |> aggregateWindow(every: v.windowPeriod, fn: sum, createEmpty: false)\n  |> yield(name: \"count\")",
           "refId": "A"
         }
       ],
@@ -440,7 +440,7 @@
             "type": "influxdb",
             "uid": "InfluxDB"
           },
-          "query": "from(bucket: \"sidekick\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"tool_calls\")\n  |> filter(fn: (r) => r[\"_field\"] == \"duration_ms\")\n  |> filter(fn: (r) => r[\"tool_name\"] == \"${tool}\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"mean\")",
+          "query": "from(bucket: \"sidekick\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"tool_calls\")\n  |> filter(fn: (r) => r[\"_field\"] == \"duration_ms\")\n  |> filter(fn: (r) => r[\"tool_name\"] =~ /^${tool:regex}$/)\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"mean\")",
           "refId": "A"
         }
       ],
@@ -526,7 +526,7 @@
             "type": "influxdb",
             "uid": "InfluxDB"
           },
-          "query": "from(bucket: \"sidekick\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"tool_calls\")\n  |> filter(fn: (r) => r[\"_field\"] == \"success_rate\")\n  |> filter(fn: (r) => r[\"tool_name\"] == \"${tool}\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"success_rate\")",
+          "query": "from(bucket: \"sidekick\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"tool_calls\")\n  |> filter(fn: (r) => r[\"_field\"] == \"success_rate\")\n  |> filter(fn: (r) => r[\"tool_name\"] =~ /^${tool:regex}$/)\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"success_rate\")",
           "refId": "A"
         }
       ],
@@ -545,16 +545,21 @@
   "templating": {
     "list": [
       {
-        "current": {},
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": ["$__all"]
+        },
         "datasource": {
           "type": "influxdb",
           "uid": "InfluxDB"
         },
         "definition": "from(bucket: \"sidekick\")\n  |> range(start: -30d)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"tool_calls\")\n  |> keep(columns: [\"tool_name\"])\n  |> distinct(column: \"tool_name\")\n  |> sort(columns: [\"tool_name\"])",
         "hide": 0,
-        "includeAll": false,
+        "includeAll": true,
+        "allValue": ".*",
         "label": "Tool",
-        "multi": false,
+        "multi": true,
         "name": "tool",
         "options": [],
         "query": "from(bucket: \"sidekick\")\n  |> range(start: -30d)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"tool_calls\")\n  |> keep(columns: [\"tool_name\"])\n  |> distinct(column: \"tool_name\")\n  |> sort(columns: [\"tool_name\"])",
