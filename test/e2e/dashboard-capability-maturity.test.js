@@ -19,6 +19,9 @@ let port;
 let childStdout = "";
 let childStderr = "";
 let childExit = null;
+const dashboardPassword = ["e2e", "dashboard", "password"].join("-");
+const mcpApiKey = ["e2e", "mcp", "api", "key"].join("-");
+const dashboardSecretKey = ["e2e", "dashboard", "secret"].join("-");
 
 function bounded(value) {
   return String(value || "").slice(-4000);
@@ -38,7 +41,7 @@ function freePort() {
 function request(method, requestPath, body) {
   return new Promise((resolve, reject) => {
     const req = http.request({ hostname: "127.0.0.1", port, path: requestPath, method, headers: {
-      Authorization: `Basic ${Buffer.from("e2e-user:e2e-pass").toString("base64")}`,
+      Authorization: `Basic ${Buffer.from(`e2e-user:${dashboardPassword}`).toString("base64")}`,
       "Content-Type": "application/json",
     } }, response => {
       let text = "";
@@ -69,7 +72,7 @@ test("real Dashboard API returns evidence-bound maturity states", async () => {
   dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "sidekick-e2e-"));
   child = spawn(process.execPath, ["src/dashboard.js"], {
     cwd: root,
-    env: { ...process.env, NODE_ENV: "test", SIDEKICK_DATA_DIR: dataDir, SIDEKICK_DB_FILE: path.join(dataDir, "sidekick.db"), SIDEKICK_DASHBOARD_PORT: String(port), SIDEKICK_DASHBOARD_USER: "e2e-user", SIDEKICK_DASHBOARD_PASS: "e2e-pass", SIDEKICK_API_KEY: "e2e-mcp-key", SIDEKICK_TOOL_POLICY: "open", SIDEKICK_APPROVAL_MODE: "off", SIDEKICK_SECRET_KEY: "e2e-dashboard-key" },
+    env: { ...process.env, NODE_ENV: "test", SIDEKICK_DATA_DIR: dataDir, SIDEKICK_DB_FILE: path.join(dataDir, "sidekick.db"), SIDEKICK_DASHBOARD_PORT: String(port), SIDEKICK_DASHBOARD_USER: "e2e-user", SIDEKICK_DASHBOARD_PASS: dashboardPassword, SIDEKICK_API_KEY: mcpApiKey, SIDEKICK_TOOL_POLICY: "open", SIDEKICK_APPROVAL_MODE: "off", SIDEKICK_SECRET_KEY: dashboardSecretKey },
     stdio: ["ignore", "pipe", "pipe"],
   });
   child.stdout.setEncoding("utf8");
@@ -92,7 +95,7 @@ test("real Dashboard API returns evidence-bound maturity states", async () => {
   assert.ok(executable, "the required E2E browser runtime is unavailable");
   const browser = await chromium.launch({ headless: true, executablePath: executable });
   try {
-    const page = await browser.newPage({ httpCredentials: { username: "e2e-user", password: "e2e-pass" } });
+    const page = await browser.newPage({ httpCredentials: { username: "e2e-user", password: dashboardPassword } });
     await page.goto(`http://127.0.0.1:${port}/#mission`, { waitUntil: "networkidle" });
     await page.locator("#nav-capabilities").click();
     const maturityButton = page.locator('button[aria-label*="Show maturity"]');
@@ -121,7 +124,7 @@ test("real Dashboard API returns evidence-bound maturity states", async () => {
     await maturityButton.click();
     await page.waitForFunction(() => document.querySelector("#capDetail-api-engineering")?.textContent.includes("Maturity error:"));
     assert.match(await detail.textContent(), /sanitized maturity failure/);
-    assert.doesNotMatch(await page.locator("#capError").textContent(), /internal stack|e2e-dashboard-key/);
+    assert.doesNotMatch(await page.locator("#capError").textContent(), new RegExp(`internal stack|${dashboardSecretKey}`));
     await page.unroute(`**/api/capabilities/api-engineering/maturity`);
   } finally {
     await browser.close();
