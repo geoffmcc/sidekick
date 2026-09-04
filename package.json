@@ -29,13 +29,31 @@
     "proving:recipes": "node scripts/generate-proving-recipes.js",
     "sbom:release": "npm sbom --sbom-format cyclonedx --sbom-type application",
     "seed:knowledge": "node scripts/seed-knowledge.js",
-    "test": "node test/run-all.js",
-    "test:ci": "node test/run-all.js",
-    "test:certification": "node test/run-all.js test/certification.test.js test/certification-isolation.test.js test/certification-lifecycle.test.js test/artifact-resource-scope.test.js test/compute-artifact-custody.test.js test/execution-node-protocol.test.js",
-    "test:security": "node test/security.test.js",
+    "test": "node test/run-all.js --tier=unit --tier=contract --tier=integration --tier=security",
+    "test:ci": "node scripts/run-tests.js",
+    "test:smoke": "node test/run-all.js --tier=unit --concurrency=4",
+    "test:unit": "node test/run-all.js --tier=unit",
+    "test:contract": "node test/run-all.js --tier=contract",
+    "test:integration": "node test/run-all.js --tier=integration",
+    "test:e2e": "node test/run-all.js --tier=e2e",
+    "test:security": "node test/run-all.js --tier=security",
+    "test:packs": "node test/run-all.js --domain=packs",
+    "test:agent": "node test/run-all.js --domain=agent",
+    "test:dashboard": "node test/run-all.js --domain=platforms --test-name-pattern=dashboard",
+    "test:compute": "node test/run-all.js --domain=compute",
+    "test:coverage": "node scripts/test-coverage.js",
+    "test:mutation": "node scripts/test-mutation.js",
+    "test:flake": "node scripts/test-flake.js",
+    "test:changed": "node scripts/test-changed.js",
+    "test:all": "node test/run-all.js",
+    "test:live": "SIDEKICK_TEST_LIVE=1 node test/run-all.js --tier=live",
+    "test:baseline": "node scripts/generate-test-baseline.js",
+    "test:architecture": "node scripts/check-test-architecture.js",
+    "test:certification": "node test/run-all.js --domain=platforms --test-name-pattern=certification",
     "test:brain-v3": "NODE_ENV=test node test/brain-v3-foundations.test.js && NODE_ENV=test node scripts/evaluate-brain-v3.js",
     "check:architecture": "node scripts/check-architecture.js",
-    "check:docs": "node scripts/check-docs.js"
+    "check:docs": "node scripts/check-docs.js",
+    "check:tests": "node scripts/check-test-architecture.js"
   },
   "engines": {
     "node": ">=22.0.0"
@@ -70,5 +88,9 @@
   },
   "allowScripts": {
     "tree-sitter-perl@1.2.1": true
+  },
+  "devDependencies": {
+    "c8": "^10.1.3",
+    "fast-check": "^4.9.0"
   }
 }

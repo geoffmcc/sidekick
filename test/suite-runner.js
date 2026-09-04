@@ -1,77 +1,188 @@
 "use strict";
 
-const { spawnSync } = require("child_process");
-const fs = require("fs");
-const path = require("path");
+const { spawn } = require("node:child_process");
+const fs = require("node:fs");
+const path = require("node:path");
 
 const SKIP_EXIT_CODE = 77;
-const root = path.join(__dirname, "..");
+const CONFIG_EXIT_CODE = 2;
+const root = path.resolve(__dirname, "..");
+const manifestDir = path.join(__dirname, "manifests");
+const allowedTiers = new Set(["smoke", "unit", "contract", "integration", "security", "e2e", "compatibility", "live"]);
+const allowedCriticality = new Set(["required", "optional"]);
 
-function discoverSuites(suites, testDir = __dirname) {
-  const discovered = fs.readdirSync(testDir)
-    .filter(file => /\.test\.(?:js|cjs)$/.test(file))
-    .sort();
-  const metadata = new Map(suites.map(suite => [suite.file, suite]));
-  const explicit = suites.filter(suite => fs.existsSync(path.resolve(root, suite.file)) && path.dirname(path.resolve(root, suite.file)) === path.resolve(testDir));
-  const explicitFiles = new Set(explicit.map(suite => path.basename(suite.file)));
-  const discoveredSuites = discovered.filter(file => !explicitFiles.has(file)).map(file => metadata.get(`test/${file}`) || { file: `test/${file}`, critical: false, description: "Discovered test suite" });
-  return [...explicit, ...discoveredSuites];
+function globToRegExp(pattern) {
+  let source = "";
+  for (let i = 0; i < pattern.length; i++) {
+    const ch = pattern[i];
+    if (ch === "*" && pattern[i + 1] === "*" && pattern[i + 2] === "/") { source += "(?:.*/)?"; i += 2; }
+    else if (ch === "*") source += pattern[i + 1] === "*" ? (i++, ".*") : "[^/]*";
+    else if (ch === "?") source += "[^/]";
+    else if (ch === "{") {
+      const end = pattern.indexOf("}", i);
+      if (end < 0) throw new Error(`Malformed glob: ${pattern}`);
+      source += `(?:${pattern.slice(i + 1, end).split(",").map(part => globToRegExp(part).source.slice(1, -1)).join("|")})`;
+      i = end;
+    } else source += ch.replace(/[.+^$()|[\]\\]/g, "\\$&");
+  }
+  return new RegExp(`^${source}$`);
 }
 
-function matchesSelection(suite, name) { return name === suite.file || name === path.basename(suite.file); }
+function loadManifests() {
+  return fs.readdirSync(manifestDir).filter(file => file.endsWith(".json")).sort()
+    .map(file => ({ ...JSON.parse(fs.readFileSync(path.join(manifestDir, file), "utf8")), source: `test/manifests/${file}` }));
+}
 
-function selectSuites(allSuites, requested) {
-  if (allSuites.length === 0) return { selected: [], unknown: [], error: "No test suites were discovered." };
-  if (requested.length === 0) return { selected: allSuites, unknown: [] };
+function validateManifest(manifest) {
+  if (!manifest.domain || !/^[a-z][a-z0-9-]+$/.test(manifest.domain)) throw new Error(`${manifest.source}: invalid domain`);
+  if (!Number.isInteger(manifest.priority)) throw new Error(`${manifest.source}: priority is required`);
+  if (!allowedTiers.has(manifest.tier) || !allowedCriticality.has(manifest.criticality)) throw new Error(`${manifest.source}: invalid tier or criticality`);
+  if (!Array.isArray(manifest.patterns) || !manifest.patterns.length || !Array.isArray(manifest.resources)) throw new Error(`${manifest.source}: patterns and resources are required`);
+  if (!Number.isInteger(manifest.timeout_ms) || manifest.timeout_ms < 1000) throw new Error(`${manifest.source}: timeout_ms must be a positive integer`);
+  for (const pattern of manifest.patterns) globToRegExp(pattern);
+  return manifest;
+}
+
+function walk(dir, result = []) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === "spike-openvino-python" || entry.name === "node_modules" || entry.name.startsWith("test-data-")) continue;
+    const file = path.join(dir, entry.name);
+    if (entry.isDirectory()) walk(file, result);
+    else if (/\.test\.(?:js|cjs|mjs)$/.test(entry.name)) result.push(file);
+  }
+  return result;
+}
+
+function discoverSuites(testRoot = root) {
+  const manifests = loadManifests().map(validateManifest);
+  const seenDomains = new Set();
+  for (const manifest of manifests) {
+    if (seenDomains.has(manifest.domain)) throw new Error(`duplicate manifest domain: ${manifest.domain}`);
+    seenDomains.add(manifest.domain);
+  }
+  const suites = [];
+  const identities = new Set();
+  for (const absolute of walk(path.join(testRoot, "test"))) {
+    const file = path.relative(testRoot, absolute).split(path.sep).join("/");
+    const matches = manifests.filter(manifest => manifest.patterns.some(pattern => globToRegExp(pattern).test(file)));
+    const highestPriority = Math.max(...matches.map(item => item.priority));
+    const ownersAtPriority = matches.filter(item => item.priority === highestPriority);
+    const manifest = ownersAtPriority[0];
+    if (!manifest) throw new Error(`orphaned test suite: ${file}`);
+    if (ownersAtPriority.length > 1 && manifest.domain !== "compatibility") {
+      const owners = ownersAtPriority.map(item => item.domain);
+      if (new Set(owners).size > 1) throw new Error(`test suite has multiple domain owners: ${file} (${owners.join(", ")})`);
+    }
+    const identity = `${manifest.domain}:${file}`;
+    if (identities.has(identity)) throw new Error(`duplicate suite identity: ${identity}`);
+    identities.add(identity);
+    const live = Boolean(manifest.live) || manifest.domain === "live";
+    if (live && process.env.SIDEKICK_TEST_LIVE !== "1") continue;
+    suites.push({ file, id: identity, domain: manifest.domain, tier: manifest.tier, criticality: manifest.criticality,
+      resources: manifest.resources, timeout_ms: manifest.timeout_ms, live, owner: manifest.owner,
+      allow_skip: manifest.allow_skip === true || live, description: manifest.description || `${manifest.domain} test suite` });
+  }
+  return suites.sort((a, b) => a.file.localeCompare(b.file));
+}
+
+function matchesSelection(suite, name) { return name === suite.file || name === path.basename(suite.file) || name === suite.id; }
+
+function selectSuites(allSuites, requested = [], filters = {}) {
+  if (!allSuites.length) return { selected: [], unknown: [], error: "No test suites were discovered." };
   const unknown = requested.filter(name => !allSuites.some(suite => matchesSelection(suite, name)));
-  const selected = allSuites.filter(suite => requested.some(name => matchesSelection(suite, name)));
+  let selected = requested.length ? allSuites.filter(suite => requested.some(name => matchesSelection(suite, name))) : allSuites;
+  if (filters.domain) selected = selected.filter(suite => suite.domain === filters.domain);
+  if (filters.tier) {
+    const tiers = Array.isArray(filters.tier) ? filters.tier : String(filters.tier).split(",");
+    selected = selected.filter(suite => tiers.includes(suite.tier));
+  }
+  if (!selected.length) return { selected: [], unknown, error: unknown.length ? `Invalid test suite selection: ${unknown.join(", ")}` : "No suites match the requested filters." };
   return { selected, unknown, error: unknown.length ? `Invalid test suite selection: ${unknown.join(", ")}` : null };
 }
 
-function boundedSuiteTimeout(value) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? Math.max(1000, Math.min(Math.trunc(parsed), 30 * 60 * 1000)) : 5 * 60 * 1000;
-}
-
-function killTimedOutSuite(result) {
-  if (process.platform === "win32" || !result?.pid) return;
-  try { process.kill(-result.pid, "SIGKILL"); } catch {}
-}
-
-function runSuites({ suites, allSuites = discoverSuites(suites), requested = [], cwd = root, spawnSyncImpl = spawnSync, output = console, suiteTimeoutMs = boundedSuiteTimeout(process.env.SIDEKICK_TEST_SUITE_TIMEOUT_MS) } = {}) {
-  const selection = selectSuites(allSuites, requested);
-  if (selection.error || selection.selected.length === 0) {
-    output.error(selection.error || "No test suites selected.");
-    return { passed: 0, failed: 1, skipped: 0, failures: [], notRun: [], exitCode: 1 };
+class ResourceLocks {
+  constructor() { this.busy = new Set(); this.waiters = []; }
+  async acquire(resources) {
+    const names = [...new Set(resources || [])].sort();
+    while (this.busy.has("exclusive") || names.some(name => this.busy.has(name)) || (names.includes("exclusive") && this.busy.size)) await new Promise(resolve => this.waiters.push(resolve));
+    for (const name of names) this.busy.add(name);
+    return () => { for (const name of names) this.busy.delete(name); const waiters = this.waiters.splice(0); waiters.forEach(resolve => resolve()); };
   }
-  let passed = 0; let failed = 0; let skipped = 0;
-  const failures = []; const notRun = [];
-  output.log("╔═══════════════════════════════════════════════════════════╗\n║                    Sidekick Tests                         ║\n╚═══════════════════════════════════════════════════════════╝");
-  for (let index = 0; index < selection.selected.length; index++) {
-    const suite = selection.selected[index];
-    const suitePath = path.join(cwd, suite.file);
-    if (!fs.existsSync(suitePath)) {
-      if (suite.optional) { skipped++; output.log(`\n↷ Skipping optional missing suite: ${suite.file}`); continue; }
-      failed++; failures.push(`${suite.file} (missing)`);
-      if (suite.critical) { notRun.push(...selection.selected.slice(index + 1).map(remaining => remaining.file)); break; }
-      continue;
+}
+
+function terminate(child) {
+  if (!child || child.exitCode !== null) return Promise.resolve();
+  if (process.platform === "win32") {
+    const killer = spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], { windowsHide: true });
+    return new Promise(resolve => killer.once("close", resolve));
+  }
+  try { process.kill(-child.pid, "SIGTERM"); } catch {}
+  return new Promise(resolve => {
+    const timer = setTimeout(() => { try { process.kill(-child.pid, "SIGKILL"); } catch {} }, 1000);
+    child.once("close", () => { clearTimeout(timer); resolve(); });
+  });
+}
+
+function executeSuite(suite, { cwd, stream, testNamePattern, signal, coverage = false }) {
+  return new Promise(resolve => {
+    const started = Date.now();
+    const args = coverage ? ["--experimental-test-coverage", "--test"] : ["--test"];
+    if (testNamePattern) args.push("--test-name-pattern", testNamePattern);
+    args.push(path.resolve(cwd, suite.file));
+    const child = spawn(process.execPath, args, { cwd, detached: process.platform !== "win32", env: { ...process.env, NODE_ENV: "test", SIDEKICK_TEST_SUITE_ID: suite.id }, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "", stderr = "", timedOut = false, cancelled = false;
+    const append = (target, chunk) => { const text = chunk.toString(); if (target === "stdout") stdout += text; else stderr += text; if (stream) process[target].write(text); };
+    child.stdout.on("data", chunk => append("stdout", chunk));
+    child.stderr.on("data", chunk => append("stderr", chunk));
+    const timer = setTimeout(async () => { timedOut = true; await terminate(child); }, suite.timeout_ms);
+    const onAbort = async () => { cancelled = true; await terminate(child); };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    child.once("close", (code, signalName) => {
+      clearTimeout(timer); signal?.removeEventListener("abort", onAbort);
+      const status = timedOut ? "timeout" : cancelled ? "cancelled" : code === SKIP_EXIT_CODE ? "skipped" : code === 0 ? "passed" : "failed";
+      resolve({ suite: suite.file, id: suite.id, status, code, signal: signalName, duration_ms: Date.now() - started, stdout, stderr, reproduction: `node ${suite.file}${testNamePattern ? ` --test-name-pattern ${JSON.stringify(testNamePattern)}` : ""}` });
+    });
+  });
+}
+
+async function runSuites({ requested = [], cwd = root, domain, tier, concurrency = Number(process.env.SIDEKICK_TEST_CONCURRENCY) || 4, stream = false, failFast = false, testNamePattern, coverage = false, signal, overallTimeoutMs = Number(process.env.SIDEKICK_TEST_OVERALL_TIMEOUT_MS) || 30 * 60 * 1000, output = console } = {}) {
+  let allSuites;
+  try { allSuites = discoverSuites(cwd); } catch (error) { output.error(error.message); return { passed: 0, failed: 1, skipped: 0, exitCode: CONFIG_EXIT_CODE, failures: [], results: [], error: error.message }; }
+  const selection = selectSuites(allSuites, requested, { domain, tier });
+  if (selection.error || !selection.selected.length) { output.error(selection.error || "No test suites selected."); return { passed: 0, failed: 1, skipped: 0, exitCode: CONFIG_EXIT_CODE, failures: [], results: [], error: selection.error }; }
+  const locks = new ResourceLocks(), results = [], queue = [...selection.selected];
+  const controller = new AbortController();
+  let stopped = false;
+  const forwardAbort = () => controller.abort();
+  signal?.addEventListener("abort", forwardAbort, { once: true });
+  controller.signal.addEventListener("abort", () => { stopped = true; }, { once: true });
+  const overallTimer = setTimeout(() => controller.abort(), Math.max(1000, overallTimeoutMs));
+  async function worker() {
+    while (queue.length && !stopped) {
+      const suite = queue.shift();
+      const release = await locks.acquire(suite.resources);
+      try {
+        if (controller.signal.aborted) continue;
+        const result = await executeSuite(suite, { cwd, stream, testNamePattern, coverage, signal: controller.signal });
+        results.push(result);
+        if (result.status === "failed" || result.status === "timeout" || result.status === "cancelled") stopped = stopped || failFast;
+      } finally { release(); }
     }
-    output.log(`\n${"═".repeat(60)}\nRunning: ${suite.file}\nPurpose: ${suite.description}${suite.critical ? "\nCritical: yes" : ""}\n${"═".repeat(60)}\n`);
-    const result = spawnSyncImpl(process.execPath, [suitePath], { cwd, stdio: "inherit", detached: process.platform !== "win32", env: { ...process.env, NODE_ENV: "test" }, timeout: suiteTimeoutMs });
-    if (result.error && result.error.code === "ETIMEDOUT") {
-      killTimedOutSuite(result); failed++; failures.push(`${suite.file} (timeout after ${suiteTimeoutMs}ms)`); output.log(`\n❌ ${suite.file} timed out after ${suiteTimeoutMs}ms`);
-      if (suite.critical) { notRun.push(...selection.selected.slice(index + 1).map(remaining => remaining.file)); break; }
-    } else if (result.status === SKIP_EXIT_CODE) { skipped++; output.log(`\n↷ ${suite.file} skipped`); }
-    else if (result.status === 0) { passed++; output.log(`\n✅ ${suite.file} passed`); }
-    else { failed++; failures.push(suite.file); output.log(`\n❌ ${suite.file} failed`); if (suite.critical) { notRun.push(...selection.selected.slice(index + 1).map(remaining => remaining.file)); break; } }
   }
-  output.log(`\n╔═══════════════════════════════════════════════════════════╗\n║                       Summary                             ║\n╚═══════════════════════════════════════════════════════════╝\nPassed:  ${passed}\nFailed:  ${failed}\nSkipped: ${skipped}`);
-  if (failures.length) output.log(`\nFailed suites:\n${failures.map(failure => `  - ${failure}`).join("\n")}`);
-  if (notRun.length) {
-    output.log("\nNot run:");
-    notRun.forEach(suite => output.log(`  - ${suite}`));
-  }
-  return { passed, failed, skipped, failures, notRun, exitCode: failed > 0 ? 1 : 0 };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(20, concurrency)) }, () => worker()));
+  clearTimeout(overallTimer);
+  signal?.removeEventListener("abort", forwardAbort);
+  results.sort((a, b) => a.suite.localeCompare(b.suite));
+  const passed = results.filter(item => item.status === "passed").length;
+  const skipped = results.filter(item => item.status === "skipped").length;
+  const unexpectedSkips = results.filter(item => item.status === "skipped" && !allSuites.find(suite => suite.file === item.suite)?.allow_skip);
+  const failures = results.filter(item => item.status !== "passed" && (item.status !== "skipped" || unexpectedSkips.some(skip => skip.suite === item.suite)));
+  const notRun = selection.selected.filter(suite => !results.some(result => result.suite === suite.file)).map(suite => suite.file);
+  const report = { version: 1, passed, failed: failures.length, skipped, unexpected_skips: unexpectedSkips.map(item => item.suite), not_run: notRun, duration_ms: results.reduce((sum, item) => Math.max(sum, item.duration_ms), 0), slowest: [...results].sort((a, b) => b.duration_ms - a.duration_ms).slice(0, 10), failures, results };
+  output.log(`Test summary: ${passed} passed, ${failures.length} failed, ${skipped} skipped; slowest: ${report.slowest.slice(0, 3).map(item => `${item.suite} (${item.duration_ms}ms)`).join(", ")}`);
+  if (failures.length) output.error(`Failed suites: ${failures.map(item => `${item.suite} [${item.status}]`).join(", ")}`);
+  if (notRun.length) output.error(`Not run: ${notRun.join(", ")}`);
+  return { ...report, exitCode: failures.length || unexpectedSkips.length || notRun.length ? 1 : 0 };
 }
 
-module.exports = { SKIP_EXIT_CODE, discoverSuites, selectSuites, runSuites };
+module.exports = { CONFIG_EXIT_CODE, SKIP_EXIT_CODE, discoverSuites, selectSuites, runSuites, ResourceLocks, globToRegExp };

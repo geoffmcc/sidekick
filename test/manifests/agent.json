@@ -1,0 +1,12 @@
+{
+  "domain": "agent",
+  "priority": 90,
+  "tier": "integration",
+  "criticality": "required",
+  "resources": ["sqlite", "filesystem", "environment"],
+  "timeout_ms": 240000,
+  "platforms": ["linux", "win32", "darwin"],
+  "live": false,
+  "owner": "agent",
+  "patterns": ["test/agent-*.test.{js,cjs}", "test/brain*.test.{js,cjs}", "test/context-engine.test.js", "test/evidence-projector.test.js", "test/approval-continuation.test.cjs", "test/agent/**/*.test.{js,cjs}"]
+}

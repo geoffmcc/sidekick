@@ -48,7 +48,12 @@ npm run dashboard  # node src/dashboard.js
 npm run agent      # node src/agent.js
 ```
 
-The test runner is `node test/run-all.js`.
+The test runner is `node test/run-all.js`. It discovers suites recursively from
+the small domain manifests in `test/manifests/`, validates suite ownership,
+uses bounded asynchronous workers and resource locks, and writes structured
+results through `scripts/run-tests.js` when CI needs an artifact. See
+`docs/testing.md` for tiers, isolation, property-test replay, coverage,
+diagnostic mutation/flake checks, and CI shard equivalence.
 
 ## Test coverage in this tree
 

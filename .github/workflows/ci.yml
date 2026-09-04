@@ -4,88 +4,135 @@ permissions: {}
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
   workflow_dispatch:
 
+concurrency:
+  group: sidekick-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
+  fast-gate:
+    name: Metadata and architecture gate
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22.x
+          cache: npm
+      - run: npm ci
+      - run: npm run check:tests
+      - run: npm run check:architecture
+      - run: npm run check:docs
+      - run: node --test test/run-all.test.js test/security/property-boundaries.test.js test/core/fault-injection.test.js
+
+  domain-shards:
+    name: ${{ matrix.domain }} / Node ${{ matrix.node-version }}
+    needs: fast-gate
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [22.x, 24.x]
+        domain: [core, security, agent, packs, compute, platforms]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - run: npm ci
+      - name: Install browser runtime for browser shard only
+        if: matrix.domain == 'platforms'
+        run: node scripts/install-browser.js
+      - name: Run domain shard
+        run: node scripts/run-tests.js --domain=${{ matrix.domain }}
+      - name: Upload bounded result summary
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1, Node 24
+        with:
+          name: test-results-${{ matrix.domain }}-${{ matrix.node-version }}
+          path: artifacts/test-results.json
+          if-no-files-found: error
+          retention-days: 7
+
+  compatibility:
+    name: Legacy compatibility / Node ${{ matrix.node-version }}
+    needs: fast-gate
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [22.x, 24.x]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - run: npm ci
+      - run: node scripts/run-tests.js --tier=compatibility
+
+  package:
+    name: Package and dependency checks
+    needs: fast-gate
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22.x
+          cache: npm
+      - run: npm ci
+      - run: npm audit --omit=dev --audit-level=moderate
+      - run: npm run package:worker
+      - run: npm pack --dry-run
+
+  coverage:
+    name: Coverage policy / Node 22
+    needs: domain-shards
     permissions:
       contents: read
     runs-on: ubuntu-latest
     timeout-minutes: 45
-
-    strategy:
-      matrix:
-        node-version: [22.x, 24.x]
-
     steps:
-    - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      with:
-        persist-credentials: false
-
-    - name: Use Node.js ${{ matrix.node-version }}
-      uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
-      with:
-        node-version: ${{ matrix.node-version }}
-
-    - name: Cache WinSW worker package binary
-      uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
-      with:
-        path: dist/.cache
-        key: winsw-v2.12.0-${{ runner.os }}
-
-    - name: Install dependencies
-      run: npm ci
-
-    - name: Audit production dependencies
-      run: npm audit --omit=dev --audit-level=moderate
-
-    - name: Validate Docker Compose configuration
-      env:
-        SIDEKICK_SECRET_DIR: ${{ runner.temp }}/sidekick-secrets
-        SIDEKICK_UID: "1000"
-        SIDEKICK_GID: "1000"
-      run: |
-        mkdir -p "$SIDEKICK_SECRET_DIR"
-        for name in sidekick_postgres_password sidekick_influx_password sidekick_influx_token sidekick_grafana_admin_password; do
-          printf 'ci-placeholder\n' > "$SIDEKICK_SECRET_DIR/$name"
-        done
-        docker compose -f docker/docker-compose.yml config --quiet
-
-    - name: Install browser runtime for Governed Browser Automation tests
-      run: node scripts/install-browser.js
-
-    - name: Run certification
-      run: npm run certify -- --json
-
-    - name: Run Agent lifecycle certification
-      run: node test/certification-lifecycle.test.js
-
-    - name: Run certification custody and protocol tests
-      run: npm run test:certification
-
-    - name: Run invariant and Doctor checks
-      run: node test/invariants-doctor.test.js
-
-    - name: Build worker package
-      run: npm run package:worker
-
-    - name: Verify worker package checksums
-      run: |
-        package_dir="dist/sidekick-compute-worker-$(node -p "require('./package.json').version")"
-        cd "$package_dir"
-        sha256sum -c SHA256SUMS
-
-    - name: Generate release certification manifest
-      run: npm run manifest:release
-
-    - name: Generate CycloneDX SBOM
-      run: npm run sbom:release > dist/sidekick-sbom.cdx.json
-
-    - name: Run tests
-      run: npm run test:ci
-
-    - name: Verify worker package
-      run: npm pack --dry-run
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22.x
+          cache: npm
+      - run: npm ci
+      - run: npm run test:coverage
+      - name: Upload coverage summary
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1, Node 24
+        with:
+          name: coverage-summary
+          path: artifacts/coverage-summary.json
+          if-no-files-found: error
+          retention-days: 7

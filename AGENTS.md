@@ -134,6 +134,21 @@ the live task projection after reconnecting; SSE is not authoritative.
 
 ## Repository and deployment work
 
+### Testing
+
+Use `npm test` for the deterministic non-live required tiers and
+`npm run test:all` for every non-live suite. The authoritative runner is
+`test/run-all.js`; it discovers suites recursively from the small manifests in
+`test/manifests/`, validates ownership, and enforces bounded concurrency and
+resource locks. New domain suites must use `node:test`; custom test harnesses
+and unscoped cleanup are prohibited by `npm run check:tests`.
+
+Use `npm run test:coverage` for the built-in coverage gate, `npm run test:flake`
+only for diagnostic repetition, and `npm run test:live` only with explicit
+local authorization. Keep experiments and model downloads outside ordinary
+discovery. See `docs/testing.md` for tiers, isolation, property seeds, and CI
+equivalence.
+
 For repository work, use the Developer capability pack when available:
 `dev_repo_profile` first, then `semantic_repo`, bounded review/verification
 workflows, and mutation workflows only with explicit authorization. Repository

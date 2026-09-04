@@ -1,0 +1,12 @@
+{
+  "domain": "compute",
+  "priority": 70,
+  "tier": "contract",
+  "criticality": "required",
+  "resources": ["sqlite", "filesystem", "subprocess", "environment"],
+  "timeout_ms": 240000,
+  "platforms": ["linux", "win32", "darwin"],
+  "live": false,
+  "owner": "compute",
+  "patterns": ["test/compute*.test.{js,cjs}", "test/openvino-*.test.{js,cjs}", "test/inference-convergence.test.js"]
+}
