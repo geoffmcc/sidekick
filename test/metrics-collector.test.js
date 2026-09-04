@@ -71,6 +71,12 @@ test("both name shapes are counted together", () => {
   assert.strictEqual(m.cache_hit_ratio, 50, "one of two succeeded");
 });
 
+test("database_admin calls are included in database performance metrics", () => {
+  seed([["database_admin", 1, 14], ["db_query", 1, 6], ["database", 1, 2]]);
+  const m = collector.collectDatabaseMetrics();
+  assert.strictEqual(m.query_count, 2, "database_admin and db_* calls count as database work");
+});
+
 test("no database tool calls yields null rather than a zero-filled point", () => {
   seed([["bash", 1, 40], ["git", 1, 15]]);
   assert.strictEqual(collector.collectDatabaseMetrics(), null,
@@ -120,6 +126,23 @@ test("no dashboard pins a stale template variable selection", () => {
   }
   assert.deepStrictEqual(offenders, [],
     "a query variable must resolve from its query, not a pinned prefixed value: " + offenders.join(", "));
+});
+
+test("metrics dashboards default to dynamic all-value selections", () => {
+  const dashboards = ["tool-analytics.json", "database-performance.json"];
+  for (const file of dashboards) {
+    const dash = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "grafana", "dashboards", file), "utf8"));
+    const variable = dash.templating.list[0];
+    assert.strictEqual(variable.includeAll, true, `${file} must include all series by default`);
+    assert.strictEqual(variable.allValue, ".*", `${file} must use a regex all-value`);
+    assert.strictEqual(variable.current.text, "All", `${file} must not depend on a stale saved selection`);
+    for (const panel of dash.panels) {
+      for (const target of panel.targets || []) {
+        assert.ok(target.query.includes(`${variable.name}:regex`),
+          `${file} panel ${panel.id} must use the variable regex interpolation`);
+      }
+    }
+  }
 });
 
 fs.rmSync(TMP, { recursive: true, force: true });
