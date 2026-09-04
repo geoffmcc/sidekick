@@ -56,6 +56,8 @@ const { registerCapabilityRoutes } = require("./dashboard/capability-routes");
 const { registerEvolveRoutes } = require("./dashboard/evolve-routes");
 const { registerProjectRoutes } = require("./dashboard/project-routes");
 const { runDoctor, formatDoctorText, createSupportBundle } = require("./doctor");
+const { inspectNetworkInterfaces, privateIPv4 } = require("./dashboard/network-info");
+const { capabilityResult, createCapabilityAction } = require("./dashboard/capability-action");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const PORT = parseInt(process.env.SIDEKICK_DASHBOARD_PORT || "4098", 10);
@@ -109,22 +111,10 @@ app.use(express.json({ limit: "1mb" }));
 const http = require("http");
 const AGENT_PORT = parseInt(process.env.SIDEKICK_AGENT_PORT || "4099", 10);
 
-// First non-internal IPv4 of a local interface. That is a PRIVATE address on
-// any NAT'd deployment — it was previously mislabeled as the public IP too.
-// The honest public value is "unknown" unless something real determines it;
-// no external lookup is performed.
-function getPrivateIPv4() {
-  const interfaces = os.networkInterfaces();
-  for (const name of Object.keys(interfaces)) {
-    for (const iface of interfaces[name]) {
-      if (iface.family === 'IPv4' && !iface.internal) {
-        return iface.address;
-      }
-    }
-  }
-  return 'unknown';
-}
-const VPS_IP = getPrivateIPv4();
+// Interface enumeration is optional telemetry. A restricted runtime must not
+// prevent the Dashboard from starting or cause a broader bind.
+const networkInfo = inspectNetworkInterfaces();
+const VPS_IP = privateIPv4(networkInfo);
 
 function runCommand(program, args = [], opts = {}) {
   try {
@@ -960,8 +950,9 @@ function seedKV() {
     // IPv4 is the private address, and nothing here performs the external
     // lookup that a real public value would require.
     "network:public_ip": "unknown",
-    "network:private_ip": getPrivateIPv4(),
-    "network:interfaces": Object.keys(os.networkInterfaces()).join(","),
+    "network:private_ip": VPS_IP,
+    "network:interfaces": Object.keys(networkInfo.interfaces).join(","),
+    "network:interfaces_status": networkInfo.diagnostic?.code || "available",
     "network:dns": (() => { try { return fs.readFileSync("/etc/resolv.conf", "utf-8").split("\n").map(line => line.match(/^nameserver\s+(\S+)/)?.[1]).filter(Boolean).join(","); } catch { return "?"; } })(),
     "network:gateway": (() => { const route = runCommand("ip", ["route", "show", "default"]); return route.match(/\bvia\s+(\S+)/)?.[1] || "?"; })(),
 
@@ -1520,41 +1511,11 @@ async function evolveDashboardAction(req, res, action, extra = {}) {
 // blanket dashboard auth middleware and the Origin/CSRF check above already
 // gate these routes.
 
-function capabilityResult(res, result) {
-  const text = result && result.content && result.content[0] ? result.content[0].text : "";
-  let payload;
-  try {
-    payload = JSON.parse(text);
-  } catch {
-    payload = { ok: !result?.isError, message: text };
-  }
-  if (result && result.isError) return res.status(400).json({ ok: false, ...payload });
-  return res.json({ ok: true, ...payload });
-}
-
 // Installing, enabling or upgrading a pack activates executable module code
 // inside the server process — the `capability` tool is critical risk for
 // exactly that reason. Reads stay open to the dashboard's existing gating;
 // mutations must name a real principal, like connector registration does.
-const CAPABILITY_MUTATIONS = new Set([
-  "install", "configure", "enable", "disable", "upgrade", "uninstall",
-]);
-
-async function capabilityAction(req, res, args, auditAction) {
-  try {
-    let actor = authenticatedUser(req);
-    if (CAPABILITY_MUTATIONS.has(args.action)) {
-      actor = requireAttributedActor(req, res, "Capability pack installation and lifecycle changes");
-      if (!actor) return;
-    }
-    auditLog(req, `capability.${auditAction}`, { name: args.name || args.path || null });
-    const result = await callDashboardTool("capability", args, dashboardExecutionMetadata(req, actor || "dashboard"));
-    return capabilityResult(res, result);
-  } catch (error) {
-    logError(req.originalUrl, 500, error, "capability", req.headers["user-agent"]);
-    return res.status(500).json({ ok: false, error: error.message });
-  }
-}
+const capabilityAction = createCapabilityAction({ authenticatedUser, requireAttributedActor, auditLog, callDashboardTool, dashboardExecutionMetadata, logError });
 
 registerCapabilityRoutes({ app, capabilityAction, capabilityResult, callDashboardTool, dashboardExecutionMetadata, authenticatedUser, logError });
 

@@ -1,8 +1,8 @@
 {
   "schema": "sidekick.compatibility-pack-inventory.v1",
   "source": "bundled pack manifests and repository files",
-  "source_commit": "4fd85599012b403316cb237491519f21704a1f99",
-  "source_commit_date": "2026-09-04T10:10:43-04:00",
+  "source_commit": "7b6f700bc15a9c94576a0e0602ec10317231150a",
+  "source_commit_date": "2026-09-04T14:28:17-04:00",
   "source_fingerprint": "sha256:84974ce7c331fe675fdf4850840eaa2eab853ae5da57368523ee1ea019c0bd78",
   "pack_count": 27,
   "packs": [
@@ -199,8 +199,11 @@
       "current_tests": [
         "test/campaign-packs-6-10.test.js",
         "test/cross-pack-workflow-fixtures.test.js",
+        "test/dashboard-api.test.js",
+        "test/dashboard-capability-action.test.js",
         "test/pack-manifest-lifecycle.test.js",
         "test/pack-maturity.test.js",
+        "test/proving-runner.test.js",
         "test/target-pack-buildout.test.js"
       ],
       "maturity_gaps": [
@@ -231,8 +234,11 @@
               "packs/api-engineering/modules/api-engineering-tools/manifest.json",
               "test/campaign-packs-6-10.test.js",
               "test/cross-pack-workflow-fixtures.test.js",
+              "test/dashboard-api.test.js",
+              "test/dashboard-capability-action.test.js",
               "test/pack-manifest-lifecycle.test.js",
               "test/pack-maturity.test.js",
+              "test/proving-runner.test.js",
               "test/target-pack-buildout.test.js"
             ]
           },
@@ -248,6 +254,7 @@
               "packs/api-engineering/workflows/api-contract-matrix.json",
               "packs/api-engineering/workflows/api-health.json",
               "test/campaign-packs-6-10.test.js",
+              "test/dashboard-api.test.js",
               "test/target-pack-buildout.test.js"
             ]
           },
@@ -257,6 +264,8 @@
             "evidence": [
               "test/campaign-packs-6-10.test.js",
               "test/cross-pack-workflow-fixtures.test.js",
+              "test/dashboard-api.test.js",
+              "test/dashboard-capability-action.test.js",
               "test/pack-manifest-lifecycle.test.js",
               "test/target-pack-buildout.test.js"
             ]
@@ -265,6 +274,7 @@
             "status": "not_observed",
             "implemented": false,
             "evidence": [
+              "test/dashboard-api.test.js",
               "test/pack-manifest-lifecycle.test.js",
               "test/target-pack-buildout.test.js"
             ]
@@ -275,6 +285,7 @@
             "evidence": [
               "test/campaign-packs-6-10.test.js",
               "test/cross-pack-workflow-fixtures.test.js",
+              "test/dashboard-api.test.js",
               "test/target-pack-buildout.test.js"
             ]
           },
@@ -287,8 +298,11 @@
               "packs/api-engineering/modules/api-engineering-tools/entry.js",
               "test/campaign-packs-6-10.test.js",
               "test/cross-pack-workflow-fixtures.test.js",
+              "test/dashboard-api.test.js",
+              "test/dashboard-capability-action.test.js",
               "test/pack-manifest-lifecycle.test.js",
               "test/pack-maturity.test.js",
+              "test/proving-runner.test.js",
               "test/target-pack-buildout.test.js"
             ]
           },
@@ -305,8 +319,11 @@
               "packs/api-engineering/workflows/api-health.json",
               "test/campaign-packs-6-10.test.js",
               "test/cross-pack-workflow-fixtures.test.js",
+              "test/dashboard-api.test.js",
+              "test/dashboard-capability-action.test.js",
               "test/pack-manifest-lifecycle.test.js",
               "test/pack-maturity.test.js",
+              "test/proving-runner.test.js",
               "test/target-pack-buildout.test.js"
             ]
           },
@@ -314,6 +331,7 @@
             "status": "not_observed",
             "implemented": false,
             "evidence": [
+              "test/dashboard-api.test.js",
               "test/target-pack-buildout.test.js"
             ]
           },
@@ -327,8 +345,11 @@
               "packs/api-engineering/workflows/api-health.json",
               "test/campaign-packs-6-10.test.js",
               "test/cross-pack-workflow-fixtures.test.js",
+              "test/dashboard-api.test.js",
+              "test/dashboard-capability-action.test.js",
               "test/pack-manifest-lifecycle.test.js",
               "test/pack-maturity.test.js",
+              "test/proving-runner.test.js",
               "test/target-pack-buildout.test.js"
             ]
           },
@@ -349,6 +370,7 @@
               "packs/api-engineering/modules/api-engineering-tools/manifest.json",
               "packs/api-engineering/sidekick.pack.json",
               "test/campaign-packs-6-10.test.js",
+              "test/dashboard-capability-action.test.js",
               "test/target-pack-buildout.test.js"
             ]
           },
@@ -366,8 +388,11 @@
               "packs/api-engineering/workflows/api-health.json",
               "test/campaign-packs-6-10.test.js",
               "test/cross-pack-workflow-fixtures.test.js",
+              "test/dashboard-api.test.js",
+              "test/dashboard-capability-action.test.js",
               "test/pack-manifest-lifecycle.test.js",
               "test/pack-maturity.test.js",
+              "test/proving-runner.test.js",
               "test/target-pack-buildout.test.js"
             ]
           },
@@ -377,8 +402,10 @@
             "evidence": [
               "test/campaign-packs-6-10.test.js",
               "test/cross-pack-workflow-fixtures.test.js",
+              "test/dashboard-api.test.js",
               "test/pack-manifest-lifecycle.test.js",
               "test/pack-maturity.test.js",
+              "test/proving-runner.test.js",
               "test/target-pack-buildout.test.js"
             ]
           },
@@ -426,8 +453,11 @@
             "packs/api-engineering/workflows/api-health.json",
             "test/campaign-packs-6-10.test.js",
             "test/cross-pack-workflow-fixtures.test.js",
+            "test/dashboard-api.test.js",
+            "test/dashboard-capability-action.test.js",
             "test/pack-manifest-lifecycle.test.js",
             "test/pack-maturity.test.js",
+            "test/proving-runner.test.js",
             "test/target-pack-buildout.test.js"
           ]
         },
@@ -8535,6 +8565,7 @@
         "test/container-operations-pack.test.js",
         "test/dashboard-api.test.js",
         "test/dashboard-browser.test.js",
+        "test/dashboard-network-info.test.js",
         "test/developer-pack.test.js",
         "test/download-custody.test.js",
         "test/health.test.js",
@@ -8612,6 +8643,7 @@
               "test/compute-worker-package.test.js",
               "test/container-operations-pack.test.js",
               "test/dashboard-api.test.js",
+              "test/dashboard-network-info.test.js",
               "test/developer-pack.test.js",
               "test/jellyfin-pack.test.js",
               "test/kernel-migration-parity.test.js",
@@ -8682,6 +8714,7 @@
               "test/browser-subsystem.test.js",
               "test/campaign-packs-6-10.test.js",
               "test/dashboard-api.test.js",
+              "test/dashboard-network-info.test.js",
               "test/developer-pack.test.js",
               "test/jellyfin-pack.test.js",
               "test/modules-builtin.test.js",
@@ -8707,6 +8740,7 @@
               "test/blackbox-lifecycle.test.js",
               "test/compute-placement.test.js",
               "test/dashboard-api.test.js",
+              "test/dashboard-network-info.test.js",
               "test/jellyfin-pack.test.js",
               "test/kernel-migration-parity.test.js",
               "test/openvino-executor.test.js",
@@ -8834,6 +8868,7 @@
               "test/container-operations-pack.test.js",
               "test/dashboard-api.test.js",
               "test/dashboard-browser.test.js",
+              "test/dashboard-network-info.test.js",
               "test/developer-pack.test.js",
               "test/download-custody.test.js",
               "test/health.test.js",
@@ -9010,6 +9045,7 @@
               "test/connector-authority.test.js",
               "test/container-operations-pack.test.js",
               "test/dashboard-api.test.js",
+              "test/dashboard-network-info.test.js",
               "test/developer-pack.test.js",
               "test/download-custody.test.js",
               "test/jellyfin-pack.test.js",
@@ -9137,6 +9173,7 @@
             "test/container-operations-pack.test.js",
             "test/dashboard-api.test.js",
             "test/dashboard-browser.test.js",
+            "test/dashboard-network-info.test.js",
             "test/developer-pack.test.js",
             "test/download-custody.test.js",
             "test/health.test.js",

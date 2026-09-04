@@ -43,9 +43,10 @@ function evidenceState(record) {
 
 function fresh(entry, now) {
   const observed = parseTime(entry.observed_at);
-  const expires = entry.expires_at ? parseTime(entry.expires_at) : Infinity;
+  const hasExpiry = Object.prototype.hasOwnProperty.call(entry, "expires_at");
+  const expires = hasExpiry ? parseTime(entry.expires_at) : Infinity;
   return Number.isFinite(observed) && now - observed >= 0 && now - observed <= MAX_EVIDENCE_AGE_MS
-    && (!Number.isFinite(expires) || now <= expires);
+    && (!hasExpiry ? true : Number.isFinite(expires) && now <= expires);
 }
 
 function evaluate(record, { now = Date.now() } = {}) {

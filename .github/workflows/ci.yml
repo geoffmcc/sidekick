@@ -144,6 +144,8 @@ jobs:
       contents: read
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      SIDEKICK_BROWSER_BROWSERS_PATH: ${{ runner.temp }}/sidekick-browsers
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -153,6 +155,8 @@ jobs:
           node-version: 22.x
           cache: npm
       - run: npm ci
+      - name: Install browser runtime
+        run: node scripts/install-browser.js
       - run: node scripts/run-tests.js --tier=e2e
       - name: Upload E2E evidence
         if: always()
@@ -160,7 +164,7 @@ jobs:
         with:
           name: e2e-results
           path: artifacts/test-results.json
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 7
 
   mutation:

@@ -7,7 +7,9 @@ preconditions, bounded discovery, negative checks, cleanup, and whether a live
 provider is required.
 
 Recipes are not certification. A proving run must use the canonical dispatcher
-and produce terminal operation receipts. Pack certification accepts only
+for every executable fixture case and produce terminal operation receipts. A
+recipe containing only descriptive capability metadata is reported as
+`not_evaluated`, never as a passing execution proof. Pack certification accepts only
 server-validated receipt, workflow, or execution references that match the
 installed package hash, configuration fingerprint, lifecycle epoch, health
 fingerprint, actor, project, recipe version, and freshness window.

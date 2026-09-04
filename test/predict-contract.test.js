@@ -24,6 +24,7 @@ const markup = fs.readFileSync(path.join(ROOT, 'src', 'dashboard.html'), 'utf-8'
 const server = [
   fs.readFileSync(path.join(ROOT, 'src', 'dashboard.js'), 'utf-8'),
   fs.readFileSync(path.join(ROOT, 'src', 'dashboard', 'predict-routes.js'), 'utf-8'),
+  fs.readFileSync(path.join(ROOT, 'src', 'dashboard', 'capability-action.js'), 'utf-8'),
 ].join('\n');
 const predictTool = fs.readFileSync(path.join(ROOT, 'src', 'tools', 'families', 'meta.js'), 'utf-8');
 
