@@ -90,6 +90,7 @@
     "tree-sitter-perl@1.2.1": true
   },
   "devDependencies": {
+    "c8": "^10.1.3",
     "fast-check": "^4.9.0"
   }
 }

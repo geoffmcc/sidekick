@@ -18,6 +18,7 @@ const workspace = require(path.join(LIB, "workspace.js"));
 const compare = require(path.join(LIB, "compare.js"));
 const probes = require(path.join(LIB, "probes.js"));
 const runs = require(path.join(LIB, "runs.js"));
+const records = require(path.join(LIB, "records.js"));
 const { ResearchError } = require(path.join(LIB, "errors.js"));
 
 let failures = 0;
@@ -169,6 +170,15 @@ test("U.19 json comparison reports changed key paths", () => {
 test("U.20 validation verdict is deterministic", () => {
   assert.strictEqual(compare.validateExpectation("status:403", "status:403", "status").matched, true);
   assert.strictEqual(compare.validateExpectation("status:403", "status:200", "status").matched, false);
+});
+
+test("U.20b kernel errors retain the stable research taxonomy", () => {
+  const existing = new ResearchError("policy_denied", "already classified");
+  assert.strictEqual(records.mapKernelError(existing), existing);
+  assert.strictEqual(records.mapKernelError(new Error("campaign not found")).code, "not_found");
+  assert.strictEqual(records.mapKernelError(new Error("Invalid proposed transition")).code, "state_conflict");
+  assert.strictEqual(records.mapKernelError(new Error("malformed input")).code, "invalid_input");
+  assert.strictEqual(records.mapKernelError({}).code, "invalid_input");
 });
 
 // --- environment resolution -------------------------------------------------

@@ -28,7 +28,7 @@ only when proven to be owned direct children of the OS temp directory.
 
 Use `npm test` for the deterministic non-live required tiers, `npm run test:all`
 for all non-live suites, `npm run test:security` for security invariants,
-`npm run test:coverage` for built-in coverage with versioned thresholds, `npm run test:mutation`
+`npm run test:coverage` for merged c8 coverage with versioned thresholds, `npm run test:mutation`
 for targeted mutation selection, and `npm run test:flake` only as a diagnostic.
 `npm run test:live` requires an explicit local opt-in and is never part of the
 ordinary PR gate. Property failures print `SIDEKICK_PROPERTY_SEED` and can be
