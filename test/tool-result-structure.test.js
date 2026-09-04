@@ -18,6 +18,9 @@ assert.strictEqual(approval.status, "approval_required");
 assert.strictEqual(approval.approval_state, "required");
 assert.strictEqual(approval.approvalId, "approval-test");
 
+const boundedWarnings = normalizeResult({ content: [{ type: "text", text: JSON.stringify({ warnings: Array.from({ length: 101 }, (_, index) => `warning-${index}`) }) }] });
+assert.strictEqual(boundedWarnings.warnings.length, 50, "result warnings must remain bounded");
+
 const result = normalizeResult({
   schema: { pattern: "^secret=[REDACTED]\n" },
   credential_ref: "secret:fixture",

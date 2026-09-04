@@ -1,8 +1,8 @@
 {
   "schema": "sidekick.compatibility-pack-inventory.v1",
   "source": "bundled pack manifests and repository files",
-  "source_commit": "56e003086dd709b51bde174a64ecdb89f0bb700a",
-  "source_commit_date": "2026-09-03T07:47:22-04:00",
+  "source_commit": "4fd85599012b403316cb237491519f21704a1f99",
+  "source_commit_date": "2026-09-04T10:10:43-04:00",
   "source_fingerprint": "sha256:84974ce7c331fe675fdf4850840eaa2eab853ae5da57368523ee1ea019c0bd78",
   "pack_count": 27,
   "packs": [
@@ -3888,6 +3888,7 @@
       },
       "current_tests": [
         "test/campaign-packs-6-10.test.js",
+        "test/metrics-collector.test.js",
         "test/pack-manifest-lifecycle.test.js",
         "test/target-pack-buildout.test.js"
       ],
@@ -3925,6 +3926,7 @@
             "implemented": false,
             "evidence": [
               "test/campaign-packs-6-10.test.js",
+              "test/metrics-collector.test.js",
               "test/target-pack-buildout.test.js"
             ]
           },
@@ -3960,6 +3962,7 @@
               "packs/database-administration/modules/database-administration-tools/manifest.json",
               "packs/database-administration/workflows/migration-readiness.json",
               "test/campaign-packs-6-10.test.js",
+              "test/metrics-collector.test.js",
               "test/target-pack-buildout.test.js"
             ]
           },
@@ -3975,6 +3978,7 @@
               "packs/database-administration/workflows/migration-readiness.json",
               "packs/database-administration/workflows/migration-review.json",
               "test/campaign-packs-6-10.test.js",
+              "test/metrics-collector.test.js",
               "test/pack-manifest-lifecycle.test.js",
               "test/target-pack-buildout.test.js"
             ]
@@ -3990,6 +3994,7 @@
               "packs/database-administration/workflows/migration-readiness.json",
               "packs/database-administration/workflows/migration-review.json",
               "test/campaign-packs-6-10.test.js",
+              "test/metrics-collector.test.js",
               "test/pack-manifest-lifecycle.test.js",
               "test/target-pack-buildout.test.js"
             ]
@@ -4018,6 +4023,7 @@
               "packs/database-administration/workflows/migration-readiness.json",
               "packs/database-administration/workflows/migration-review.json",
               "test/campaign-packs-6-10.test.js",
+              "test/metrics-collector.test.js",
               "test/pack-manifest-lifecycle.test.js",
               "test/target-pack-buildout.test.js"
             ]
@@ -4040,6 +4046,7 @@
               "packs/database-administration/modules/database-administration-tools/manifest.json",
               "packs/database-administration/sidekick.pack.json",
               "test/campaign-packs-6-10.test.js",
+              "test/metrics-collector.test.js",
               "test/target-pack-buildout.test.js"
             ]
           },
@@ -4062,6 +4069,7 @@
             "implemented": true,
             "evidence": [
               "test/campaign-packs-6-10.test.js",
+              "test/metrics-collector.test.js",
               "test/pack-manifest-lifecycle.test.js",
               "test/target-pack-buildout.test.js"
             ]
@@ -4109,6 +4117,7 @@
             "packs/database-administration/workflows/migration-readiness.json",
             "packs/database-administration/workflows/migration-review.json",
             "test/campaign-packs-6-10.test.js",
+            "test/metrics-collector.test.js",
             "test/pack-manifest-lifecycle.test.js",
             "test/target-pack-buildout.test.js"
           ]

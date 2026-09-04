@@ -4560,7 +4560,7 @@ function renderInstalledCapabilities(packs) {
     const actions = [];
     actions.push('<button class="btn btn-sm" data-dashboard-action="callback" data-handler="capabilityDetail" data-id="' + attr(pack.name) + '"><i class="fas fa-circle-info"></i> Details</button>');
     actions.push('<button class="btn btn-sm" data-dashboard-action="callback" data-handler="capabilityHealth" data-id="' + attr(pack.name) + '"><i class="fas fa-stethoscope"></i> Health Check</button>');
-    actions.push('<button class="btn btn-sm btn-outline" data-dashboard-action="callback" data-handler="capabilityMaturity" data-id="' + attr(pack.name) + '"><i class="fas fa-certificate"></i> Maturity</button>');
+     actions.push('<button type="button" class="btn btn-sm btn-outline" aria-label="Show maturity for ' + attr(pack.display_name || pack.name) + '" data-dashboard-action="callback" data-handler="capabilityMaturity" data-id="' + attr(pack.name) + '"><i class="fas fa-certificate" aria-hidden="true"></i> Maturity</button>');
     actions.push('<button class="btn btn-sm btn-outline" data-dashboard-action="callback" data-handler="capabilityDoctor" data-id="' + attr(pack.name) + '"><i class="fas fa-kit-medical"></i> Diagnose</button>');
     if (pack.enabled) {
       actions.push('<button class="btn btn-sm btn-outline" data-dashboard-action="callback" data-handler="capabilityAction" data-id="' + attr(pack.name) + '" data-value="disable"><i class="fas fa-pause"></i> Disable</button>');
@@ -4670,25 +4670,59 @@ async function capabilityHealth(name) {
   loadCapabilities();
 }
 
+const capabilityMaturityRequests = new Map();
+
 async function capabilityMaturity(name) {
   const el = $('capDetail-' + name);
+  const previous = capabilityMaturityRequests.get(name);
+  if (previous) previous.abort();
+  const controller = new AbortController();
+  capabilityMaturityRequests.set(name, controller);
+  if (el) {
+    el.textContent = 'Loading evidence-bound maturity...';
+    el.classList.add('is-visible');
+    el.setAttribute('aria-busy', 'true');
+  }
   try {
-    const res = await authFetch('/api/capabilities/' + encodeURIComponent(name) + '/maturity');
-    const data = await res.json();
-    if (!res.ok || !data.ok) throw new Error(data.error || 'maturity unavailable');
+    const res = await authFetch('/api/capabilities/' + encodeURIComponent(name) + '/maturity', { signal: controller.signal });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) {
+      const error = new Error(data.error || `Maturity request failed (${res.status})`);
+      error.code = data.code || 'maturity_request_failed';
+      throw error;
+    }
     const maturity = data.maturity || {};
     if (el) {
       el.textContent = JSON.stringify({
         level: maturity.level,
+        pack_state: maturity.pack_state,
+        health: maturity.health,
         evidence_freshness: maturity.evidence_freshness,
+        next_level: maturity.next_level,
+        satisfied_checks: maturity.satisfied_checks || [],
+        missing_checks: maturity.missing_checks || [],
+        next_action: maturity.next_action,
         optional_provider_integration: maturity.optional_provider_integration,
         reasons: maturity.reasons || [],
-        evidence: maturity.evidence || [],
+        evidence: (maturity.evidence || []).map(entry => ({
+          id: entry.id,
+          current: entry.current,
+          observed_at: entry.observed_at,
+          expires_at: entry.expires_at,
+          source: entry.source,
+          checks: entry.checks,
+        })),
       }, null, 2);
-      el.classList.add('is-visible');
     }
   } catch (error) {
+    if (error.name === 'AbortError') return;
     capError('maturity: ' + error.message);
+    if (el) el.textContent = 'Maturity error: ' + error.message;
+  } finally {
+    if (capabilityMaturityRequests.get(name) === controller) {
+      capabilityMaturityRequests.delete(name);
+      if (el) el.removeAttribute('aria-busy');
+    }
   }
 }
 

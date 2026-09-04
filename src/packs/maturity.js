@@ -43,7 +43,9 @@ function evidenceState(record) {
 
 function fresh(entry, now) {
   const observed = parseTime(entry.observed_at);
-  return Number.isFinite(observed) && now - observed >= 0 && now - observed <= MAX_EVIDENCE_AGE_MS;
+  const expires = entry.expires_at ? parseTime(entry.expires_at) : Infinity;
+  return Number.isFinite(observed) && now - observed >= 0 && now - observed <= MAX_EVIDENCE_AGE_MS
+    && (!Number.isFinite(expires) || now <= expires);
 }
 
 function evaluate(record, { now = Date.now() } = {}) {
@@ -51,16 +53,16 @@ function evaluate(record, { now = Date.now() } = {}) {
   const evidence = evidenceState(record);
   const health = record.health || {};
   const operational = record.state === "enabled" && health.ok === true && health.status === "healthy";
-  const matching = true;
   const lifecycleEpoch = Number(record.metadata?.maturity_lifecycle_epoch || 0);
   const ordered = [...evidence.entries].sort((a, b) => (parseTime(b.observed_at) || 0) - (parseTime(a.observed_at) || 0));
-  const current = ordered.find(entry => matching && fresh(entry, now)
+  const current = ordered.find(entry => fresh(entry, now)
     && entry.pack_version === record.version
     && (entry.package_hash || null) === (record.package_hash || null)
     && entry.config_fingerprint === configFingerprint(record)
     && Number(entry.lifecycle_epoch) === lifecycleEpoch
     && entry.health_fingerprint === healthFingerprint(record)
     ? entry : null) || null;
+  const requiredChecks = ["canonical_dispatch", "agent_discovery", "workflow", "single_pack", "cross_pack", "skeptical_verification"];
   const has = key => current?.checks?.[key] === true;
   const integrated = operational && has("canonical_dispatch") && has("agent_discovery") && has("workflow");
   const certified = integrated && has("single_pack") && has("cross_pack") && has("skeptical_verification");
@@ -68,22 +70,39 @@ function evaluate(record, { now = Date.now() } = {}) {
   if (operational) level = "operational";
   if (integrated) level = "integrated";
   if (certified) level = "certified";
+  const satisfiedChecks = requiredChecks.filter(has);
+  const missingChecks = requiredChecks.filter(check => !has(check));
   const reasons = [];
   if (record.state !== "enabled") reasons.push(`pack_state:${record.state}`);
   if (!health.ok || health.status !== "healthy") reasons.push(`health:${health.status || "unknown"}`);
   if (!current) reasons.push(evidence.entries.length ? "verification_evidence_stale_or_mismatched" : "verification_evidence_missing");
   if (current) {
-    for (const check of ["canonical_dispatch", "agent_discovery", "workflow", "single_pack", "cross_pack", "skeptical_verification"]) {
-      if (!has(check)) reasons.push(`verification_missing:${check}`);
-    }
+    for (const check of missingChecks) reasons.push(`verification_missing:${check}`);
   }
+  const nextLevel = certified ? null : integrated ? "certified" : operational ? "integrated" : "operational";
+  const nextAction = !record
+    ? "Install the capability pack."
+    : record.state !== "enabled"
+      ? "Enable the capability pack, then run a health check."
+      : !health.ok || health.status !== "healthy"
+        ? "Repair the reported health prerequisite and run a health check."
+        : current
+          ? `Run verification for the missing checks: ${missingChecks.join(", ") || "none"}.`
+          : "Run the server-side pack verification recipe to create current evidence.";
   return {
     level,
     levels: { foundation: true, operational, integrated, certified },
+    pack_state: record.state,
+    health: { status: health.status || "unknown", ok: health.ok === true, checked_at: health.checked_at || null },
+    next_level: nextLevel,
+    satisfied_checks: satisfiedChecks,
+    missing_checks: missingChecks,
+    next_action: nextAction,
     evidence: evidence.entries.map(entry => ({
       id: entry.id || null,
-      observed_at: entry.observed_at || null,
-      source: entry.source || null,
+       observed_at: entry.observed_at || null,
+       expires_at: entry.expires_at || null,
+       source: entry.source || null,
       checks: entry.checks || {},
       evidence_refs: entry.evidence_refs || [],
       result_digest: entry.result_digest || null,

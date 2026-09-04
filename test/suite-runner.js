@@ -40,6 +40,14 @@ function validateManifest(manifest) {
   if (!Array.isArray(manifest.patterns) || !manifest.patterns.length || !Array.isArray(manifest.resources)) throw new Error(`${manifest.source}: patterns and resources are required`);
   if (!Number.isInteger(manifest.timeout_ms) || manifest.timeout_ms < 1000) throw new Error(`${manifest.source}: timeout_ms must be a positive integer`);
   for (const pattern of manifest.patterns) globToRegExp(pattern);
+  if (manifest.shared_resources !== undefined) {
+    if (!Array.isArray(manifest.shared_resources) || manifest.shared_resources.some(resource => typeof resource !== "string" || !resource.trim())) {
+      throw new Error(`${manifest.source}: shared_resources must be a list of non-empty strings`);
+    }
+    if (manifest.shared_resources.some(resource => !manifest.resources.includes(resource))) {
+      throw new Error(`${manifest.source}: shared_resources must be declared in resources`);
+    }
+  }
   return manifest;
 }
 
@@ -78,8 +86,17 @@ function discoverSuites(testRoot = root) {
     identities.add(identity);
     const live = Boolean(manifest.live) || manifest.domain === "live";
     if (live && process.env.SIDEKICK_TEST_LIVE !== "1") continue;
+    const sharedResources = new Set(manifest.shared_resources || []);
+    const sourceText = fs.readFileSync(absolute, "utf8");
+    // Only suites that create their own temporary roots can safely namespace
+    // filesystem/database state. Legacy suites retain a real shared lock until
+    // their fixture ownership is made explicit in the manifest.
+    const isolatedFixture = /mkdtemp(?:Sync)?\s*\(|helpers[\\/]isolated/.test(sourceText);
+    const resources = manifest.resources.map(resource => sharedResources.has(resource) || !isolatedFixture
+      ? resource
+      : `${resource}:${file}`);
     suites.push({ file, id: identity, domain: manifest.domain, tier: manifest.tier, criticality: manifest.criticality,
-      resources: manifest.resources, timeout_ms: manifest.timeout_ms, live, owner: manifest.owner,
+      resources: manifest.resources, lock_resources: resources, timeout_ms: manifest.timeout_ms, live, owner: manifest.owner,
       allow_skip: manifest.allow_skip === true || live, description: manifest.description || `${manifest.domain} test suite` });
   }
   return suites.sort((a, b) => a.file.localeCompare(b.file));
@@ -100,13 +117,33 @@ function selectSuites(allSuites, requested = [], filters = {}) {
   return { selected, unknown, error: unknown.length ? `Invalid test suite selection: ${unknown.join(", ")}` : null };
 }
 
+function shuffleSuites(suites, seed) {
+  if (!Number.isInteger(seed)) return suites;
+  const result = [...suites];
+  let state = seed >>> 0;
+  for (let index = result.length - 1; index > 0; index--) {
+    state = (state * 1664525 + 1013904223) >>> 0;
+    const swap = state % (index + 1);
+    [result[index], result[swap]] = [result[swap], result[index]];
+  }
+  return result;
+}
+
 class ResourceLocks {
   constructor() { this.busy = new Set(); this.waiters = []; }
   async acquire(resources) {
     const names = [...new Set(resources || [])].sort();
-    while (this.busy.has("exclusive") || names.some(name => this.busy.has(name)) || (names.includes("exclusive") && this.busy.size)) await new Promise(resolve => this.waiters.push(resolve));
+    const started = Date.now();
+    let waits = 0;
+    while (this.busy.has("exclusive") || names.some(name => this.busy.has(name)) || (names.includes("exclusive") && this.busy.size)) {
+      waits++;
+      await new Promise(resolve => this.waiters.push(resolve));
+    }
     for (const name of names) this.busy.add(name);
-    return () => { for (const name of names) this.busy.delete(name); const waiters = this.waiters.splice(0); waiters.forEach(resolve => resolve()); };
+    const release = () => { for (const name of names) this.busy.delete(name); const waiters = this.waiters.splice(0); waiters.forEach(resolve => resolve()); };
+    release.wait_ms = Date.now() - started;
+    release.wait_count = waits;
+    return release;
   }
 }
 
@@ -123,7 +160,7 @@ function terminate(child) {
   });
 }
 
-function executeSuite(suite, { cwd, stream, testNamePattern, signal, coverage = false }) {
+function executeSuite(suite, { cwd, stream, testNamePattern, signal, coverage = false, queue_wait_ms = 0, lock_wait_ms = 0, active = 0 }) {
   return new Promise(resolve => {
     const started = Date.now();
     const args = coverage ? ["--experimental-test-coverage", "--test"] : ["--test"];
@@ -140,33 +177,43 @@ function executeSuite(suite, { cwd, stream, testNamePattern, signal, coverage = 
     child.once("close", (code, signalName) => {
       clearTimeout(timer); signal?.removeEventListener("abort", onAbort);
       const status = timedOut ? "timeout" : cancelled ? "cancelled" : code === SKIP_EXIT_CODE ? "skipped" : code === 0 ? "passed" : "failed";
-      resolve({ suite: suite.file, id: suite.id, status, code, signal: signalName, duration_ms: Date.now() - started, stdout, stderr, reproduction: `node ${suite.file}${testNamePattern ? ` --test-name-pattern ${JSON.stringify(testNamePattern)}` : ""}` });
+      resolve({ suite: suite.file, id: suite.id, status, code, signal: signalName, duration_ms: Date.now() - started, queue_wait_ms, lock_wait_ms, active_concurrency: active, stdout, stderr, reproduction: `node ${suite.file}${testNamePattern ? ` --test-name-pattern ${JSON.stringify(testNamePattern)}` : ""}` });
     });
   });
 }
 
-async function runSuites({ requested = [], cwd = root, domain, tier, concurrency = Number(process.env.SIDEKICK_TEST_CONCURRENCY) || 4, stream = false, failFast = false, testNamePattern, coverage = false, signal, overallTimeoutMs = Number(process.env.SIDEKICK_TEST_OVERALL_TIMEOUT_MS) || 30 * 60 * 1000, output = console } = {}) {
+async function runSuites({ requested = [], cwd = root, domain, tier, seed, concurrency = Number(process.env.SIDEKICK_TEST_CONCURRENCY) || 4, stream = false, failFast = false, testNamePattern, coverage = false, signal, overallTimeoutMs = Number(process.env.SIDEKICK_TEST_OVERALL_TIMEOUT_MS) || 30 * 60 * 1000, output = console } = {}) {
   let allSuites;
   try { allSuites = discoverSuites(cwd); } catch (error) { output.error(error.message); return { passed: 0, failed: 1, skipped: 0, exitCode: CONFIG_EXIT_CODE, failures: [], results: [], error: error.message }; }
   const selection = selectSuites(allSuites, requested, { domain, tier });
   if (selection.error || !selection.selected.length) { output.error(selection.error || "No test suites selected."); return { passed: 0, failed: 1, skipped: 0, exitCode: CONFIG_EXIT_CODE, failures: [], results: [], error: selection.error }; }
-  const locks = new ResourceLocks(), results = [], queue = [...selection.selected];
+  const wall_started = Date.now();
+  const orderedSelection = shuffleSuites(selection.selected, seed);
+  const locks = new ResourceLocks(), results = [], queue = orderedSelection.map(suite => ({ suite, queued_at: Date.now() }));
   const controller = new AbortController();
   let stopped = false;
   const forwardAbort = () => controller.abort();
   signal?.addEventListener("abort", forwardAbort, { once: true });
   controller.signal.addEventListener("abort", () => { stopped = true; }, { once: true });
   const overallTimer = setTimeout(() => controller.abort(), Math.max(1000, overallTimeoutMs));
+  let active = 0;
+  let peak_concurrency = 0;
   async function worker() {
     while (queue.length && !stopped) {
-      const suite = queue.shift();
-      const release = await locks.acquire(suite.resources);
+      const item = queue.shift();
+      const suite = item.suite;
+      const queue_wait_ms = Date.now() - item.queued_at;
+      const release = await locks.acquire(suite.lock_resources || suite.resources);
+      let counted = false;
       try {
         if (controller.signal.aborted) continue;
-        const result = await executeSuite(suite, { cwd, stream, testNamePattern, coverage, signal: controller.signal });
+        active++;
+        counted = true;
+        peak_concurrency = Math.max(peak_concurrency, active);
+        const result = await executeSuite(suite, { cwd, stream, testNamePattern, coverage, signal: controller.signal, queue_wait_ms, lock_wait_ms: release.wait_ms, active });
         results.push(result);
         if (result.status === "failed" || result.status === "timeout" || result.status === "cancelled") stopped = stopped || failFast;
-      } finally { release(); }
+      } finally { if (counted) active--; release(); }
     }
   }
   await Promise.all(Array.from({ length: Math.max(1, Math.min(20, concurrency)) }, () => worker()));
@@ -178,11 +225,11 @@ async function runSuites({ requested = [], cwd = root, domain, tier, concurrency
   const unexpectedSkips = results.filter(item => item.status === "skipped" && !allSuites.find(suite => suite.file === item.suite)?.allow_skip);
   const failures = results.filter(item => item.status !== "passed" && (item.status !== "skipped" || unexpectedSkips.some(skip => skip.suite === item.suite)));
   const notRun = selection.selected.filter(suite => !results.some(result => result.suite === suite.file)).map(suite => suite.file);
-  const report = { version: 1, passed, failed: failures.length, skipped, unexpected_skips: unexpectedSkips.map(item => item.suite), not_run: notRun, duration_ms: results.reduce((sum, item) => Math.max(sum, item.duration_ms), 0), slowest: [...results].sort((a, b) => b.duration_ms - a.duration_ms).slice(0, 10), failures, results };
+  const report = { version: 2, passed, failed: failures.length, skipped, unexpected_skips: unexpectedSkips.map(item => item.suite), not_run: notRun, cancelled: results.filter(item => item.status === "cancelled").map(item => item.suite), timed_out: results.filter(item => item.status === "timeout").map(item => item.suite), wall_duration_ms: Date.now() - wall_started, duration_ms: Date.now() - wall_started, peak_concurrency, slowest: [...results].sort((a, b) => b.duration_ms - a.duration_ms).slice(0, 10), failures, results };
   output.log(`Test summary: ${passed} passed, ${failures.length} failed, ${skipped} skipped; slowest: ${report.slowest.slice(0, 3).map(item => `${item.suite} (${item.duration_ms}ms)`).join(", ")}`);
   if (failures.length) output.error(`Failed suites: ${failures.map(item => `${item.suite} [${item.status}]`).join(", ")}`);
   if (notRun.length) output.error(`Not run: ${notRun.join(", ")}`);
-  return { ...report, exitCode: failures.length || unexpectedSkips.length || notRun.length ? 1 : 0 };
+  return { ...report, seed: Number.isInteger(seed) ? seed : null, exitCode: failures.length || unexpectedSkips.length || notRun.length ? 1 : 0 };
 }
 
-module.exports = { CONFIG_EXIT_CODE, SKIP_EXIT_CODE, discoverSuites, selectSuites, runSuites, ResourceLocks, globToRegExp };
+module.exports = { CONFIG_EXIT_CODE, SKIP_EXIT_CODE, discoverSuites, selectSuites, runSuites, ResourceLocks, globToRegExp, shuffleSuites };

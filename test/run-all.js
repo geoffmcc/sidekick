@@ -12,6 +12,7 @@ function parseArgs(args) {
     else if (arg.startsWith("--domain=")) options.domain = arg.slice(9);
     else if (arg.startsWith("--tier=")) options.tier = [...(options.tier || []), ...arg.slice(7).split(",")];
     else if (arg.startsWith("--concurrency=")) options.concurrency = Number(arg.slice(14));
+    else if (arg.startsWith("--seed=")) options.seed = Number(arg.slice(7));
     else if (arg.startsWith("--test-name-pattern=")) options.testNamePattern = arg.slice(20);
     else if (arg === "--json") options.json = true;
     else requested.push(arg);

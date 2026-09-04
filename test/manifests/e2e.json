@@ -1,0 +1,12 @@
+{
+  "domain": "e2e",
+  "priority": 100,
+  "tier": "e2e",
+  "criticality": "required",
+  "resources": ["subprocess"],
+  "timeout_ms": 300000,
+  "platforms": ["linux", "win32", "darwin"],
+  "live": false,
+  "owner": "end-to-end",
+  "patterns": ["test/e2e/**/*.test.{js,cjs,mjs}"]
+}
