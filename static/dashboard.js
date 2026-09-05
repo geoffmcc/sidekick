@@ -232,15 +232,9 @@ function showToast(message, type = 'info') {
 
 // Centralized error handler
 function apiError(url, error, status) {
-  const messages = {
-    401: 'Authentication required — please refresh the page',
-    429: 'Rate limited — please wait before refreshing',
-    502: 'Backend service unavailable',
-    503: 'Service temporarily unavailable',
-  };
-  
-  const msg = messages[status] || `Request failed: ${error.message || 'Unknown error'}`;
-  showToast(msg, status >= 500 ? 'error' : 'warning');
+  const detail = window.dashboardErrorDetails(error, status);
+  const msg = detail.message;
+  showToast(msg, detail.status >= 500 ? 'error' : 'warning');
   
   // Log to server (fire-and-forget)
   fetch('/api/internal/error-log', {
@@ -248,12 +242,9 @@ function apiError(url, error, status) {
     headers: { 'Content-Type': 'application/json' },
     credentials: 'same-origin',
     body: JSON.stringify({
-      timestamp: new Date().toISOString(),
-      url,
-      status,
-      error: error.message || String(error),
-      page: currentPage,
-      userAgent: navigator.userAgent
+      status: detail.status,
+      code: detail.code,
+      correlation_id: detail.correlation_id,
     })
   }).catch(() => {}); // This one CAN silently fail
 }
@@ -421,7 +412,7 @@ function loadProjects() {
       return '<article class="project-card"><span class="eyebrow">Project workspace</span><h2>' + esc(project.display_name || project.project_id) + '</h2><p>' + esc(project.description || 'No project description recorded.') + '</p><div class="project-meta"><span>' + esc(project.state || 'unknown') + '</span><span>' + sources.length + ' recorded source' + (sources.length === 1 ? '' : 's') + '</span><span>' + (workspace ? 'Workspace configured' : 'Workspace not configured') + '</span></div><button class="btn btn-outline btn-sm" type="button" data-project="' + attr(project.project_id) + '">Inspect project data</button></article>';
     }).join('');
     list.querySelectorAll('[data-project]').forEach(button => button.addEventListener('click', () => { routeToPage('data'); const filter = $('kvProjectFilter'); if (filter) { filter.value = button.dataset.project; if (typeof filterKV === 'function') filterKV(); } }));
-  }).catch(error => { list.innerHTML = '<div class="panel project-empty"><div class="error-text">Project data unavailable.</div><p class="sub">' + esc(error.message) + '</p></div>'; });
+  }).catch(error => { list.innerHTML = '<div class="panel project-empty"><div class="error-text">Project data unavailable.</div><p class="sub">' + esc(dashboardSafeErrorMessage(error)) + '</p></div>'; });
 }
 
 function brainProjectionEmpty(message) { return '<div class="empty">' + esc(message) + '</div>'; }
@@ -475,7 +466,7 @@ function loadBrainControlRoom() {
       if (!latestId) throw new Error('latest task has no usable id');
       if (input) input.value = latestId;
       loadBrainControlRoom();
-    }).catch(error => { $('brainStatus').textContent = 'Brain task list unavailable: ' + (error.message || String(error)); });
+    }).catch(error => { $('brainStatus').textContent = 'Brain task list unavailable: ' + dashboardSafeErrorMessage(error); });
     return;
   }
   if (input) input.value = taskId;
@@ -499,7 +490,7 @@ function loadBrainControlRoom() {
     $('brainRoleRouting').innerHTML = routing.length ? routing.slice(0, 32).map(item => '<div class="brain-row"><strong>' + esc(item.role || 'role') + '</strong><span>' + esc(item.selected || item.model || 'not recorded') + '</span><small>' + esc(item.reason || (item.degraded ? 'degraded' : 'recorded decision')) + (item.data_classification ? ' · classification: ' + esc(item.data_classification) : '') + '</small></div>').join('') : brainProjectionEmpty('No role-routing decisions recorded for this task.');
     const project = task.project_id || task.project || null;
     loadBrainLearningCandidates(project);
-  }).catch(error => { $('brainStatus').textContent = 'Brain metadata unavailable: ' + (error.message || String(error)); $('brainSummary').innerHTML = ''; ['brainTaskSpec','brainBeliefState','brainTraceActivity','brainGraphCoverage','brainVerificationGates','brainRoleRouting','brainLearningCandidates'].forEach(id => { if ($(id)) $(id).innerHTML = brainProjectionEmpty('Unavailable.'); }); });
+  }).catch(error => { $('brainStatus').textContent = 'Brain metadata unavailable: ' + dashboardSafeErrorMessage(error); $('brainSummary').innerHTML = ''; ['brainTaskSpec','brainBeliefState','brainTraceActivity','brainGraphCoverage','brainVerificationGates','brainRoleRouting','brainLearningCandidates'].forEach(id => { if ($(id)) $(id).innerHTML = brainProjectionEmpty('Unavailable.'); }); });
 }
 function loadBrainLearningCandidates(projectRef) {
   const target = $('brainLearningCandidates'); if (!target) return;
@@ -509,7 +500,7 @@ function loadBrainLearningCandidates(projectRef) {
     if (!ok) throw new Error(data.error || 'candidate request failed');
     const candidates = data.candidates || [];
     target.innerHTML = candidates.length ? candidates.slice(0, 20).map(candidate => '<div class="brain-row"><strong>' + esc(candidate.kind || 'candidate') + '</strong><span>' + esc(candidate.state || 'proposal') + '</span><small>' + esc(candidate.candidate_id || 'unknown') + ' · source: ' + esc(candidate.source_task_id || 'not attached') + '</small></div>').join('') : brainProjectionEmpty('No project-scoped learning candidates.');
-  }).catch(error => { target.innerHTML = brainProjectionEmpty('Learning candidates unavailable: ' + (error.message || String(error))); });
+  }).catch(error => { target.innerHTML = brainProjectionEmpty('Learning candidates unavailable: ' + dashboardSafeErrorMessage(error)); });
 }
 
 let repositoryResearchCursor = null;
@@ -520,7 +511,7 @@ let selectedResearchSnapshot = null;
 async function researchJson(url, options) {
   const response = await authFetch(url, options);
   const data = await response.json();
-  if (!response.ok || data.ok === false) throw new Error(data.error || 'Research source request failed');
+  if (!response.ok || data.ok === false) throw window.dashboardErrorFromResponse(response, data);
   return data;
 }
 
@@ -537,7 +528,7 @@ async function loadResearchSources() {
       '<div class="card compact-card research-source-card"><strong>' + esc(repo.name || repo.repository_id) + '</strong> <span class="sub">' + esc(repo.state) + ' · ' + esc(repo.repository_id) + '</span>' +
       '<div class="research-actions"><button class="btn btn-sm btn-outline" data-dashboard-action="research-select" data-id="' + attr(repo.repository_id) + '" data-campaign="' + attr(repo.campaign_id) + '">Show snapshots</button></div></div>'
     ).join('') || '<div class="empty">No campaign repositories found.</div>';
-  } catch (error) { if (readiness) readiness.textContent = error.message; if (repositories) repositories.textContent = 'Unable to load repositories.'; }
+  } catch (error) { if (readiness) readiness.textContent = dashboardSafeErrorMessage(error); if (repositories) repositories.textContent = 'Unable to load repositories.'; }
 }
 
 async function selectResearchRepository(repositoryId, campaignId) {
@@ -549,7 +540,7 @@ async function selectResearchRepository(repositoryId, campaignId) {
       '<div class="card compact-card research-source-card"><strong>' + esc(snapshot.snapshot_id) + '</strong> <span class="sub">' + esc(snapshot.state) + ' · integrity: ' + esc(snapshot.integrity_status) + ' · authority: ' + esc(snapshot.authority) + '</span>' +
       '<div class="research-actions"><button class="btn btn-sm btn-outline" data-dashboard-action="research-snapshot" data-id="' + attr(snapshot.snapshot_id) + '">Details</button> <button class="btn btn-sm" data-dashboard-action="research-action" data-handler="researchSelect" data-id="' + attr(snapshot.snapshot_id) + '">Select</button> <button class="btn btn-sm btn-outline" data-dashboard-action="research-action" data-handler="researchVerify" data-id="' + attr(snapshot.snapshot_id) + '">Verify</button> <button class="btn btn-sm btn-outline" data-dashboard-action="research-action" data-handler="researchIndex" data-id="' + attr(snapshot.snapshot_id) + '">Index</button> <button class="btn btn-sm btn-outline" data-dashboard-action="research-action" data-handler="researchArchive" data-id="' + attr(snapshot.snapshot_id) + '">Archive</button> <button class="btn btn-sm btn-danger" data-dashboard-action="research-action" data-handler="researchRemove" data-id="' + attr(snapshot.snapshot_id) + '">Remove</button></div></div>'
     ).join('') || '<div class="empty">No snapshots found.</div>';
-  } catch (error) { if (output) output.textContent = error.message; }
+  } catch (error) { if (output) output.textContent = dashboardSafeErrorMessage(error); }
 }
 
 async function showResearchSnapshot(snapshotId) {
@@ -558,7 +549,7 @@ async function showResearchSnapshot(snapshotId) {
     const data = await researchJson('/api/research/source/snapshots/' + encodeURIComponent(snapshotId) + '?repository_id=' + encodeURIComponent(selectedResearchRepository));
     const snapshot = data.snapshot || {}; const verification = snapshot.verification || {};
     $('researchSnapshotDetail').innerHTML = '<div class="sub">State: ' + esc(snapshot.state) + ' · Integrity: ' + esc(snapshot.integrity_status) + ' · Stale: ' + esc(String(verification.stale)) + ' · Files: ' + esc(String(snapshot.file_count ?? 'unknown')) + ' · Ref: ' + esc(snapshot.workspace_ref || 'unavailable') + '</div>';
-  } catch (error) { $('researchSnapshotDetail').textContent = error.message; }
+  } catch (error) { $('researchSnapshotDetail').textContent = dashboardSafeErrorMessage(error); }
 }
 
 async function researchAction(action, body) {
@@ -567,17 +558,17 @@ async function researchAction(action, body) {
   return data;
 }
 
-async function researchVerify(snapshotId) { try { await researchAction('verify', { repository_id: selectedResearchRepository, snapshot_id: snapshotId }); await selectResearchRepository(selectedResearchRepository); } catch (error) { $('researchActionStatus').textContent = error.message; } }
-async function researchSelect(snapshotId) { try { await researchAction('select', { repository_id: selectedResearchRepository, snapshot_id: snapshotId }); await loadResearchSources(); } catch (error) { $('researchActionStatus').textContent = error.message; } }
-async function researchIndex(snapshotId) { try { await researchAction('index', { repository_id: selectedResearchRepository, snapshot_id: snapshotId, index_action: 'profile', max_chars: 12000 }); await selectResearchRepository(selectedResearchRepository, selectedResearchCampaign); } catch (error) { $('researchActionStatus').textContent = error.message; } }
-async function researchArchive(snapshotId) { if (!confirm('Archive this snapshot? It will no longer be selectable.')) return; try { await researchAction('archive', { repository_id: selectedResearchRepository, snapshot_id: snapshotId, confirm: true }); await selectResearchRepository(selectedResearchRepository, selectedResearchCampaign); } catch (error) { $('researchActionStatus').textContent = error.message; } }
-async function researchRemove(snapshotId) { if (!confirm('Remove this snapshot and its governed workspace copy? This cannot be undone.')) return; try { await researchAction('remove', { repository_id: selectedResearchRepository, snapshot_id: snapshotId, confirm: true }); await selectResearchRepository(selectedResearchRepository, selectedResearchCampaign); } catch (error) { $('researchActionStatus').textContent = error.message; } }
+async function researchVerify(snapshotId) { try { await researchAction('verify', { repository_id: selectedResearchRepository, snapshot_id: snapshotId }); await selectResearchRepository(selectedResearchRepository); } catch (error) { $('researchActionStatus').textContent = dashboardSafeErrorMessage(error); } }
+async function researchSelect(snapshotId) { try { await researchAction('select', { repository_id: selectedResearchRepository, snapshot_id: snapshotId }); await loadResearchSources(); } catch (error) { $('researchActionStatus').textContent = dashboardSafeErrorMessage(error); } }
+async function researchIndex(snapshotId) { try { await researchAction('index', { repository_id: selectedResearchRepository, snapshot_id: snapshotId, index_action: 'profile', max_chars: 12000 }); await selectResearchRepository(selectedResearchRepository, selectedResearchCampaign); } catch (error) { $('researchActionStatus').textContent = dashboardSafeErrorMessage(error); } }
+async function researchArchive(snapshotId) { if (!confirm('Archive this snapshot? It will no longer be selectable.')) return; try { await researchAction('archive', { repository_id: selectedResearchRepository, snapshot_id: snapshotId, confirm: true }); await selectResearchRepository(selectedResearchRepository, selectedResearchCampaign); } catch (error) { $('researchActionStatus').textContent = dashboardSafeErrorMessage(error); } }
+async function researchRemove(snapshotId) { if (!confirm('Remove this snapshot and its governed workspace copy? This cannot be undone.')) return; try { await researchAction('remove', { repository_id: selectedResearchRepository, snapshot_id: snapshotId, confirm: true }); await selectResearchRepository(selectedResearchRepository, selectedResearchCampaign); } catch (error) { $('researchActionStatus').textContent = dashboardSafeErrorMessage(error); } }
 async function researchImport() {
   const sourcePath = ($('researchImportPath').value || '').trim(); if (!sourcePath || !selectedResearchRepository) { $('researchActionStatus').textContent = 'Select a repository and enter a server directory.'; return; }
   if (!confirm('Import this directory into the selected campaign repository? The source will be copied into the governed research workspace.')) return;
-  try { await researchAction('import', { repository_id: selectedResearchRepository, campaign_id: selectedResearchCampaign, source_path: sourcePath, name: selectedResearchRepository }); await loadResearchSources(); } catch (error) { $('researchActionStatus').textContent = error.message; }
+  try { await researchAction('import', { repository_id: selectedResearchRepository, campaign_id: selectedResearchCampaign, source_path: sourcePath, name: selectedResearchRepository }); await loadResearchSources(); } catch (error) { $('researchActionStatus').textContent = dashboardSafeErrorMessage(error); }
 }
-async function researchRecover() { if (!selectedResearchCampaign) { $('researchActionStatus').textContent = 'Select a campaign before recovery.'; return; } if (!confirm('Recover and remove abandoned staging directories for this campaign?')) return; try { await researchAction('recover', { campaign_id: selectedResearchCampaign, confirm: true }); } catch (error) { $('researchActionStatus').textContent = error.message; } }
+async function researchRecover() { if (!selectedResearchCampaign) { $('researchActionStatus').textContent = 'Select a campaign before recovery.'; return; } if (!confirm('Recover and remove abandoned staging directories for this campaign?')) return; try { await researchAction('recover', { campaign_id: selectedResearchCampaign, confirm: true }); } catch (error) { $('researchActionStatus').textContent = dashboardSafeErrorMessage(error); } }
 async function loadRepositoryResearch(next) {
   const query = (($('researchQuery') || {}).value || '').trim();
   if (!next) repositoryResearchCursor = null;
@@ -592,7 +583,7 @@ async function loadRepositoryResearch(next) {
     if (status) status.textContent = (data.page && data.page.has_more ? 'More results are available.' : 'End of this snapshot.') + ' Evidence class: ' + ((data.provenance || {}).evidence_class || 'discovery_lead') + '. Completeness: ' + ((data.provenance || {}).completeness || 'unknown') + '.';
     if (output) output.textContent = data.projection || JSON.stringify(data, null, 2);
     if (more) more.hidden = !repositoryResearchCursor;
-  } catch (error) { if (status) status.textContent = 'Unable to load repository evidence: ' + error.message; if (more) more.hidden = true; }
+  } catch (error) { if (status) status.textContent = 'Unable to load repository evidence: ' + dashboardSafeErrorMessage(error); if (more) more.hidden = true; }
 }
 
 function identityError(message) {
@@ -622,7 +613,7 @@ async function loadIdentityAdmin() {
         + '<button class="btn btn-sm btn-outline" data-dashboard-action="identity" data-handler="assignIdentityRole" data-id="' + attr(principal.principal_id) + '">Assign role</button></div>'
         + '</div>';
     }).join('') || '<div class="sub">No principals found.</div>';
-  } catch (error) { identityError(error.message); }
+  } catch (error) { identityError(dashboardSafeErrorMessage(error)); }
 }
 
 async function createIdentityUser() {
@@ -679,7 +670,7 @@ function loadMetricsStatus() {
     }
     el.innerHTML = html;
   }).catch(e=>{
-    el.innerHTML = '<div class="quick-action-error">Metrics status unavailable: ' + esc(e.message || String(e)) + '</div>';
+    el.innerHTML = '<div class="quick-action-error">Metrics status unavailable: ' + esc(dashboardSafeErrorMessage(e)) + '</div>';
   });
 }
 
@@ -1081,7 +1072,7 @@ function runQuickAction(action, payload){
     resultEl.innerHTML = renderQuickActionResult(action, d.result || {});
     if (action === 'restart-agent' || action === 'health-check') loadMissionControl();
   }).catch(e=>{
-    resultEl.innerHTML = '<div class="quick-action-error">' + esc(e.message || String(e)) + '</div>';
+    resultEl.innerHTML = '<div class="quick-action-error">' + esc(dashboardSafeErrorMessage(e)) + '</div>';
     apiError('/api/quick-actions/' + action, e, 0);
   });
 }
@@ -1192,7 +1183,7 @@ function loadLogs(){
     logPage = 0;
     renderLogs();
   }).catch(e => {
-    if (container) container.innerHTML = '<div class="quick-action-error">Activity unavailable: ' + esc(e.message || String(e)) + '</div>';
+    if (container) container.innerHTML = '<div class="quick-action-error">Activity unavailable: ' + esc(dashboardSafeErrorMessage(e)) + '</div>';
     apiError('/api/logs', e, 0);
   });
 }
@@ -1788,7 +1779,7 @@ function importKV() {
           }
         });
       } catch (e) {
-        showToast('Failed to parse JSON file: ' + e.message, 'error');
+        showToast('Failed to parse JSON file: ' + dashboardSafeErrorMessage(e), 'error');
       }
     };
     
@@ -1891,7 +1882,7 @@ async function expireStaleMemories() {
       alert('Failed: ' + result.error);
     }
   } catch (e) {
-    alert('Failed: ' + e.message);
+    alert('Failed: ' + dashboardSafeErrorMessage(e));
   }
 }
 
@@ -2008,7 +1999,7 @@ async function disableMemory(id) {
     showToast('Memory disabled', 'success');
     loadMemories();
   } catch (e) {
-    showToast('Failed to disable: ' + e.message, 'error');
+    showToast('Failed to disable: ' + dashboardSafeErrorMessage(e), 'error');
   }
 }
 
@@ -2018,7 +2009,7 @@ async function enableMemory(id) {
     showToast('Memory enabled', 'success');
     loadMemories();
   } catch (e) {
-    showToast('Failed to enable: ' + e.message, 'error');
+    showToast('Failed to enable: ' + dashboardSafeErrorMessage(e), 'error');
   }
 }
 
@@ -2029,7 +2020,7 @@ async function deleteMemory(id) {
     showToast('Memory deleted', 'success');
     loadMemories();
   } catch (e) {
-    showToast('Failed to delete: ' + e.message, 'error');
+    showToast('Failed to delete: ' + dashboardSafeErrorMessage(e), 'error');
   }
 }
 
@@ -2051,7 +2042,7 @@ async function exportMemories() {
     a.click();
     URL.revokeObjectURL(url);
   } catch (e) {
-    alert('Export failed: ' + e.message);
+    alert('Export failed: ' + dashboardSafeErrorMessage(e));
   }
 }
 
@@ -2149,7 +2140,7 @@ function startAgentContinuation(kind) {
   }).then(r => r.json().then(data => ({ ok: r.ok, data }))).then(({ ok, data }) => {
     if (!ok || !data.taskId) throw new Error(data.error || 'Continuation failed');
     streamAgentTask(data.taskId, { reset: false, parentTaskId: id, announce: true });
-  }).catch(error => appendLog('<span class="agent-err">Continuation failed: ' + esc(error.message) + '</span>'));
+  }).catch(error => appendLog('<span class="agent-err">Continuation failed: ' + esc(dashboardSafeErrorMessage(error)) + '</span>'));
 }
 
 function loadAgentLearningCandidates(projectRef) {
@@ -2179,7 +2170,7 @@ function pauseAgentTask(){
     .then(r => r.json().then(data => ({ok:r.ok,data}))).then(({ok,data}) => {
       appendLog('<span class="agent-step">' + esc(ok ? 'Pause requested; the task will stop at a safe boundary.' : (data.error || 'Pause failed')) + '</span>');
       loadDurableAgentTask(id);
-    }).catch(e => appendLog('<span class="agent-err">Pause failed: ' + esc(e.message) + '</span>'));
+    }).catch(e => appendLog('<span class="agent-err">Pause failed: ' + esc(dashboardSafeErrorMessage(e)) + '</span>'));
 }
 
 function resumeAgentTask(){
@@ -2190,7 +2181,7 @@ function resumeAgentTask(){
     .then(r => r.json().then(data => ({ok:r.ok,data}))).then(({ok,data}) => {
       if (!ok || data.error) throw new Error(data.error || 'Resume failed');
       streamAgentTask(data.taskId || id, { reset:false, reconnect:true });
-    }).catch(e => { appendLog('<span class="agent-err">Resume failed: ' + esc(e.message) + '</span>'); loadDurableAgentTask(id); });
+    }).catch(e => { appendLog('<span class="agent-err">Resume failed: ' + esc(dashboardSafeErrorMessage(e)) + '</span>'); loadDurableAgentTask(id); });
 }
 
 function sendAgentGuidance(){
@@ -2198,7 +2189,7 @@ function sendAgentGuidance(){
   if (!input || !currentAgentTaskId || !input.value.trim()) return;
   const text = input.value.trim();
   authFetch('/api/agent/tasks/' + encodeURIComponent(currentAgentTaskId) + '/guidance', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ guidance:text }) })
-    .then(r => r.json().then(data => ({ok:r.ok,data}))).then(({ok,data}) => { if (ok) { input.value=''; appendLog('<span class="agent-step">Guidance saved for the durable task.</span>'); loadDurableAgentTask(currentAgentTaskId); } else appendLog('<span class="agent-err">' + esc(data.error || 'Guidance failed') + '</span>'); }).catch(e => appendLog('<span class="agent-err">' + esc(e.message) + '</span>'));
+    .then(r => r.json().then(data => ({ok:r.ok,data}))).then(({ok,data}) => { if (ok) { input.value=''; appendLog('<span class="agent-step">Guidance saved for the durable task.</span>'); loadDurableAgentTask(currentAgentTaskId); } else appendLog('<span class="agent-err">' + esc(data.error || 'Guidance failed') + '</span>'); }).catch(e => appendLog('<span class="agent-err">' + esc(dashboardSafeErrorMessage(e)) + '</span>'));
 }
 
 // Reveal a terminal task's detail (which contains the follow-up form) and focus it.
@@ -2370,7 +2361,7 @@ function runAgent() {
   authFetch('/api/agent/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ goal, profile, ...(project ? { project } : {}) }) })
     .then(r => r.json().then(data => ({ status: r.status, data })))
     .then(({ status, data }) => { if (status >= 400 || data.error) throw new Error(data.error || ('HTTP ' + status)); activeAgentSession = { rootTaskId: data.taskId, turns: [{ id: data.taskId, goal, status: 'running', t: new Date().toISOString() }] }; rememberAgentSession(data.taskId, data.taskId); streamAgentTask(data.taskId, { reset: false }); })
-    .catch(e => { appendLog('<span class="agent-err">' + esc(e.message) + '</span>'); finishAgentStream(); })
+    .catch(e => { appendLog('<span class="agent-err">' + esc(dashboardSafeErrorMessage(e)) + '</span>'); finishAgentStream(); })
     .finally(() => { agentSubmissionPending = false; });
 }
 
@@ -2400,7 +2391,7 @@ function submitFollowup(id) {
   authFetch('/api/agent/run/' + id + '/follow-up', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ goal }) })
     .then(r => r.json().then(data => ({ status: r.status, data })))
     .then(({ status, data }) => { if (status >= 400 || data.error) throw new Error(data.error || ('HTTP ' + status)); input.value = ''; activeAgentSession.turns.push({ id: data.taskId, goal, status: 'running', t: new Date().toISOString(), parentTaskId: id }); renderAgentSession(activeAgentSession); streamAgentTask(data.taskId, { reset: false, parentTaskId: id }); })
-    .catch(e => { appendLog('<span class="agent-err">Follow-up failed: ' + esc(e.message) + '</span>'); finishAgentStream(); })
+    .catch(e => { appendLog('<span class="agent-err">Follow-up failed: ' + esc(dashboardSafeErrorMessage(e)) + '</span>'); finishAgentStream(); })
     .finally(() => { agentSubmissionPending = false; input.disabled = false; $('agentFollowupGo').disabled = false; });
 }
 
@@ -2408,13 +2399,13 @@ function restoreAgentState() {
   if (agentRestoreInFlight || agentRunning) return; const root = readRememberedAgentRoot(); const task = readRememberedAgentTask();
   agentRestoreInFlight = true;
   const load = root ? refreshAgentSession(root).then(session => { if (!session && task) streamAgentTask(task, { reset: false, reconnect: true }); return session; }) : (task ? authFetch('/api/agent/run/' + encodeURIComponent(task)).then(r => r.ok ? r.json() : null).then(run => run && refreshAgentSession(run.root_task_id || task)) : Promise.resolve(null));
-  load.catch(e => appendLog('<span class="agent-err">Could not restore Agent session: ' + esc(e.message) + '</span>')).finally(() => { agentRestoreInFlight = false; });
+  load.catch(e => appendLog('<span class="agent-err">Could not restore Agent session: ' + esc(dashboardSafeErrorMessage(e)) + '</span>')).finally(() => { agentRestoreInFlight = false; });
 }
 
 function finishAgentStream() { if (agentStream) { agentStream.close(); agentStream = null; } if (currentAgentTaskId) loadDurableAgentTask(currentAgentTaskId); agentRunning = false; currentAgentTaskId = null; $('agentGo').disabled = false; $('agentClear').disabled = false; $('agentStop').disabled = true; if ($('agentPause')) $('agentPause').disabled = true; if (activeAgentSession) refreshAgentSession(activeAgentSession.rootTaskId).catch(() => {}); }
 function clearAgent() { if (agentRunning) return; $('agentGoal').value = ''; }
 function newAgentTask() { if (agentRunning) return; activeAgentSession = null; currentAgentTaskId = null; try { localStorage.removeItem(AGENT_ROOT_KEY); localStorage.removeItem(AGENT_LAST_TASK_KEY); } catch (_) {} $('agentLog').innerHTML = '<span class="empty">Describe a new task below</span>'; $('agentSessionMeta').textContent = 'New root Agent task'; $('agentFollowupArea').hidden = true; $('agentGoal').focus(); }
-function stopAgent() { const id = currentAgentTaskId; if (!id || !agentRunning) return; authFetch('/api/agent/run/' + encodeURIComponent(id) + '/cancel', { method: 'POST' }).then(r => r.json()).then(d => appendLog('<span class="agent-step">' + esc(d.error || 'Cancellation requested') + '</span>')).catch(e => appendLog('<span class="agent-err">Cancel failed: ' + esc(e.message) + '</span>')); }
+function stopAgent() { const id = currentAgentTaskId; if (!id || !agentRunning) return; authFetch('/api/agent/run/' + encodeURIComponent(id) + '/cancel', { method: 'POST' }).then(r => r.json()).then(d => appendLog('<span class="agent-step">' + esc(d.error || 'Cancellation requested') + '</span>')).catch(e => appendLog('<span class="agent-err">Cancel failed: ' + esc(dashboardSafeErrorMessage(e)) + '</span>')); }
 
 function refreshAgentHistory() {
   const el = $('agentHistory'); if (!el) return Promise.resolve();
@@ -2424,7 +2415,7 @@ function refreshAgentHistory() {
     el.querySelectorAll('[data-session-id]').forEach(node => { const open = () => refreshAgentSession(node.dataset.sessionId).catch(e => apiError('/api/agent/session', e, 0)); node.addEventListener('click', open); node.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } }); });
   });
 }
-function toggleHistory() { const el = $('agentHistory'), toggle = $('agentHistoryToggle'); const expanded = el.style.display === 'none'; el.style.display = expanded ? 'block' : 'none'; toggle.setAttribute('aria-expanded', String(expanded)); $('agentHistoryChevron').textContent = expanded ? '▲' : '▼'; if (expanded) refreshAgentHistory().catch(e => { el.innerHTML = '<div class="agent-err">History unavailable: ' + esc(e.message) + '</div>'; }); }
+function toggleHistory() { const el = $('agentHistory'), toggle = $('agentHistoryToggle'); const expanded = el.style.display === 'none'; el.style.display = expanded ? 'block' : 'none'; toggle.setAttribute('aria-expanded', String(expanded)); $('agentHistoryChevron').textContent = expanded ? '▲' : '▼'; if (expanded) refreshAgentHistory().catch(e => { el.innerHTML = '<div class="agent-err">History unavailable: ' + esc(dashboardSafeErrorMessage(e)) + '</div>'; }); }
 
 // -- Evolve -- //
 function evolveAction(id, action, body){
@@ -2459,7 +2450,7 @@ function promptEvolveArgs(item){
   });
   const value = prompt('Arguments JSON for ' + item.proposed_tool_name, JSON.stringify(example, null, 2));
   if (value === null) return null;
-  try { return JSON.parse(value || '{}'); } catch (e) { alert('Invalid JSON: ' + e.message); return null; }
+  try { return JSON.parse(value || '{}'); } catch (e) { alert('Invalid JSON: ' + dashboardSafeErrorMessage(e)); return null; }
 }
 
 function runEvolveTrial(id, index){
@@ -2667,7 +2658,7 @@ function loadComputeOverview(){
       metric('Routing rules', o.routing?.rulesCount || 0, (o.routing?.rulesCount ? 'custom placement active' : 'default placement'))
     ].join('');
   }).catch(e=>{
-    el.innerHTML = '<div class="quick-action-error">Compute overview unavailable: ' + esc(e.message || String(e)) + '</div>';
+    el.innerHTML = '<div class="quick-action-error">Compute overview unavailable: ' + esc(dashboardSafeErrorMessage(e)) + '</div>';
   });
 }
 
@@ -3000,7 +2991,7 @@ function createComputeEnrollment(){
       ).join('') + '</div>' +
       '<div class="sub">Expires ' + esc(fmtDate(d.expiresAt)) + '. Worker protocol ' + esc(d.install?.protocolVersion || '1') + '.</div>';
   }).catch(e=>{
-    result.innerHTML = '<div class="quick-action-error">Enrollment failed: ' + esc(e.message || String(e)) + '</div>';
+    result.innerHTML = '<div class="quick-action-error">Enrollment failed: ' + esc(dashboardSafeErrorMessage(e)) + '</div>';
   }).finally(()=>{
     computeEnrollmentPending = false;
   });
@@ -3025,7 +3016,7 @@ function computeWorkerAction(workerId, action){
     if (d.ok === false) throw new Error(d.error || action + ' failed');
     showToast('Worker ' + action + ' complete', 'success');
     loadCompute();
-  }).catch(e=>alert('Worker action failed: ' + (e.message || String(e))));
+  }).catch(e=>alert('Worker action failed: ' + dashboardSafeErrorMessage(e)));
 }
 
 function computeJobAction(jobId, action){
@@ -3042,7 +3033,7 @@ function computeJobAction(jobId, action){
     }
     loadCompute();
     showComputeJob(jobId);
-  }).catch(e=>alert('Job action failed: ' + (e.message || String(e))));
+  }).catch(e=>alert('Job action failed: ' + dashboardSafeErrorMessage(e)));
 }
 
 function recoverComputeJobs(){
@@ -3050,7 +3041,7 @@ function recoverComputeJobs(){
     if (d.ok === false) throw new Error(d.error || 'recovery failed');
     showToast('Recovered ' + (d.recovered || 0) + ' expired leases', 'success');
     loadCompute();
-  }).catch(e=>alert('Recovery failed: ' + (e.message || String(e))));
+  }).catch(e=>alert('Recovery failed: ' + dashboardSafeErrorMessage(e)));
 }
 
 // -- Predict -- //
@@ -3754,7 +3745,7 @@ function runQuery() {
       $('dbQueryResult').innerHTML = '<div class="database-error">' + esc(d.error) + '</div>';
     }
   }).catch(e => {
-    $('dbQueryResult').innerHTML = '<div class="database-error">' + esc(e.message) + '</div>';
+    $('dbQueryResult').innerHTML = '<div class="database-error">' + esc(dashboardSafeErrorMessage(e)) + '</div>';
   });
 }
 
@@ -3790,7 +3781,7 @@ function runDbSearch() {
       $('dbSearchResult').innerHTML = '<div class="agent-err">' + esc(d.error) + '</div>';
     }
   }).catch(e => {
-    $('dbSearchResult').innerHTML = '<div class="agent-err">' + esc(e.message) + '</div>';
+    $('dbSearchResult').innerHTML = '<div class="agent-err">' + esc(dashboardSafeErrorMessage(e)) + '</div>';
   });
 }
 
@@ -3818,7 +3809,7 @@ function createBackup() {
     } else {
       showToast('Backup failed: ' + d.error, 'error');
     }
-  }).catch(e => showToast('Backup failed: ' + e.message, 'error'));
+  }).catch(e => showToast('Backup failed: ' + dashboardSafeErrorMessage(e), 'error'));
 }
 
 function loadTools(){
@@ -4057,7 +4048,7 @@ async function loadBlackbox(){
     }
   } catch (error) {
     apiError('/api/blackbox/incidents', error);
-    list.innerHTML = '<div class="quick-action-error">Failed to load Black Box incidents: ' + esc(error.message) + '</div>';
+    list.innerHTML = '<div class="quick-action-error">Failed to load Black Box incidents: ' + esc(dashboardSafeErrorMessage(error)) + '</div>';
   }
 }
 
@@ -4101,7 +4092,7 @@ async function showBlackboxIncident(id){
     if (!data.incident) throw new Error(data.error || 'Incident not found');
     renderBlackboxDetail(data.incident);
   } catch (error) {
-    detail.innerHTML = '<div class="quick-action-error">' + esc(error.message) + '</div>';
+    detail.innerHTML = '<div class="quick-action-error">' + esc(dashboardSafeErrorMessage(error)) + '</div>';
   }
 }
 
@@ -4168,7 +4159,7 @@ async function loadBlackboxSources(captureId){
       + '<strong>' + esc(source.display_name) + '</strong><small>' + esc(source.category || 'Source') + ' · ' + esc(source.duration_ms || 0) + 'ms · exit ' + esc(source.exit_code === null ? 'n/a' : source.exit_code) + '</small>'
       + '<span>' + sourceBadges(source) + '</span></button>').join('');
   } catch (error) {
-    box.innerHTML = '<div class="quick-action-error">' + esc(error.message) + '</div>';
+    box.innerHTML = '<div class="quick-action-error">' + esc(dashboardSafeErrorMessage(error)) + '</div>';
   }
 }
 
@@ -4201,7 +4192,7 @@ async function openBlackboxSource(sourceId){
     if (existing) existing.remove();
     document.body.insertAdjacentHTML('beforeend', html);
   } catch (error) {
-    showToast(error.message, 'error');
+    showToast(dashboardSafeErrorMessage(error), 'error');
   }
 }
 
@@ -4238,7 +4229,7 @@ async function startBlackboxCapture(){
     selectedBlackboxIncident = cap.incident_id;
     await loadBlackbox();
   } catch (error) {
-    progress.innerHTML = '<div class="quick-action-error">' + esc(error.message) + '</div>';
+    progress.innerHTML = '<div class="quick-action-error">' + esc(dashboardSafeErrorMessage(error)) + '</div>';
   }
 }
 
@@ -4258,7 +4249,7 @@ async function retryBlackboxCapture(captureId, incidentId){
     selectedBlackboxIncident = cap.incident_id;
     await loadBlackbox();
   } catch (error) {
-    if (progress) progress.innerHTML = '<div class="quick-action-error">' + esc(error.message) + '</div>';
+    if (progress) progress.innerHTML = '<div class="quick-action-error">' + esc(dashboardSafeErrorMessage(error)) + '</div>';
   }
 }
 
@@ -4270,7 +4261,7 @@ async function analyzeBlackboxIncident(id){
     showToast('Analysis recorded with evidence citations', 'info');
     await showBlackboxIncident(id);
   } catch (error) {
-    showToast(error.message, 'error');
+    showToast(dashboardSafeErrorMessage(error), 'error');
   }
 }
 
@@ -4280,7 +4271,7 @@ async function pinBlackboxIncident(id){
     showToast('Incident pinned', 'info');
     await loadBlackbox();
   } catch (error) {
-    showToast(error.message, 'error');
+    showToast(dashboardSafeErrorMessage(error), 'error');
   }
 }
 
@@ -4293,7 +4284,7 @@ async function exportBlackboxIncident(id){
     if (existing) existing.remove();
     document.body.insertAdjacentHTML('beforeend', '<div class="tool-detail-overlay active"><div class="tool-detail"><h3>Export Preview</h3><div class="value-block is-long">' + esc(text) + '</div><div class="overlay-actions"><button class="btn btn-outline" data-dashboard-action="close-overlay">Close</button></div></div></div>');
   } catch (error) {
-    showToast(error.message, 'error');
+    showToast(dashboardSafeErrorMessage(error), 'error');
   }
 }
 
@@ -4405,7 +4396,7 @@ function loadWorkspaceOptions() {
     menu.hidden = !menu.hidden;
     button.setAttribute('aria-expanded', String(!menu.hidden));
     if (menu.hidden || menu.dataset.loaded) return;
-    try { await fetchProjects(); } catch (error) { menu.innerHTML = '<div class="view-state view-state-error">' + esc(error.message) + '</div>'; }
+    try { await fetchProjects(); } catch (error) { menu.innerHTML = '<div class="view-state view-state-error">' + esc(dashboardSafeErrorMessage(error)) + '</div>'; }
   });
   button.addEventListener('keydown', event => { if (event.key === 'ArrowDown' || event.key === 'Enter' || event.key === ' ') { event.preventDefault(); if (menu.hidden) button.click(); else menu.querySelector('[role="option"]')?.focus(); } });
   menu.addEventListener('keydown', event => { const options = [...menu.querySelectorAll('[role="option"]')]; if (!options.length) return; if (event.key === 'Escape') { event.preventDefault(); menu.hidden = true; button.setAttribute('aria-expanded', 'false'); button.focus(); } else if (['ArrowDown','ArrowUp','Home','End'].includes(event.key)) { event.preventDefault(); workspaceMenuFocus = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1 : Math.max(0, Math.min(options.length - 1, (document.activeElement === options[workspaceMenuFocus] ? workspaceMenuFocus : 0) + (event.key === 'ArrowUp' ? -1 : 1))); options[workspaceMenuFocus].focus(); } else if (event.key === 'Enter') { event.preventDefault(); document.activeElement.click(); } });
@@ -4483,7 +4474,7 @@ async function loadCapabilities() {
     renderAvailableCapabilities(data.available_bundled || []);
     $('capCount').textContent = (data.installed || []).length;
   } catch (error) {
-    capError(error.message);
+    capError(dashboardSafeErrorMessage(error));
   }
 }
 
@@ -4501,7 +4492,7 @@ async function loadNetworkScopes() {
     const scopes = data.scopes || [];
     $('networkScopeCount').textContent = scopes.length;
     $('networkScopeList').innerHTML = scopes.length ? scopes.map(renderNetworkScope).join('') : '<div class="sub">No named network scopes have been created.</div>';
-  } catch (error) { networkScopeError(error.message); }
+  } catch (error) { networkScopeError(dashboardSafeErrorMessage(error)); }
 }
 
 function renderNetworkScope(scope) {
@@ -4525,7 +4516,7 @@ async function createNetworkScope() {
     if (!data.ok) throw new Error(data.error || 'Failed to create network scope');
     $('networkScopeName').value = ''; $('networkScopePolicy').value = '';
     await loadNetworkScopes();
-  } catch (error) { networkScopeError(error.message); }
+  } catch (error) { networkScopeError(dashboardSafeErrorMessage(error)); }
 }
 
 async function setNetworkScopeState(scopeId, state) {
@@ -4535,7 +4526,7 @@ async function setNetworkScopeState(scopeId, state) {
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || 'Failed to update network scope state');
     await loadNetworkScopes();
-  } catch (error) { networkScopeError(error.message); }
+  } catch (error) { networkScopeError(dashboardSafeErrorMessage(error)); }
 }
 
 async function updateNetworkScope(scopeId) {
@@ -4547,7 +4538,7 @@ async function updateNetworkScope(scopeId) {
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || 'Failed to revise network scope');
     await loadNetworkScopes();
-  } catch (error) { networkScopeError(error.message); }
+  } catch (error) { networkScopeError(dashboardSafeErrorMessage(error)); }
 }
 
 function renderInstalledCapabilities(packs) {
@@ -4640,7 +4631,7 @@ async function capabilityPost(url, body, label) {
     await loadCapabilities();
     return data;
   } catch (error) {
-    capError(error.message);
+    capError(dashboardSafeErrorMessage(error));
     return null;
   }
 }
@@ -4716,8 +4707,8 @@ async function capabilityMaturity(name) {
     }
   } catch (error) {
     if (error.name === 'AbortError') return;
-    capError('maturity: ' + error.message);
-    if (el) el.textContent = 'Maturity error: ' + error.message;
+    capError('maturity: ' + dashboardSafeErrorMessage(error));
+    if (el) el.textContent = 'Maturity error: ' + dashboardSafeErrorMessage(error);
   } finally {
     if (capabilityMaturityRequests.get(name) === controller) {
       capabilityMaturityRequests.delete(name);
@@ -4736,7 +4727,7 @@ async function capabilityDoctor(name) {
       el.textContent = JSON.stringify(data.doctor || data, null, 2);
       el.classList.add('is-visible');
     }
-  } catch (error) { capError('diagnose: ' + error.message); }
+  } catch (error) { capError('diagnose: ' + dashboardSafeErrorMessage(error)); }
 }
 
 function capabilityUpgrade(name) {
@@ -4786,7 +4777,7 @@ async function showCapabilityInspection(body) {
     el.textContent = JSON.stringify(data.inspection, null, 2);
     el.style.display = 'block';
   } catch (error) {
-    capError(error.message);
+    capError(dashboardSafeErrorMessage(error));
     el.style.display = 'none';
   }
 }
@@ -4808,7 +4799,7 @@ async function loadHandoffs() {
         if (!result.ok || !body.ok || !body.projection) throw new Error(body.error || 'handoff receiver request failed');
         return { projection: body.projection };
       } catch (error) {
-        return { handoff, error: error.message || 'handoff receiver request failed' };
+        return { handoff, error: dashboardSafeErrorMessage(error) || 'handoff receiver request failed' };
       }
     }));
     const projections = results.filter(result => result.projection).map(result => result.projection);
@@ -4835,7 +4826,7 @@ async function loadHandoffs() {
         '</div>';
      }).join('') + (failures.length ? '<div class="card"><div class="empty">' + esc(String(failures.length)) + ' handoff receiver record' + (failures.length === 1 ? '' : 's') + ' could not be loaded. Refresh to retry.</div></div>' : '');
   } catch (error) {
-    status.textContent = 'Unable to load handoffs: ' + error.message;
+    status.textContent = 'Unable to load handoffs: ' + dashboardSafeErrorMessage(error);
     list.innerHTML = '<div class="card"><div class="empty">Handoff receiver data unavailable.</div></div>';
   }
 }

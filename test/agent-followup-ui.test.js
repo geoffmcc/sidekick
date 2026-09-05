@@ -111,7 +111,7 @@ ok("follow-up controls are accessible (labels / aria)", () => {
 ok("API errors render safely (escaped, not injected)", () => {
   const body = fnBody(clientJs, "submitFollowup");
   assert.match(body, /agent-err/, "errors render in the error style");
-  assert.match(body, /esc\(e\.message\)/, "error text is HTML-escaped");
+  assert.match(body, /esc\(dashboardSafeErrorMessage\(e\)\)/, "sanitized error text is HTML-escaped");
 });
 
 ok("old tasks without lineage still render (parent lineage is optional)", () => {

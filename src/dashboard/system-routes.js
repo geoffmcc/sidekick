@@ -10,6 +10,7 @@ function registerSystemRoutes({
   grafanaPort,
   grafanaConfigured,
   influxConfigured,
+  errorResponse,
 }) {
   app.get("/api/system", (req, res) => {
     try {
@@ -23,7 +24,7 @@ function registerSystemRoutes({
         load: snapshot.load,
       });
     } catch (error) {
-      res.json({ error: error.message });
+      return errorResponse(req, res, error, { status: 500, code: "service_unavailable", component: "system" });
     }
   });
 

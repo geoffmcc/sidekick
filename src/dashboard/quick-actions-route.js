@@ -2,7 +2,7 @@
 function registerQuickActionsRoute({
   app, startDashboardExecution, finishDashboardExecution, systemctlStatus, systemSnapshot,
   dbStore, auditLog, callDashboardTool, dashboardExecutionMetadata, authenticatedUser,
-  logError, fs, path, rootDir,
+  logError, fs, path, rootDir, errorResponse,
 }) {
   app.post("/api/quick-actions/:action", async (req, res) => {
     const action = req.params.action;
@@ -34,14 +34,15 @@ function registerQuickActionsRoute({
         const service = String(req.body?.service || "sidekick-mcp");
         if (!allowedServices.has(service)) {
           finishDashboardExecution(execution, "failed", { result_status: "invalid_request", error_category: "unsupported_service", result_summary: `Unsupported service: ${service}` });
-          return res.status(400).json({ ok: false, error: "Unsupported service" });
+          return errorResponse(req, res, null, { status: 400, code: "invalid_request", component: "service_logs", publicMessage: "Unsupported service" });
         }
         const result = await callDashboardTool("service", { action: "logs", service, lines: 40 }, dashboardExecutionMetadata(req, authenticatedUser(req) || "dashboard"));
         const text = result?.content?.[0]?.text || "";
         auditLog(req, "quick-action.service-logs", { service, ok: !result?.isError });
         if (result?.isError) {
-          finishDashboardExecution(execution, "failed", { result_status: result.code || "error", error_category: "service_logs", result_summary: text.slice(0, 200) });
-          return res.status(result.approvalRequired ? 202 : result.code === "policy_denied" ? 403 : 500).json({ ok: false, error: text || "service logs unavailable", approvalRequired: !!result.approvalRequired });
+          finishDashboardExecution(execution, "failed", { result_status: result.code || "error", error_category: "service_logs", result_summary: "service logs unavailable" });
+          if (result.approvalRequired) return errorResponse(req, res, null, { status: 202, code: "approval_required", component: "service_logs", extra: { approvalRequired: true } });
+          return errorResponse(req, res, null, { status: result.code === "policy_denied" ? 403 : 502, code: result.code === "policy_denied" ? "policy_denied" : "upstream_unavailable", component: "service_logs" });
         }
         finishDashboardExecution(execution, "completed", { result_status: "success", result_summary: `dashboard service logs returned for ${service}` });
         return res.json({ ok: true, action, result: { service, logs: text } });
@@ -51,8 +52,9 @@ function registerQuickActionsRoute({
         const text = result?.content?.[0]?.text || "";
         if (result?.isError) {
           auditLog(req, "quick-action.restart-agent", { ok: false, code: result.code || "error" });
-          finishDashboardExecution(execution, "failed", { result_status: result.code || "error", error_category: "service_restart", result_summary: text.slice(0, 200) });
-          return res.status(result.approvalRequired ? 202 : result.code === "policy_denied" ? 403 : 500).json({ ok: false, error: text || "restart refused", approvalRequired: !!result.approvalRequired });
+          finishDashboardExecution(execution, "failed", { result_status: result.code || "error", error_category: "service_restart", result_summary: "service restart unavailable" });
+          if (result.approvalRequired) return errorResponse(req, res, null, { status: 202, code: "approval_required", component: "service_restart", extra: { approvalRequired: true } });
+          return errorResponse(req, res, null, { status: result.code === "policy_denied" ? 403 : 502, code: result.code === "policy_denied" ? "policy_denied" : "upstream_unavailable", component: "service_restart" });
         }
         const status = systemctlStatus("sidekick-agent");
         auditLog(req, "quick-action.restart-agent", { status });
@@ -60,11 +62,10 @@ function registerQuickActionsRoute({
         return res.json({ ok: status === "active", action, result: { service: "sidekick-agent", status } });
       }
       finishDashboardExecution(execution, "failed", { result_status: "not_found", error_category: "unknown_action", result_summary: `Unknown quick action: ${action}` });
-      res.status(404).json({ ok: false, error: "Unknown quick action" });
+      return errorResponse(req, res, null, { status: 404, code: "not_found", component: "mission", publicMessage: "Unknown quick action" });
     } catch (error) {
-      finishDashboardExecution(execution, "failed", { result_status: "error", error_category: "dashboard_action_error", result_summary: error.message, reason: error.message });
-      logError(req.originalUrl, 500, error, "mission", req.headers["user-agent"]);
-      res.status(500).json({ ok: false, error: error.message });
+      finishDashboardExecution(execution, "failed", { result_status: "error", error_category: "dashboard_action_error", result_summary: "dashboard action failed", reason: "dashboard action failed" });
+      return errorResponse(req, res, error, { status: 500, code: "service_unavailable", component: "mission" });
     }
   });
 }

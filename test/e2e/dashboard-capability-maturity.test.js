@@ -133,8 +133,9 @@ test("real Dashboard API returns evidence-bound maturity states", async () => {
     });
     await maturityButton.click();
     await page.waitForFunction(() => document.querySelector("#capDetail-api-engineering")?.textContent.includes("Maturity error:"));
-    assert.match(await detail.textContent(), /sanitized maturity failure/);
-    assert.doesNotMatch(await page.locator("#capError").textContent(), new RegExp(`internal stack|${dashboardSecretKey}`));
+     assert.match(await detail.textContent(), /Dashboard request failed\./);
+     assert.doesNotMatch(await detail.textContent(), /sanitized maturity failure|internal stack|secret|token|password/i);
+     assert.doesNotMatch(await page.locator("#capError").textContent(), new RegExp(`internal stack|${dashboardSecretKey}`));
     await page.unroute(`**/api/capabilities/api-engineering/maturity`);
   } finally {
     await browser.close();

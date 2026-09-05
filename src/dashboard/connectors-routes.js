@@ -12,6 +12,7 @@ function registerConnectorRoutes({
   startDashboardExecution,
   finishDashboardExecution,
   auditLog,
+  errorResponse,
 }) {
   app.get("/api/connectors", (req, res) => {
     try {
@@ -30,7 +31,7 @@ function registerConnectorRoutes({
         },
       });
     } catch (error) {
-      res.status(400).json({ ok: false, error: error.message });
+      return errorResponse(req, res, error, { status: 500, code: "service_unavailable", component: "connectors" });
     }
   });
 
@@ -45,8 +46,8 @@ function registerConnectorRoutes({
       auditLog(req, "connector.register", { connector_id: connector.connector_id, name: connector.name, type: connector.type, actor });
       res.json({ ok: true, connector });
     } catch (error) {
-      finishDashboardExecution(execution, "failed", { result_status: "failure", error_category: "connector_registration", result_summary: error.message });
-      res.status(400).json({ ok: false, error: error.message });
+      finishDashboardExecution(execution, "failed", { result_status: "failure", error_category: "connector_registration", result_summary: "connector registration failed" });
+      return errorResponse(req, res, error, { status: 400, code: "invalid_request", component: "connectors" });
     }
   });
 
@@ -64,7 +65,13 @@ function registerConnectorRoutes({
       const recorded = platformKernel.recordConnectorHealth(connector.connector_id, health);
       res.status(recorded.ok ? 200 : 502).json({ ok: recorded.ok, connector_id: recorded.connector.connector_id, state: recorded.connector.state, health: recorded.health, last_health_check_at: recorded.connector.last_health_check_at, probe_execution: "adapter-owned" });
     } catch (error) {
-      res.status(502).json({ ok: false, connector_id: connector.connector_id, error: "connector_health_failed" });
+      return errorResponse(req, res, error, {
+        status: 502,
+        code: "upstream_unavailable",
+        component: "connectors",
+        publicMessage: "connector_health_failed",
+        extra: { connector_id: connector.connector_id, probe_execution: "adapter-owned" },
+      });
     }
   });
 
@@ -81,7 +88,7 @@ function registerConnectorRoutes({
       const connector = platformKernel.configureConnector(req.params.connectorId, { ...req.body, source: "dashboard" });
       auditLog(req, "connector.configure", { connector_id: connector.connector_id, actor, has_secret_ref: Boolean(connector.secret_ref) });
       res.json({ ok: true, connector });
-    } catch (error) { res.status(400).json({ ok: false, error: error.message }); }
+    } catch (error) { return errorResponse(req, res, error, { status: 400, code: "invalid_request", component: "connectors" }); }
   });
 
   app.post("/api/connectors/:connectorId/:action", (req, res) => {
@@ -94,7 +101,7 @@ function registerConnectorRoutes({
       const connector = platformKernel.transitionConnector(req.params.connectorId, nextState, { source: "dashboard", actor_id: actor });
       auditLog(req, `connector.${req.params.action}`, { connector_id: connector.connector_id, actor });
       res.json({ ok: true, connector });
-    } catch (error) { res.status(400).json({ ok: false, error: error.message }); }
+    } catch (error) { return errorResponse(req, res, error, { status: 400, code: "invalid_request", component: "connectors" }); }
   });
 }
 

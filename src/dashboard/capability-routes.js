@@ -1,6 +1,6 @@
 "use strict";
 
-function registerCapabilityRoutes({ app, capabilityAction, capabilityResult, callDashboardTool, dashboardExecutionMetadata, authenticatedUser, logError }) {
+function registerCapabilityRoutes({ app, capabilityAction, capabilityResult, callDashboardTool, dashboardExecutionMetadata, authenticatedUser, logError, errorResponse }) {
   app.get("/api/capabilities/catalog", (req, res) => capabilityAction(req, res, {
     action: "catalog",
     source: "dashboard",
@@ -67,10 +67,9 @@ function registerCapabilityRoutes({ app, capabilityAction, capabilityResult, cal
   app.get("/api/capabilities/:name/workflows", async (req, res) => {
     try {
       const result = await callDashboardTool("workflow", { action: "list", owner: req.params.name }, dashboardExecutionMetadata(req, authenticatedUser(req) || "dashboard"));
-      return capabilityResult(res, result);
+      return capabilityResult(res, result, { req, errorResponse, component: "workflow" });
     } catch (error) {
-      logError(req.originalUrl, 500, error, "capability", req.headers["user-agent"]);
-      return res.status(500).json({ ok: false, error: error.message });
+      return errorResponse(req, res, error, { status: 500, code: "service_unavailable", component: "workflow" });
     }
   });
 }

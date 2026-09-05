@@ -1,4 +1,4 @@
-function registerMemoryReadRoutes({ app, dbStore, memoryCategory }) {
+function registerMemoryReadRoutes({ app, dbStore, memoryCategory, errorResponse }) {
   app.get("/api/memories", (req, res) => {
     try {
       const { project, type, include_disabled, limit, query } = req.query;
@@ -27,26 +27,26 @@ function registerMemoryReadRoutes({ app, dbStore, memoryCategory }) {
         last_seen_at: m.last_seen_at,
       }));
       res.json({ ok: true, memories: formatted, count: formatted.length });
-    } catch (error) { res.json({ ok: false, error: error.message, memories: [] }); }
+    } catch (error) { errorResponse(req, res, error, { status: 500, code: "service_unavailable", component: "memories" }); }
   });
 
   app.get("/api/memories/projects", (req, res) => {
     try {
       const rows = dbStore.getDb().prepare("SELECT DISTINCT project FROM memories WHERE project IS NOT NULL AND project != '' AND enabled = 1 ORDER BY project").all();
       res.json({ ok: true, projects: rows.map(r => r.project) });
-    } catch (error) { res.json({ ok: false, error: error.message, projects: [] }); }
+    } catch (error) { errorResponse(req, res, error, { status: 500, code: "service_unavailable", component: "memories" }); }
   });
 
   app.get("/api/memories/types", (req, res) => {
     try {
       const rows = dbStore.getDb().prepare("SELECT DISTINCT type FROM memories ORDER BY type").all();
       res.json({ ok: true, types: rows.map(r => r.type) });
-    } catch (error) { res.json({ ok: false, error: error.message, types: [] }); }
+    } catch (error) { errorResponse(req, res, error, { status: 500, code: "service_unavailable", component: "memories" }); }
   });
 
   app.get("/api/memories/stats", (req, res) => {
     try { res.json({ ok: true, stats: dbStore.getMemoryIntelligenceStats() }); }
-    catch (error) { res.json({ ok: false, error: error.message, stats: null }); }
+    catch (error) { errorResponse(req, res, error, { status: 500, code: "service_unavailable", component: "memories" }); }
   });
 }
 
