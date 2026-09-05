@@ -1,8 +1,8 @@
 {
   "schema": "sidekick.compatibility-pack-inventory.v1",
   "source": "bundled pack manifests and repository files",
-  "source_commit": "7b6f700bc15a9c94576a0e0602ec10317231150a",
-  "source_commit_date": "2026-09-04T14:28:17-04:00",
+  "source_commit": "89659927c3814513f5d58736f9fbc4c508a71317",
+  "source_commit_date": "2026-09-04T23:45:29-04:00",
   "source_fingerprint": "sha256:84974ce7c331fe675fdf4850840eaa2eab853ae5da57368523ee1ea019c0bd78",
   "pack_count": 27,
   "packs": [
@@ -203,6 +203,7 @@
         "test/dashboard-capability-action.test.js",
         "test/pack-manifest-lifecycle.test.js",
         "test/pack-maturity.test.js",
+        "test/pack-proving-evidence.test.js",
         "test/proving-runner.test.js",
         "test/target-pack-buildout.test.js"
       ],
@@ -238,6 +239,7 @@
               "test/dashboard-capability-action.test.js",
               "test/pack-manifest-lifecycle.test.js",
               "test/pack-maturity.test.js",
+              "test/pack-proving-evidence.test.js",
               "test/proving-runner.test.js",
               "test/target-pack-buildout.test.js"
             ]
@@ -302,6 +304,7 @@
               "test/dashboard-capability-action.test.js",
               "test/pack-manifest-lifecycle.test.js",
               "test/pack-maturity.test.js",
+              "test/pack-proving-evidence.test.js",
               "test/proving-runner.test.js",
               "test/target-pack-buildout.test.js"
             ]
@@ -323,6 +326,7 @@
               "test/dashboard-capability-action.test.js",
               "test/pack-manifest-lifecycle.test.js",
               "test/pack-maturity.test.js",
+              "test/pack-proving-evidence.test.js",
               "test/proving-runner.test.js",
               "test/target-pack-buildout.test.js"
             ]
@@ -392,6 +396,7 @@
               "test/dashboard-capability-action.test.js",
               "test/pack-manifest-lifecycle.test.js",
               "test/pack-maturity.test.js",
+              "test/pack-proving-evidence.test.js",
               "test/proving-runner.test.js",
               "test/target-pack-buildout.test.js"
             ]
@@ -405,6 +410,7 @@
               "test/dashboard-api.test.js",
               "test/pack-manifest-lifecycle.test.js",
               "test/pack-maturity.test.js",
+              "test/pack-proving-evidence.test.js",
               "test/proving-runner.test.js",
               "test/target-pack-buildout.test.js"
             ]
@@ -457,6 +463,7 @@
             "test/dashboard-capability-action.test.js",
             "test/pack-manifest-lifecycle.test.js",
             "test/pack-maturity.test.js",
+            "test/pack-proving-evidence.test.js",
             "test/proving-runner.test.js",
             "test/target-pack-buildout.test.js"
           ]
@@ -15209,7 +15216,8 @@
       "current_tests": [
         "test/campaign-packs-6-10.test.js",
         "test/cross-pack-workflow-fixtures.test.js",
-        "test/pack-manifest-lifecycle.test.js"
+        "test/pack-manifest-lifecycle.test.js",
+        "test/scripts-quality-gates.test.js"
       ],
       "maturity_gaps": [
         "no stored fixture verification evidence",
@@ -15246,7 +15254,8 @@
             "status": "not_observed",
             "implemented": false,
             "evidence": [
-              "test/campaign-packs-6-10.test.js"
+              "test/campaign-packs-6-10.test.js",
+              "test/scripts-quality-gates.test.js"
             ]
           },
           "analysis": {
@@ -15283,7 +15292,8 @@
               "packs/testing-quality-engineering/workflows/quality-gate.json",
               "packs/testing-quality-engineering/workflows/quality-lifecycle.json",
               "test/campaign-packs-6-10.test.js",
-              "test/cross-pack-workflow-fixtures.test.js"
+              "test/cross-pack-workflow-fixtures.test.js",
+              "test/scripts-quality-gates.test.js"
             ]
           },
           "execution": {
@@ -15296,7 +15306,8 @@
               "packs/testing-quality-engineering/workflows/quality-lifecycle.json",
               "test/campaign-packs-6-10.test.js",
               "test/cross-pack-workflow-fixtures.test.js",
-              "test/pack-manifest-lifecycle.test.js"
+              "test/pack-manifest-lifecycle.test.js",
+              "test/scripts-quality-gates.test.js"
             ]
           },
           "verification": {
@@ -15312,7 +15323,8 @@
               "packs/testing-quality-engineering/workflows/quality-lifecycle.json",
               "test/campaign-packs-6-10.test.js",
               "test/cross-pack-workflow-fixtures.test.js",
-              "test/pack-manifest-lifecycle.test.js"
+              "test/pack-manifest-lifecycle.test.js",
+              "test/scripts-quality-gates.test.js"
             ]
           },
           "recovery": {
@@ -15320,7 +15332,8 @@
             "implemented": true,
             "evidence": [
               "packs/testing-quality-engineering/modules/testing-quality-tools/entry.js",
-              "packs/testing-quality-engineering/workflows/quality-lifecycle.json"
+              "packs/testing-quality-engineering/workflows/quality-lifecycle.json",
+              "test/scripts-quality-gates.test.js"
             ]
           },
           "health": {
@@ -15331,7 +15344,8 @@
               "packs/testing-quality-engineering/modules/testing-quality-tools/manifest.json",
               "test/campaign-packs-6-10.test.js",
               "test/cross-pack-workflow-fixtures.test.js",
-              "test/pack-manifest-lifecycle.test.js"
+              "test/pack-manifest-lifecycle.test.js",
+              "test/scripts-quality-gates.test.js"
             ]
           },
           "workflows": {
@@ -15352,7 +15366,8 @@
               "packs/testing-quality-engineering/modules/testing-quality-tools/entry.js",
               "packs/testing-quality-engineering/modules/testing-quality-tools/manifest.json",
               "packs/testing-quality-engineering/sidekick.pack.json",
-              "test/campaign-packs-6-10.test.js"
+              "test/campaign-packs-6-10.test.js",
+              "test/scripts-quality-gates.test.js"
             ]
           },
           "security": {
@@ -15365,7 +15380,8 @@
               "packs/testing-quality-engineering/workflows/negative-verification.json",
               "test/campaign-packs-6-10.test.js",
               "test/cross-pack-workflow-fixtures.test.js",
-              "test/pack-manifest-lifecycle.test.js"
+              "test/pack-manifest-lifecycle.test.js",
+              "test/scripts-quality-gates.test.js"
             ]
           },
           "fixtures": {
@@ -15374,7 +15390,8 @@
             "evidence": [
               "test/campaign-packs-6-10.test.js",
               "test/cross-pack-workflow-fixtures.test.js",
-              "test/pack-manifest-lifecycle.test.js"
+              "test/pack-manifest-lifecycle.test.js",
+              "test/scripts-quality-gates.test.js"
             ]
           },
           "docs": {
@@ -15421,7 +15438,8 @@
             "packs/testing-quality-engineering/workflows/quality-lifecycle.json",
             "test/campaign-packs-6-10.test.js",
             "test/cross-pack-workflow-fixtures.test.js",
-            "test/pack-manifest-lifecycle.test.js"
+            "test/pack-manifest-lifecycle.test.js",
+            "test/scripts-quality-gates.test.js"
           ]
         },
         "weaknesses": [

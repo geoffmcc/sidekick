@@ -262,22 +262,35 @@ function verifyEvidenceReferences(record, references) {
   }
   const refs = [];
   const reasons = [];
+  const usedEvidence = new Map();
   for (const reference of references) {
     if (!reference || typeof reference !== "object" || !["receipt", "workflow", "execution"].includes(reference.type) || typeof reference.id !== "string" || reference.id.length > 256 || !["canonical_dispatch", "agent_discovery", "workflow", "single_pack", "cross_pack", "skeptical_verification", "provider_integration"].includes(reference.role)) {
       reasons.push("malformed evidence reference");
       continue;
     }
+    const evidenceKey = `${reference.type}:${reference.id}`;
+    const previousRole = usedEvidence.get(evidenceKey);
+    if (previousRole && previousRole !== reference.role) {
+      reasons.push(`${evidenceKey} cannot support multiple verification roles (${previousRole}, ${reference.role})`);
+      continue;
+    }
+    usedEvidence.set(evidenceKey, reference.role);
     if (reference.type === "receipt") {
       const row = db.prepare("SELECT receipt_id, task_id, capability, capability_version, dispatch_state, outcome_state, project_ref, principal_ref, updated_at FROM agent_operation_receipts WHERE receipt_id = ?").get(reference.id);
       if (!row) { reasons.push(`receipt ${reference.id} does not exist`); continue; }
       if (!["finalized", "verified"].includes(row.outcome_state)) { reasons.push(`receipt ${reference.id} is not terminal`); continue; }
       if (!allowedTools.has(String(row.capability).replace(/^sidekick_/, ""))) { reasons.push(`receipt ${reference.id} used a tool outside pack ownership`); continue; }
       refs.push({ type: "receipt", id: row.receipt_id, role: reference.role, task_id: row.task_id, capability: row.capability, capability_version: row.capability_version, project_ref: row.project_ref, principal_ref: row.principal_ref, observed_at: row.updated_at });
-    } else {
+    } else if (reference.type === "workflow") {
       const row = db.prepare("SELECT name, state, updated_at FROM platform_workflows WHERE workflow_id = ?").get(reference.id);
       if (!row) { reasons.push(`${reference.type} ${reference.id} does not exist`); continue; }
       if (row.state !== "completed") { reasons.push(`${reference.type} ${reference.id} is not completed`); continue; }
       refs.push({ type: reference.type, id: reference.id, role: reference.role, name: row.name, observed_at: row.updated_at });
+    } else {
+      const row = db.prepare("SELECT execution_id, state, project_id, actor_principal_id, updated_at FROM platform_executions WHERE execution_id = ?").get(reference.id);
+      if (!row) { reasons.push(`${reference.type} ${reference.id} does not exist`); continue; }
+      if (row.state !== "completed") { reasons.push(`${reference.type} ${reference.id} is not completed`); continue; }
+      refs.push({ type: reference.type, id: row.execution_id, role: reference.role, project_ref: row.project_id, principal_ref: row.actor_principal_id, observed_at: row.updated_at });
     }
   }
   const configFingerprint = crypto.createHash("sha256").update(JSON.stringify(record.config || {})).digest("hex");

@@ -4,7 +4,7 @@
   "tier": "e2e",
   "criticality": "required",
   "resources": ["subprocess"],
-  "resource_scopes": {"subprocess": "shared"},
+  "resource_contracts": {"subprocess": {"kind": "shared", "provisioner": "test-fixture", "fixture": "subprocess", "cleanup_owner": "runner", "lock_identity": "subprocess", "supported_platforms": ["linux", "win32", "darwin"]}},
   "timeout_ms": 300000,
   "platforms": ["linux", "win32", "darwin"],
   "live": false,

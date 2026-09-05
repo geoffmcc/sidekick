@@ -39,6 +39,11 @@ function activeDelegation(delegationId, delegatePrincipalId) {
   if (!delegationId) return null;
   const row = dbStore.getDb().prepare(`SELECT * FROM identity_delegations WHERE delegation_id = ? AND delegate_principal_id = ? AND revoked_at IS NULL`).get(delegationId, delegatePrincipalId);
   if (!row || (row.expires_at && row.expires_at <= now())) return null;
+  // Delegated authority cannot outlive the delegator's current identity state.
+  // Re-check it at authorization time so disabling a delegator takes effect
+  // without requiring every delegation row to be rewritten.
+  const delegator = identity.getPrincipal(row.delegator_principal_id);
+  if (!delegator?.enabled) return null;
   return { ...row, permissions: parseJson(row.permissions_json, []) };
 }
 

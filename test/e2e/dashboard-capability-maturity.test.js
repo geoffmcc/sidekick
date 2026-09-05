@@ -7,7 +7,7 @@ const os = require("node:os");
 const path = require("node:path");
 const fs = require("node:fs/promises");
 const { spawn } = require("node:child_process");
-const { test, after } = require("node:test");
+const { test, before, after } = require("node:test");
 const { chromium } = require("playwright-core");
 const { browserConfig } = require("../../src/browser/config");
 const browserDriver = require("../../src/browser/driver");
@@ -38,21 +38,44 @@ function freePort() {
   });
 }
 
-function request(method, requestPath, body) {
+function request(method, requestPath, body, authenticated = true) {
   return new Promise((resolve, reject) => {
-    const req = http.request({ hostname: "127.0.0.1", port, path: requestPath, method, headers: {
-      Authorization: `Basic ${Buffer.from(`e2e-user:${dashboardPassword}`).toString("base64")}`,
+    const headers = {
       "Content-Type": "application/json",
-    } }, response => {
+    };
+    if (authenticated) headers.Authorization = `Basic ${Buffer.from(`e2e-user:${dashboardPassword}`).toString("base64")}`;
+    const req = http.request({ hostname: "127.0.0.1", port, path: requestPath, method, headers }, response => {
       let text = "";
       response.setEncoding("utf8");
       response.on("data", chunk => { text += chunk; });
-      response.on("end", () => resolve({ status: response.statusCode, body: JSON.parse(text) }));
+      response.on("end", () => {
+        let body = text;
+        try { body = JSON.parse(text); } catch {}
+        resolve({ status: response.statusCode, body });
+      });
     });
     req.on("error", reject);
     if (body) req.end(JSON.stringify(body)); else req.end();
   });
 }
+
+async function startDashboard() {
+  port = await freePort();
+  dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "sidekick-e2e-"));
+  child = spawn(process.execPath, ["src/dashboard.js"], {
+    cwd: root,
+    env: { ...process.env, NODE_ENV: "test", SIDEKICK_DATA_DIR: dataDir, SIDEKICK_DB_FILE: path.join(dataDir, "sidekick.db"), SIDEKICK_DASHBOARD_PORT: String(port), SIDEKICK_DASHBOARD_USER: "e2e-user", SIDEKICK_DASHBOARD_PASS: dashboardPassword, SIDEKICK_API_KEY: mcpApiKey, SIDEKICK_TOOL_POLICY: "open", SIDEKICK_APPROVAL_MODE: "off", SIDEKICK_SECRET_KEY: dashboardSecretKey },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", chunk => { childStdout = bounded(childStdout + chunk); });
+  child.stderr.on("data", chunk => { childStderr = bounded(childStderr + chunk); });
+  child.once("exit", code => { childExit = code; });
+  await waitForDashboard();
+}
+
+before(startDashboard);
 
 async function waitForDashboard() {
   const deadline = Date.now() + 30000;
@@ -68,19 +91,6 @@ async function waitForDashboard() {
 }
 
 test("real Dashboard API returns evidence-bound maturity states", async () => {
-  port = await freePort();
-  dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "sidekick-e2e-"));
-  child = spawn(process.execPath, ["src/dashboard.js"], {
-    cwd: root,
-    env: { ...process.env, NODE_ENV: "test", SIDEKICK_DATA_DIR: dataDir, SIDEKICK_DB_FILE: path.join(dataDir, "sidekick.db"), SIDEKICK_DASHBOARD_PORT: String(port), SIDEKICK_DASHBOARD_USER: "e2e-user", SIDEKICK_DASHBOARD_PASS: dashboardPassword, SIDEKICK_API_KEY: mcpApiKey, SIDEKICK_TOOL_POLICY: "open", SIDEKICK_APPROVAL_MODE: "off", SIDEKICK_SECRET_KEY: dashboardSecretKey },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  child.stdout.setEncoding("utf8");
-  child.stderr.setEncoding("utf8");
-  child.stdout.on("data", chunk => { childStdout = bounded(childStdout + chunk); });
-  child.stderr.on("data", chunk => { childStderr = bounded(childStderr + chunk); });
-  child.once("exit", code => { childExit = code; });
-  await waitForDashboard();
   const installed = await request("POST", "/api/capabilities/install", { name: "api-engineering", enable: true });
   assert.equal(installed.status, 200, JSON.stringify(installed.body));
   const maturity = await request("GET", "/api/capabilities/api-engineering/maturity");
@@ -132,6 +142,31 @@ test("real Dashboard API returns evidence-bound maturity states", async () => {
   const unknown = await request("GET", "/api/capabilities/does-not-exist/maturity");
   assert.equal(unknown.status, 400);
   assert.notEqual(unknown.body.error, "maturity unavailable");
+});
+
+test("real Dashboard authentication protects API and shell boundaries", async () => {
+  const unauthenticatedApi = await request("GET", "/api/capabilities", null, false);
+  assert.equal(unauthenticatedApi.status, 401);
+  const unauthenticatedShell = await request("GET", "/", null, false);
+  assert.equal(unauthenticatedShell.status, 401);
+
+  const config = await request("GET", "/api/config");
+  assert.equal(config.status, 200);
+  const serialized = JSON.stringify(config.body);
+  assert.doesNotMatch(serialized, new RegExp(`${dashboardPassword}|${mcpApiKey}|${dashboardSecretKey}`));
+});
+
+test("real Dashboard capability catalog and health expose bounded production state", async () => {
+  const catalog = await request("GET", "/api/capabilities/catalog?limit=5");
+  assert.equal(catalog.status, 200, JSON.stringify(catalog.body));
+  assert.equal(catalog.body.ok, true);
+  assert.ok(Array.isArray(catalog.body.entries), JSON.stringify(catalog.body));
+  assert.ok(catalog.body.entries.length <= 5);
+
+  const health = await request("GET", "/api/capabilities/api-engineering/health");
+  assert.equal(health.status, 200, JSON.stringify(health.body));
+  assert.equal(health.body.ok, true);
+  assert.ok(health.body.health || health.body.result || health.body.capability);
 });
 
 after(async () => {

@@ -1,128 +1,232 @@
 #!/usr/bin/env node
 "use strict";
 
-// Small, deterministic mutation runner. Mutants are always applied to a
-// disposable source copy; the authoritative checkout is never modified.
+// Deterministic mutation runner. Inventory entries describe AST-located source
+// regions, not arbitrary file-wide substitutions. Mutants and test runs live in
+// disposable copies; the authoritative checkout is never modified.
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const crypto = require("node:crypto");
 const { spawnSync } = require("node:child_process");
+const Parser = require("tree-sitter");
+const JavaScript = require("tree-sitter-javascript");
 
 const root = path.resolve(__dirname, "..");
 const reportDir = path.join(root, "artifacts");
+const policyPath = path.join(root, "docs", "mutation-policy.json");
+const parser = new Parser();
+parser.setLanguage(JavaScript);
+
+// This is the maintained inventory. Each operator is resolved against a
+// concrete syntax node and an exact node/parent expression before editing.
 const targetedSpecs = [
-  { file: "src/core/project-identity.js", tests: ["test/project-identity.test.js", "test/identity-authorization.test.js"], pattern: [
-    { name: "canonical-case-change", from: ".toLowerCase()", to: ".toUpperCase()", security: true },
-    { name: "separator-validation-removal", from: ".replace(/[^a-z0-9_]+/g, \"_\")", to: ".replace(/[^a-z0-9_]+/g, \"\")", security: true },
+  { id: "project-identity", group: "identity", file: "src/core/project-identity.js", tests: ["test/project-identity.test.js", "test/identity-authorization.test.js"], pattern: [
+    { id: "canonical-case-change", name: "canonical-case-change", category: "normalization", kind: "region", expression: "String(name == null ? \"\" : name)", contains: "String(name == null ? \"\" : name)", within: ".toLowerCase()", replacement: ".toUpperCase()", security: true },
+    { id: "separator-validation-removal", name: "separator-validation-removal", category: "normalization", kind: "region", expression: ".replace(/[^a-z0-9_]+/g, \"_\")", contains: ".replace(/[^a-z0-9_]+/g, \"_\")", within: "\"_\"", replacement: "\"\"", security: true },
   ] },
-  { file: "src/tools/path-policy.js", tests: ["test/tools.test.js"], pattern: [
-    { name: "allowlist-gate-removal", from: "if (allowedEntries.length > 0) {", to: "if (false && allowedEntries.length > 0) {", security: true },
+  { id: "path-policy", group: "path-policy", file: "src/tools/path-policy.js", tests: ["test/path-policy.test.cjs"], pattern: [
+    { id: "allowlist-gate-removal", name: "allowlist-gate-removal", category: "authorization", kind: "condition", expression: "allowedEntries.length > 0", replacement: "false", security: true },
   ] },
-  { file: "src/tools/result.js", tests: ["test/tool-result-structure.test.js", "test/sensitive-result-boundary.test.js"], pattern: [
-    { name: "partial-status-removal", from: "status === \"succeeded\" || status === \"partial\"", to: "status === \"succeeded\" && status === \"partial\"", security: true },
-    { name: "result-bound-change", from: "warnings: Array.isArray(value.warnings) ? value.warnings.slice(0, 50)", to: "warnings: Array.isArray(value.warnings) ? value.warnings.slice(0, 51)", security: true },
+  { id: "result-contract", group: "result-contract", file: "src/tools/result.js", tests: ["test/tool-result-structure.test.js", "test/sensitive-result-boundary.test.js"], pattern: [
+    { id: "partial-status-removal", name: "partial-status-removal", category: "boolean", kind: "operator", expression: "status === \"succeeded\" || status === \"partial\"", operator: "||", replacement: "&&", security: true },
+    { id: "result-bound-change", name: "result-bound-change", category: "collection-bound", kind: "literal", expression: "50", parent: "value.warnings.slice(0, 50)", replacement: "51", security: true },
   ] },
-  { file: "src/packs/maturity.js", tests: ["test/pack-maturity.test.js"], pattern: [
-    { name: "freshness-negation", from: "now - observed >= 0 && now - observed <= MAX_EVIDENCE_AGE_MS", to: "now - observed >= 0 && now - observed > MAX_EVIDENCE_AGE_MS" },
-    { name: "health-gate-removal", from: "record.state === \"enabled\" && health.ok === true && health.status === \"healthy\"", to: "record.state === \"enabled\" || health.ok === true || health.status === \"healthy\"" },
+  { id: "pack-maturity", group: "maturity", file: "src/packs/maturity.js", tests: ["test/pack-maturity.test.js"], pattern: [
+    { id: "freshness-negation", name: "freshness-negation", category: "comparison", kind: "operator", expression: "now - observed <= MAX_EVIDENCE_AGE_MS", operator: "<=", replacement: ">", security: false },
+    { id: "health-gate-removal", name: "health-gate-removal", category: "boolean", kind: "operator", expression: "record.state === \"enabled\" && health.ok === true && health.status === \"healthy\"", operator: "&&", replacement: "||", security: false },
   ] },
 ];
 
-// The full inventory deliberately adds boundary mutations rather than merely
-// changing the label or rerunning the targeted inventory.
 const fullSpecs = [
-  { file: "src/core/authorization.js", tests: ["test/identity-authorization.test.js", "test/security-phase-03-auth-authorization.test.js"], pattern: [
-    { name: "disabled-principal-gate-removal", from: "if (!principal.enabled) return { ok: false, code: \"principal-disabled\", permissions: new Set() };", to: "if (false) return { ok: false, code: \"principal-disabled\", permissions: new Set() };", security: true },
+  { id: "authorization", group: "authorization", file: "src/core/authorization.js", tests: ["test/identity-authorization.test.js", "test/security-phase-03-auth-authorization.test.js"], pattern: [
+    { id: "disabled-principal-gate-removal", name: "disabled-principal-gate-removal", category: "authorization", kind: "condition", expression: "!principal.enabled", replacement: "false", security: true },
+    { id: "credential-scope-operator", name: "credential-scope-operator", category: "authorization", kind: "operator", expression: "!scopes.has(\"*\") && !scopes.has(permission)", operator: "&&", replacement: "||", security: true },
   ] },
-  { file: "src/tools/result.js", tests: ["test/tool-result-structure.test.js", "test/sensitive-result-boundary.test.js"], pattern: [
-    { name: "result-bound-shrink", from: "warnings: Array.isArray(value.warnings) ? value.warnings.slice(0, 50)", to: "warnings: Array.isArray(value.warnings) ? value.warnings.slice(0, 49)", security: true },
+  { id: "path-policy-boundaries", group: "path-policy", file: "src/tools/path-policy.js", tests: ["test/path-policy.test.cjs"], pattern: [
+    { id: "path-open-gate", name: "path-open-gate", category: "authorization", kind: "operator", expression: "deniedEntries.length === 0 && allowedEntries.length === 0", operator: "&&", replacement: "||", security: true },
+    { id: "canonical-resolution-fail-open", name: "canonical-resolution-fail-open", category: "fail-closed", kind: "condition", expression: "canonicalTarget.error", replacement: "false", security: true },
+  ] },
+  { id: "result-contract-boundaries", group: "result-contract", file: "src/tools/result.js", tests: ["test/tool-result-structure.test.js", "test/sensitive-result-boundary.test.js"], pattern: [
+    { id: "evidence-bound-change", name: "evidence-bound-change", category: "collection-bound", kind: "literal", expression: "100", parent: "metadata.evidence_refs.slice(0, 100)", replacement: "101", security: true },
+    { id: "limitations-bound-change", name: "limitations-bound-change", category: "collection-bound", kind: "literal", expression: "50", parent: "metadata.limitations.slice(0, 50)", replacement: "51", security: true },
+  ] },
+  { id: "maturity-expiry", group: "maturity", file: "src/packs/maturity.js", tests: ["test/pack-maturity.test.js"], pattern: [
+    { id: "expiry-comparison", name: "expiry-comparison", category: "comparison", kind: "operator", expression: "now <= expires", operator: "<=", replacement: ">", security: false },
   ] },
 ];
 
-function getSpecs(mode = process.env.SIDEKICK_MUTATION_FULL === "1" ? "full" : "targeted") {
+function loadPolicy() {
+  return JSON.parse(fs.readFileSync(policyPath, "utf8"));
+}
+
+function getSpecs(mode = process.env.SIDEKICK_MUTATION_MODE || (process.env.SIDEKICK_MUTATION_FULL === "1" ? "full" : "targeted")) {
   return mode === "full" ? [...targetedSpecs, ...fullSpecs] : targetedSpecs;
 }
 
-function copySource(destination) {
-  fs.cpSync(root, destination, {
-    recursive: true,
-    filter(source) {
-      const relative = path.relative(root, source);
-      return relative !== ".git" && relative !== "node_modules" && !relative.startsWith("artifacts") && !relative.startsWith("data") && !relative.startsWith("test/test-");
-    },
-  });
+function walk(node, visit) {
+  visit(node);
+  for (const child of node.namedChildren || []) walk(child, visit);
 }
 
-function runMutant(spec, mutation, destination) {
+function nodeSource(source, node) { return source.slice(node.startIndex, node.endIndex); }
+
+function replaceOnce(source, start, end, expected, replacement) {
+  const current = source.slice(start, end);
+  const offset = current.indexOf(expected);
+  if (offset < 0) return null;
+  return { source: source.slice(0, start + offset) + replacement + source.slice(start + offset + expected.length), start: start + offset };
+}
+
+function applyMutation(source, mutation) {
+  const tree = parser.parse(source);
+  if (tree.rootNode.hasError) return { status: "invalid_baseline", reason: "source does not parse" };
+  const matches = [];
+  walk(tree.rootNode, node => {
+    const text = nodeSource(source, node);
+    if (mutation.kind === "condition" && node.type === "if_statement" && node.childForFieldName("condition")) {
+      const condition = node.childForFieldName("condition");
+      const conditionText = nodeSource(source, condition).replace(/^\((.*)\)$/, "$1");
+      if (conditionText === mutation.expression) matches.push(condition);
+    }
+    if (mutation.kind === "operator" && text === mutation.expression) matches.push(node);
+    if (mutation.kind === "region" && mutation.contains && text.includes(mutation.contains)) matches.push(node);
+    if (mutation.kind === "literal" && text === mutation.expression) {
+      let parent = node.parent;
+      while (parent) {
+        if (nodeSource(source, parent) === mutation.parent) { matches.push(node); break; }
+        parent = parent.parent;
+      }
+    }
+  });
+  if (mutation.kind === "region" && matches.length > 1) {
+    const eligible = matches.filter(node => nodeSource(source, node).includes(mutation.within));
+    if (eligible.length) matches.splice(0, matches.length, ...eligible);
+    const shortest = Math.min(...matches.map(node => node.endIndex - node.startIndex));
+    const narrowed = matches.filter(node => node.endIndex - node.startIndex === shortest);
+    matches.splice(0, matches.length, ...narrowed);
+  }
+  if (matches.length !== 1) return { status: "missing_target", reason: `expected one AST target, found ${matches.length}` };
+  const node = matches[0];
+  let edit;
+  if (mutation.kind === "condition") {
+    const conditionText = nodeSource(source, node);
+    const replacement = conditionText.startsWith("(") ? `(${mutation.replacement})` : `(${mutation.replacement})`;
+    edit = { source: source.slice(0, node.startIndex) + replacement + source.slice(node.endIndex), start: node.startIndex };
+  }
+  else if (mutation.kind === "operator") edit = replaceOnce(source, node.startIndex, node.endIndex, mutation.operator, mutation.replacement);
+  else if (mutation.kind === "region") edit = replaceOnce(source, node.startIndex, node.endIndex, mutation.within, mutation.replacement);
+  else if (mutation.kind === "literal") edit = { source: source.slice(0, node.startIndex) + mutation.replacement + source.slice(node.endIndex), start: node.startIndex };
+  if (!edit) return { status: "missing_target", reason: "operator target not found" };
+  const mutatedTree = parser.parse(edit.source);
+  if (mutatedTree.rootNode.hasError) return { status: "syntax_error", reason: "mutated source does not parse" };
+  return { status: "applied", source: edit.source, line: source.slice(0, edit.start).split("\n").length };
+}
+
+function copySource(destination) {
+  fs.cpSync(root, destination, { recursive: true, filter(source) {
+    const relative = path.relative(root, source);
+    return relative !== ".git" && relative !== "node_modules" && !relative.startsWith("artifacts") && !relative.startsWith("data") && !relative.startsWith("test/test-");
+  } });
+}
+
+function digest(text) { return crypto.createHash("sha256").update(String(text || "")).digest("hex"); }
+function bounded(text, limit) { return String(text || "").slice(0, limit); }
+
+function executeTests(tests, cwd, policy) {
+  const result = spawnSync(process.execPath, ["test/run-all.js", ...tests], {
+    cwd,
+    env: { ...process.env, NODE_PATH: path.join(root, "node_modules"), NODE_ENV: "test", SIDEKICK_TEST_OVERALL_TIMEOUT_MS: String(policy.execution.overall_timeout_ms) },
+    encoding: "utf8",
+    timeout: policy.execution.process_timeout_ms,
+    maxBuffer: policy.output.max_bytes,
+  });
+  const output = `${result.stdout || ""}\n${result.stderr || ""}`;
+  return { result, output, output_digest: digest(output), output_excerpt: bounded(output, policy.output.max_chars) };
+}
+
+function classifyMutant(execution) {
+  if (execution.result.error) return { status: "infrastructure_error", reason: execution.result.error.code || execution.result.error.message };
+  if (execution.result.signal) return { status: "timeout", reason: execution.result.signal };
+  if (execution.output.includes("SyntaxError") || execution.output.includes("ERR_PARSE")) return { status: "syntax_error" };
+  if (execution.output.includes("ERR_MODULE_NOT_FOUND") || execution.output.includes("Could not find") || execution.output.includes("No test files found")) return { status: "infrastructure_error" };
+  return { status: execution.result.status === 0 ? "survived" : "assertion_killed" };
+}
+
+function runMutant(spec, mutation, destination, policy) {
   const file = path.join(destination, spec.file);
   const original = fs.readFileSync(file, "utf8");
-  if (!original.includes(mutation.from)) return { status: "uncovered", reason: "mutation pattern not present" };
-  const line = original.slice(0, original.indexOf(mutation.from)).split("\n").length;
-  fs.writeFileSync(file, original.replace(mutation.from, mutation.to));
-  const result = spawnSync(process.execPath, ["test/run-all.js", ...spec.tests], {
-    cwd: destination,
-    env: { ...process.env, NODE_PATH: path.join(root, "node_modules"), NODE_ENV: "test", SIDEKICK_TEST_OVERALL_TIMEOUT_MS: "120000" },
-    encoding: "utf8",
-    timeout: 150000,
-  });
-  return { status: result.status === 0 ? "survived" : result.signal ? "timeout" : "killed", line, exit_code: result.status, signal: result.signal };
+  const applied = applyMutation(original, mutation);
+  if (applied.status !== "applied") return applied;
+  fs.writeFileSync(file, applied.source);
+  const execution = executeTests(spec.tests, destination, policy);
+  return { ...classifyMutant(execution), line: applied.line, exit_code: execution.result.status, signal: execution.result.signal || null, output_digest: execution.output_digest, output_excerpt: execution.output_excerpt };
 }
 
-function buildReport(results, mode) {
-  const attempted = results.filter(item => item.status !== "uncovered").length;
-  const killed = results.filter(item => item.status === "killed").length;
-  const securityResults = results.filter(item => item.security);
-  const securityAttempted = securityResults.filter(item => item.status !== "uncovered").length;
-  const securityKilled = securityResults.filter(item => item.status === "killed").length;
-  const securityScore = securityAttempted ? Number((securityKilled / securityAttempted * 100).toFixed(2)) : 0;
+function buildReport(results, mode, policy = loadPolicy(), baselines = {}) {
+  const normalized = results.map(item => ({ ...item, status: item.status === "killed" ? "assertion_killed" : item.status }));
+  const attempted = normalized.filter(item => ["assertion_killed", "survived", "timeout", "syntax_error", "infrastructure_error"].includes(item.status)).length;
+  const killed = normalized.filter(item => item.status === "assertion_killed").length;
+  const securityResults = normalized.filter(item => item.security);
+  const securityAttempted = securityResults.filter(item => item.status !== "missing_target").length;
+  const securityKilled = securityResults.filter(item => item.status === "assertion_killed").length;
+  const score = (count, total) => total ? Number((count / total * 100).toFixed(2)) : 0;
+  const categories = Object.fromEntries([...new Set(normalized.map(item => item.category).filter(Boolean))].map(category => [category, normalized.filter(item => item.category === category).length]));
+  const groups = Object.fromEntries([...new Set(normalized.map(item => item.group).filter(Boolean))].map(group => {
+    const entries = normalized.filter(item => item.group === group);
+    return [group, { total: entries.length, killed: entries.filter(item => item.status === "assertion_killed").length, missing_targets: entries.filter(item => item.status === "missing_target").length, survivors: entries.filter(item => item.status === "survived").length }];
+  }));
   return {
-    version: 3,
-    mode,
-    inventory: { targeted: targetedSpecs.length, full: targetedSpecs.length + fullSpecs.length },
-    attempted,
-    killed,
-    survived: results.filter(item => item.status === "survived").length,
-    timed_out: results.filter(item => item.status === "timeout").length,
-    uncovered: results.filter(item => item.status === "uncovered").length,
-    mutation_score: attempted ? Number((killed / attempted * 100).toFixed(2)) : 0,
-    threshold: 60,
-    security_attempted: securityAttempted,
-    security_killed: securityKilled,
-    security_survived: securityResults.filter(item => item.status === "survived").length,
-    security_timed_out: securityResults.filter(item => item.status === "timeout").length,
-    security_uncovered: securityResults.filter(item => item.status === "uncovered").length,
-    security_score: securityScore,
-    security_threshold: 60,
-    surviving_mutations: results.filter(item => item.status === "survived"),
-    results,
-    reproduction: "SIDEKICK_MUTATION_FULL=1 npm run test:mutation",
+    version: policy.version, mode, inventory: { targeted: targetedSpecs.reduce((n, spec) => n + spec.pattern.length, 0), full: getSpecs("full").reduce((n, spec) => n + spec.pattern.length, 0) },
+    attempted, killed, survived: normalized.filter(item => item.status === "survived").length, timed_out: normalized.filter(item => item.status === "timeout").length,
+    syntax_errors: normalized.filter(item => item.status === "syntax_error").length, infrastructure_errors: normalized.filter(item => item.status === "infrastructure_error").length,
+    missing_targets: normalized.filter(item => item.status === "missing_target").length, invalid_baselines: normalized.filter(item => item.status === "invalid_baseline").length,
+    mutation_score: score(killed, attempted), threshold: policy.thresholds.overall_percent,
+    security_attempted: securityAttempted, security_killed: securityKilled, security_survived: securityResults.filter(item => item.status === "survived").length,
+    security_timed_out: securityResults.filter(item => item.status === "timeout").length, security_missing_targets: securityResults.filter(item => item.status === "missing_target").length,
+    security_score: score(securityKilled, securityAttempted), security_threshold: policy.thresholds.security_percent, groups, categories, baselines,
+    surviving_mutations: normalized.filter(item => item.status === "survived"), results: normalized,
+    reproduction: `SIDEKICK_MUTATION_MODE=${mode} npm run test:mutation`,
   };
 }
 
-function shouldFail(report) {
-  return !report.attempted || report.mutation_score < report.threshold || report.timed_out
-    || !report.security_attempted || report.security_score < report.security_threshold || report.security_timed_out;
+function shouldFail(report, policy = loadPolicy()) {
+  const forbidden = new Set(policy.forbidden_survivors || []);
+  return !report.attempted || report.mutation_score < report.threshold || report.security_attempted < policy.thresholds.minimum_security_mutants
+    || report.security_score < report.security_threshold || report.survived > 0 || report.timed_out > 0 || report.syntax_errors > 0
+    || report.infrastructure_errors > 0 || report.missing_targets > 0 || report.invalid_baselines > 0
+    || (policy.required_categories || []).some(category => !report.categories || !report.categories[category])
+    || report.surviving_mutations.some(item => forbidden.has(item.mutation || item.id));
 }
 
 function main() {
-  const mode = process.env.SIDEKICK_MUTATION_FULL === "1" ? "full" : "targeted";
+  const policy = loadPolicy();
+  const mode = process.env.SIDEKICK_MUTATION_MODE || (process.env.SIDEKICK_MUTATION_FULL === "1" ? "full" : "targeted");
+  const selected = process.argv.includes("--mutant") ? process.argv[process.argv.indexOf("--mutant") + 1] : process.env.SIDEKICK_MUTATION_MUTANT;
   const results = [];
+  const baselineByGroup = new Map();
   for (const spec of getSpecs(mode)) {
-    if (!fs.existsSync(path.join(root, spec.file))) continue;
+    if (!fs.existsSync(path.join(root, spec.file))) { for (const mutation of spec.pattern) results.push({ id: mutation.id, mutation: mutation.name, group: spec.group, security: Boolean(mutation.security), status: "missing_target", reason: "inventory file missing" }); continue; }
+    if (!baselineByGroup.has(spec.group)) baselineByGroup.set(spec.group, executeTests(spec.tests, root, policy));
+    const baseline = baselineByGroup.get(spec.group);
     for (const mutation of spec.pattern) {
+      if (selected && selected !== mutation.id) continue;
+      const base = { id: mutation.id, mutation: mutation.name, file: spec.file, tests: spec.tests, group: spec.group, category: mutation.category, security: Boolean(mutation.security), reproduction: `SIDEKICK_MUTATION_MODE=${mode} SIDEKICK_MUTATION_MUTANT=${mutation.id} npm run test:mutation` };
+      if (baseline.result.status !== 0) { results.push({ ...base, status: "invalid_baseline", reason: "group baseline failed", baseline_output_digest: baseline.output_digest }); continue; }
       const destination = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-mutant-"));
-      try { copySource(destination); results.push({ file: spec.file, tests: spec.tests, mutation: mutation.name, security: Boolean(mutation.security), ...runMutant(spec, mutation, destination) }); }
+      try { copySource(destination); results.push({ ...base, ...runMutant(spec, mutation, destination, policy) }); }
       finally { fs.rmSync(destination, { recursive: true, force: true }); }
     }
   }
-  const report = buildReport(results, mode);
+  const baselines = Object.fromEntries([...baselineByGroup.entries()].map(([group, execution]) => [group, { status: execution.result.status === 0 ? "valid" : "invalid_baseline", output_digest: execution.output_digest, output_excerpt: execution.output_excerpt }]));
+  const report = buildReport(results, mode, policy, baselines);
   fs.mkdirSync(reportDir, { recursive: true });
   fs.writeFileSync(path.join(reportDir, "mutation-report.json"), `${JSON.stringify(report, null, 2)}\n`);
-  console.log(`Mutation testing: ${report.killed}/${report.attempted} killed (${report.mutation_score}%), ${report.survived} survived, ${report.uncovered} uncovered`);
+  console.log(`Mutation testing: ${report.killed}/${report.attempted} killed (${report.mutation_score}%), ${report.survived} survived, ${report.missing_targets} missing, ${report.invalid_baselines} invalid baselines`);
   console.log(`Security mutants: ${report.security_killed}/${report.security_attempted} killed (${report.security_score}%), ${report.security_survived} survived`);
-  if (shouldFail(report)) process.exitCode = 1;
+  if (shouldFail(report, policy)) process.exitCode = 1;
 }
 
 if (require.main === module) main();
 
-module.exports = { buildReport, getSpecs, shouldFail };
+module.exports = { applyMutation, buildReport, getSpecs, loadPolicy, shouldFail };

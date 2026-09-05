@@ -10,8 +10,12 @@ const root = path.resolve(__dirname, "..");
 const manifestDir = path.join(__dirname, "manifests");
 const allowedTiers = new Set(["smoke", "unit", "contract", "integration", "security", "e2e", "compatibility", "live"]);
 const allowedCriticality = new Set(["required", "optional"]);
-const allowedResourceScopes = new Set(["isolated", "shared"]);
+const allowedContractKinds = new Set(["isolated", "shared", "exclusive"]);
+const supportedPlatforms = new Set(["linux", "win32", "darwin"]);
 const suiteResourcePath = path.join(__dirname, "suite-resources.json");
+const DEFAULT_OUTPUT_LIMIT = 12000;
+const DEFAULT_SLOW_THRESHOLD_MS = 15000;
+const DEFAULT_HEARTBEAT_MS = 5000;
 
 function globToRegExp(pattern) {
   let source = "";
@@ -36,11 +40,28 @@ function loadManifests() {
 }
 
 function loadSuiteResourceScopes() {
-  const scopes = JSON.parse(fs.readFileSync(suiteResourcePath, "utf8"));
-  if (!scopes || typeof scopes !== "object" || Array.isArray(scopes) || Object.values(scopes).some(value => value !== true)) {
-    throw new Error("test/suite-resources.json: values must be true");
+  const contracts = JSON.parse(fs.readFileSync(suiteResourcePath, "utf8"));
+  if (!contracts || typeof contracts !== "object" || Array.isArray(contracts) || contracts.version !== 1 || !contracts.resources || !contracts.suites) {
+    throw new Error("test/suite-resources.json: version, resources, and suites are required");
   }
-  return scopes;
+  for (const [name, contract] of Object.entries(contracts.resources)) validateContract(contract, `test/suite-resources.json resource ${name}`);
+  for (const [file, contract] of Object.entries(contracts.suites)) {
+    validateContract(contract, `test/suite-resources.json suite ${file}`);
+    if (file !== "*" && !file.startsWith("test/")) throw new Error(`test/suite-resources.json: invalid suite path ${file}`);
+  }
+  return contracts;
+}
+
+function validateContract(contract, label) {
+  if (!contract || typeof contract !== "object" || Array.isArray(contract)) throw new Error(`${label}: contract must be an object`);
+  if (!allowedContractKinds.has(contract.kind)) throw new Error(`${label}: kind must be isolated, shared, or exclusive`);
+  for (const field of ["provisioner", "fixture", "cleanup_owner", "lock_identity"]) {
+    if (typeof contract[field] !== "string" || !contract[field].trim()) throw new Error(`${label}: ${field} is required`);
+  }
+  if (!Array.isArray(contract.supported_platforms) || !contract.supported_platforms.length || contract.supported_platforms.some(platform => !supportedPlatforms.has(platform))) {
+    throw new Error(`${label}: supported_platforms is invalid`);
+  }
+  return contract;
 }
 
 function validateManifest(manifest) {
@@ -48,25 +69,14 @@ function validateManifest(manifest) {
   if (!Number.isInteger(manifest.priority)) throw new Error(`${manifest.source}: priority is required`);
   if (!allowedTiers.has(manifest.tier) || !allowedCriticality.has(manifest.criticality)) throw new Error(`${manifest.source}: invalid tier or criticality`);
   if (!Array.isArray(manifest.patterns) || !manifest.patterns.length || !Array.isArray(manifest.resources)) throw new Error(`${manifest.source}: patterns and resources are required`);
-  if (!manifest.resource_scopes || typeof manifest.resource_scopes !== "object" || Array.isArray(manifest.resource_scopes)) throw new Error(`${manifest.source}: resource_scopes are required`);
+  if (!manifest.resource_contracts || typeof manifest.resource_contracts !== "object" || Array.isArray(manifest.resource_contracts)) throw new Error(`${manifest.source}: resource_contracts are required`);
   const resources = new Set(manifest.resources);
   if (manifest.resources.some(resource => typeof resource !== "string" || !resource.trim()) || resources.size !== manifest.resources.length) throw new Error(`${manifest.source}: resources must be unique non-empty strings`);
-  const scopeNames = Object.keys(manifest.resource_scopes);
-  if (scopeNames.length !== resources.size || scopeNames.some(resource => !resources.has(resource))) throw new Error(`${manifest.source}: resource_scopes must classify every declared resource and no others`);
-  if (scopeNames.some(resource => !allowedResourceScopes.has(manifest.resource_scopes[resource]))) throw new Error(`${manifest.source}: resource scopes must be isolated or shared`);
+  const contractNames = Object.keys(manifest.resource_contracts);
+  if (contractNames.length !== resources.size || contractNames.some(resource => !resources.has(resource))) throw new Error(`${manifest.source}: resource_contracts must classify every declared resource and no others`);
+  for (const resource of manifest.resources) validateContract(manifest.resource_contracts[resource], `${manifest.source} resource ${resource}`);
   if (!Number.isInteger(manifest.timeout_ms) || manifest.timeout_ms < 1000) throw new Error(`${manifest.source}: timeout_ms must be a positive integer`);
   for (const pattern of manifest.patterns) globToRegExp(pattern);
-  if (manifest.shared_resources !== undefined) {
-    if (!Array.isArray(manifest.shared_resources) || manifest.shared_resources.some(resource => typeof resource !== "string" || !resource.trim())) {
-      throw new Error(`${manifest.source}: shared_resources must be a list of non-empty strings`);
-    }
-    if (manifest.shared_resources.some(resource => !manifest.resources.includes(resource))) {
-      throw new Error(`${manifest.source}: shared_resources must be declared in resources`);
-    }
-    if (manifest.resources.some(resource => (manifest.resource_scopes[resource] === "shared") !== manifest.shared_resources.includes(resource))) {
-      throw new Error(`${manifest.source}: shared_resources must match resource_scopes`);
-    }
-  }
   return manifest;
 }
 
@@ -106,12 +116,18 @@ function discoverSuites(testRoot = root) {
     identities.add(identity);
     const live = Boolean(manifest.live) || manifest.domain === "live";
     if (live && process.env.SIDEKICK_TEST_LIVE !== "1") continue;
-    const isolated = suiteResourceScopes[file] === true;
-    const resources = manifest.resources.map(resource => (!isolated || manifest.resource_scopes[resource] === "shared")
-      ? resource
-      : `${resource}:${file}`);
+    const suiteContract = suiteResourceScopes.suites[file] || suiteResourceScopes.suites["*"];
+    if (!suiteContract) throw new Error(`missing suite contract: ${file}`);
+    if (!suiteContract.supported_platforms.includes(process.platform)) continue;
+    const contracts = Object.fromEntries(manifest.resources.map(resource => [resource, manifest.resource_contracts[resource]]));
+    const resources = manifest.resources.map(resource => {
+      const contract = contracts[resource];
+      if (contract.kind === "exclusive" || suiteContract.kind === "exclusive") return ["exclusive", contract.lock_identity].join(":");
+      if (suiteContract.kind === "isolated" && contract.kind === "isolated") return `${contract.lock_identity}:${file}`;
+      return contract.lock_identity;
+    });
     suites.push({ file, id: identity, domain: manifest.domain, tier: manifest.tier, criticality: manifest.criticality,
-      resources: manifest.resources, lock_resources: resources, timeout_ms: manifest.timeout_ms, live, owner: manifest.owner,
+      resources: manifest.resources, contracts, suite_contract: suiteContract, lock_resources: resources, timeout_ms: manifest.timeout_ms, live, owner: manifest.owner,
       allow_skip: manifest.allow_skip === true || live, description: manifest.description || `${manifest.domain} test suite` });
   }
   return suites.sort((a, b) => a.file.localeCompare(b.file));
@@ -147,17 +163,21 @@ function shuffleSuites(suites, seed) {
 class ResourceLocks {
   constructor() { this.busy = new Set(); this.waiters = []; }
   canAcquire(names) { return !this.busy.has("exclusive") && !names.some(name => this.busy.has(name)) && (!names.includes("exclusive") || !this.busy.size); }
-  async acquire(resources) {
+  async acquire(resources, signal) {
     const names = [...new Set(resources || [])].sort();
     const started = Date.now();
     let waits = 0;
-    if (!this.canAcquire(names)) {
-      waits++;
-      await new Promise(resolve => this.waiters.push({ names, resolve }));
-    }
     while (!this.canAcquire(names)) {
       waits++;
-      await new Promise(resolve => this.waiters.push({ names, resolve }));
+      const acquired = await new Promise(resolve => {
+        const waiter = { names, resolve: null };
+        const cancel = () => { this.waiters = this.waiters.filter(item => item !== waiter); resolve(false); };
+        if (signal?.aborted) return cancel();
+        waiter.resolve = value => { signal?.removeEventListener("abort", cancel); resolve(value); };
+        signal?.addEventListener("abort", cancel, { once: true });
+        this.waiters.push(waiter);
+      });
+      if (!acquired) return null;
     }
     for (const name of names) this.busy.add(name);
     const release = () => { for (const name of names) this.busy.delete(name); this.#wake(); };
@@ -169,7 +189,7 @@ class ResourceLocks {
     const next = this.waiters[0];
     if (next && this.canAcquire(next.names)) {
       this.waiters.shift();
-      next.resolve();
+      next.resolve(true);
     }
   }
 }
@@ -187,15 +207,22 @@ function terminate(child) {
   });
 }
 
-function executeSuite(suite, { cwd, stream, testNamePattern, signal, coverage = false, queue_wait_ms = 0, lock_wait_ms = 0, active = 0 }) {
+function executeSuite(suite, { cwd, stream, testNamePattern, signal, coverage = false, queue_wait_ms = 0, lock_wait_ms = 0, active = 0, maxOutputChars = DEFAULT_OUTPUT_LIMIT }) {
   return new Promise(resolve => {
     const started = Date.now();
     const args = coverage ? ["--experimental-test-coverage", "--test"] : ["--test"];
     if (testNamePattern) args.push("--test-name-pattern", testNamePattern);
     args.push(path.resolve(cwd, suite.file));
     const child = spawn(process.execPath, args, { cwd, detached: process.platform !== "win32", env: { ...process.env, NODE_ENV: "test", SIDEKICK_TEST_SUITE_ID: suite.id }, stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "", stderr = "", timedOut = false, cancelled = false;
-    const append = (target, chunk) => { const text = chunk.toString(); if (target === "stdout") stdout += text; else stderr += text; if (stream) process[target].write(text); };
+    let stdout = "", stderr = "", timedOut = false, cancelled = false, outputTruncated = false;
+    const append = (target, chunk) => {
+      const text = chunk.toString();
+      const current = target === "stdout" ? stdout : stderr;
+      const visible = text.slice(0, Math.max(0, maxOutputChars - current.length));
+      if (visible.length < text.length) outputTruncated = true;
+      if (target === "stdout") stdout += visible; else stderr += visible;
+      if (stream && visible) process[target].write(visible);
+    };
     child.stdout.on("data", chunk => append("stdout", chunk));
     child.stderr.on("data", chunk => append("stderr", chunk));
     const timer = setTimeout(async () => { timedOut = true; await terminate(child); }, suite.timeout_ms);
@@ -204,7 +231,7 @@ function executeSuite(suite, { cwd, stream, testNamePattern, signal, coverage = 
     child.once("close", (code, signalName) => {
       clearTimeout(timer); signal?.removeEventListener("abort", onAbort);
       const status = timedOut ? "timeout" : cancelled ? "cancelled" : code === SKIP_EXIT_CODE ? "skipped" : code === 0 ? "passed" : "failed";
-      resolve({ suite: suite.file, id: suite.id, status, code, signal: signalName, duration_ms: Date.now() - started, queue_wait_ms, lock_wait_ms, active_concurrency: active, stdout, stderr, reproduction: `node ${suite.file}${testNamePattern ? ` --test-name-pattern ${JSON.stringify(testNamePattern)}` : ""}` });
+      resolve({ suite: suite.file, id: suite.id, status, code, signal: signalName, duration_ms: Date.now() - started, queue_wait_ms, lock_wait_ms, active_concurrency: active, stdout, stderr, output_truncated: outputTruncated, reproduction: `node ${suite.file}${testNamePattern ? ` --test-name-pattern ${JSON.stringify(testNamePattern)}` : ""}` });
     });
   });
 }
@@ -215,13 +242,16 @@ function validateRunConfig({ concurrency, overallTimeoutMs, seed }) {
   if (seed !== undefined && !Number.isInteger(seed)) throw new Error("seed must be an integer");
 }
 
-async function runSuites({ requested = [], cwd = root, domain, tier, seed, concurrency, stream = false, failFast = false, testNamePattern, coverage = false, signal, overallTimeoutMs, output = console, onProgress, onEvent } = {}) {
+async function runSuites({ requested = [], cwd = root, domain, tier, seed, concurrency, stream = false, failFast = false, testNamePattern, coverage = false, signal, overallTimeoutMs, maxOutputChars = DEFAULT_OUTPUT_LIMIT, slowThresholdMs = DEFAULT_SLOW_THRESHOLD_MS, heartbeatMs = DEFAULT_HEARTBEAT_MS, output = console, onProgress, onEvent } = {}) {
   if (concurrency === undefined) concurrency = process.env.SIDEKICK_TEST_CONCURRENCY === undefined ? 4 : Number(process.env.SIDEKICK_TEST_CONCURRENCY);
   if (overallTimeoutMs === undefined) overallTimeoutMs = process.env.SIDEKICK_TEST_OVERALL_TIMEOUT_MS === undefined ? 30 * 60 * 1000 : Number(process.env.SIDEKICK_TEST_OVERALL_TIMEOUT_MS);
   try { validateRunConfig({ concurrency, overallTimeoutMs, seed }); } catch (error) {
     output.error(error.message);
     return { passed: 0, failed: 1, skipped: 0, exitCode: CONFIG_EXIT_CODE, failures: [], results: [], error: error.message };
   }
+  if (!Number.isInteger(maxOutputChars) || maxOutputChars < 100) return { passed: 0, failed: 1, skipped: 0, exitCode: CONFIG_EXIT_CODE, failures: [], results: [], error: "maxOutputChars must be an integer of at least 100" };
+  if (!Number.isInteger(slowThresholdMs) || slowThresholdMs < 100) return { passed: 0, failed: 1, skipped: 0, exitCode: CONFIG_EXIT_CODE, failures: [], results: [], error: "slowThresholdMs must be an integer of at least 100ms" };
+  if (!Number.isInteger(heartbeatMs) || heartbeatMs < 100) return { passed: 0, failed: 1, skipped: 0, exitCode: CONFIG_EXIT_CODE, failures: [], results: [], error: "heartbeatMs must be an integer of at least 100ms" };
   const progress = event => {
     const structured = Object.freeze({ ...event });
     for (const callback of [onProgress, onEvent, output.progress]) if (typeof callback === "function") callback(structured);
@@ -233,14 +263,17 @@ async function runSuites({ requested = [], cwd = root, domain, tier, seed, concu
   const wall_started = Date.now();
   const orderedSelection = shuffleSuites(selection.selected, seed);
   const locks = new ResourceLocks(), results = [], queue = orderedSelection.map(suite => ({ suite, queued_at: Date.now() }));
-  progress({ type: "runner", event: "started", total: orderedSelection.length, concurrency });
-  orderedSelection.forEach((suite, index) => progress({ type: "suite", event: "queued", suite: suite.file, id: suite.id, index }));
+  const state = { completed: 0, current: [], queued: orderedSelection.map(suite => suite.file), lock_waiting: [], counts: { passed: 0, failed: 0, skipped: 0, timeout: 0, cancelled: 0 } };
+  const emitState = (event, extra = {}) => progress({ type: event === "heartbeat" ? "runner" : "suite", event, elapsed_ms: Date.now() - wall_started, completed: state.completed, total: orderedSelection.length, counts: { ...state.counts }, current: [...state.current], queued: [...state.queued], lock_waiting: [...state.lock_waiting], ...extra });
+  emitState("started", { concurrency });
+  orderedSelection.forEach((suite, index) => emitState("queued", { suite: suite.file, id: suite.id, index }));
   const controller = new AbortController();
   let stopped = false;
   const forwardAbort = () => controller.abort();
   signal?.addEventListener("abort", forwardAbort, { once: true });
   controller.signal.addEventListener("abort", () => { stopped = true; }, { once: true });
   const overallTimer = setTimeout(() => controller.abort(), Math.max(1000, overallTimeoutMs));
+  const heartbeat = setInterval(() => emitState("heartbeat"), heartbeatMs);
   let active = 0;
   let peak_concurrency = 0;
   async function worker() {
@@ -248,23 +281,37 @@ async function runSuites({ requested = [], cwd = root, domain, tier, seed, concu
       const item = queue.shift();
       const suite = item.suite;
       const queue_wait_ms = Date.now() - item.queued_at;
-      const release = await locks.acquire(suite.lock_resources || suite.resources);
+      state.queued = state.queued.filter(name => name !== suite.file);
+      const lockResources = suite.lock_resources || suite.resources;
+      if (!locks.canAcquire(lockResources)) {
+        state.lock_waiting.push(suite.file);
+        emitState("lock-waiting", { suite: suite.file, id: suite.id });
+      }
+      const release = await locks.acquire(lockResources, controller.signal);
+      state.lock_waiting = state.lock_waiting.filter(name => name !== suite.file);
       let counted = false;
       try {
-        if (controller.signal.aborted) continue;
+        if (!release || controller.signal.aborted) continue;
         active++;
         counted = true;
         peak_concurrency = Math.max(peak_concurrency, active);
-        progress({ type: "suite", event: "started", suite: suite.file, id: suite.id, active_concurrency: active, queue_wait_ms, lock_wait_ms: release.wait_ms });
-        const result = await executeSuite(suite, { cwd, stream, testNamePattern, coverage, signal: controller.signal, queue_wait_ms, lock_wait_ms: release.wait_ms, active });
+        state.current.push(suite.file);
+        emitState("started", { suite: suite.file, id: suite.id, active_concurrency: active, queue_wait_ms, lock_wait_ms: release.wait_ms });
+        const slowTimer = setTimeout(() => emitState("slow-warning", { suite: suite.file, id: suite.id, threshold_ms: slowThresholdMs }), slowThresholdMs);
+        const result = await executeSuite(suite, { cwd, stream, testNamePattern, coverage, signal: controller.signal, queue_wait_ms, lock_wait_ms: release.wait_ms, active, maxOutputChars });
+        clearTimeout(slowTimer);
         results.push(result);
-        progress({ type: "suite", event: "finished", suite: suite.file, id: suite.id, status: result.status, duration_ms: result.duration_ms, active_concurrency: active });
+        state.current = state.current.filter(name => name !== suite.file);
+        state.completed++;
+        state.counts[result.status] = (state.counts[result.status] || 0) + 1;
+        emitState("finished", { suite: suite.file, id: suite.id, status: result.status, duration_ms: result.duration_ms, active_concurrency: active });
         if (result.status === "failed" || result.status === "timeout" || result.status === "cancelled") stopped = stopped || failFast;
-      } finally { if (counted) active--; release(); }
+      } finally { if (counted) active--; if (release) release(); }
     }
   }
   await Promise.all(Array.from({ length: Math.max(1, Math.min(20, concurrency)) }, () => worker()));
   clearTimeout(overallTimer);
+  clearInterval(heartbeat);
   signal?.removeEventListener("abort", forwardAbort);
   results.sort((a, b) => a.suite.localeCompare(b.suite));
   const passed = results.filter(item => item.status === "passed").length;
@@ -273,13 +320,26 @@ async function runSuites({ requested = [], cwd = root, domain, tier, seed, concu
   const failures = results.filter(item => item.status !== "passed" && (item.status !== "skipped" || unexpectedSkips.some(skip => skip.suite === item.suite)));
   const notRun = selection.selected.filter(suite => !results.some(result => result.suite === suite.file)).map(suite => suite.file);
   const report = { version: 2, passed, failed: failures.length, skipped, unexpected_skips: unexpectedSkips.map(item => item.suite), not_run: notRun, cancelled: results.filter(item => item.status === "cancelled").map(item => item.suite), timed_out: results.filter(item => item.status === "timeout").map(item => item.suite), wall_duration_ms: Date.now() - wall_started, duration_ms: Date.now() - wall_started, peak_concurrency, slowest: [...results].sort((a, b) => b.duration_ms - a.duration_ms).slice(0, 10), failures, results };
-  notRun.forEach(suite => progress({ type: "suite", event: "not_run", suite }));
+  notRun.forEach(suite => emitState("not_run", { suite }));
   output.log(`Test summary: ${passed} passed, ${failures.length} failed, ${skipped} skipped; slowest: ${report.slowest.slice(0, 3).map(item => `${item.suite} (${item.duration_ms}ms)`).join(", ")}`);
   if (failures.length) output.error(`Failed suites: ${failures.map(item => `${item.suite} [${item.status}]`).join(", ")}`);
   if (notRun.length) output.error(`Not run: ${notRun.join(", ")}`);
   const final = { ...report, seed: Number.isInteger(seed) ? seed : null, exitCode: failures.length || unexpectedSkips.length || notRun.length ? 1 : 0 };
-  progress({ type: "runner", event: "finished", exitCode: final.exitCode, passed, failed: failures.length, skipped, not_run: notRun.length });
+  emitState("finished", { exitCode: final.exitCode, passed, failed: failures.length, skipped, not_run: notRun.length });
   return final;
 }
 
-module.exports = { CONFIG_EXIT_CODE, SKIP_EXIT_CODE, discoverSuites, selectSuites, runSuites, ResourceLocks, globToRegExp, shuffleSuites, validateManifest, validateRunConfig };
+function createProgressReporter({ output = process.stderr, json = false } = {}) {
+  return event => {
+    if (json || !output || typeof output.write !== "function") return;
+    const counts = event.counts || {};
+    const line = [`[${event.elapsed_ms || 0}ms]`, `${event.completed || 0}/${event.total || 0}`, `pass=${counts.passed || 0}`, `fail=${counts.failed || 0}`, `skip=${counts.skipped || 0}`];
+    if (event.event === "heartbeat") line.push(`current=${event.current?.join(",") || "-"}`, `queued=${event.queued?.length || 0}`, `lock-waiting=${event.lock_waiting?.length || 0}`);
+    if (event.event === "lock-waiting") line.push(`lock-waiting=${event.suite}`);
+    if (event.event === "slow-warning") line.push(`SLOW=${event.suite}`);
+    if (event.event === "finished" && event.suite) line.push(`${event.suite}=${event.status}`, `${event.duration_ms}ms`);
+    output.write(`${line.join(" ")}\n`);
+  };
+}
+
+module.exports = { CONFIG_EXIT_CODE, SKIP_EXIT_CODE, discoverSuites, selectSuites, runSuites, ResourceLocks, globToRegExp, shuffleSuites, validateContract, validateManifest, validateRunConfig, createProgressReporter };

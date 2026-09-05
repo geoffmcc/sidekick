@@ -32,7 +32,7 @@ jobs:
       - run: npm run check:tests
       - run: npm run check:architecture
       - run: npm run check:docs
-      - run: node --test test/run-all.test.js test/security/property-boundaries.test.js test/core/fault-injection.test.js
+      - run: node --test test/run-all.test.js test/security/property-boundaries.test.js test/security/security-boundaries.test.js test/core/fault-injection.test.js
 
   domain-shards:
     name: ${{ matrix.domain }} / Node ${{ matrix.node-version }}

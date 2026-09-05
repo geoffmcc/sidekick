@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "thresholds": {
+    "overall_percent": 60,
+    "security_percent": 80,
+    "minimum_security_mutants": 1
+  },
+  "required_categories": [
+    "normalization",
+    "authorization",
+    "fail-closed",
+    "boolean",
+    "comparison",
+    "collection-bound"
+  ],
+  "forbidden_survivors": [],
+  "output": {
+    "max_chars": 1200,
+    "max_bytes": 262144
+  },
+  "execution": {
+    "overall_timeout_ms": 120000,
+    "process_timeout_ms": 150000
+  }
+}

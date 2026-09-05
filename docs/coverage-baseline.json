@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "source": "merged c8 report on PR branch",
+  "minimums": { "lines": 77.97, "statements": 77.97, "functions": 81.21, "branches": 67.71 },
+  "files": {
+    "src/core/identity.js": { "lines": 89.25, "branches": 69.23, "functions": 92.3 },
+    "src/core/authentication.js": { "lines": 95.38, "branches": 76.38, "functions": 94.73 },
+    "src/core/auth-rate-limit.js": { "lines": 92.15, "branches": 76.19, "functions": 100 },
+    "src/core/authorization.js": { "lines": 100, "branches": 70.51, "functions": 100 },
+    "src/approvals/store.js": { "lines": 96.24, "branches": 77.01, "functions": 90 },
+    "src/approvals/continuation.js": { "lines": 92.88, "branches": 71.36, "functions": 92 },
+    "src/tools/approvals.js": { "lines": 100, "branches": 100, "functions": 100 },
+    "src/tools/platform-approval.js": { "lines": 100, "branches": 57.89, "functions": 100 },
+    "src/tools/dispatcher.js": { "lines": 93.29, "branches": 74.72, "functions": 93.75 },
+    "src/tools/dispatch-seam.js": { "lines": 100, "branches": 100, "functions": 100 },
+    "src/tools/path-policy.js": { "lines": 96.14, "branches": 82.6, "functions": 100 },
+    "src/security/network-scope.js": { "lines": 92.74, "branches": 78.76, "functions": 90.9 },
+    "src/security/network-scopes.js": { "lines": 92, "branches": 55.55, "functions": 85.71 },
+    "src/tools/families/net-fetch.js": { "lines": 80.32, "branches": 58.33, "functions": 100 },
+    "src/tools/families/network-scopes.js": { "lines": 68.85, "branches": 42.85, "functions": 66.66 },
+    "src/redact.js": { "lines": 100, "branches": 100, "functions": 100 },
+    "src/tools/sensitive-result.js": { "lines": 100, "branches": 100, "functions": 100 },
+    "src/workflows/runner.js": { "lines": 84.42, "branches": 79.77, "functions": 100 },
+    "src/workflows/schema.js": { "lines": 100, "branches": 100, "functions": 100 },
+    "src/packs/lifecycle.js": { "lines": 89.1, "branches": 70.96, "functions": 96 },
+    "src/packs/repository.js": { "lines": 91.88, "branches": 61.53, "functions": 100 },
+    "src/packs/manifest.js": { "lines": 96.26, "branches": 79, "functions": 100 },
+    "src/platform/kernel.js": { "lines": 89.79, "branches": 74.07, "functions": 90.25 },
+    "src/platform/execution-guards.js": { "lines": 100, "branches": 91.17, "functions": 100 },
+    "src/agent/task-store.js": { "lines": 95.91, "branches": 55, "functions": 89.28 }
+  }
+}

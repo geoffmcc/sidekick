@@ -2,7 +2,7 @@
 
 const assert = require("node:assert/strict");
 const { test } = require("node:test");
-const { ResourceLocks, discoverSuites, globToRegExp, selectSuites, validateManifest, runSuites } = require("./suite-runner");
+const { ResourceLocks, createProgressReporter, discoverSuites, globToRegExp, selectSuites, validateContract, validateManifest, runSuites } = require("./suite-runner");
 
 test("recursive discovery assigns every suite one domain owner", () => {
   const suites = discoverSuites();
@@ -13,8 +13,10 @@ test("recursive discovery assigns every suite one domain owner", () => {
 });
 
 test("manifest resource ownership is explicit and complete", () => {
-  assert.throws(() => validateManifest({ source: "fixture.json", domain: "fixture", priority: 1, tier: "unit", criticality: "required", patterns: ["test/*.test.js"], resources: ["sqlite"] }), /resource_scopes are required/);
-  assert.throws(() => validateManifest({ source: "fixture.json", domain: "fixture", priority: 1, tier: "unit", criticality: "required", patterns: ["test/*.test.js"], resources: ["sqlite"], resource_scopes: { sqlite: "maybe" }, timeout_ms: 1000 }), /isolated or shared/);
+  assert.throws(() => validateManifest({ source: "fixture.json", domain: "fixture", priority: 1, tier: "unit", criticality: "required", patterns: ["test/*.test.js"], resources: ["sqlite"] }), /resource_contracts are required/);
+  assert.throws(() => validateContract({ kind: "maybe" }, "fixture resource"), /isolated, shared, or exclusive/);
+  assert.throws(() => validateContract({ kind: "isolated", provisioner: "x", fixture: "x", cleanup_owner: "x", lock_identity: "x", supported_platforms: ["plan9"] }, "fixture resource"), /supported_platforms/);
+  assert.throws(() => validateContract({ kind: "shared", provisioner: "x", fixture: "x", cleanup_owner: "x", lock_identity: "" , supported_platforms: ["linux"] }, "fixture resource"), /lock_identity/);
 });
 
 test("invalid runner configuration fails closed", async () => {
@@ -62,6 +64,29 @@ test("resource lock waiters acquire in request order", async () => {
   assert.deepEqual(order, ["second", "third"]);
 });
 
+test("exclusive contracts serialize otherwise unrelated resources", async () => {
+  const locks = new ResourceLocks();
+  const first = await locks.acquire(["exclusive", "live"]);
+  let acquired = false;
+  const pending = locks.acquire(["sqlite"]).then(release => { acquired = true; release(); });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(acquired, false);
+  first();
+  await pending;
+});
+
+test("cancelled lock waiters are removed and do not deadlock later suites", async () => {
+  const locks = new ResourceLocks();
+  const first = await locks.acquire(["sqlite"]);
+  const controller = new AbortController();
+  const cancelled = locks.acquire(["sqlite"], controller.signal);
+  controller.abort();
+  assert.equal(await cancelled, null);
+  first();
+  const release = await locks.acquire(["sqlite"]);
+  release();
+});
+
 test("runner emits structured lifecycle progress without changing the final report", async () => {
   const events = [];
   const result = await runSuites({ requested: ["test/run-all.test.js"], concurrency: 1, output: { log() {}, error() {} }, onProgress: event => events.push(event) });
@@ -70,4 +95,14 @@ test("runner emits structured lifecycle progress without changing the final repo
   assert.equal(events[0].event, "started");
   assert.equal(events.at(-1).event, "finished");
   assert.ok(events.some(event => event.type === "suite" && event.event === "started"));
+  assert.ok(events.every(event => Number.isInteger(event.elapsed_ms) && event.total === 1 && event.completed <= event.total));
+});
+
+test("progress reporter includes queue and lock state and stays silent for JSON mode", () => {
+  let text = "";
+  createProgressReporter({ output: { write(value) { text += value; } } })({ event: "heartbeat", elapsed_ms: 1234, completed: 1, total: 3, counts: { passed: 1 }, current: ["a"], queued: ["b"], lock_waiting: ["c"] });
+  assert.match(text, /1234ms.*1\/3.*current=a.*queued=1.*lock-waiting=1/);
+  let wrote = false;
+  createProgressReporter({ json: true, output: { write() { wrote = true; } } })({ event: "heartbeat" });
+  assert.equal(wrote, false);
 });

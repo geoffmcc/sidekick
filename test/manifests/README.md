@@ -10,10 +10,12 @@ migrated to `node:test` and domain directories.
 `SIDEKICK_TEST_LIVE=1` is set. Missing optional dependencies must be reported as
 explicit skips, never silently counted as passes.
 
-Every resource must have an explicit `resource_scopes` entry of `isolated` or
-`shared`. Isolated resources are namespaced by suite; shared resources use one
-real lock across suites. Declare `shared` only for a genuinely global provider,
-such as the platform subprocess fixture. The runner never inspects suite source
-text to infer fixture ownership. Suite-specific isolation is declared in
-`test/suite-resources.json`; entries are reviewed metadata, not runtime source
-inspection.
+Every manifest resource must have an explicit `resource_contracts` entry. A
+contract declares `kind` (`isolated`, `shared`, or `exclusive`), `provisioner`,
+`fixture`, `cleanup_owner`, `lock_identity`, and `supported_platforms`.
+Isolated resources are namespaced by suite; shared resources use one lock across
+suites; exclusive resources serialize the complete runner resource set. The
+versioned `test/suite-resources.json` document contains the reviewed resource
+catalog and suite contract (the `*` entry is the explicit shared contract for
+suites without a narrower override). The runner validates and enforces these
+contracts, and never inspects suite source text to infer fixture ownership.
