@@ -1,9 +1,9 @@
-function registerEventRoutes({ app, platformKernel, authenticatedUser, auditLog }) {
+function registerEventRoutes({ app, platformKernel, authenticatedUser, auditLog, errorResponse }) {
   app.get("/api/event-deliveries", (req, res) => {
     try {
       const deliveries = platformKernel.listEventDeliveries({ subscription_id: req.query.subscription_id, status: req.query.status, limit: req.query.limit });
       res.json({ ok: true, subscriptions: platformKernel.listEventSubscriptions(), deliveries, total: deliveries.length, stats: platformKernel.getEventDeliveryStats() });
-    } catch (error) { res.status(400).json({ ok: false, error: error.message }); }
+    } catch (error) { return errorResponse(req, res, error, { status: 400, code: "invalid_request", component: "events" }); }
   });
 
   app.post("/api/event-subscriptions", (req, res) => {
@@ -13,7 +13,7 @@ function registerEventRoutes({ app, platformKernel, authenticatedUser, auditLog 
       const subscription = platformKernel.registerEventSubscription({ ...req.body, source: "dashboard" });
       auditLog(req, "event_subscription.register", { subscription_id: subscription.subscription_id, event_type: subscription.event_type, actor });
       res.json({ ok: true, subscription });
-    } catch (error) { res.status(400).json({ ok: false, error: error.message }); }
+    } catch (error) { return errorResponse(req, res, error, { status: 400, code: "invalid_request", component: "events" }); }
   });
 
   app.post("/api/event-subscriptions/:subscriptionId/:action", (req, res) => {
@@ -25,7 +25,7 @@ function registerEventRoutes({ app, platformKernel, authenticatedUser, auditLog 
       const subscription = platformKernel.setEventSubscriptionState(req.params.subscriptionId, state);
       auditLog(req, `event_subscription.${req.params.action}`, { subscription_id: subscription.subscription_id, actor });
       res.json({ ok: true, subscription });
-    } catch (error) { res.status(400).json({ ok: false, error: error.message }); }
+    } catch (error) { return errorResponse(req, res, error, { status: 400, code: "invalid_request", component: "events" }); }
   });
 
   app.post("/api/event-deliveries/:deliveryId/requeue", (req, res) => {
@@ -35,7 +35,7 @@ function registerEventRoutes({ app, platformKernel, authenticatedUser, auditLog 
       const delivery = platformKernel.requeueEventDelivery(req.params.deliveryId);
       auditLog(req, "event_delivery.requeue", { delivery_id: delivery.delivery_id, actor });
       res.json({ ok: true, delivery });
-    } catch (error) { res.status(400).json({ ok: false, error: error.message }); }
+    } catch (error) { return errorResponse(req, res, error, { status: 400, code: "invalid_request", component: "events" }); }
   });
 }
 

@@ -885,6 +885,9 @@ function maturity(name) {
 }
 
 function recordVerification(name, verification) {
+  // Verification fingerprints must describe the current derived health, not a
+  // stale health snapshot left by the previous lifecycle operation.
+  repository.recordPackHealth(name, health(name));
   const record = repository.recordPackVerification(name, verification);
   return { pack: describe(name), maturity: packMaturity.evaluate(record) };
 }

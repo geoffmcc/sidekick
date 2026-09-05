@@ -23,6 +23,7 @@ const packManifest = require('../src/packs/manifest');
 const packDependencies = require('../src/packs/dependencies');
 const packLifecycle = require('../src/packs/lifecycle');
 const packRepository = require('../src/packs/repository');
+const moduleLifecycle = require('../src/modules/lifecycle');
 const bundled = require('../src/packs/bundled');
 const moduleManifestModule = require('../src/modules/manifest');
 const { callInternalTool } = require('../src/tools/dispatcher');
@@ -320,6 +321,7 @@ function packWithWorkflow(name, tool, requires = {}) {
     const dir = writePack(baseManifest('optional-dep-pack', { depends: { packs: [{ name: 'absent-pack', optional: true }] } }));
     packLifecycle.install(dir);
     const health = packLifecycle.health('optional-dep-pack');
+    assert.strictEqual(health.status, 'disabled');
     const dependency = health.components.find(c => c.kind === 'dependency' && c.component === 'absent-pack');
     assert.ok(dependency, JSON.stringify(health.components));
     assert.strictEqual(dependency.ok, true);
@@ -328,11 +330,29 @@ function packWithWorkflow(name, tool, requires = {}) {
     packLifecycle.uninstall('optional-dep-pack');
   });
 
+  test('PC.16b: module activation failure leaves the pack unavailable', () => {
+    const dir = packWithModule('activation-failure', 'activation-module', []);
+    packLifecycle.install(dir);
+    const originalEnable = moduleLifecycle.enable;
+    moduleLifecycle.enable = () => { throw new Error('activation fixture failure'); };
+    try {
+      assert.throws(() => packLifecycle.enable('activation-failure'), /could not be enabled/);
+      assert.strictEqual(packRepository.getPack('activation-failure').state, 'error');
+    } finally {
+      moduleLifecycle.enable = originalEnable;
+      packLifecycle.uninstall('activation-failure');
+    }
+  });
+
   test('PC.16: enable is refused while a required dependency is not enabled, then succeeds', () => {
     assert.throws(() => packLifecycle.enable('needs-base'), /required dependency not ready.*base-pack.*enable it first/s);
     packLifecycle.enable('base-pack');
     const result = packLifecycle.enable('needs-base');
     assert.strictEqual(result.pack.state, 'enabled');
+    assert.strictEqual(packLifecycle.health('needs-base').status, 'healthy');
+    packRepository.setPackState('base-pack', 'disabled');
+    assert.strictEqual(packLifecycle.health('needs-base').status, 'degraded');
+    packRepository.setPackState('base-pack', 'enabled');
   });
 
   test('PC.16a: readiness predicate reports missing, version, and disabled required providers', () => {

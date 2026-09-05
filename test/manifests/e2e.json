@@ -1,0 +1,17 @@
+{
+  "domain": "e2e",
+  "priority": 100,
+  "tier": "e2e",
+  "criticality": "required",
+  "resources": ["subprocess", "ports", "workspace"],
+  "resource_contracts": {
+    "subprocess": {"kind": "shared", "provisioner": "process-group", "fixture": "process-group", "cleanup": "no-op", "cleanup_owner": "runner", "lock_identity": "subprocess", "supported_platforms": ["linux", "win32", "darwin"]},
+    "ports": {"kind": "isolated", "provisioner": "loopback-port", "fixture": "loopback-port", "cleanup": "close-port", "cleanup_owner": "suite", "lock_identity": "ports", "supported_platforms": ["linux", "win32", "darwin"]},
+    "workspace": {"kind": "isolated", "provisioner": "temp-workspace", "fixture": "workspace-directory", "cleanup": "owned-temp-tree", "cleanup_owner": "suite", "lock_identity": "workspace", "supported_platforms": ["linux", "win32", "darwin"]}
+  },
+  "timeout_ms": 300000,
+  "platforms": ["linux", "win32", "darwin"],
+  "live": false,
+  "owner": "end-to-end",
+  "patterns": ["test/e2e/**/*.test.{js,cjs,mjs}"]
+}

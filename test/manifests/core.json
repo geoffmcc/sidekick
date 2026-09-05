@@ -4,6 +4,10 @@
   "tier": "unit",
   "criticality": "required",
   "resources": ["pure", "environment"],
+  "resource_contracts": {
+    "pure": {"kind": "isolated", "provisioner": "in-process", "fixture": "in-process", "cleanup": "no-op", "cleanup_owner": "suite", "lock_identity": "pure", "supported_platforms": ["linux", "win32", "darwin"]},
+    "environment": {"kind": "isolated", "provisioner": "environment-scope", "fixture": "process-environment", "cleanup": "no-op", "cleanup_owner": "runner", "lock_identity": "environment", "supported_platforms": ["linux", "win32", "darwin"]}
+  },
   "timeout_ms": 120000,
   "platforms": ["linux", "win32", "darwin"],
   "live": false,

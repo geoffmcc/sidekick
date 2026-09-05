@@ -957,6 +957,24 @@ setTimeout(async () => {
     // The SQLite schema enforces structure, so there's no "old format" to migrate from
 
     // Clean up
+    console.log('Test 3.8: capability maturity is returned through the authenticated dashboard API');
+    {
+      const installed = await makeRequest('POST', '/api/capabilities/install', { name: 'api-engineering', enable: true });
+      assert.strictEqual(installed.status, 200, `Capability install should succeed: ${JSON.stringify(installed.data)}`);
+      const maturity = await makeRequest('GET', '/api/capabilities/api-engineering/maturity');
+      assert.strictEqual(maturity.status, 200, `Maturity endpoint should succeed: ${JSON.stringify(maturity.data)}`);
+      assert.strictEqual(maturity.data.ok, true, 'Maturity projection should be a successful read even when evidence is missing');
+      assert.ok(['foundation', 'operational', 'integrated', 'certified'].includes(maturity.data.maturity.level), 'Maturity should expose a real level');
+      assert.strictEqual(maturity.data.maturity.pack_state, 'enabled', 'Maturity should expose current pack state');
+      assert.ok(Array.isArray(maturity.data.maturity.missing_checks), 'Maturity should expose missing checks');
+      assert.ok(maturity.data.maturity.next_action, 'Maturity should expose a recovery action');
+      const unknown = await makeRequest('GET', '/api/capabilities/not-installed/maturity');
+      assert.strictEqual(unknown.status, 400, 'Unknown packs should be a bounded client error');
+      assert.notStrictEqual(unknown.data.error, 'maturity unavailable', 'Unknown packs must not use the generic maturity error');
+      await makeRequest('POST', '/api/capabilities/api-engineering/uninstall', {});
+      console.log('✓ Passed\n');
+    }
+
     fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
     
     console.log('All Dashboard API Tests Passed! ✓');

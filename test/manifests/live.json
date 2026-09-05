@@ -4,6 +4,10 @@
   "tier": "live",
   "criticality": "optional",
   "resources": ["exclusive", "subprocess"],
+  "resource_contracts": {
+    "exclusive": {"kind": "exclusive", "provisioner": "operator-live", "fixture": "live-environment", "cleanup": "operator-owned", "cleanup_owner": "operator", "lock_identity": "live", "supported_platforms": ["linux", "win32", "darwin"]},
+    "subprocess": {"kind": "shared", "provisioner": "process-group", "fixture": "process-group", "cleanup": "no-op", "cleanup_owner": "runner", "lock_identity": "subprocess", "supported_platforms": ["linux", "win32", "darwin"]}
+  },
   "timeout_ms": 300000,
   "platforms": ["linux", "win32", "darwin"],
   "live": true,

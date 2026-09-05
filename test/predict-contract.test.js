@@ -24,6 +24,7 @@ const markup = fs.readFileSync(path.join(ROOT, 'src', 'dashboard.html'), 'utf-8'
 const server = [
   fs.readFileSync(path.join(ROOT, 'src', 'dashboard.js'), 'utf-8'),
   fs.readFileSync(path.join(ROOT, 'src', 'dashboard', 'predict-routes.js'), 'utf-8'),
+  fs.readFileSync(path.join(ROOT, 'src', 'dashboard', 'capability-action.js'), 'utf-8'),
 ].join('\n');
 const predictTool = fs.readFileSync(path.join(ROOT, 'src', 'tools', 'families', 'meta.js'), 'utf-8');
 
@@ -119,8 +120,8 @@ console.log('Contract.4: server routes enforce scope and confirmation');
 test('the analyze route rejects an unscoped request', () => {
   assert.ok(/app\.post\("\/api\/predict\/analyze", \(req, res\) => governedDashboardMutation/.test(server),
     'the analyze route uses the governed prediction dispatcher');
-  assert.ok(/if \(result && result\.isError\) return res\.status\(400\)\.json/.test(server),
-    'governed prediction errors surface as a 400');
+  assert.ok(/capabilityResult\(res, result, \{ req, errorResponse: dashboardErrors\.respond/.test(server),
+    'governed prediction errors use the centralized Dashboard error boundary');
   const result = predictEngine.analyze({});
   assert.strictEqual(result.ok, false, 'the engine refuses an unscoped analysis');
 });

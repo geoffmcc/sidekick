@@ -1,6 +1,6 @@
 "use strict";
 
-function registerBlackboxRoutes({ app, blackbox, requireIdentityPermission, blackboxJson, governedDashboardMutation }) {
+function registerBlackboxRoutes({ app, blackbox, requireIdentityPermission, blackboxJson, governedDashboardMutation, errorResponse }) {
   app.get("/api/blackbox/profiles", (req, res) => {
     if (!requireIdentityPermission(req, res, "blackbox.read")) return;
     res.json({ profiles: blackbox.PROFILE_INFO });
@@ -8,28 +8,27 @@ function registerBlackboxRoutes({ app, blackbox, requireIdentityPermission, blac
 
   app.get("/api/blackbox/health", (req, res) => {
     if (!requireIdentityPermission(req, res, "blackbox.read")) return;
-    return blackboxJson(res, () => blackbox.blackboxHealth());
+    return blackboxJson(req, res, () => blackbox.blackboxHealth());
   });
 
   app.get("/api/blackbox/storage", (req, res) => {
     if (!requireIdentityPermission(req, res, "blackbox.read")) return;
-    return blackboxJson(res, () => blackbox.storageStatus());
+    return blackboxJson(req, res, () => blackbox.storageStatus());
   });
 
   app.get("/api/blackbox/incidents", (req, res) => {
     if (!requireIdentityPermission(req, res, "blackbox.read")) return;
-    return blackboxJson(res, () => ({ incidents: blackbox.listIncidents(req.query) }));
+    return blackboxJson(req, res, () => ({ incidents: blackbox.listIncidents(req.query) }));
   });
 
   app.post("/api/blackbox/capture", (req, res) => governedDashboardMutation(req, res, "black_box", { action: "capture", ...(req.body || {}) }, "blackbox.capture"));
 
   app.get("/api/blackbox/incidents/:id", (req, res) => {
     if (!requireIdentityPermission(req, res, "blackbox.read")) return;
-    return blackboxJson(res, () => {
+    return blackboxJson(req, res, () => {
       const incident = blackbox.getIncident(req.params.id, { includeTimeline: true, includeAnalysis: true });
       if (!incident) {
-        res.status(404);
-        return { error: "Incident not found" };
+        return errorResponse(req, res, null, { status: 404, code: "not_found", component: "blackbox", publicMessage: "Incident not found" });
       }
       return { incident };
     });
@@ -40,12 +39,12 @@ function registerBlackboxRoutes({ app, blackbox, requireIdentityPermission, blac
 
   app.get("/api/blackbox/incidents/:id/timeline", (req, res) => {
     if (!requireIdentityPermission(req, res, "blackbox.read")) return;
-    return blackboxJson(res, () => ({ timeline: blackbox.getTimeline(req.params.id) }));
+    return blackboxJson(req, res, () => ({ timeline: blackbox.getTimeline(req.params.id) }));
   });
 
   app.get("/api/blackbox/incidents/:id/export", (req, res) => {
     if (!requireIdentityPermission(req, res, "blackbox.read")) return;
-    return blackboxJson(res, () => ({ export: blackbox.exportIncident(req.params.id, { format: req.query.format || "json" }) }));
+    return blackboxJson(req, res, () => ({ export: blackbox.exportIncident(req.params.id, { format: req.query.format || "json" }) }));
   });
 
   app.post("/api/blackbox/incidents/:id/analyze", (req, res) => governedDashboardMutation(req, res, "black_box", { action: "analyze", incident_id: req.params.id, ...(req.body || {}) }, "blackbox.analyze"));
@@ -53,7 +52,7 @@ function registerBlackboxRoutes({ app, blackbox, requireIdentityPermission, blac
 
   app.get("/api/blackbox/captures/:id", (req, res) => {
     if (!requireIdentityPermission(req, res, "blackbox.read")) return;
-    return blackboxJson(res, () => ({ capture: blackbox.getCapture(req.params.id, { includeSources: true }) }));
+    return blackboxJson(req, res, () => ({ capture: blackbox.getCapture(req.params.id, { includeSources: true }) }));
   });
 
   app.post("/api/blackbox/captures/:id/cancel", (req, res) => governedDashboardMutation(req, res, "black_box", { action: "cancel_capture", capture_id: req.params.id }, "blackbox.cancel"));
@@ -76,22 +75,22 @@ function registerBlackboxRoutes({ app, blackbox, requireIdentityPermission, blac
 
   app.get("/api/blackbox/sources/:id", (req, res) => {
     if (!requireIdentityPermission(req, res, "blackbox.read")) return;
-    return blackboxJson(res, () => ({ source: blackbox.getSource(req.params.id, { offset: Number(req.query.offset || 0), limit: Number(req.query.limit || 65536) }) }));
+    return blackboxJson(req, res, () => ({ source: blackbox.getSource(req.params.id, { offset: Number(req.query.offset || 0), limit: Number(req.query.limit || 65536) }) }));
   });
 
   app.get("/api/blackbox/search", (req, res) => {
     if (!requireIdentityPermission(req, res, "blackbox.read")) return;
-    return blackboxJson(res, () => ({ results: blackbox.searchIncidents(req.query.q || req.query.query || "", req.query) }));
+    return blackboxJson(req, res, () => ({ results: blackbox.searchIncidents(req.query.q || req.query.query || "", req.query) }));
   });
 
   app.get("/api/blackbox/compare", (req, res) => {
     if (!requireIdentityPermission(req, res, "blackbox.read")) return;
-    return blackboxJson(res, () => blackbox.compareCaptures(req.query.a, req.query.b));
+    return blackboxJson(req, res, () => blackbox.compareCaptures(req.query.a, req.query.b));
   });
 
   app.get("/api/blackbox/purge-preview", (req, res) => {
     if (!requireIdentityPermission(req, res, "blackbox.read")) return;
-    return blackboxJson(res, () => blackbox.purgePreview());
+    return blackboxJson(req, res, () => blackbox.purgePreview());
   });
 
   app.post("/api/blackbox/purge", (req, res) => governedDashboardMutation(req, res, "black_box", { action: "purge", confirm: req.body?.confirm === true }, "blackbox.purge"));

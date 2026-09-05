@@ -38,6 +38,13 @@ that fingerprint changes. The `capability` tool exposes the projection with
 `action="maturity"`; the Dashboard exposes it at
 `GET /api/capabilities/:name/maturity`.
 
+The Dashboard projection includes the current pack state and health, evidence
+freshness, satisfied and missing verification checks, evidence observation and
+source metadata, reasons blocking the next level, and a bounded next action.
+Missing or stale evidence is a valid maturity result, not a transport error;
+unknown packs and genuine dispatch failures return sanitized machine-readable
+errors.
+
 Evidence can be requested or recorded with `capability action="prove"` and
 `capability action="record_verification"`, or through
 `POST /api/capabilities/:name/prove`. Recording requires server-verifiable

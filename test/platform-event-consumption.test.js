@@ -23,6 +23,7 @@ const dbStore = require("../src/db");
 const kernel = require("../src/platform/kernel");
 const drainer = require("../src/platform/event-drainer");
 const vocabulary = require("../src/platform/event-vocabulary");
+const { createEventDeliveryStore } = require("../src/platform/event-delivery");
 
 console.log("Running platform event consumption tests...\n");
 
@@ -50,6 +51,25 @@ function resetEvents() {
   drainer.clearHandlers();
   delete process.env.SIDEKICK_EVENT_BACKLOG_CAP;
 }
+
+test("event delivery exposes a narrow factory and preserves delivery redaction at the boundary", () => {
+  assert.strictEqual(typeof createEventDeliveryStore, "function");
+  const store = createEventDeliveryStore({
+    ensureSchema() {},
+    getDb() { throw new Error("database should not be needed for event preparation"); },
+    eventVocabulary: vocabulary,
+    redactSensitiveKeysDeep(value) { return { ...value, token: "[REDACTED]" }; },
+    json: JSON.stringify,
+    parseJson(value, fallback) { try { return value ? JSON.parse(value) : fallback; } catch { return fallback; } },
+    nowIso: () => "2026-01-01T00:00:00.000Z",
+    newId: prefix => `${prefix}_test`,
+    runWithCausation: (_eventId, fn) => fn(),
+  });
+  assert.strictEqual(typeof store.registerEventSubscription, "function");
+  const delivered = store.prepareDeliveredEvent({ payload_json: JSON.stringify({ token: "secret" }), redaction_state: "unknown" });
+  assert.strictEqual(delivered.redacted_by_delivery, true);
+  assert.strictEqual(delivered.payload.token, "[REDACTED]");
+});
 
 // ---- vocabulary -------------------------------------------------------------
 

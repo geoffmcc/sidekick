@@ -96,12 +96,13 @@ function repositoryView(repository = {}) {
   };
 }
 
-function errorResponse(res, result, fallback = "research source operation failed") {
+function resultErrorResponse(req, res, result, fallback = "research source operation failed", errorResponse) {
   const payload = parseResult(result);
-  return res.status(400).json({ ok: false, error: payload.error || payload.message || fallback, code: payload.code || "research_source_failed" });
+  const code = payload.code === "policy_denied" ? "policy_denied" : "invalid_request";
+  return errorResponse(req, res, null, { status: code === "policy_denied" ? 403 : 400, code, component: "research_source" });
 }
 
-function registerResearchSourceRoutes({ app, callDashboardTool, dashboardExecutionMetadata, authenticatedUser, auditLog, logError }) {
+function registerResearchSourceRoutes({ app, callDashboardTool, dashboardExecutionMetadata, authenticatedUser, auditLog, logError, errorResponse }) {
   async function dispatch(req, tool, args) {
     return callDashboardTool(tool, args, dashboardExecutionMetadata(req, authenticatedUser(req) || "dashboard"));
   }
@@ -111,7 +112,7 @@ function registerResearchSourceRoutes({ app, callDashboardTool, dashboardExecuti
     try {
       const result = await dispatch(req, "research_status", {});
       const payload = parseResult(result);
-      if (result?.isError || payload.ok === false) return errorResponse(res, result, "research workspace readiness unavailable");
+       if (result?.isError || payload.ok === false) return resultErrorResponse(req, res, result, "research workspace readiness unavailable", errorResponse);
       const workspace = payload.workspace || {};
       const policy = payload.policy || {};
       return res.json({ ok: true, readiness: {
@@ -132,8 +133,7 @@ function registerResearchSourceRoutes({ app, callDashboardTool, dashboardExecuti
         environment_count: Array.isArray(payload.environments) ? payload.environments.length : 0,
       } });
     } catch (error) {
-      logError(req.originalUrl, 500, error, "research_status", req.headers["user-agent"]);
-      return res.status(500).json({ ok: false, error: "research workspace readiness unavailable", code: "research_source_unavailable" });
+      return errorResponse(req, res, error, { status: 500, code: "service_unavailable", component: "research_status" });
     }
   }
 
@@ -144,11 +144,10 @@ function registerResearchSourceRoutes({ app, callDashboardTool, dashboardExecuti
       if (mode === "snapshots") args.repository_id = req.query.repository_id;
       const result = await dispatch(req, "research_source", args);
       const payload = parseResult(result);
-      if (result?.isError || payload.ok === false) return errorResponse(res, result);
+       if (result?.isError || payload.ok === false) return resultErrorResponse(req, res, result, undefined, errorResponse);
       return res.json({ ok: true, repositories: (payload.repositories || []).map(repositoryView), snapshots: (payload.snapshots || []).map(snapshotView) });
     } catch (error) {
-      logError(req.originalUrl, 500, error, "research_source", req.headers["user-agent"]);
-      return res.status(500).json({ ok: false, error: "research source list unavailable", code: "research_source_unavailable" });
+      return errorResponse(req, res, error, { status: 500, code: "service_unavailable", component: "research_source" });
     }
   }
 
@@ -157,12 +156,11 @@ function registerResearchSourceRoutes({ app, callDashboardTool, dashboardExecuti
     try {
       const result = await dispatch(req, "research_source", { action: "get", repository_id: req.query.repository_id, snapshot_id: req.params.snapshotId, campaign_id: req.query.campaign_id, project_id: req.query.project_id, limit: boundedLimit(req.query.limit) });
       const payload = parseResult(result);
-      if (result?.isError || payload.ok === false) return errorResponse(res, result, "source snapshot unavailable");
+       if (result?.isError || payload.ok === false) return resultErrorResponse(req, res, result, "source snapshot unavailable", errorResponse);
       const snapshot = snapshotView(payload.snapshot || {});
       return res.json(verificationOnly ? { ok: true, snapshot_id: snapshot.snapshot_id, verification: snapshot.verification, integrity_status: snapshot.integrity_status, stale: snapshot.verification.stale } : { ok: true, repository: repositoryView(payload.repository), snapshot });
     } catch (error) {
-      logError(req.originalUrl, 500, error, "research_source", req.headers["user-agent"]);
-      return res.status(500).json({ ok: false, error: "research snapshot unavailable", code: "research_source_unavailable" });
+      return errorResponse(req, res, error, { status: 500, code: "service_unavailable", component: "research_source" });
     }
   }
 
@@ -178,7 +176,7 @@ function registerResearchSourceRoutes({ app, callDashboardTool, dashboardExecuti
       auditLog(req, `research_source.${name}`, { repository_id: args.repository_id || null, snapshot_id: args.snapshot_id || null });
       const result = await dispatch(req, "research_source", args);
       const payload = parseResult(result);
-      if (result?.isError || payload.ok === false) return errorResponse(res, result);
+       if (result?.isError || payload.ok === false) return resultErrorResponse(req, res, result, undefined, errorResponse);
       if (name === "verify") return res.json({ ok: true, verification: verificationView(payload.verification) });
       if (name === "select") return res.json({ ok: true, repository: repositoryView(payload.repository) });
       if (name === "compare") return res.json({ ok: true, comparison: { baseline: payload.baseline || null, candidate: payload.candidate || null, changed: payload.changed === true, changed_count: Array.isArray(payload.changes) ? payload.changes.length : null } });
@@ -188,8 +186,7 @@ function registerResearchSourceRoutes({ app, callDashboardTool, dashboardExecuti
       const item = payload.item || payload.snapshot || payload.repository || null;
       return res.json({ ok: true, item: item ? (item.snapshot_id ? snapshotView(item) : repositoryView(item)) : null, storage_removed: name === "remove" ? payload.storage_removed === true : undefined });
     } catch (error) {
-      logError(req.originalUrl, 500, error, "research_source", req.headers["user-agent"]);
-      return res.status(500).json({ ok: false, error: "research source operation unavailable", code: "research_source_unavailable" });
+      return errorResponse(req, res, error, { status: 500, code: "service_unavailable", component: "research_source" });
     }
   }
 

@@ -18,6 +18,15 @@ assert.strictEqual(approval.status, "approval_required");
 assert.strictEqual(approval.approval_state, "required");
 assert.strictEqual(approval.approvalId, "approval-test");
 
+const boundedWarnings = normalizeResult({ content: [{ type: "text", text: JSON.stringify({ warnings: Array.from({ length: 101 }, (_, index) => `warning-${index}`) }) }] });
+assert.strictEqual(boundedWarnings.warnings.length, 50, "result warnings must remain bounded");
+const boundedErrorMetadata = errorResult("bounded", "handler_error", {
+  evidence_refs: Array.from({ length: 101 }, (_, index) => `evidence-${index}`),
+  limitations: Array.from({ length: 101 }, (_, index) => `limitation-${index}`),
+});
+assert.strictEqual(boundedErrorMetadata.evidence_refs.length, 100, "error evidence references must remain bounded");
+assert.strictEqual(boundedErrorMetadata.limitations.length, 50, "error limitations must remain bounded");
+
 const result = normalizeResult({
   schema: { pattern: "^secret=[REDACTED]\n" },
   credential_ref: "secret:fixture",

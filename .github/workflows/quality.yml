@@ -22,8 +22,10 @@ jobs:
           node-version: 22.x
           cache: npm
       - run: npm ci
+      - name: Run flake policy self-tests
+        run: node --test test/scripts-quality-gates.test.js
       - run: npm run test:flake
-      - run: npm run test:mutation
+      - run: SIDEKICK_MUTATION_FULL=1 npm run test:mutation
       - name: Upload diagnostic reports
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1, Node 24

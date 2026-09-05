@@ -4,6 +4,12 @@
   "tier": "contract",
   "criticality": "required",
   "resources": ["sqlite", "filesystem", "subprocess", "environment"],
+  "resource_contracts": {
+    "sqlite": {"kind": "isolated", "provisioner": "sqlite-file", "fixture": "sqlite-database", "cleanup": "owned-temp-tree", "cleanup_owner": "suite", "lock_identity": "sqlite", "supported_platforms": ["linux", "win32", "darwin"]},
+    "filesystem": {"kind": "isolated", "provisioner": "temp-directory", "fixture": "filesystem-directory", "cleanup": "owned-temp-tree", "cleanup_owner": "suite", "lock_identity": "filesystem", "supported_platforms": ["linux", "win32", "darwin"]},
+    "subprocess": {"kind": "shared", "provisioner": "process-group", "fixture": "process-group", "cleanup": "no-op", "cleanup_owner": "runner", "lock_identity": "subprocess", "supported_platforms": ["linux", "win32", "darwin"]},
+    "environment": {"kind": "isolated", "provisioner": "environment-scope", "fixture": "process-environment", "cleanup": "no-op", "cleanup_owner": "runner", "lock_identity": "environment", "supported_platforms": ["linux", "win32", "darwin"]}
+  },
   "timeout_ms": 240000,
   "platforms": ["linux", "win32", "darwin"],
   "live": false,
