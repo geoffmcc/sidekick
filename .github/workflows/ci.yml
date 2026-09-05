@@ -34,6 +34,78 @@ jobs:
       - run: npm run check:docs
       - run: node --test test/run-all.test.js test/security/property-boundaries.test.js test/security/security-boundaries.test.js test/core/fault-injection.test.js
 
+  changed-tests:
+    name: Changed-test selector / Node ${{ matrix.node-version }}
+    needs: fast-gate
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [22.x, 24.x]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - run: npm ci
+      - name: Run changed-test selector self-tests
+        run: node --test test/scripts-quality-gates.test.js
+      - name: Run changed tests with conservative fallback
+        run: SIDEKICK_TEST_BASE="$(git merge-base HEAD origin/main)" npm run test:changed
+
+  resource-contracts:
+    name: Resource contracts / Node ${{ matrix.node-version }}
+    needs: fast-gate
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [22.x, 24.x]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - run: npm ci
+      - run: npm run check:tests
+      - name: Run resource-contract self-tests
+        run: node --test test/run-all.test.js
+
+  security:
+    name: Security boundaries / Node ${{ matrix.node-version }}
+    needs: fast-gate
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [22.x, 24.x]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - run: npm ci
+      - run: npm run test:security
+
   domain-shards:
     name: ${{ matrix.domain }} / Node ${{ matrix.node-version }}
     needs: fast-gate
@@ -92,7 +164,31 @@ jobs:
       - run: node scripts/run-tests.js --tier=compatibility
 
   package:
-    name: Package and dependency checks
+    name: Package, dependency, and lock checks
+    needs: fast-gate
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22.x
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Re-resolve the lockfile without scripts
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+      - name: Require a stable package lock
+        run: git diff --exit-code -- package-lock.json
+      - run: npm audit --omit=dev --audit-level=moderate
+      - run: npm run package:worker
+      - run: npm pack --dry-run
+
+  proving-inventory:
+    name: Proving recipes and pack inventory freshness
     needs: fast-gate
     permissions:
       contents: read
@@ -107,9 +203,30 @@ jobs:
           node-version: 22.x
           cache: npm
       - run: npm ci
-      - run: npm audit --omit=dev --audit-level=moderate
-      - run: npm run package:worker
-      - run: npm pack --dry-run
+      - run: npm run pack:inventory
+      - run: npm run check:docs
+      - name: Require deterministic inventory content
+        run: |
+          node <<'NODE'
+          const fs = require("node:fs");
+          const { execFileSync } = require("node:child_process");
+          const file = "docs/compatibility-pack-inventory.json";
+          const normalize = text => {
+            const value = JSON.parse(text);
+            delete value.source_commit;
+            delete value.source_commit_date;
+            return JSON.stringify(value);
+          };
+          const generated = normalize(fs.readFileSync(file, "utf8"));
+          const committed = normalize(execFileSync("git", ["show", `HEAD:${file}`], { encoding: "utf8" }));
+          if (generated !== committed) {
+            console.error(`${file} is stale or was generated from a different source tree`);
+            process.exit(1);
+          }
+          NODE
+      - run: npm run proving:recipes
+      - name: Require deterministic proving recipes
+        run: git diff --exit-code -- docs/proving-recipes.json
 
   coverage:
     name: Coverage policy / Node 22
@@ -178,7 +295,7 @@ jobs:
           retention-days: 7
 
   mutation:
-    name: Bounded critical mutation gate
+    name: Targeted critical mutation gate
     needs: fast-gate
     permissions:
       contents: read
@@ -193,7 +310,9 @@ jobs:
           node-version: 22.x
           cache: npm
       - run: npm ci
-      - run: SIDEKICK_MUTATION_FULL=1 npm run test:mutation
+      - name: Run mutation policy self-tests
+        run: node --test test/mutation-policy.test.js
+      - run: npm run test:mutation
       - name: Upload mutation report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1, Node 24
@@ -219,6 +338,8 @@ jobs:
           node-version: 22.x
           cache: npm
       - run: npm ci
+      - name: Run flake policy self-tests
+        run: node --test test/scripts-quality-gates.test.js
       - run: npm run test:flake
       - name: Upload flake report
         if: always()
