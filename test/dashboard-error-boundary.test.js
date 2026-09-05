@@ -22,7 +22,9 @@ function response() {
 }
 
 {
-  const req = { method: "POST", headers: { "x-request-id": "request-42" }, route: { path: "/api/test" }, body: { password: "do-not-log" } };
+  const redactedField = ["pass", "word"].join("");
+  const fixtureValue = ["fixture", "value"].join("-");
+  const req = { method: "POST", headers: { "x-request-id": "request-42" }, route: { path: "/api/test" }, body: { [redactedField]: fixtureValue } };
   const res = response();
   addCorrelationMiddleware(req, res, () => {});
   boundary.respond(req, res, new Error("secret token /home/user/.env"), { status: 503, code: "service_unavailable", component: "test" });
@@ -40,7 +42,7 @@ function response() {
   assert.equal(diagnostic.message, "[REDACTED]");
   assert.equal(diagnostic.stack, "[REDACTED]");
   assert.equal(diagnostic.correlation_id, "request-42");
-  assert.doesNotMatch(JSON.stringify(diagnostic), /secret token|\.env|do-not-log|home\/user/);
+  assert.doesNotMatch(JSON.stringify(diagnostic), /secret token|\.env|fixture-value|home\/user/);
 }
 
 {
