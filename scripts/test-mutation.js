@@ -115,7 +115,6 @@ function main() {
       finally { fs.rmSync(destination, { recursive: true, force: true }); }
     }
   }
-}
   const report = buildReport(results, mode);
   fs.mkdirSync(reportDir, { recursive: true });
   fs.writeFileSync(path.join(reportDir, "mutation-report.json"), `${JSON.stringify(report, null, 2)}\n`);
