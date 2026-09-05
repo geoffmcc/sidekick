@@ -3,8 +3,14 @@
   "priority": 80,
   "tier": "contract",
   "criticality": "required",
-  "resources": ["sqlite", "filesystem", "browser", "environment"],
-  "resource_contracts": {"sqlite": {"kind": "isolated", "provisioner": "test-db", "fixture": "sqlite", "cleanup_owner": "suite", "lock_identity": "sqlite", "supported_platforms": ["linux", "win32", "darwin"]}, "filesystem": {"kind": "isolated", "provisioner": "test-fixture", "fixture": "filesystem", "cleanup_owner": "suite", "lock_identity": "filesystem", "supported_platforms": ["linux", "win32", "darwin"]}, "browser": {"kind": "shared", "provisioner": "test-fixture", "fixture": "browser", "cleanup_owner": "runner", "lock_identity": "browser", "supported_platforms": ["linux", "win32", "darwin"]}, "environment": {"kind": "isolated", "provisioner": "none", "fixture": "process-environment", "cleanup_owner": "suite", "lock_identity": "environment", "supported_platforms": ["linux", "win32", "darwin"]}},
+  "resources": ["sqlite", "filesystem", "browser", "environment", "workspace"],
+  "resource_contracts": {
+    "sqlite": {"kind": "isolated", "provisioner": "sqlite-file", "fixture": "sqlite-database", "cleanup": "owned-temp-tree", "cleanup_owner": "suite", "lock_identity": "sqlite", "supported_platforms": ["linux", "win32", "darwin"]},
+    "filesystem": {"kind": "isolated", "provisioner": "temp-directory", "fixture": "filesystem-directory", "cleanup": "owned-temp-tree", "cleanup_owner": "suite", "lock_identity": "filesystem", "supported_platforms": ["linux", "win32", "darwin"]},
+    "browser": {"kind": "shared", "provisioner": "browser-profile", "fixture": "browser-profile", "cleanup": "owned-temp-tree", "cleanup_owner": "runner", "lock_identity": "browser", "supported_platforms": ["linux", "win32", "darwin"]},
+    "environment": {"kind": "isolated", "provisioner": "environment-scope", "fixture": "process-environment", "cleanup": "no-op", "cleanup_owner": "suite", "lock_identity": "environment", "supported_platforms": ["linux", "win32", "darwin"]},
+    "workspace": {"kind": "isolated", "provisioner": "temp-workspace", "fixture": "workspace-directory", "cleanup": "owned-temp-tree", "cleanup_owner": "suite", "lock_identity": "workspace", "supported_platforms": ["linux", "win32", "darwin"]}
+  },
   "timeout_ms": 240000,
   "platforms": ["linux", "win32", "darwin"],
   "live": false,

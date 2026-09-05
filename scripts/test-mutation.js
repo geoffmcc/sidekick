@@ -33,8 +33,18 @@ const targetedSpecs = [
     { id: "result-bound-change", name: "result-bound-change", category: "collection-bound", kind: "literal", expression: "50", parent: "value.warnings.slice(0, 50)", replacement: "51", security: true },
   ] },
   { id: "pack-maturity", group: "maturity", file: "src/packs/maturity.js", tests: ["test/pack-maturity.test.js"], pattern: [
-    { id: "freshness-negation", name: "freshness-negation", category: "comparison", kind: "operator", expression: "now - observed <= MAX_EVIDENCE_AGE_MS", operator: "<=", replacement: ">", security: false },
+    { id: "freshness-negation", name: "freshness-negation", category: "comparison", kind: "operator", expression: "now - observed > MAX_EVIDENCE_AGE_MS", operator: ">", replacement: "<=", security: false },
     { id: "health-gate-removal", name: "health-gate-removal", category: "boolean", kind: "operator", expression: "record.state === \"enabled\" && health.ok === true && health.status === \"healthy\"", operator: "&&", replacement: "||", security: false },
+    { id: "freshness-identity-bypass", name: "freshness-identity-bypass", category: "evidence-freshness", kind: "operator", expression: "entry.pack_version !== record.version", operator: "!==", replacement: "===", security: true },
+  ] },
+  { id: "proving-runner", group: "proving", file: "src/proving/runner.js", tests: ["test/proving-runner.test.js"], pattern: [
+    { id: "proving-not-evaluated-gate", name: "proving-not-evaluated-gate", category: "fail-closed", kind: "condition", expression: "cases.length === 0", replacement: "false", security: true },
+  ] },
+  { id: "pack-repository", group: "pack-repository", file: "src/packs/repository.js", tests: ["test/pack-proving-evidence.test.js", "test/pack-contract.test.js"], pattern: [
+    { id: "evidence-reference-gate-removal", name: "evidence-reference-gate-removal", category: "provenance", kind: "operator", expression: "reasons.length === 0 && refs.length > 0", operator: "&&", replacement: "||", security: true },
+  ] },
+  { id: "pack-lifecycle", group: "pack-lifecycle", file: "src/packs/lifecycle.js", tests: ["test/capability-packs.test.js", "test/pack-maturity.test.js"], pattern: [
+    { id: "enabled-pack-disable-removal", name: "enabled-pack-disable-removal", category: "lifecycle", kind: "condition", expression: "record.state === \"enabled\"", replacement: "false", security: false },
   ] },
 ];
 
@@ -52,7 +62,24 @@ const fullSpecs = [
     { id: "limitations-bound-change", name: "limitations-bound-change", category: "collection-bound", kind: "literal", expression: "50", parent: "metadata.limitations.slice(0, 50)", replacement: "51", security: true },
   ] },
   { id: "maturity-expiry", group: "maturity", file: "src/packs/maturity.js", tests: ["test/pack-maturity.test.js"], pattern: [
-    { id: "expiry-comparison", name: "expiry-comparison", category: "comparison", kind: "operator", expression: "now <= expires", operator: "<=", replacement: ">", security: false },
+    { id: "expiry-comparison", name: "expiry-comparison", category: "comparison", kind: "operator", expression: "hasExpiry && now > expires", operator: "&&", replacement: "||", security: false },
+    { id: "evidence-state-mismatch", name: "evidence-state-mismatch", category: "evidence-freshness", kind: "operator", expression: "entry.config_fingerprint !== configFingerprint(record)", operator: "!==", replacement: "===", security: false },
+    { id: "operational-state-gate", name: "operational-state-gate", category: "lifecycle", kind: "operator", expression: "record.state === \"enabled\" && health.ok === true && health.status === \"healthy\"", operator: "&&", replacement: "||", security: false },
+  ] },
+  { id: "proving-runner", group: "proving", file: "src/proving/runner.js", tests: ["test/proving-runner.test.js"], pattern: [
+    { id: "phase-case-mutation-allowed", name: "phase-case-mutation-allowed", category: "authorization", kind: "operator", expression: "typeof item.tool === \"string\"", operator: "===", replacement: "!==", security: true },
+    { id: "phase-unavailable-classification", name: "phase-unavailable-classification", category: "boolean", kind: "operator", expression: "normalized.code === \"provider_unavailable\"", operator: "===", replacement: "!==", security: true },
+    { id: "not-evaluated-phase-removal", name: "not-evaluated-phase-removal", category: "fail-closed", kind: "condition", expression: "cases.length === 0", replacement: "false", security: true },
+  ] },
+  { id: "pack-repository", group: "pack-repository", file: "src/packs/repository.js", tests: ["test/pack-proving-evidence.test.js", "test/pack-contract.test.js"], pattern: [
+    { id: "terminal-execution-gate", name: "terminal-execution-gate", category: "fail-closed", kind: "operator", expression: "reference.type === \"receipt\"", operator: "===", replacement: "!==", security: true },
+    { id: "duplicate-evidence-role-gate", name: "duplicate-evidence-role-gate", category: "provenance", kind: "operator", expression: "previousRole === reference.role", operator: "===", replacement: "!==", security: true },
+    { id: "owned-tool-gate", name: "owned-tool-gate", category: "authorization", kind: "operator", expression: "!allowedTools.has(String(row.capability).replace(/^sidekick_/, \"\"))", operator: "!", replacement: "", security: true },
+  ] },
+  { id: "pack-lifecycle", group: "pack-lifecycle", file: "src/packs/lifecycle.js", tests: ["test/capability-packs.test.js", "test/pack-manifest-lifecycle.test.js", "test/pack-contract.test.js"], pattern: [
+    { id: "enable-failure-gate", name: "enable-failure-gate", category: "fail-closed", kind: "condition", expression: "failures.length", replacement: "false", security: true },
+    { id: "dependency-readiness-gate", name: "dependency-readiness-gate", category: "authorization", kind: "condition", expression: "dependencyBlockers.length", replacement: "false", security: true },
+    { id: "disabled-pack-health-classification", name: "disabled-pack-health-classification", category: "lifecycle", kind: "operator", expression: "!enabled && (status === HEALTH_STATUS.DEGRADED || status === HEALTH_STATUS.DISABLED)", operator: "&&", replacement: "||", security: false },
   ] },
 ];
 
@@ -126,7 +153,7 @@ function applyMutation(source, mutation) {
 function copySource(destination) {
   fs.cpSync(root, destination, { recursive: true, filter(source) {
     const relative = path.relative(root, source);
-    return relative !== ".git" && relative !== "node_modules" && !relative.startsWith("artifacts") && !relative.startsWith("data") && !relative.startsWith("test/test-");
+    return relative !== ".git" && relative !== "node_modules" && !relative.startsWith("artifacts") && !relative.startsWith("data") && !relative.startsWith("test/test-") && !relative.startsWith("test/spike-openvino-python");
   } });
 }
 
@@ -165,26 +192,28 @@ function runMutant(spec, mutation, destination, policy) {
 
 function buildReport(results, mode, policy = loadPolicy(), baselines = {}) {
   const normalized = results.map(item => ({ ...item, status: item.status === "killed" ? "assertion_killed" : item.status }));
+  const total = normalized.length;
   const attempted = normalized.filter(item => ["assertion_killed", "survived", "timeout", "syntax_error", "infrastructure_error"].includes(item.status)).length;
   const killed = normalized.filter(item => item.status === "assertion_killed").length;
   const securityResults = normalized.filter(item => item.security);
-  const securityAttempted = securityResults.filter(item => item.status !== "missing_target").length;
+  const securityAttempted = securityResults.filter(item => ["assertion_killed", "survived", "timeout", "syntax_error", "infrastructure_error"].includes(item.status)).length;
   const securityKilled = securityResults.filter(item => item.status === "assertion_killed").length;
-  const score = (count, total) => total ? Number((count / total * 100).toFixed(2)) : 0;
+  const score = (count, denominator) => denominator ? Number((count / denominator * 100).toFixed(2)) : 0;
   const categories = Object.fromEntries([...new Set(normalized.map(item => item.category).filter(Boolean))].map(category => [category, normalized.filter(item => item.category === category).length]));
   const groups = Object.fromEntries([...new Set(normalized.map(item => item.group).filter(Boolean))].map(group => {
     const entries = normalized.filter(item => item.group === group);
-    return [group, { total: entries.length, killed: entries.filter(item => item.status === "assertion_killed").length, missing_targets: entries.filter(item => item.status === "missing_target").length, survivors: entries.filter(item => item.status === "survived").length }];
+    return [group, { total: entries.length, attempted: entries.filter(item => ["assertion_killed", "survived", "timeout", "syntax_error", "infrastructure_error"].includes(item.status)).length, killed: entries.filter(item => item.status === "assertion_killed").length, score: score(entries.filter(item => item.status === "assertion_killed").length, entries.length), missing_targets: entries.filter(item => item.status === "missing_target").length, invalid_baselines: entries.filter(item => item.status === "invalid_baseline").length, survivors: entries.filter(item => item.status === "survived").length }];
   }));
   return {
     version: policy.version, mode, inventory: { targeted: targetedSpecs.reduce((n, spec) => n + spec.pattern.length, 0), full: getSpecs("full").reduce((n, spec) => n + spec.pattern.length, 0) },
-    attempted, killed, survived: normalized.filter(item => item.status === "survived").length, timed_out: normalized.filter(item => item.status === "timeout").length,
+    total, attempted, killed, survived: normalized.filter(item => item.status === "survived").length, timed_out: normalized.filter(item => item.status === "timeout").length,
     syntax_errors: normalized.filter(item => item.status === "syntax_error").length, infrastructure_errors: normalized.filter(item => item.status === "infrastructure_error").length,
     missing_targets: normalized.filter(item => item.status === "missing_target").length, invalid_baselines: normalized.filter(item => item.status === "invalid_baseline").length,
-    mutation_score: score(killed, attempted), threshold: policy.thresholds.overall_percent,
+    mutation_score: score(killed, total), threshold: policy.thresholds.overall_percent,
     security_attempted: securityAttempted, security_killed: securityKilled, security_survived: securityResults.filter(item => item.status === "survived").length,
     security_timed_out: securityResults.filter(item => item.status === "timeout").length, security_missing_targets: securityResults.filter(item => item.status === "missing_target").length,
-    security_score: score(securityKilled, securityAttempted), security_threshold: policy.thresholds.security_percent, groups, categories, baselines,
+    security_score: score(securityKilled, securityResults.length), security_threshold: policy.thresholds.security_percent, groups, categories, baselines,
+    domain_minimums: policy.thresholds.domain_minimums || {},
     surviving_mutations: normalized.filter(item => item.status === "survived"), results: normalized,
     reproduction: `SIDEKICK_MUTATION_MODE=${mode} npm run test:mutation`,
   };
@@ -192,10 +221,13 @@ function buildReport(results, mode, policy = loadPolicy(), baselines = {}) {
 
 function shouldFail(report, policy = loadPolicy()) {
   const forbidden = new Set(policy.forbidden_survivors || []);
+  const minimums = report.mode === "full" ? (policy.thresholds.domain_minimums || {}) : (policy.thresholds.targeted_domain_minimums || {});
+  const domainMinimumFailed = Object.entries(minimums).some(([domain, minimum]) => (report.groups?.[domain]?.total || 0) < minimum);
+  const missingCategories = (policy.required_categories || []).some(category => !report.categories || !report.categories[category]);
   return !report.attempted || report.mutation_score < report.threshold || report.security_attempted < policy.thresholds.minimum_security_mutants
     || report.security_score < report.security_threshold || report.survived > 0 || report.timed_out > 0 || report.syntax_errors > 0
     || report.infrastructure_errors > 0 || report.missing_targets > 0 || report.invalid_baselines > 0
-    || (policy.required_categories || []).some(category => !report.categories || !report.categories[category])
+    || missingCategories || domainMinimumFailed
     || report.surviving_mutations.some(item => forbidden.has(item.mutation || item.id));
 }
 
