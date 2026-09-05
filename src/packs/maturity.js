@@ -5,6 +5,7 @@
 // certify itself.
 const MAX_EVIDENCE_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const LEVELS = Object.freeze(["foundation", "operational", "integrated", "certified"]);
+const EVIDENCE_STATES = Object.freeze(["fresh", "stale", "dirty", "malformed", "expired"]);
 
 function parseTime(value) {
   const time = Date.parse(String(value || ""));
@@ -35,18 +36,26 @@ function healthFingerprint(record) {
 function evidenceState(record) {
   // Only server-validated rows are certification evidence. The metadata field
   // is retained for historical inspection, but is deliberately not consulted.
-  const entries = Array.isArray(record.verified_evidence)
-    ? record.verified_evidence.filter(entry => entry && typeof entry === "object")
-    : [];
-  return { entries, fingerprint: evidenceFingerprint(record), recorded_fingerprint: null };
+  const rawEntries = Array.isArray(record.verified_evidence) ? record.verified_evidence : [];
+  const entries = rawEntries.filter(entry => entry && typeof entry === "object" && !Array.isArray(entry));
+  return { entries, malformed: rawEntries.length - entries.length, fingerprint: evidenceFingerprint(record) };
 }
 
-function fresh(entry, now) {
+function classifyEvidence(entry, record, now) {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return "malformed";
   const observed = parseTime(entry.observed_at);
   const hasExpiry = Object.prototype.hasOwnProperty.call(entry, "expires_at");
   const expires = hasExpiry ? parseTime(entry.expires_at) : Infinity;
-  return Number.isFinite(observed) && now - observed >= 0 && now - observed <= MAX_EVIDENCE_AGE_MS
-    && (!hasExpiry ? true : Number.isFinite(expires) && now <= expires);
+  const required = ["observed_at", "pack_version", "config_fingerprint", "lifecycle_epoch", "health_fingerprint", "checks"];
+  if (!required.every(field => Object.prototype.hasOwnProperty.call(entry, field)) || !Number.isFinite(observed) || (hasExpiry && !Number.isFinite(expires)) || !entry.checks || typeof entry.checks !== "object" || Array.isArray(entry.checks)) return "malformed";
+  if (hasExpiry && now > expires) return "expired";
+  if (now < observed || now - observed > MAX_EVIDENCE_AGE_MS) return "stale";
+  if (entry.pack_version !== record.version
+    || (entry.package_hash || null) !== (record.package_hash || null)
+    || entry.config_fingerprint !== configFingerprint(record)
+    || Number(entry.lifecycle_epoch) !== Number(record.metadata?.maturity_lifecycle_epoch || 0)
+    || entry.health_fingerprint !== healthFingerprint(record)) return "dirty";
+  return "fresh";
 }
 
 function evaluate(record, { now = Date.now() } = {}) {
@@ -56,13 +65,8 @@ function evaluate(record, { now = Date.now() } = {}) {
   const operational = record.state === "enabled" && health.ok === true && health.status === "healthy";
   const lifecycleEpoch = Number(record.metadata?.maturity_lifecycle_epoch || 0);
   const ordered = [...evidence.entries].sort((a, b) => (parseTime(b.observed_at) || 0) - (parseTime(a.observed_at) || 0));
-  const current = ordered.find(entry => fresh(entry, now)
-    && entry.pack_version === record.version
-    && (entry.package_hash || null) === (record.package_hash || null)
-    && entry.config_fingerprint === configFingerprint(record)
-    && Number(entry.lifecycle_epoch) === lifecycleEpoch
-    && entry.health_fingerprint === healthFingerprint(record)
-    ? entry : null) || null;
+  const classified = ordered.map(entry => ({ entry, state: classifyEvidence(entry, record, now) }));
+  const current = classified.find(item => item.state === "fresh")?.entry || null;
   const requiredChecks = ["canonical_dispatch", "agent_discovery", "workflow", "single_pack", "cross_pack", "skeptical_verification"];
   const has = key => current?.checks?.[key] === true;
   const integrated = operational && has("canonical_dispatch") && has("agent_discovery") && has("workflow");
@@ -76,7 +80,13 @@ function evaluate(record, { now = Date.now() } = {}) {
   const reasons = [];
   if (record.state !== "enabled") reasons.push(`pack_state:${record.state}`);
   if (!health.ok || health.status !== "healthy") reasons.push(`health:${health.status || "unknown"}`);
-  if (!current) reasons.push(evidence.entries.length ? "verification_evidence_stale_or_mismatched" : "verification_evidence_missing");
+  if (!current) {
+    if (!evidence.entries.length && !evidence.malformed) reasons.push("verification_evidence_missing");
+    else if (classified.some(item => item.state === "malformed") || evidence.malformed) reasons.push("verification_evidence_malformed");
+    else if (classified.some(item => item.state === "expired")) reasons.push("verification_evidence_expired");
+    else if (classified.some(item => item.state === "dirty")) reasons.push("verification_evidence_dirty");
+    else reasons.push("verification_evidence_stale");
+  }
   if (current) {
     for (const check of missingChecks) reasons.push(`verification_missing:${check}`);
   }
@@ -99,25 +109,27 @@ function evaluate(record, { now = Date.now() } = {}) {
     satisfied_checks: satisfiedChecks,
     missing_checks: missingChecks,
     next_action: nextAction,
-    evidence: evidence.entries.map(entry => ({
+    evidence: classified.map(({ entry, state }) => ({
       id: entry.id || null,
-       observed_at: entry.observed_at || null,
-       expires_at: entry.expires_at || null,
-       source: entry.source || null,
+      observed_at: entry.observed_at || null,
+      expires_at: entry.expires_at || null,
+      source: entry.source || null,
       checks: entry.checks || {},
       evidence_refs: entry.evidence_refs || [],
       result_digest: entry.result_digest || null,
       recipe_version: entry.recipe_version || null,
       provider: entry.provider || null,
+      state,
       current: entry === current,
     })),
     evidence_fingerprint: evidence.fingerprint,
-    evidence_freshness: current ? "fresh" : evidence.entries.length ? "stale" : "missing",
+    evidence_freshness: current ? "fresh" : evidence.malformed ? "malformed" : classified.some(item => item.state === "malformed") ? "malformed" : classified.some(item => item.state === "expired") ? "expired" : classified.some(item => item.state === "dirty") ? "dirty" : classified.length ? "stale" : "missing",
+    evidence_states: Object.fromEntries(EVIDENCE_STATES.map(state => [state, classified.filter(item => item.state === state).length])),
     reasons,
-    optional_provider_integration: has("provider_integration") ? "verified" : "not_verified",
-    provider_verified: has("provider_integration"),
+    optional_provider_integration: has("provider_integration") && current?.provider?.verified === true ? "verified" : "not_verified",
+    provider_verified: has("provider_integration") && current?.provider?.verified === true,
     evaluated_at: new Date(now).toISOString(),
   };
 }
 
-module.exports = { LEVELS, MAX_EVIDENCE_AGE_MS, evidenceFingerprint, configFingerprint, healthFingerprint, evaluate };
+module.exports = { LEVELS, EVIDENCE_STATES, MAX_EVIDENCE_AGE_MS, evidenceFingerprint, configFingerprint, healthFingerprint, classifyEvidence, evaluate };

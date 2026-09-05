@@ -226,6 +226,20 @@ function recordPackVerification(name, verification) {
     error.code = "verification_source_required";
     throw error;
   }
+  const observedAt = verification.observed_at || nowIso();
+  const observedTime = Date.parse(observedAt);
+  const expiresAt = verification.expires_at || (Number.isFinite(observedTime) ? new Date(observedTime + 30 * 24 * 60 * 60 * 1000).toISOString() : "");
+  const expiresTime = Date.parse(expiresAt);
+  if (!Number.isFinite(observedTime) || !Number.isFinite(expiresTime) || expiresTime <= observedTime) {
+    const error = new Error("pack verification timestamps must be valid and expire after observation");
+    error.code = "invalid_pack_verification";
+    throw error;
+  }
+  if (verification.evidence_refs.some(reference => reference?.role === "provider_integration") && verification.provider?.verified !== true) {
+    const error = new Error("provider integration evidence requires an explicitly attributed provider verification");
+    error.code = "provider_verification_required";
+    throw error;
+  }
   const verified = verifyEvidenceReferences(record, verification.evidence_refs);
   if (!verified.ok) {
     const error = new Error(`pack verification evidence rejected: ${verified.reasons.join("; ")}`);
@@ -233,8 +247,6 @@ function recordPackVerification(name, verification) {
     throw error;
   }
   const crypto = require("crypto");
-  const observedAt = verification.observed_at || nowIso();
-  const expiresAt = verification.expires_at || new Date(Date.parse(observedAt) + 30 * 24 * 60 * 60 * 1000).toISOString();
   const evidence = verified.refs;
   const checks = verified.checks;
   const resultDigest = verification.result_digest || crypto.createHash("sha256").update(JSON.stringify({ evidence, checks, observed_at: observedAt, expires_at: expiresAt })).digest("hex");
@@ -270,8 +282,10 @@ function verifyEvidenceReferences(record, references) {
     }
     const evidenceKey = `${reference.type}:${reference.id}`;
     const previousRole = usedEvidence.get(evidenceKey);
-    if (previousRole && previousRole !== reference.role) {
-      reasons.push(`${evidenceKey} cannot support multiple verification roles (${previousRole}, ${reference.role})`);
+    if (previousRole) {
+      reasons.push(previousRole === reference.role
+        ? `${evidenceKey} is duplicated for verification role ${reference.role}`
+        : `${evidenceKey} cannot support multiple verification roles (${previousRole}, ${reference.role})`);
       continue;
     }
     usedEvidence.set(evidenceKey, reference.role);

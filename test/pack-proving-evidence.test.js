@@ -71,3 +71,52 @@ test("pack evidence does not reuse one receipt for multiple certification roles"
     /cannot support multiple verification roles/
   );
 });
+
+test("pack evidence rejects duplicated references even when the role is unchanged", () => {
+  const execution = platformKernel.createExecution({
+    project_id: "pack-proving-evidence",
+    actor_id: "test",
+    actor_principal_id: "test-principal",
+    operation_type: "pack_proving",
+    source: "test",
+  });
+  platformKernel.transitionExecution(execution.execution_id, "running", { source: "test", actor_id: "test" });
+  platformKernel.transitionExecution(execution.execution_id, "completed", { source: "test", actor_id: "test" });
+  assert.throws(
+    () => lifecycle.recordVerification(installed.pack.name, {
+      actor_ref: "test-principal",
+      evidence_refs: [
+        { type: "execution", id: execution.execution_id, role: "canonical_dispatch" },
+        { type: "execution", id: execution.execution_id, role: "canonical_dispatch" },
+      ],
+    }),
+    /duplicated for verification role/
+  );
+});
+
+test("pack evidence rejects receipts for tools outside pack ownership", () => {
+  const task = taskStore.insertTask(taskModel.createTask({
+    objective: "foreign capability fixture",
+    project_id: "pack-proving-evidence",
+    actor_id: "test",
+    actor_principal_id: "test-principal",
+  }));
+  const receipt = receiptStore.createReceipt({
+    task_id: task.task_id,
+    action_fingerprint: "foreign-capability-fingerprint",
+    capability: "not_owned_by_api_engineering",
+    args: {},
+    project_ref: "pack-proving-evidence",
+    effect_class: "read_only",
+    risk_class: "low",
+  });
+  receiptStore.transitionReceipt(receipt.receipt_id, "dispatched");
+  receiptStore.transitionReceipt(receipt.receipt_id, "finalized");
+  assert.throws(
+    () => lifecycle.recordVerification(installed.pack.name, {
+      actor_ref: "test-principal",
+      evidence_refs: [{ type: "receipt", id: receipt.receipt_id, role: "canonical_dispatch" }],
+    }),
+    /outside pack ownership/
+  );
+});

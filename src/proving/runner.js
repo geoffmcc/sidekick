@@ -6,9 +6,12 @@ const { normalizeResult } = require("../tools/result");
 const platformKernel = require("../platform/kernel");
 
 const TERMINAL = new Set(["passed", "failed", "blocked", "skipped", "unavailable", "not_evaluated", "inconclusive"]);
+const MANDATORY_PHASES = Object.freeze(["single_pack", "cross_pack", "negative_checks", "independent_verification"]);
 
-function executableCases(recipe) {
-  return (recipe?.single_pack || []).filter(item => item && typeof item === "object"
+function executableCases(recipe, phase = "single_pack") {
+  const declared = Array.isArray(recipe?.[phase]) ? recipe[phase] : [];
+  const local = Array.isArray(recipe?.local_fixtures?.[phase]) ? recipe.local_fixtures[phase] : [];
+  return [...declared, ...local].filter(item => item && typeof item === "object"
     && typeof item.tool === "string" && item.tool.length > 0 && item.args && typeof item.args === "object" && !Array.isArray(item.args));
 }
 
@@ -21,8 +24,18 @@ function resultStatus(result) {
   };
 }
 
-async function runRecipe(pack, { project = "pack-proving", actor = "proving-runner", authIdentity = null, liveProvider = false } = {}) {
-  const recipe = getRecipe(pack);
+function stepFromOutcome(name, outcome) {
+  return {
+    name,
+    status: outcome.failed ? "failed" : outcome.unavailable ? "unavailable" : "passed",
+    receipt: outcome.normalized.operationId || outcome.normalized.operation_id || null,
+    result_status: outcome.normalized.result_status || null,
+    code: outcome.normalized.code || null,
+  };
+}
+
+async function runRecipe(pack, { project = "pack-proving", actor = "proving-runner", authIdentity = null, liveProvider = false, recipe: suppliedRecipe = null } = {}) {
+  const recipe = suppliedRecipe || getRecipe(pack);
   const validation = validateRecipe(recipe);
   if (!validation.valid) return { schema: "sidekick.pack-proving-run.v1", status: "failed", pack, errors: validation.errors };
   const runId = `proving_${Date.now().toString(36)}`;
@@ -36,20 +49,25 @@ async function runRecipe(pack, { project = "pack-proving", actor = "proving-runn
     if (name === "capability" && ["show", "health"].includes(action)) args.name = recipe.pack;
     const result = await callInternalTool(name, args, context);
     const outcome = resultStatus(result);
-    steps.push({ name: check, status: outcome.failed ? "failed" : outcome.unavailable ? "unavailable" : "passed", receipt: outcome.normalized.operationId || outcome.normalized.operation_id || null, result_status: outcome.normalized.result_status || null, code: outcome.normalized.code || null });
-    if (outcome.failed || outcome.unavailable) break;
+    steps.push(stepFromOutcome(check, outcome));
   }
-  if (steps.every(step => step.status === "passed") && executableCases(recipe).length === 0) {
-    steps.push({ name: "single_pack", status: "not_evaluated", reason: "recipe declares no server-approved executable fixture cases" });
+
+  // Each mandatory phase is evaluated independently. A failed or unavailable
+  // case is evidence about that case, not permission to hide later phases.
+  for (const phase of MANDATORY_PHASES) {
+    const cases = executableCases(recipe, phase);
+    if (cases.length === 0) {
+      steps.push({ name: phase, status: "not_evaluated", reason: "phase declares no server-approved executable fixture cases" });
+      continue;
+    }
+    for (const fixture of cases) {
+      const result = await callInternalTool(fixture.tool, { ...fixture.args }, context);
+      const outcome = resultStatus(result);
+      steps.push(stepFromOutcome(`${phase}.${fixture.tool}`, outcome));
+    }
   }
-  for (const fixture of executableCases(recipe)) {
-    if (steps.some(step => step.status !== "passed")) break;
-    const result = await callInternalTool(fixture.tool, { ...fixture.args }, context);
-    const outcome = resultStatus(result);
-    steps.push({ name: `single_pack.${fixture.tool}`, status: outcome.failed ? "failed" : outcome.unavailable ? "unavailable" : "passed", receipt: outcome.normalized.operationId || outcome.normalized.operation_id || null, result_status: outcome.normalized.result_status || null, code: outcome.normalized.code || null });
-    if (outcome.failed || outcome.unavailable) break;
-  }
-  if (steps.every(step => step.status === "passed") && recipe.live_provider_required && !liveProvider) {
+
+  if (recipe.live_provider_required && !liveProvider) {
     steps.push({ name: "provider", status: "unavailable", reason: "recipe requires a live provider and none was authorized" });
   }
   const status = steps.some(step => step.status === "failed") ? "failed" : steps.some(step => step.status === "unavailable") ? "unavailable" : steps.some(step => step.status === "not_evaluated") ? "not_evaluated" : "passed";
@@ -69,4 +87,4 @@ async function runRecipe(pack, { project = "pack-proving", actor = "proving-runn
   };
 }
 
-module.exports = { runRecipe, executableCases, resultStatus };
+module.exports = { MANDATORY_PHASES, runRecipe, executableCases, resultStatus };

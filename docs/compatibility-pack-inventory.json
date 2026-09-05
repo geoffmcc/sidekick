@@ -1,8 +1,8 @@
 {
   "schema": "sidekick.compatibility-pack-inventory.v1",
   "source": "bundled pack manifests and repository files",
-  "source_commit": "89659927c3814513f5d58736f9fbc4c508a71317",
-  "source_commit_date": "2026-09-04T23:45:29-04:00",
+  "source_commit": "20bf4af4d81739e4a369d701282dbaf6c4ef4001",
+  "source_commit_date": "2026-09-05T09:14:10-04:00",
   "source_fingerprint": "sha256:84974ce7c331fe675fdf4850840eaa2eab853ae5da57368523ee1ea019c0bd78",
   "pack_count": 27,
   "packs": [

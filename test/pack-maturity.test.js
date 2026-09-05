@@ -51,10 +51,14 @@ function checkTimestamp(observed_at, expires_at) {
   if (expires_at !== undefined) entry.expires_at = expires_at;
   return maturity.evaluate({ ...record, verified_evidence: [entry] }, { now: evaluatedAt });
 }
-assert.equal(checkTimestamp("2026-01-14T00:00:00Z", "not-a-timestamp").evidence_freshness, "stale");
+assert.equal(checkTimestamp("2026-01-14T00:00:00Z", "not-a-timestamp").evidence_freshness, "malformed");
 assert.equal(checkTimestamp("2026-01-14T00:00:00Z", "2026-01-15T00:00:00Z").evidence_freshness, "fresh");
+assert.equal(checkTimestamp("2026-01-14T00:00:00Z", "2026-01-14T00:00:00Z").evidence_freshness, "expired");
 assert.equal(checkTimestamp("2026-01-15T00:00:01Z").evidence_freshness, "stale");
-assert.equal(checkTimestamp("not-a-timestamp").evidence_freshness, "stale");
+assert.equal(checkTimestamp("not-a-timestamp").evidence_freshness, "malformed");
+assert.equal(maturity.classifyEvidence({ observed_at: "2026-01-14T00:00:00Z", pack_version: record.version, package_hash: record.package_hash, config_fingerprint: "dirty", lifecycle_epoch: 0, health_fingerprint: fingerprints.health, checks: {} }, record, evaluatedAt), "dirty");
+assert.equal(maturity.classifyEvidence({ observed_at: "2026-01-14T00:00:00Z", pack_version: record.version, package_hash: record.package_hash, config_fingerprint: fingerprints.config, lifecycle_epoch: 0, health_fingerprint: fingerprints.health, checks: {}, expires_at: "2026-01-14T00:00:00Z" }, record, evaluatedAt), "expired");
+assert.equal(maturity.classifyEvidence({ observed_at: "not-a-timestamp" }, record, evaluatedAt), "malformed");
 assert.equal(maturity.evaluate({ ...record, health: { ok: false, status: "healthy" } }, { now: evaluatedAt }).level, "foundation");
 
 const stale = lifecycle.recordVerification(installed.pack.name, { actor_ref: "test-principal", project_ref: "pack-maturity", recipe_version: "pack-proving-v1", observed_at: "2020-01-01T00:00:00Z", expires_at: "2020-02-01T00:00:00Z", evidence_refs });
@@ -63,11 +67,11 @@ assert.ok(stale.maturity.evidence.some(entry => entry.observed_at.startsWith("20
 
 lifecycle.disable(installed.pack.name);
 lifecycle.enable(installed.pack.name);
-assert.strictEqual(lifecycle.maturity(installed.pack.name).evidence_freshness, "stale", "lifecycle transitions invalidate prior verification");
+assert.strictEqual(lifecycle.maturity(installed.pack.name).evidence_freshness, "expired", "lifecycle transitions invalidate prior verification");
 
 lifecycle.configure(installed.pack.name, { max_assertions: 10 });
 assert.strictEqual(lifecycle.maturity(installed.pack.name).level, "operational", "configuration changes invalidate verification without disabling the pack");
-assert.strictEqual(lifecycle.maturity(installed.pack.name).evidence_freshness, "stale");
+assert.strictEqual(lifecycle.maturity(installed.pack.name).evidence_freshness, "expired");
 
 assert.throws(() => lifecycle.recordVerification(installed.pack.name, { checks: { certified: true }, source: "caller" }), /evidence_refs/);
 
