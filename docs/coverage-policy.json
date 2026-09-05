@@ -1,7 +1,12 @@
 {
-  "version": 1,
+  "version": 2,
   "provider": "c8 with NODE_V8_COVERAGE subprocess merging",
   "minimums": { "lines": 40, "statements": 40, "functions": 40, "branches": 20 },
   "critical_domains": ["identity", "authorization", "approvals", "dispatcher", "path-policy", "network", "redaction", "workflow", "pack-lifecycle", "durability"],
+  "security_domains": [
+    { "name": "authorization", "files": ["src/core/authorization.js"], "minimums": { "lines": 40, "branches": 20 } },
+    { "name": "path-policy", "files": ["src/tools/path-policy.js"], "minimums": { "lines": 40, "branches": 20 } },
+    { "name": "result-boundary", "files": ["src/tools/result.js"], "minimums": { "lines": 40, "branches": 20 } }
+  ],
   "note": "Statements use the built-in line metric because Node's standard reporter does not expose a separate aggregate statement column. Critical-domain branch coverage is reviewed from the per-file report and is not hidden by exclusions."
 }

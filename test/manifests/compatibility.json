@@ -4,6 +4,7 @@
   "tier": "compatibility",
   "criticality": "required",
   "resources": ["sqlite", "filesystem", "environment"],
+  "resource_scopes": {"sqlite": "shared", "filesystem": "shared", "environment": "shared"},
   "timeout_ms": 240000,
   "platforms": ["linux", "win32", "darwin"],
   "live": false,

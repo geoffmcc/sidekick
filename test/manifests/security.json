@@ -4,6 +4,7 @@
   "tier": "security",
   "criticality": "required",
   "resources": ["pure", "environment"],
+  "resource_scopes": {"pure": "isolated", "environment": "shared"},
   "timeout_ms": 180000,
   "platforms": ["linux", "win32", "darwin"],
   "live": false,

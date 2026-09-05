@@ -18,14 +18,16 @@ compatibility manifest and are not a license for new custom harnesses. New
 domain suites under `test/core`, `test/security`, `test/agent`, `test/packs`, or
 `test/workflows` must import `node:test`.
 
-Manifest resources are suite-scoped by default, so independent SQLite,
-filesystem, subprocess, and environment fixtures run concurrently. A manifest
-may opt a declared resource into a real shared lock with `shared_resources`;
+Manifest resources require explicit `resource_scopes` metadata. The reviewed
+`test/suite-resources.json` map opts individual suites into namespaced
+resources; resources not listed there retain the manifest's shared lock. A
+manifest may mark a declared resource as shared with `shared_resources`;
 `exclusive` remains the escape hatch for an actually global resource. No suite
 may use a fixed port unless it declares an explicit exception. Local servers
 bind to `127.0.0.1` and dynamically allocated ports; test roots come from
 `test/helpers/isolated.js` and are cleaned only when proven to be owned direct
-children of the OS temp directory.
+children of the OS temp directory. The runner never scans suite source text to
+infer fixture ownership.
 
 Each run reports wall-clock duration, suite duration, queue and lock wait,
 peak concurrency, skipped/cancelled/timed-out/not-run suites, and the slowest
@@ -36,7 +38,8 @@ and write the complete sanitized result to `artifacts/test-results.json`.
 
 Use `npm test` for the deterministic non-live required tiers, `npm run test:all`
 for all non-live suites, `npm run test:security` for security invariants,
-`npm run test:coverage` for merged c8 coverage with versioned thresholds,
+`npm run test:coverage` for merged c8 coverage with the versioned policy in
+`docs/coverage-policy.json` (including separate security-domain thresholds),
 `npm run test:mutation` for genuine isolated critical-module mutations with a
 numeric score and threshold, and `npm run test:flake` for bounded repetition of
 Dashboard, Agent, Compute, pack, browser, and runner boundary suites. Flake

@@ -4,6 +4,7 @@
   "tier": "contract",
   "criticality": "required",
   "resources": ["sqlite", "filesystem", "browser", "environment"],
+  "resource_scopes": {"sqlite": "isolated", "filesystem": "isolated", "browser": "shared", "environment": "isolated"},
   "shared_resources": ["browser"],
   "timeout_ms": 240000,
   "platforms": ["linux", "win32", "darwin"],

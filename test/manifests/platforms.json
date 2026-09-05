@@ -4,6 +4,7 @@
   "tier": "integration",
   "criticality": "required",
   "resources": ["sqlite", "filesystem", "subprocess", "browser", "git", "environment"],
+  "resource_scopes": {"sqlite": "isolated", "filesystem": "isolated", "subprocess": "shared", "browser": "shared", "git": "isolated", "environment": "isolated"},
   "shared_resources": ["subprocess", "browser"],
   "timeout_ms": 240000,
   "platforms": ["linux", "win32", "darwin"],

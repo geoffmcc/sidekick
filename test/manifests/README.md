@@ -10,7 +10,10 @@ migrated to `node:test` and domain directories.
 `SIDEKICK_TEST_LIVE=1` is set. Missing optional dependencies must be reported as
 explicit skips, never silently counted as passes.
 
-Resources are fixture-scoped by default when a suite creates a temporary root.
-Use `shared_resources` only for a resource whose provider is genuinely global,
-such as the platform subprocess fixture; the runner uses that declaration to
-serialize only the affected suites.
+Every resource must have an explicit `resource_scopes` entry of `isolated` or
+`shared`. Isolated resources are namespaced by suite; shared resources use one
+real lock across suites. Declare `shared` only for a genuinely global provider,
+such as the platform subprocess fixture. The runner never inspects suite source
+text to infer fixture ownership. Suite-specific isolation is declared in
+`test/suite-resources.json`; entries are reviewed metadata, not runtime source
+inspection.

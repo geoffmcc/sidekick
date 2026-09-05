@@ -10,6 +10,8 @@ const root = path.resolve(__dirname, "..");
 const manifestDir = path.join(__dirname, "manifests");
 const allowedTiers = new Set(["smoke", "unit", "contract", "integration", "security", "e2e", "compatibility", "live"]);
 const allowedCriticality = new Set(["required", "optional"]);
+const allowedResourceScopes = new Set(["isolated", "shared"]);
+const suiteResourcePath = path.join(__dirname, "suite-resources.json");
 
 function globToRegExp(pattern) {
   let source = "";
@@ -33,11 +35,25 @@ function loadManifests() {
     .map(file => ({ ...JSON.parse(fs.readFileSync(path.join(manifestDir, file), "utf8")), source: `test/manifests/${file}` }));
 }
 
+function loadSuiteResourceScopes() {
+  const scopes = JSON.parse(fs.readFileSync(suiteResourcePath, "utf8"));
+  if (!scopes || typeof scopes !== "object" || Array.isArray(scopes) || Object.values(scopes).some(value => value !== true)) {
+    throw new Error("test/suite-resources.json: values must be true");
+  }
+  return scopes;
+}
+
 function validateManifest(manifest) {
   if (!manifest.domain || !/^[a-z][a-z0-9-]+$/.test(manifest.domain)) throw new Error(`${manifest.source}: invalid domain`);
   if (!Number.isInteger(manifest.priority)) throw new Error(`${manifest.source}: priority is required`);
   if (!allowedTiers.has(manifest.tier) || !allowedCriticality.has(manifest.criticality)) throw new Error(`${manifest.source}: invalid tier or criticality`);
   if (!Array.isArray(manifest.patterns) || !manifest.patterns.length || !Array.isArray(manifest.resources)) throw new Error(`${manifest.source}: patterns and resources are required`);
+  if (!manifest.resource_scopes || typeof manifest.resource_scopes !== "object" || Array.isArray(manifest.resource_scopes)) throw new Error(`${manifest.source}: resource_scopes are required`);
+  const resources = new Set(manifest.resources);
+  if (manifest.resources.some(resource => typeof resource !== "string" || !resource.trim()) || resources.size !== manifest.resources.length) throw new Error(`${manifest.source}: resources must be unique non-empty strings`);
+  const scopeNames = Object.keys(manifest.resource_scopes);
+  if (scopeNames.length !== resources.size || scopeNames.some(resource => !resources.has(resource))) throw new Error(`${manifest.source}: resource_scopes must classify every declared resource and no others`);
+  if (scopeNames.some(resource => !allowedResourceScopes.has(manifest.resource_scopes[resource]))) throw new Error(`${manifest.source}: resource scopes must be isolated or shared`);
   if (!Number.isInteger(manifest.timeout_ms) || manifest.timeout_ms < 1000) throw new Error(`${manifest.source}: timeout_ms must be a positive integer`);
   for (const pattern of manifest.patterns) globToRegExp(pattern);
   if (manifest.shared_resources !== undefined) {
@@ -46,6 +62,9 @@ function validateManifest(manifest) {
     }
     if (manifest.shared_resources.some(resource => !manifest.resources.includes(resource))) {
       throw new Error(`${manifest.source}: shared_resources must be declared in resources`);
+    }
+    if (manifest.resources.some(resource => (manifest.resource_scopes[resource] === "shared") !== manifest.shared_resources.includes(resource))) {
+      throw new Error(`${manifest.source}: shared_resources must match resource_scopes`);
     }
   }
   return manifest;
@@ -63,6 +82,7 @@ function walk(dir, result = []) {
 
 function discoverSuites(testRoot = root) {
   const manifests = loadManifests().map(validateManifest);
+  const suiteResourceScopes = loadSuiteResourceScopes();
   const seenDomains = new Set();
   for (const manifest of manifests) {
     if (seenDomains.has(manifest.domain)) throw new Error(`duplicate manifest domain: ${manifest.domain}`);
@@ -86,13 +106,8 @@ function discoverSuites(testRoot = root) {
     identities.add(identity);
     const live = Boolean(manifest.live) || manifest.domain === "live";
     if (live && process.env.SIDEKICK_TEST_LIVE !== "1") continue;
-    const sharedResources = new Set(manifest.shared_resources || []);
-    const sourceText = fs.readFileSync(absolute, "utf8");
-    // Only suites that create their own temporary roots can safely namespace
-    // filesystem/database state. Legacy suites retain a real shared lock until
-    // their fixture ownership is made explicit in the manifest.
-    const isolatedFixture = /mkdtemp(?:Sync)?\s*\(|helpers[\\/]isolated/.test(sourceText);
-    const resources = manifest.resources.map(resource => sharedResources.has(resource) || !isolatedFixture
+    const isolated = suiteResourceScopes[file] === true;
+    const resources = manifest.resources.map(resource => (!isolated || manifest.resource_scopes[resource] === "shared")
       ? resource
       : `${resource}:${file}`);
     suites.push({ file, id: identity, domain: manifest.domain, tier: manifest.tier, criticality: manifest.criticality,
@@ -131,19 +146,31 @@ function shuffleSuites(suites, seed) {
 
 class ResourceLocks {
   constructor() { this.busy = new Set(); this.waiters = []; }
+  canAcquire(names) { return !this.busy.has("exclusive") && !names.some(name => this.busy.has(name)) && (!names.includes("exclusive") || !this.busy.size); }
   async acquire(resources) {
     const names = [...new Set(resources || [])].sort();
     const started = Date.now();
     let waits = 0;
-    while (this.busy.has("exclusive") || names.some(name => this.busy.has(name)) || (names.includes("exclusive") && this.busy.size)) {
+    if (!this.canAcquire(names)) {
       waits++;
-      await new Promise(resolve => this.waiters.push(resolve));
+      await new Promise(resolve => this.waiters.push({ names, resolve }));
+    }
+    while (!this.canAcquire(names)) {
+      waits++;
+      await new Promise(resolve => this.waiters.push({ names, resolve }));
     }
     for (const name of names) this.busy.add(name);
-    const release = () => { for (const name of names) this.busy.delete(name); const waiters = this.waiters.splice(0); waiters.forEach(resolve => resolve()); };
+    const release = () => { for (const name of names) this.busy.delete(name); this.#wake(); };
     release.wait_ms = Date.now() - started;
     release.wait_count = waits;
     return release;
+  }
+  #wake() {
+    const next = this.waiters[0];
+    if (next && this.canAcquire(next.names)) {
+      this.waiters.shift();
+      next.resolve();
+    }
   }
 }
 
@@ -182,7 +209,23 @@ function executeSuite(suite, { cwd, stream, testNamePattern, signal, coverage = 
   });
 }
 
-async function runSuites({ requested = [], cwd = root, domain, tier, seed, concurrency = Number(process.env.SIDEKICK_TEST_CONCURRENCY) || 4, stream = false, failFast = false, testNamePattern, coverage = false, signal, overallTimeoutMs = Number(process.env.SIDEKICK_TEST_OVERALL_TIMEOUT_MS) || 30 * 60 * 1000, output = console } = {}) {
+function validateRunConfig({ concurrency, overallTimeoutMs, seed }) {
+  if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 20) throw new Error("concurrency must be an integer between 1 and 20");
+  if (!Number.isInteger(overallTimeoutMs) || overallTimeoutMs < 1000) throw new Error("overallTimeoutMs must be an integer of at least 1000ms");
+  if (seed !== undefined && !Number.isInteger(seed)) throw new Error("seed must be an integer");
+}
+
+async function runSuites({ requested = [], cwd = root, domain, tier, seed, concurrency, stream = false, failFast = false, testNamePattern, coverage = false, signal, overallTimeoutMs, output = console, onProgress, onEvent } = {}) {
+  if (concurrency === undefined) concurrency = process.env.SIDEKICK_TEST_CONCURRENCY === undefined ? 4 : Number(process.env.SIDEKICK_TEST_CONCURRENCY);
+  if (overallTimeoutMs === undefined) overallTimeoutMs = process.env.SIDEKICK_TEST_OVERALL_TIMEOUT_MS === undefined ? 30 * 60 * 1000 : Number(process.env.SIDEKICK_TEST_OVERALL_TIMEOUT_MS);
+  try { validateRunConfig({ concurrency, overallTimeoutMs, seed }); } catch (error) {
+    output.error(error.message);
+    return { passed: 0, failed: 1, skipped: 0, exitCode: CONFIG_EXIT_CODE, failures: [], results: [], error: error.message };
+  }
+  const progress = event => {
+    const structured = Object.freeze({ ...event });
+    for (const callback of [onProgress, onEvent, output.progress]) if (typeof callback === "function") callback(structured);
+  };
   let allSuites;
   try { allSuites = discoverSuites(cwd); } catch (error) { output.error(error.message); return { passed: 0, failed: 1, skipped: 0, exitCode: CONFIG_EXIT_CODE, failures: [], results: [], error: error.message }; }
   const selection = selectSuites(allSuites, requested, { domain, tier });
@@ -190,6 +233,8 @@ async function runSuites({ requested = [], cwd = root, domain, tier, seed, concu
   const wall_started = Date.now();
   const orderedSelection = shuffleSuites(selection.selected, seed);
   const locks = new ResourceLocks(), results = [], queue = orderedSelection.map(suite => ({ suite, queued_at: Date.now() }));
+  progress({ type: "runner", event: "started", total: orderedSelection.length, concurrency });
+  orderedSelection.forEach((suite, index) => progress({ type: "suite", event: "queued", suite: suite.file, id: suite.id, index }));
   const controller = new AbortController();
   let stopped = false;
   const forwardAbort = () => controller.abort();
@@ -210,8 +255,10 @@ async function runSuites({ requested = [], cwd = root, domain, tier, seed, concu
         active++;
         counted = true;
         peak_concurrency = Math.max(peak_concurrency, active);
+        progress({ type: "suite", event: "started", suite: suite.file, id: suite.id, active_concurrency: active, queue_wait_ms, lock_wait_ms: release.wait_ms });
         const result = await executeSuite(suite, { cwd, stream, testNamePattern, coverage, signal: controller.signal, queue_wait_ms, lock_wait_ms: release.wait_ms, active });
         results.push(result);
+        progress({ type: "suite", event: "finished", suite: suite.file, id: suite.id, status: result.status, duration_ms: result.duration_ms, active_concurrency: active });
         if (result.status === "failed" || result.status === "timeout" || result.status === "cancelled") stopped = stopped || failFast;
       } finally { if (counted) active--; release(); }
     }
@@ -226,10 +273,13 @@ async function runSuites({ requested = [], cwd = root, domain, tier, seed, concu
   const failures = results.filter(item => item.status !== "passed" && (item.status !== "skipped" || unexpectedSkips.some(skip => skip.suite === item.suite)));
   const notRun = selection.selected.filter(suite => !results.some(result => result.suite === suite.file)).map(suite => suite.file);
   const report = { version: 2, passed, failed: failures.length, skipped, unexpected_skips: unexpectedSkips.map(item => item.suite), not_run: notRun, cancelled: results.filter(item => item.status === "cancelled").map(item => item.suite), timed_out: results.filter(item => item.status === "timeout").map(item => item.suite), wall_duration_ms: Date.now() - wall_started, duration_ms: Date.now() - wall_started, peak_concurrency, slowest: [...results].sort((a, b) => b.duration_ms - a.duration_ms).slice(0, 10), failures, results };
+  notRun.forEach(suite => progress({ type: "suite", event: "not_run", suite }));
   output.log(`Test summary: ${passed} passed, ${failures.length} failed, ${skipped} skipped; slowest: ${report.slowest.slice(0, 3).map(item => `${item.suite} (${item.duration_ms}ms)`).join(", ")}`);
   if (failures.length) output.error(`Failed suites: ${failures.map(item => `${item.suite} [${item.status}]`).join(", ")}`);
   if (notRun.length) output.error(`Not run: ${notRun.join(", ")}`);
-  return { ...report, seed: Number.isInteger(seed) ? seed : null, exitCode: failures.length || unexpectedSkips.length || notRun.length ? 1 : 0 };
+  const final = { ...report, seed: Number.isInteger(seed) ? seed : null, exitCode: failures.length || unexpectedSkips.length || notRun.length ? 1 : 0 };
+  progress({ type: "runner", event: "finished", exitCode: final.exitCode, passed, failed: failures.length, skipped, not_run: notRun.length });
+  return final;
 }
 
-module.exports = { CONFIG_EXIT_CODE, SKIP_EXIT_CODE, discoverSuites, selectSuites, runSuites, ResourceLocks, globToRegExp, shuffleSuites };
+module.exports = { CONFIG_EXIT_CODE, SKIP_EXIT_CODE, discoverSuites, selectSuites, runSuites, ResourceLocks, globToRegExp, shuffleSuites, validateManifest, validateRunConfig };

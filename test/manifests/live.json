@@ -4,6 +4,7 @@
   "tier": "live",
   "criticality": "optional",
   "resources": ["exclusive", "subprocess"],
+  "resource_scopes": {"exclusive": "shared", "subprocess": "shared"},
   "timeout_ms": 300000,
   "platforms": ["linux", "win32", "darwin"],
   "live": true,
