@@ -127,7 +127,14 @@ jobs:
           node-version: 22.x
           cache: npm
       - run: npm ci
-      - run: npm run test:coverage
+      - name: Install browser runtime for coverage E2E
+        env:
+          SIDEKICK_BROWSER_BROWSERS_PATH: ${{ runner.temp }}/sidekick-browsers
+        run: node scripts/install-browser.js
+      - name: Run coverage policy
+        env:
+          SIDEKICK_BROWSER_BROWSERS_PATH: ${{ runner.temp }}/sidekick-browsers
+        run: npm run test:coverage
       - name: Upload coverage summary
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1, Node 24
