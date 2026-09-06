@@ -57,7 +57,13 @@ jobs:
       - run: npm ci
       - name: Run changed-test selector self-tests
         run: node --test test/scripts-quality-gates.test.js
+      - name: Install browser runtime for selected browser tests
+        env:
+          SIDEKICK_BROWSER_BROWSERS_PATH: ${{ runner.temp }}/sidekick-browsers
+        run: node scripts/install-browser.js
       - name: Run changed tests with conservative fallback
+        env:
+          SIDEKICK_BROWSER_BROWSERS_PATH: ${{ runner.temp }}/sidekick-browsers
         run: SIDEKICK_TEST_BASE="$(git merge-base HEAD origin/main)" npm run test:changed
 
   resource-contracts:

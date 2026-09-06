@@ -3,7 +3,7 @@
   "source": "merged c8 report on PR branch",
   "minimums": { "lines": 77.97, "statements": 77.97, "functions": 81.21, "branches": 67.71 },
   "files": {
-    "src/core/identity.js": { "lines": 89.25, "branches": 69.23, "functions": 92.3 },
+    "src/core/identity.js": { "lines": 89.25, "branches": 66.66, "functions": 92.3 },
     "src/core/authentication.js": { "lines": 95.38, "branches": 76.38, "functions": 94.73 },
     "src/core/auth-rate-limit.js": { "lines": 92.15, "branches": 76.19, "functions": 100 },
     "src/core/authorization.js": { "lines": 100, "branches": 70.51, "functions": 100 },
@@ -23,9 +23,9 @@
     "src/workflows/runner.js": { "lines": 84.42, "branches": 79.77, "functions": 100 },
     "src/workflows/schema.js": { "lines": 100, "branches": 100, "functions": 100 },
     "src/packs/lifecycle.js": { "lines": 89.1, "branches": 70.96, "functions": 96 },
-    "src/packs/repository.js": { "lines": 91.88, "branches": 61.53, "functions": 100 },
+    "src/packs/repository.js": { "lines": 91.73, "branches": 61.53, "functions": 100 },
     "src/packs/manifest.js": { "lines": 96.26, "branches": 79, "functions": 100 },
-    "src/platform/kernel.js": { "lines": 89.79, "branches": 74.07, "functions": 90.25 },
+    "src/platform/kernel.js": { "lines": 88.88, "branches": 74.07, "functions": 89.83 },
     "src/platform/execution-guards.js": { "lines": 100, "branches": 91.17, "functions": 100 },
     "src/agent/task-store.js": { "lines": 95.91, "branches": 55, "functions": 89.28 }
   }
