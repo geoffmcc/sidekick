@@ -52,6 +52,10 @@ function request(port, method, requestPath, body, options = {}) {
         resolve({ status: response.statusCode, headers: response.headers, body: parsed });
       });
     });
+    const timeoutMs = options.timeout || 15000;
+    req.setTimeout(timeoutMs, () => {
+      req.destroy(new Error(`request to 127.0.0.1:${port}${requestPath} timed out after ${timeoutMs}ms`));
+    });
     req.on("error", reject);
     if (body !== undefined && body !== null) req.end(JSON.stringify(body));
     else req.end();
@@ -61,9 +65,14 @@ function request(port, method, requestPath, body, options = {}) {
 async function waitFor(label, check, timeoutMs = 30000) {
   const deadline = Date.now() + timeoutMs;
   let lastError = null;
-  while (Date.now() < deadline) {
+  while (true) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
     try {
-      const result = await check();
+      const result = await Promise.race([
+        check(),
+        delay(remaining).then(() => { throw new Error(`${label} check was still pending when the ${timeoutMs}ms budget expired`); }),
+      ]);
       if (result) return result;
     } catch (error) {
       lastError = error;
@@ -160,7 +169,7 @@ async function launchDashboard(fixture) {
     if (fixture.dashboardOutput.exit !== null) throw new Error(`exit=${fixture.dashboardOutput.exit}`);
     const result = await request(fixture.dashboardPort, "GET", "/api/capabilities");
     return result.status === 200;
-  });
+  }, 90000);
 }
 
 async function launchAgent(fixture) {
@@ -174,7 +183,7 @@ async function launchAgent(fixture) {
     if (fixture.agentOutput.exit !== null) throw new Error(`exit=${fixture.agentOutput.exit}`);
     const result = await request(fixture.agentPort, "GET", "/api/health", null, { auth: false });
     return result.status === 200;
-  });
+  }, 90000);
 }
 
 async function startFixture({ withAgent = false } = {}) {
@@ -200,7 +209,7 @@ async function startFixture({ withAgent = false } = {}) {
     await waitFor("Compute provider backed by the local inference boundary", async () => {
       const result = await request(fixture.dashboardPort, "GET", "/api/compute");
       return result.status === 200 && result.body?.overview?.providers?.healthy > 0;
-    });
+    }, 120000);
   }
   fixture.request = (method, requestPath, body, options) => request(fixture.dashboardPort, method, requestPath, body, options);
   fixture.restartDashboard = async () => {

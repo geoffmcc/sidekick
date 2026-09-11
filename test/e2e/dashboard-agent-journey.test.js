@@ -21,7 +21,9 @@ after(async () => {
 
 test("Agent task submission, durable completion, history, and reload restoration work end to end", async () => {
   await withDiagnostics(page, fixture, "agent-task-session", async () => {
-    await page.goto(`${fixture.baseUrl}/#agent`, { waitUntil: "networkidle" });
+    await page.goto(`${fixture.baseUrl}/#agent`, { waitUntil: "domcontentloaded" });
+    await page.locator("#page-agent.active").waitFor({ state: "attached" });
+    await page.locator("#agentGoal").waitFor({ state: "visible" });
     await page.locator("#agentGoal").fill("Give me a short greeting");
     await page.locator("#agentProject").fill("e2e_journey");
     await page.locator("#agentGo").click();

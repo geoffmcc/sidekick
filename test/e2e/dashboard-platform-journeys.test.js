@@ -17,7 +17,7 @@ before(async () => {
   fixture = await startFixture();
   browser = await launchBrowser();
   page = await browser.newPage({ httpCredentials: { username: "e2e-user", password: "e2e-dashboard-password" } });
-  await page.goto(`${fixture.baseUrl}/#mission`, { waitUntil: "networkidle" });
+  await page.goto(`${fixture.baseUrl}/#mission`, { waitUntil: "domcontentloaded" });
   await page.locator("#nav-mission").waitFor({ state: "visible" });
 });
 
@@ -71,7 +71,7 @@ test("capability catalog, lifecycle, health, maturity, and workflow projections 
     assert.equal(workflows.status, 200, JSON.stringify(workflows.body));
     assert.equal(workflows.body.ok, true);
 
-    await page.goto(`${fixture.baseUrl}/#capabilities`, { waitUntil: "networkidle" });
+    await page.goto(`${fixture.baseUrl}/#capabilities`, { waitUntil: "domcontentloaded" });
     const installedCard = page.locator("#capInstalled .capability-card").filter({ hasText: "api-engineering · Sidekick" });
     await installedCard.waitFor({ state: "visible" });
     const maturityButton = installedCard.getByRole("button", { name: /maturity/i });
@@ -119,7 +119,7 @@ test("KV state survives a Dashboard process restart", async () => {
     const key = "e2e-persistence";
     const saved = await fixture.request("PUT", `/api/kv/${key}`, { value: "survives-restart", project: "sidekick" });
     assert.equal(saved.status, 200, JSON.stringify(saved.body));
-    await page.goto(`${fixture.baseUrl}/#data`, { waitUntil: "networkidle" });
+    await page.goto(`${fixture.baseUrl}/#data`, { waitUntil: "domcontentloaded" });
     await page.locator(`[data-key="${key}"]`).waitFor({ state: "visible" });
     await page.locator(`[data-key="${key}"]`).click();
     await page.locator("#kvInspector").getByText("survives-restart").waitFor({ state: "visible" });
@@ -128,7 +128,8 @@ test("KV state survives a Dashboard process restart", async () => {
     const restored = await fixture.request("GET", "/api/kv");
     assert.equal(restored.status, 200, JSON.stringify(restored.body));
     assert.equal(restored.body.entries.find(entry => entry.key === key).value, "survives-restart");
-    await page.reload({ waitUntil: "networkidle" });
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.locator("#page-data.active").waitFor({ state: "attached" });
     await page.locator(`[data-key="${key}"]`).waitFor({ state: "visible" });
     await page.locator(`[data-key="${key}"]`).click();
     await page.locator("#kvInspector").getByText("survives-restart").waitFor({ state: "visible" });

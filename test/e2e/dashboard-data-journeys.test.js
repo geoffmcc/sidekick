@@ -42,7 +42,8 @@ test("memory import is visible in the real Memory workspace", async () => {
     assert.equal(imported.body.ok, true);
     assert.equal(imported.body.imported, 1);
 
-    await page.goto(`${fixture.baseUrl}/#memory`, { waitUntil: "networkidle" });
+    await page.goto(`${fixture.baseUrl}/#memory`, { waitUntil: "domcontentloaded" });
+    await page.locator("#page-memory.active").waitFor({ state: "attached" });
     await page.locator("#memoryList").getByText("E2E durable memory").waitFor({ state: "visible" });
     assert.match(await page.locator("#memoryList").textContent(), /e2e_journey/);
     await page.locator("#memoryCategoryAll").click();
@@ -68,12 +69,14 @@ test("knowledge, handoff, and workflow read journeys report bounded product stat
     assert.equal(workflowCatalog.body.ok, true);
     assert.ok(workflowCatalog.body.entries.every(entry => entry.kind === "workflow"));
 
-    await page.goto(`${fixture.baseUrl}/#handoffs`, { waitUntil: "networkidle" });
+    await page.goto(`${fixture.baseUrl}/#handoffs`, { waitUntil: "domcontentloaded" });
+    await page.locator("#page-handoffs.active").waitFor({ state: "attached" });
     await waitFor("handoff workspace", async () => !/Loading handoffs\.\.\./.test(await page.locator("#handoffStatus").textContent()));
     assert.match(await page.locator("#handoffStatus").textContent(), /handoff/i);
     assert.equal(await page.locator("#page-handoffs").evaluate(element => element.classList.contains("active")), true);
 
-    await page.goto(`${fixture.baseUrl}/#projects`, { waitUntil: "networkidle" });
+    await page.goto(`${fixture.baseUrl}/#projects`, { waitUntil: "domcontentloaded" });
+    await page.locator("#page-projects.active").waitFor({ state: "attached" });
     await page.locator("#projectsList").waitFor({ state: "visible" });
     assert.doesNotMatch(await page.locator("#projectsList").textContent(), /internal stack|password|secret/i);
   });
