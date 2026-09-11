@@ -1,8 +1,8 @@
 {
   "schema": "sidekick.compatibility-pack-inventory.v1",
   "source": "bundled pack manifests and repository files",
-  "source_commit": "96d8166f4eca889aa06f50ae8c4240099a118543",
-  "source_commit_date": "2026-09-05T15:40:48-04:00",
+  "source_commit": "62908b5c18e31c36b8e472717d14d01aec4a840e",
+  "source_commit_date": "2026-09-06T10:12:00-04:00",
   "source_fingerprint": "sha256:84974ce7c331fe675fdf4850840eaa2eab853ae5da57368523ee1ea019c0bd78",
   "pack_count": 27,
   "packs": [
@@ -4668,6 +4668,7 @@
               "test/production-compatibility-packs-11-15.test.js",
               "test/security-research-unit.test.js",
               "test/semantic-repository.test.js",
+              "test/static-code-quality.test.js",
               "test/target-pack-buildout.test.js",
               "test/tool-log-correlation.test.js"
             ]
@@ -13269,7 +13270,8 @@
               "test/platform-kernel.test.js",
               "test/security-research-adapter.test.js",
               "test/security-research-pack.test.js",
-              "test/security-research-unit.test.js"
+              "test/security-research-unit.test.js",
+              "test/static-code-quality.test.js"
             ]
           },
           "inventory": {
