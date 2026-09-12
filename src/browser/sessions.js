@@ -24,6 +24,10 @@ const browserArtifacts = require("./artifacts");
 
 const sessions = new Map();
 const EVIDENCE_CAP = 200;
+// TEMPORARY DIAGNOSTIC: bound download.path() so a stalled CI download settles
+// with failure()/warnings instead of leaving wait for="download" to time out
+// with no visibility. Remove once the GH-runner-only stall is understood.
+const DOWNLOAD_PATH_DIAGNOSTIC_TIMEOUT_MS = 4000;
 
 function newSessionId() {
   return `bsn_${crypto.randomBytes(8).toString("hex")}`;
@@ -97,6 +101,38 @@ function adoptPage(session, page, { origin = "created" } = {}) {
   return pageId;
 }
 
+async function boundedDownloadPath(download) {
+  let timer;
+  const timerPromise = new Promise((resolve) => {
+    timer = setTimeout(() => resolve({ timeout: true }), DOWNLOAD_PATH_DIAGNOSTIC_TIMEOUT_MS);
+  });
+  try {
+    const result = await Promise.race([
+      download.path().then((path) => ({ path })),
+      timerPromise,
+    ]);
+    return result;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function diagnosticDownloadFailure(download) {
+  let timer;
+  const timerPromise = new Promise((resolve) => {
+    timer = setTimeout(() => resolve({ timeout: true }), 1500);
+  });
+  try {
+    const result = await Promise.race([
+      download.failure().then((value) => ({ value })),
+      timerPromise,
+    ]);
+    return result;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function captureDownload(session, download) {
   const config = browserConfig();
   const entry = {
@@ -107,7 +143,15 @@ async function captureDownload(session, download) {
   };
   record(session.downloads, entry);
   try {
-    const tempPath = await download.path();
+    const result = await boundedDownloadPath(download);
+    if (result.timeout) {
+      const failure = await diagnosticDownloadFailure(download);
+      const failureText = failure.timeout ? "unavailable (failure() did not answer)" : JSON.stringify(failure.value);
+      entry.status = "failed";
+      entry.error = `download did not produce a file within ${DOWNLOAD_PATH_DIAGNOSTIC_TIMEOUT_MS}ms diagnostic bound; failure=${failureText}; url=${entry.url}; suggested_filename=${entry.suggested_filename}; session_warnings=${JSON.stringify(session.warnings.slice(-5))}`;
+      return;
+    }
+    const tempPath = result.path;
     if (!tempPath) {
       entry.status = "failed";
       entry.error = String(await download.failure() || "download produced no file");
@@ -201,6 +245,7 @@ async function openSession(options = {}, executionContext = null) {
     activePageId: null,
     pageCounter: 0,
     downloads: [],
+    downloadConsumed: 0,
     blockedRequests: [],
     warnings: [],
     requestCount: 0,

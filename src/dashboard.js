@@ -5,8 +5,7 @@ const path = require("path");
 const os = require("os");
 const { timingSafeCompare } = require("./crypto-utils");
 const { readSecret, hasSecret } = require("./core/runtime-secrets");
-const { execFileSync } = require("child_process");
-const { childProcessEnv } = require("./security/child-process");
+const { formatKb, parseMemInfo, parseDiskRoot, runCommand, systemSnapshot, systemctlStatus } = require("./dashboard/system-snapshot");
 const { callDashboardTool, getToolDefsForSource, getToolCategoriesWithTools, buildPolicyInspection, summarizePolicyInspection, enforceToolPolicy, listApprovals, resolveApproval, renderContinuationApprovalPreview, loadWatches, syncToolRegistry } = require("./tools");
 const dynamicTools = require("./dynamic-tools");
 
@@ -18,7 +17,7 @@ try {
   builtinModules.startModuleHealthChecks();
   builtinModules.startModuleReconciliation();
 } catch (error) {
-  console.error("[Modules] Builtin module provisioning failed:", error.message);
+  console.error("[Modules] Builtin module provisioning failed");
 }
 const dbStore = require("./db");
 const identity = require("./core/identity");
@@ -56,10 +55,14 @@ const { registerCapabilityRoutes } = require("./dashboard/capability-routes");
 const { registerEvolveRoutes } = require("./dashboard/evolve-routes");
 const { registerProjectRoutes } = require("./dashboard/project-routes");
 const { runDoctor, formatDoctorText, createSupportBundle } = require("./doctor");
+const { inspectNetworkInterfaces, privateIPv4 } = require("./dashboard/network-info");
+const { capabilityResult, createCapabilityAction } = require("./dashboard/capability-action");
+const { addCorrelationMiddleware, createDashboardErrorBoundary, requestCorrelationId } = require("./dashboard/error-boundary");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const PORT = parseInt(process.env.SIDEKICK_DASHBOARD_PORT || "4098", 10);
 const BIND_HOST = process.env.SIDEKICK_DASHBOARD_BIND_HOST || "127.0.0.1";
+const ERROR_LOG = path.join(DATA_DIR, "dashboard-errors.log");
 if (["0.0.0.0", "::"].includes(BIND_HOST) && process.env.SIDEKICK_ALLOW_PUBLIC_BIND !== "1") {
   throw new Error("wildcard Dashboard bind requires SIDEKICK_ALLOW_PUBLIC_BIND=1");
 }
@@ -80,6 +83,8 @@ dbStore.runPendingMigrations();
 syncToolRegistry();
 
 const app = express();
+const dashboardErrors = createDashboardErrorBoundary({ fs, logFile: ERROR_LOG });
+app.use(addCorrelationMiddleware);
 // Forwarded headers are only authoritative when the deployment explicitly
 // declares a trusted reverse proxy. Treating a client-supplied
 // X-Forwarded-Proto as truth can otherwise make an HTTP session look secure
@@ -109,89 +114,10 @@ app.use(express.json({ limit: "1mb" }));
 const http = require("http");
 const AGENT_PORT = parseInt(process.env.SIDEKICK_AGENT_PORT || "4099", 10);
 
-// First non-internal IPv4 of a local interface. That is a PRIVATE address on
-// any NAT'd deployment — it was previously mislabeled as the public IP too.
-// The honest public value is "unknown" unless something real determines it;
-// no external lookup is performed.
-function getPrivateIPv4() {
-  const interfaces = os.networkInterfaces();
-  for (const name of Object.keys(interfaces)) {
-    for (const iface of interfaces[name]) {
-      if (iface.family === 'IPv4' && !iface.internal) {
-        return iface.address;
-      }
-    }
-  }
-  return 'unknown';
-}
-const VPS_IP = getPrivateIPv4();
-
-function runCommand(program, args = [], opts = {}) {
-  try {
-    return execFileSync(program, args, { encoding: "utf-8", timeout: 5000, ...opts, env: childProcessEnv(opts.env) }).trim();
-  } catch { return "?"; }
-}
-
-function parseMemInfo() {
-  try {
-    return Object.fromEntries(fs.readFileSync("/proc/meminfo", "utf-8").split("\n").filter(Boolean).map(line => {
-      const match = line.match(/^([^:]+):\s+(\d+)\s*(\w+)?/);
-      return match ? [match[1], { value: Number(match[2]), unit: match[3] || "" }] : null;
-    }).filter(Boolean));
-  } catch { return {}; }
-}
-
-function formatKb(entry) {
-  if (!entry || !Number.isFinite(entry.value)) return "?";
-  if (entry.unit === "kB") return `${entry.value} kB`;
-  return String(entry.value);
-}
-
-function parseDiskRoot() {
-  const output = runCommand("df", ["-h", "/"]);
-  const line = output.split("\n")[1] || "";
-  const parts = line.trim().split(/\s+/);
-  return {
-    total: parts[1] || "?",
-    used: parts[2] || "?",
-    free: parts[3] || "?",
-    pct: parts[4] || "?"
-  };
-}
-
-function parseLoadAverage() {
-  try {
-    return fs.readFileSync("/proc/loadavg", "utf-8").trim().split(/\s+/).slice(0, 3).join(" ");
-  } catch { return os.loadavg().map(n => n.toFixed(2)).join(" "); }
-}
-
-function systemctlStatus(unit, action = "is-active") {
-  const status = runCommand("systemctl", [action, unit], { timeout: 3000 });
-  return status === "?" ? "inactive" : status;
-}
-
-function systemSnapshot() {
-  const memInfo = parseMemInfo();
-  const totalKb = memInfo.MemTotal?.value || 0;
-  const availableKb = memInfo.MemAvailable?.value || 0;
-  const usedKb = totalKb && availableKb ? totalKb - availableKb : 0;
-  const memPct = totalKb ? Math.round((usedKb / totalKb) * 100) : 0;
-  const disk = parseDiskRoot();
-  // os.loadavg()[0] is the 1-minute LOAD AVERAGE, not a CPU percentage — it
-  // was previously rendered with a "%" suffix, which faked a percent. It is
-  // now reported as what it is, with the core count so consumers can judge
-  // pressure (load ≈ cores means saturated).
-  const load1m = Number((os.loadavg()[0] || 0).toFixed(2));
-  const cpuCount = os.cpus().length || 1;
-  return {
-    uptime: runCommand("uptime", ["-p"]),
-    memory: { total: formatKb(memInfo.MemTotal), used: usedKb ? `${usedKb} kB` : "?", free: formatKb(memInfo.MemAvailable), pct: `${memPct}%`, pctNumber: memPct },
-    disk,
-    load_1m: load1m,
-    cpu_count: cpuCount,
-    load: parseLoadAverage()
-  };
-}
+// Interface enumeration is optional telemetry. A restricted runtime must not
+// prevent the Dashboard from starting or cause a broader bind.
+const networkInfo = inspectNetworkInterfaces();
+const VPS_IP = privateIPv4(networkInfo);
 
 const DASHBOARD_USER = process.env.SIDEKICK_DASHBOARD_USER || "";
 const DASHBOARD_PASS = readSecret("SIDEKICK_DASHBOARD_PASS");
@@ -446,20 +372,8 @@ function finishDashboardExecution(execution, state, details = {}) {
   }
 }
 
-// Error logging
-const ERROR_LOG = path.join(DATA_DIR, 'dashboard-errors.log');
-function logError(url, status, error, page, userAgent) {
-  const entry = {
-    timestamp: new Date().toISOString(),
-    url,
-    status,
-    error: error.message || String(error),
-    page,
-    userAgent,
-    logged: new Date().toISOString()
-  };
-  const line = JSON.stringify(entry) + '\n';
-  fs.appendFileSync(ERROR_LOG, line);
+function logError(url, status, error, page, userAgent, req = null) {
+  return dashboardErrors.logError(req, error, { url, status, component: page, userAgent });
 }
 
 function getJsonFromLocalService(port, pathName, headers = {}, timeout = 3000) {
@@ -597,6 +511,7 @@ const { requireIdentityPermission, requireIdentityAdministrator } = registerAuth
   makeSessionToken,
   bootstrapToken: BOOTSTRAP_TOKEN,
   remoteBootstrapAllowed: REMOTE_BOOTSTRAP_REQUIRED,
+  errorResponse: dashboardErrors.respond,
 });
 
 // Grafana auth-proxy mode does not create a Grafana session token. Do not
@@ -655,8 +570,7 @@ app.use('/grafana', (req, res) => {
   });
   proxyReq.on('timeout', () => proxyReq.destroy(new Error('Grafana proxy timed out')));
   proxyReq.on('error', error => {
-    logError(req.originalUrl, 502, error, 'grafana', req.headers['user-agent']);
-    if (!res.headersSent) res.status(502).send('Grafana proxy error');
+    if (!res.headersSent) dashboardErrors.respond(req, res, error, { status: 502, code: "upstream_unavailable", component: "grafana" });
   });
   if (body) proxyReq.write(body);
   else req.pipe(proxyReq);
@@ -679,7 +593,7 @@ app.get("/api/doctor", (req, res) => {
     if (format === "text") return res.type("text/plain").send(formatDoctorText(report));
     return res.json(createSupportBundle({ report }));
   } catch (error) {
-    return res.status(500).json({ ok: false, error: "Doctor diagnostics unavailable", code: "doctor_failed" });
+    return dashboardErrors.respond(req, res, error, { status: 500, code: "internal_error", component: "doctor", publicMessage: "Doctor diagnostics unavailable" });
   }
 });
 
@@ -712,11 +626,13 @@ function dashboardExecutionMetadata(req, actor, extra = {}) {
   };
 }
 
-function blackboxJson(res, fn) {
+function blackboxJson(req, res, fn) {
   try {
-    res.json(fn());
+    const payload = fn();
+    if (res.headersSent) return;
+    return res.json(payload);
   } catch (error) {
-    res.status(400).json({ error: error.message });
+    return dashboardErrors.respond(req, res, error, { status: 400, code: "invalid_request", component: "blackbox" });
   }
 }
 
@@ -753,10 +669,9 @@ async function governedDashboardMutation(req, res, tool, args, auditAction) {
       };
       if (Object.values(wrapped).some(value => value !== undefined)) return res.json({ ok: true, ...wrapped });
     }
-    return capabilityResult(res, result);
+    return capabilityResult(res, result, { req, errorResponse: dashboardErrors.respond, component: tool });
   } catch (error) {
-    logError(req.originalUrl, 500, error, tool, req.headers["user-agent"]);
-    return res.status(500).json({ ok: false, error: error.message });
+    return dashboardErrors.respond(req, res, error, { status: 500, code: "service_unavailable", component: tool });
   }
 }
 
@@ -960,8 +875,9 @@ function seedKV() {
     // IPv4 is the private address, and nothing here performs the external
     // lookup that a real public value would require.
     "network:public_ip": "unknown",
-    "network:private_ip": getPrivateIPv4(),
-    "network:interfaces": Object.keys(os.networkInterfaces()).join(","),
+    "network:private_ip": VPS_IP,
+    "network:interfaces": Object.keys(networkInfo.interfaces).join(","),
+    "network:interfaces_status": networkInfo.diagnostic?.code || "available",
     "network:dns": (() => { try { return fs.readFileSync("/etc/resolv.conf", "utf-8").split("\n").map(line => line.match(/^nameserver\s+(\S+)/)?.[1]).filter(Boolean).join(","); } catch { return "?"; } })(),
     "network:gateway": (() => { const route = runCommand("ip", ["route", "show", "default"]); return route.match(/\bvia\s+(\S+)/)?.[1] || "?"; })(),
 
@@ -1008,7 +924,7 @@ function seedKV() {
   console.log("Seed KV written with", Object.keys(seed).length, "keys");
 }
 
-registerLogsRoute({ app, dbStore, normalizeLogEntry, buildActivitySessions, summarizeActivity, fallbackGapMs: ACTIVITY_FALLBACK_GAP_MS });
+registerLogsRoute({ app, dbStore, normalizeLogEntry, buildActivitySessions, summarizeActivity, fallbackGapMs: ACTIVITY_FALLBACK_GAP_MS, errorResponse: dashboardErrors.respond });
 
 async function dashboardSummaryHandler(req, res) {
   try {
@@ -1166,7 +1082,7 @@ async function dashboardSummaryHandler(req, res) {
       deployments
     });
   } catch (e) {
-    res.json({ error: e.message });
+    return dashboardErrors.respond(req, res, e, { status: 500, code: "service_unavailable", component: "summary" });
   }
 }
 
@@ -1179,6 +1095,7 @@ registerResearchSourceRoutes({
   authenticatedUser,
   auditLog,
   logError,
+  errorResponse: dashboardErrors.respond,
 });
 
 registerNetworkScopeRoutes({
@@ -1187,6 +1104,7 @@ registerNetworkScopeRoutes({
   requireIdentityAdministrator,
   auditLog,
   logError,
+  errorResponse: dashboardErrors.respond,
 });
 
 app.get("/api/artifacts", (req, res) => {
@@ -1217,7 +1135,7 @@ app.get("/api/artifacts", (req, res) => {
       },
     });
   } catch (error) {
-    res.status(400).json({ ok: false, error: error.message });
+     return dashboardErrors.respond(req, res, error, { status: 400, code: "invalid_request", component: "artifacts" });
   }
 });
 
@@ -1230,11 +1148,11 @@ app.get("/api/repository/semantic", async (req, res) => {
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200 || !Number.isSafeInteger(maxChars) || maxChars < 1000 || maxChars > 60000) return res.status(400).json({ ok: false, error: "invalid bounded semantic query limits", code: "invalid_limits" });
   try {
     const result = await callDashboardTool("semantic_repo", { action: "query", path: req.query.path, query: String(req.query.query || "").slice(0, 500), level: Math.min(2, Math.max(0, Number(req.query.level || 0))), limit, max_chars: maxChars, cursor: req.query.cursor || undefined }, dashboardExecutionMetadata(req, authenticatedUser(req) || "dashboard"));
-    return capabilityResult(res, result);
-  } catch (error) { return res.status(400).json({ ok: false, error: error.message, code: "semantic_query_failed" }); }
+    return capabilityResult(res, result, { req, errorResponse: dashboardErrors.respond, component: "semantic_repository" });
+   } catch (error) { return dashboardErrors.respond(req, res, error, { status: 400, code: "invalid_request", component: "semantic_repository" }); }
 });
 
-registerEventRoutes({ app, platformKernel, authenticatedUser, auditLog });
+registerEventRoutes({ app, platformKernel, authenticatedUser, auditLog, errorResponse: dashboardErrors.respond });
 
 registerConnectorRoutes({
   app,
@@ -1244,13 +1162,14 @@ registerConnectorRoutes({
   startDashboardExecution,
   finishDashboardExecution,
   auditLog,
+  errorResponse: dashboardErrors.respond,
 });
 
 app.get("/api/scope-snapshots", (req, res) => {
   try {
     const snapshots = platformKernel.listScopeSnapshots({ project_id: req.query.project_id, state: req.query.state, limit: req.query.limit });
     res.json({ ok: true, snapshots, total: snapshots.length });
-  } catch (error) { res.status(400).json({ ok: false, error: error.message }); }
+  } catch (error) { return dashboardErrors.respond(req, res, error, { status: 400, code: "invalid_request", component: "scope_snapshots" }); }
 });
 
 app.post("/api/scope-snapshots", (req, res) => {
@@ -1260,7 +1179,7 @@ app.post("/api/scope-snapshots", (req, res) => {
     const snapshot = platformKernel.createScopeSnapshot({ ...req.body, created_by: actor, source: "dashboard" });
     auditLog(req, "scope_snapshot.create", { snapshot_id: snapshot.snapshot_id, digest: snapshot.digest, target_count: snapshot.target_count, actor });
     res.json({ ok: true, snapshot });
-  } catch (error) { res.status(400).json({ ok: false, error: error.message }); }
+  } catch (error) { return dashboardErrors.respond(req, res, error, { status: 400, code: "invalid_request", component: "scope_snapshots" }); }
 });
 
 app.post("/api/scope-guard/evaluate", (req, res) => {
@@ -1270,7 +1189,7 @@ app.post("/api/scope-guard/evaluate", (req, res) => {
     const decision = platformKernel.evaluateScope(req.body?.snapshot_id, req.body || {});
     auditLog(req, "scope_guard.evaluate", { snapshot_id: decision.snapshot_id, decision_digest: decision.decision_digest, ok: decision.ok, reason: decision.reason, actor });
     res.json({ ok: true, decision });
-  } catch (error) { res.status(400).json({ ok: false, error: error.message }); }
+  } catch (error) { return dashboardErrors.respond(req, res, error, { status: 400, code: "invalid_request", component: "scope_guard" }); }
 });
 
 app.get("/api/llm", (req, res) => {
@@ -1294,7 +1213,7 @@ app.get("/api/llm", (req, res) => {
     }
     res.json({ status: models.length === 0 ? "no_models" : "ok", models });
   } catch (e) {
-    res.json({ status: "unreachable", error: e.message });
+    res.json({ status: "unreachable", code: "upstream_unavailable", correlation_id: requestCorrelationId(req) });
   }
 });
 
@@ -1313,6 +1232,7 @@ registerQuickActionsRoute({
   fs,
   path,
   rootDir: path.join(__dirname, ".."),
+  errorResponse: dashboardErrors.respond,
 });
 
 registerSystemRoutes({
@@ -1324,6 +1244,7 @@ registerSystemRoutes({
   grafanaPort: GRAFANA_PORT,
   grafanaConfigured: Boolean(GRAFANA_USER),
   influxConfigured: Boolean(hasSecret("SIDEKICK_INFLUX_TOKEN") && readSecret("SIDEKICK_INFLUX_TOKEN") !== "sidekick-influx-token"),
+  errorResponse: dashboardErrors.respond,
 });
 
 app.get("/api/config", (req, res) => {
@@ -1348,10 +1269,11 @@ registerKvRoutes({
   valueType,
   auditLog,
   requireIdentityAdministrator,
+  errorResponse: dashboardErrors.respond,
 });
-registerProjectRoutes({ app, platformKernel });
+registerProjectRoutes({ app, platformKernel, errorResponse: dashboardErrors.respond });
 
-registerStatsToolsRoutes({ app, dbStore, getToolDefsForSource });
+registerStatsToolsRoutes({ app, dbStore, getToolDefsForSource, errorResponse: dashboardErrors.respond });
 
 app.get("/api/tool-policy", (req, res) => {
   const sources = String(req.query.source || "mcp,dashboard,agent").split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
@@ -1361,7 +1283,7 @@ app.get("/api/tool-policy", (req, res) => {
   // name=bash appear to be missing.
   let records = getToolDefsForSource(sources.length === 1 ? sources[0] : "dashboard");
   if (req.query.name) records = records.filter(tool => tool.name === req.query.name);
-  if (req.query.name && records.length === 0) return res.status(404).json({ ok: false, error: "Tool not found: " + req.query.name });
+  if (req.query.name && records.length === 0) return dashboardErrors.respond(req, res, null, { status: 404, code: "not_found", component: "tool_policy" });
   const limit = Number.parseInt(req.query.limit || "100", 10);
   records = records.slice(0, Number.isFinite(limit) && limit > 0 ? Math.min(limit, 200) : 100);
   const decisions = buildPolicyInspection(records, sources);
@@ -1409,7 +1331,7 @@ function computeInstallInfo(req, enrollmentToken) {
   };
 }
 
-registerComputeReadRoutes({ app, compute, computeInstallInfo });
+registerComputeReadRoutes({ app, compute, computeInstallInfo, errorResponse: dashboardErrors.respond });
 
 app.post("/api/compute/enrollment-tokens", (req, res) => {
   const body = req.body || {};
@@ -1447,9 +1369,9 @@ app.post("/api/compute/jobs/:jobId/:action", (req, res) => {
 
 app.post("/api/compute/recover", (req, res) => governedDashboardMutation(req, res, "compute_jobs", { action: "recover" }, "compute.jobs.recover"));
 
-registerBlackboxRoutes({ app, blackbox, requireIdentityPermission, blackboxJson, governedDashboardMutation });
+registerBlackboxRoutes({ app, blackbox, requireIdentityPermission, blackboxJson, governedDashboardMutation, errorResponse: dashboardErrors.respond });
 
-registerPredictRoutes({ app, predictEngine, governedDashboardMutation });
+registerPredictRoutes({ app, predictEngine, governedDashboardMutation, errorResponse: dashboardErrors.respond });
 
 app.get("/api/evolve", (req, res) => {
   const capabilities = dbStore.listGeneratedCapabilities({ includeInactive: true }).map(cap => ["trial", "active"].includes(cap.state) ? (dbStore.syncGeneratedCapabilityStats(cap.id) || cap) : cap);
@@ -1505,10 +1427,10 @@ async function evolveDashboardAction(req, res, action, extra = {}) {
     }
     auditLog(req, `evolve.${action}`, { id: req.params.id || req.body?.id || null });
     const result = await callDashboardTool("evolve", { action, id: req.params.id || req.body?.id, ...(req.body || {}), ...extra }, dashboardExecutionMetadata(req, actor || "dashboard"));
+    if (result?.isError) return dashboardErrors.respond(req, res, null, { status: result.approvalRequired ? 202 : result.code === "policy_denied" ? 403 : 400, code: result.approvalRequired ? "approval_required" : result.code === "policy_denied" ? "policy_denied" : "invalid_request", component: "evolve" });
     res.json({ ok: !result.isError, result: result.content?.[0]?.text || "" });
   } catch (error) {
-    logError(req.originalUrl, 500, error, "evolve", req.headers["user-agent"]);
-    res.status(500).json({ ok: false, error: error.message });
+    return dashboardErrors.respond(req, res, error, { status: 500, code: "service_unavailable", component: "evolve" });
   }
 }
 
@@ -1520,43 +1442,13 @@ async function evolveDashboardAction(req, res, action, extra = {}) {
 // blanket dashboard auth middleware and the Origin/CSRF check above already
 // gate these routes.
 
-function capabilityResult(res, result) {
-  const text = result && result.content && result.content[0] ? result.content[0].text : "";
-  let payload;
-  try {
-    payload = JSON.parse(text);
-  } catch {
-    payload = { ok: !result?.isError, message: text };
-  }
-  if (result && result.isError) return res.status(400).json({ ok: false, ...payload });
-  return res.json({ ok: true, ...payload });
-}
-
 // Installing, enabling or upgrading a pack activates executable module code
 // inside the server process — the `capability` tool is critical risk for
 // exactly that reason. Reads stay open to the dashboard's existing gating;
 // mutations must name a real principal, like connector registration does.
-const CAPABILITY_MUTATIONS = new Set([
-  "install", "configure", "enable", "disable", "upgrade", "uninstall",
-]);
+const capabilityAction = createCapabilityAction({ authenticatedUser, requireAttributedActor, auditLog, callDashboardTool, dashboardExecutionMetadata, logError, errorResponse: dashboardErrors.respond });
 
-async function capabilityAction(req, res, args, auditAction) {
-  try {
-    let actor = authenticatedUser(req);
-    if (CAPABILITY_MUTATIONS.has(args.action)) {
-      actor = requireAttributedActor(req, res, "Capability pack installation and lifecycle changes");
-      if (!actor) return;
-    }
-    auditLog(req, `capability.${auditAction}`, { name: args.name || args.path || null });
-    const result = await callDashboardTool("capability", args, dashboardExecutionMetadata(req, actor || "dashboard"));
-    return capabilityResult(res, result);
-  } catch (error) {
-    logError(req.originalUrl, 500, error, "capability", req.headers["user-agent"]);
-    return res.status(500).json({ ok: false, error: error.message });
-  }
-}
-
-registerCapabilityRoutes({ app, capabilityAction, capabilityResult, callDashboardTool, dashboardExecutionMetadata, authenticatedUser, logError });
+registerCapabilityRoutes({ app, capabilityAction, capabilityResult, callDashboardTool, dashboardExecutionMetadata, authenticatedUser, logError, errorResponse: dashboardErrors.respond });
 
 function shapeExecution(execution) {
   if (!execution) return null;
@@ -1599,10 +1491,10 @@ function shapeExecution(execution) {
 registerEvolveRoutes({
   app, evolveDashboardAction, authenticatedUser, dbStore, shapeExecution,
   requireAttributedActor, crypto, callDashboardTool, dashboardExecutionMetadata,
-  redactSensitive, auditLog, dynamicTools,
+  redactSensitive, auditLog, dynamicTools, logError, errorResponse: dashboardErrors.respond,
 });
 
-registerApprovalRoutes({ app, listApprovals, renderContinuationApprovalPreview, authenticatedUser, auditLog, logError, resolveApproval, requireIdentityPermission });
+registerApprovalRoutes({ app, listApprovals, renderContinuationApprovalPreview, authenticatedUser, auditLog, logError, resolveApproval, requireIdentityPermission, errorResponse: dashboardErrors.respond });
 
 /**
  * On-demand argument preview for a task-originated approval (ADR §4.4).
@@ -1663,8 +1555,7 @@ app.get("/api/reconciliations", (req, res) => {
       can_resolve: Boolean(authenticatedUser(req)),
     });
   } catch (error) {
-    logError(req.originalUrl, 500, error, "reconciliations", req.headers["user-agent"]);
-    res.status(500).json({ ok: false, error: error.message });
+    return dashboardErrors.respond(req, res, error, { status: 500, code: "service_unavailable", component: "reconciliations" });
   }
 });
 
@@ -1683,14 +1574,13 @@ app.post("/api/reconciliations/:taskId/resolve", (req, res) => {
     try {
       outcome = resolveReconciliation({ taskId: req.params.taskId, decision, reconciledBy });
     } catch (error) {
-      return res.status(400).json({ ok: false, error: error.message });
+      return dashboardErrors.respond(req, res, error, { status: 400, code: "invalid_request", component: "reconciliations" });
     }
     auditLog(req, "approval.reconcile", { task_id: req.params.taskId, decision, reconciled_by: reconciledBy, ok: outcome.ok });
     if (!outcome.ok) return res.status(409).json({ ok: false, error: outcome.code });
     res.json({ ok: true, task_id: outcome.taskId, decision: outcome.decision, state: outcome.checkpointState });
   } catch (error) {
-    logError(req.originalUrl, 500, error, "reconciliations", req.headers["user-agent"]);
-    res.status(500).json({ ok: false, error: error.message });
+    return dashboardErrors.respond(req, res, error, { status: 500, code: "service_unavailable", component: "reconciliations" });
   }
 });
 
@@ -1721,11 +1611,11 @@ app.get("/api/knowledge", (req, res) => {
     
     res.json({ ok: true, knowledge: rows });
   } catch (error) {
-    res.json({ ok: false, error: error.message, knowledge: [] });
+    return dashboardErrors.respond(req, res, error, { status: 500, code: "service_unavailable", component: "knowledge" });
   }
 });
 
-registerMemoryReadRoutes({ app, dbStore, memoryCategory });
+registerMemoryReadRoutes({ app, dbStore, memoryCategory, errorResponse: dashboardErrors.respond });
 
 /**
  * Memory mutations route through the dispatcher where a tool action exists
@@ -1746,11 +1636,11 @@ async function dispatchMemoryManage(req, res, args, auditAction) {
       // The tool reports a missing id in its message text; that is the one
       // signal available without widening the tool contract.
       const httpStatus = /not found/i.test(text) ? 404 : 500;
-      return res.status(httpStatus).json({ ok: false, error: text || "memory operation failed" });
+      return dashboardErrors.respond(req, res, null, { status: httpStatus, code: httpStatus === 404 ? "not_found" : "service_unavailable", component: "memory" });
     }
     return res.json({ ok: true, message: text });
   } catch (error) {
-    return res.status(500).json({ ok: false, error: error.message });
+    return dashboardErrors.respond(req, res, error, { status: 500, code: "service_unavailable", component: "memory" });
   }
 }
 
@@ -1766,11 +1656,11 @@ app.post("/api/memories/:id/enable", (req, res) => {
     const success = dbStore.enableMemory(req.params.id);
     auditLog(req, "memory_enable", { id: req.params.id, ok: success });
     if (!success) {
-      return res.status(404).json({ ok: false, error: "Memory not found or not enable-able (deleted/expired memories require restore)" });
+      return dashboardErrors.respond(req, res, null, { status: 404, code: "not_found", component: "memory" });
     }
     res.json({ ok: true });
   } catch (error) {
-    res.status(500).json({ ok: false, error: error.message });
+    return dashboardErrors.respond(req, res, error, { status: 500, code: "service_unavailable", component: "memory" });
   }
 });
 
@@ -1787,15 +1677,15 @@ app.post("/api/memories/export", async (req, res) => {
     }, dashboardExecutionMetadata(req, authenticatedUser(req) || "dashboard"));
     const text = result?.content?.[0]?.text || "";
     if (result?.isError) {
-      return res.status(500).json({ ok: false, error: text || "export failed" });
+      return dashboardErrors.respond(req, res, null, { status: 502, code: "upstream_unavailable", component: "memory_export" });
     }
     let data;
     try { data = JSON.parse(text); } catch { data = null; }
-    if (!data) return res.status(500).json({ ok: false, error: "export produced an unreadable payload" });
+    if (!data) return dashboardErrors.respond(req, res, null, { status: 502, code: "upstream_unavailable", component: "memory_export" });
     auditLog(req, "memory_export", { count: data.count, project, type });
     res.json({ ok: true, data });
   } catch (error) {
-    res.status(500).json({ ok: false, error: error.message });
+    return dashboardErrors.respond(req, res, error, { status: 500, code: "service_unavailable", component: "memory" });
   }
 });
 
@@ -1803,7 +1693,7 @@ app.post("/api/memories/import", async (req, res) => {
   try {
     const { data, on_conflict, preserve_ids } = req.body || {};
     if (data === undefined || data === null) {
-      return res.status(400).json({ ok: false, error: "data required" });
+      return dashboardErrors.respond(req, res, null, { status: 400, code: "invalid_request", component: "memory_import" });
     }
     const result = await callDashboardTool("memory_import", {
       // The tool takes the export payload as a JSON string.
@@ -1814,7 +1704,7 @@ app.post("/api/memories/import", async (req, res) => {
     const text = result?.content?.[0]?.text || "";
     if (result?.isError) {
       const httpStatus = /invalid json/i.test(text) ? 400 : 500;
-      return res.status(httpStatus).json({ ok: false, error: text || "import failed" });
+      return dashboardErrors.respond(req, res, null, { status: httpStatus, code: httpStatus === 400 ? "invalid_request" : "upstream_unavailable", component: "memory_import" });
     }
     // Recover the structured counts from the tool's summary line so existing
     // clients keep their imported/updated/skipped fields.
@@ -1827,7 +1717,7 @@ app.post("/api/memories/import", async (req, res) => {
     auditLog(req, "memory_import", summary);
     res.json({ ok: true, ...summary, message: text });
   } catch (error) {
-    res.status(500).json({ ok: false, error: error.message });
+    return dashboardErrors.respond(req, res, error, { status: 500, code: "service_unavailable", component: "memory" });
   }
 });
 
@@ -1839,19 +1729,19 @@ app.post("/api/memories/expire", (req, res) => {
     if (req.authPrincipal && !requireIdentityAdministrator(req, res)) return;
     const { stale_days } = req.body || {};
     if (stale_days !== undefined && (!Number.isFinite(Number(stale_days)) || Number(stale_days) < 0)) {
-      return res.status(400).json({ ok: false, error: "stale_days must be a non-negative number" });
+      return dashboardErrors.respond(req, res, null, { status: 400, code: "invalid_request", component: "memory" });
     }
     const result = dbStore.expireStaleMemories({ staleDays: stale_days });
     auditLog(req, "memory_expire", { expired: result.expired, stale_days });
     res.json({ ok: true, ...result });
   } catch (error) {
-    res.status(500).json({ ok: false, error: error.message });
+    return dashboardErrors.respond(req, res, error, { status: 500, code: "service_unavailable", component: "memory" });
   }
 });
 
-registerHandoffReadRoutes({ app, dbStore });
+registerHandoffReadRoutes({ app, dbStore, errorResponse: dashboardErrors.respond });
 
-registerSyncRoutes({ app, dbStore, auditLog });
+registerSyncRoutes({ app, dbStore, auditLog, errorResponse: dashboardErrors.respond });
 
 app.get("/api/procedures", (req, res) => {
   const proceduresFile = path.join(DATA_DIR, "procedures.json");
@@ -1872,21 +1762,22 @@ app.get("/api/procedures", (req, res) => {
     }));
     res.json({ ok: true, procedures });
   } catch (e) {
-    res.json({ ok: false, error: e.message, procedures: [] });
+    return dashboardErrors.respond(req, res, e, { status: 500, code: "service_unavailable", component: "procedures" });
   }
 });
 
 function requireDashboardTool(req, res, toolName) {
   const policyError = enforceToolPolicy(toolName, "dashboard");
   if (!policyError) return true;
-  auditLog(req, "tool.policy_block", { tool: toolName, reason: policyError.content[0].text });
-  res.status(403).json({ ok: false, error: policyError.content[0].text });
+  auditLog(req, "tool.policy_block", { tool: toolName, reason: "policy_denied" });
+  dashboardErrors.respond(req, res, policyError, { status: 403, code: "policy_denied", component: "tool_policy" });
   return false;
 }
 
 registerDatabaseRoutes({
   app, dbStore, dataDir: DATA_DIR, path, fs, callDashboardTool,
   dashboardExecutionMetadata, authenticatedUser, requireDashboardTool, auditLog,
+  errorResponse: dashboardErrors.respond,
 });
 
 // Destructive clears report what actually happened. These previously answered
@@ -1910,9 +1801,8 @@ function respondToClear(req, res, auditEvent, run) {
     auditLog(req, auditEvent, detail);
     res.json({ ok: true, ...detail });
   } catch (error) {
-    logError(req.originalUrl, 500, error, auditEvent, req.headers["user-agent"]);
-    auditLog(req, auditEvent + ".failed", { error: redactSensitive(String(error.message || error)) });
-    res.status(500).json({ ok: false, error: redactSensitive(String(error.message || error)) });
+    auditLog(req, auditEvent + ".failed", { error: "dashboard_action_failed" });
+    return dashboardErrors.respond(req, res, error, { status: 500, code: "service_unavailable", component: auditEvent });
   }
 }
 
@@ -1944,8 +1834,10 @@ app.delete("/api/data", (req, res) =>
 // old {ok:true} claimed a persistence result this handler never verifies.
 app.post('/api/internal/error-log', (req, res) => {
   try {
-    const entry = req.body || {};
-    logError(entry.url, entry.status, entry.error, entry.page, entry.userAgent);
+    dashboardErrors.logError(req, new Error("frontend error report"), {
+      status: Number(req.body?.status) >= 400 && Number(req.body?.status) <= 599 ? Number(req.body.status) : 500,
+      component: "frontend",
+    });
   } catch {}
   res.status(204).end();
 });
@@ -1973,11 +1865,11 @@ app.post('/api/webhook/:source', (req, res) => {
     saveWebhooks(webhooks);
     res.json({ ok: true, id: webhook.id });
   } catch (e) {
-    res.status(400).json({ error: e.message });
+    return dashboardErrors.respond(req, res, e, { status: 400, code: "invalid_request", component: "webhook" });
   }
 });
 
-registerAgentProxyRoutes({ app, http, agentPort: AGENT_PORT });
+registerAgentProxyRoutes({ app, http, agentPort: AGENT_PORT, errorResponse: dashboardErrors.respond });
 
 // --- Frontend ---
 
@@ -1986,6 +1878,9 @@ app.get("/", (req, res) => {
     .replace("__VPS_IP__", VPS_IP);
   res.set("Content-Type", "text/html; charset=utf-8").set("Cache-Control", "no-cache").send(html);
 });
+
+app.use("/api", (req, res) => dashboardErrors.respond(req, res, null, { status: 404, code: "not_found", component: "api_not_found" }));
+app.use(dashboardErrors.middleware);
 
 let dashboardServer = null;
 let dashboardShutdown = null;

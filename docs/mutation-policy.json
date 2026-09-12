@@ -1,0 +1,48 @@
+{
+  "version": 2,
+  "thresholds": {
+    "overall_percent": 60,
+    "security_percent": 80,
+    "minimum_security_mutants": 4,
+    "domain_minimums": {
+      "identity": 2,
+      "path-policy": 3,
+      "result-contract": 4,
+      "maturity": 3,
+      "proving": 4,
+      "pack-repository": 4,
+      "pack-lifecycle": 4,
+      "authorization": 2
+    },
+    "targeted_domain_minimums": {
+      "identity": 2,
+      "path-policy": 1,
+      "result-contract": 2,
+      "maturity": 2,
+      "proving": 1,
+      "pack-repository": 1,
+      "pack-lifecycle": 1,
+      "authorization": 0
+    }
+  },
+  "required_categories": [
+    "normalization",
+    "authorization",
+    "fail-closed",
+    "boolean",
+    "comparison",
+    "collection-bound",
+    "evidence-freshness",
+    "lifecycle",
+    "provenance"
+  ],
+  "forbidden_survivors": [],
+  "output": {
+    "max_chars": 1200,
+    "max_bytes": 262144
+  },
+  "execution": {
+    "overall_timeout_ms": 120000,
+    "process_timeout_ms": 150000
+  }
+}

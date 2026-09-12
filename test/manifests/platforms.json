@@ -3,10 +3,20 @@
   "priority": 50,
   "tier": "integration",
   "criticality": "required",
-  "resources": ["sqlite", "filesystem", "subprocess", "git", "environment"],
+  "resources": ["sqlite", "filesystem", "subprocess", "browser", "git", "environment", "ports", "workspace"],
+  "resource_contracts": {
+    "sqlite": {"kind": "isolated", "provisioner": "sqlite-file", "fixture": "sqlite-database", "cleanup": "owned-temp-tree", "cleanup_owner": "suite", "lock_identity": "sqlite", "supported_platforms": ["linux", "win32", "darwin"]},
+    "filesystem": {"kind": "isolated", "provisioner": "temp-directory", "fixture": "filesystem-directory", "cleanup": "owned-temp-tree", "cleanup_owner": "suite", "lock_identity": "filesystem", "supported_platforms": ["linux", "win32", "darwin"]},
+    "subprocess": {"kind": "shared", "provisioner": "process-group", "fixture": "process-group", "cleanup": "no-op", "cleanup_owner": "runner", "lock_identity": "subprocess", "supported_platforms": ["linux", "win32", "darwin"]},
+    "browser": {"kind": "shared", "provisioner": "browser-profile", "fixture": "browser-profile", "cleanup": "owned-temp-tree", "cleanup_owner": "runner", "lock_identity": "browser", "supported_platforms": ["linux", "win32", "darwin"]},
+    "git": {"kind": "isolated", "provisioner": "git-workspace", "fixture": "git-workspace", "cleanup": "owned-temp-tree", "cleanup_owner": "suite", "lock_identity": "git", "supported_platforms": ["linux", "win32", "darwin"]},
+    "environment": {"kind": "isolated", "provisioner": "environment-scope", "fixture": "process-environment", "cleanup": "no-op", "cleanup_owner": "suite", "lock_identity": "environment", "supported_platforms": ["linux", "win32", "darwin"]},
+    "ports": {"kind": "isolated", "provisioner": "loopback-port", "fixture": "loopback-port", "cleanup": "close-port", "cleanup_owner": "suite", "lock_identity": "ports", "supported_platforms": ["linux", "win32", "darwin"]},
+    "workspace": {"kind": "isolated", "provisioner": "temp-workspace", "fixture": "workspace-directory", "cleanup": "owned-temp-tree", "cleanup_owner": "suite", "lock_identity": "workspace", "supported_platforms": ["linux", "win32", "darwin"]}
+  },
   "timeout_ms": 240000,
   "platforms": ["linux", "win32", "darwin"],
   "live": false,
   "owner": "platform",
-  "patterns": ["test/{dashboard*,browser*,mcp-*,local-stdio*,git-*,deploy-*,release-*,backup-*,execution-*,scheduler-*,queue-*,scheduling-*,project-*,workspace-*,memory-*,handoff-*,automatic-memory*,blackbox*,predict*,evolve*,insight-report*,metrics-*,connector*,ci-status*,certification*,invariants-doctor*,integration*}.test.{js,cjs}"]
+  "patterns": ["test/{dashboard*,browser*,mcp-*,local-stdio*,git-*,deploy-*,release-*,backup-*,execution-*,scheduler*,queue-*,scheduling-*,project-*,workspace-*,memory-*,handoff-*,automatic-memory*,blackbox*,predict*,evolve*,insight-report*,metrics-*,connector*,ci-status*,certification*,invariants-doctor*,integration*}.test.{js,cjs}"]
 }

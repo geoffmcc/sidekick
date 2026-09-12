@@ -1,5 +1,5 @@
 /** Register dashboard approval inspection and resolution routes. */
-function registerApprovalRoutes({ app, listApprovals, renderContinuationApprovalPreview, authenticatedUser, auditLog, logError, resolveApproval, requireIdentityPermission }) {
+function registerApprovalRoutes({ app, listApprovals, renderContinuationApprovalPreview, authenticatedUser, auditLog, logError, resolveApproval, requireIdentityPermission, errorResponse }) {
   app.get("/api/approvals", (req, res) => {
     if (req.authPrincipal && requireIdentityPermission && !requireIdentityPermission(req, res, "approvals.read")) return;
     if (!req.authPrincipal && authenticatedUser(req)) return res.status(403).json({ ok: false, error: "approval inspection requires an authenticated principal" });
@@ -17,8 +17,7 @@ function registerApprovalRoutes({ app, listApprovals, renderContinuationApproval
       auditLog(req, "approval.preview", { id: req.params.id, viewer: authenticatedUser(req) });
       res.json({ ok: true, preview });
     } catch (error) {
-      logError(req.originalUrl, 500, error, "approvals", req.headers["user-agent"]);
-      res.status(500).json({ ok: false, error: error.message });
+      return errorResponse(req, res, error, { status: 500, code: "service_unavailable", component: "approvals" });
     }
   });
 
@@ -36,8 +35,7 @@ function registerApprovalRoutes({ app, listApprovals, renderContinuationApproval
         const result = await resolveApproval(req.params.id, verb, reviewer, { reviewerPrincipalId: principalId });
         res.json({ ok: !result.isError, result: result.content?.[0]?.text || "" });
       } catch (error) {
-        logError(req.originalUrl, 500, error, "approvals", req.headers["user-agent"]);
-        res.status(500).json({ ok: false, error: error.message });
+        return errorResponse(req, res, error, { status: 500, code: "service_unavailable", component: "approvals" });
       }
     });
   }

@@ -15,6 +15,7 @@ function registerKvRoutes({
   valueType,
   auditLog,
   requireIdentityAdministrator,
+  errorResponse,
 }) {
   function requireAdmin(req, res) {
     if (!req.authPrincipal || !requireIdentityAdministrator) return true;
@@ -84,7 +85,7 @@ function registerKvRoutes({
       writeKV(kv);
       auditLog(req, "kv.update", { value_length: value?.length, project });
       res.json({ ok: true });
-    } catch { res.status(400).json({ error: "invalid body" }); }
+    } catch (error) { return errorResponse(req, res, error, { status: 400, code: "invalid_body", component: "kv" }); }
   });
 
   app.get("/api/kv/projects", (req, res) => {
@@ -101,7 +102,7 @@ function registerKvRoutes({
     const existed = Object.prototype.hasOwnProperty.call(kv, req.params.key);
     if (!existed) {
       auditLog(req, "kv.delete", { key: req.params.key, deleted: false });
-      return res.status(404).json({ ok: false, deleted: false, error: "key not found" });
+      return errorResponse(req, res, null, { status: 404, code: "not_found", component: "kv", publicMessage: "key not found", extra: { deleted: false } });
     }
     delete kv[req.params.key];
     writeKV(kv);

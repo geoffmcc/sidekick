@@ -28,6 +28,7 @@ function registerAuthRoutes({
   makeSessionToken,
   bootstrapToken,
   remoteBootstrapAllowed = false,
+  errorResponse,
 }) {
   app.get("/api/auth/bootstrap-status", (req, res) => {
     res.set("Cache-Control", "no-store");
@@ -36,9 +37,9 @@ function registerAuthRoutes({
 
   app.post("/api/auth/bootstrap", (req, res) => {
     try {
-      if (bootstrapCompleted()) return res.status(409).json({ error: "Owner bootstrap has already been completed" });
+      if (bootstrapCompleted()) return errorResponse(req, res, null, { status: 409, code: "conflict", component: "auth" });
       if (remoteBootstrapAllowed && (!bootstrapToken || !timingSafeCompare(req.body?.bootstrap_token, bootstrapToken))) {
-        return res.status(403).json({ error: "remote owner bootstrap requires the protected bootstrap token" });
+        return errorResponse(req, res, null, { status: 403, code: "forbidden", component: "auth" });
       }
       const principal = identity.bootstrapOwner(req.body || {});
       const session = authentication.createSession(principal.principal_id, {
@@ -48,7 +49,7 @@ function registerAuthRoutes({
       setIdentityCookie(res, session.token, undefined, req);
       res.status(201).json({ principal, expires_at: session.expires_at });
     } catch (error) {
-      res.status(/already|completed/i.test(error.message) ? 409 : 400).json({ error: error.message });
+      return errorResponse(req, res, error, { status: /already|completed/i.test(String(error?.message || "")) ? 409 : 400, code: /already|completed/i.test(String(error?.message || "")) ? "conflict" : "invalid_request", component: "auth" });
     }
   });
 
@@ -170,7 +171,7 @@ function registerAuthRoutes({
       authentication.invalidatePrincipalSessions(principalId);
       res.json({ ok: true });
     } catch (error) {
-      res.status(400).json({ error: error.message });
+      return errorResponse(req, res, error, { status: 400, code: "invalid_request", component: "auth" });
     }
   });
 
@@ -181,7 +182,7 @@ function registerAuthRoutes({
       if (req.body?.role) identity.assignRole(principal.principal_id, req.body.role, req.authPrincipal.principal_id);
       res.status(201).json({ principal: identity.getPrincipal(principal.principal_id) });
     } catch (error) {
-      res.status(400).json({ error: error.message, code: 'user_create_failed' });
+      return errorResponse(req, res, error, { status: 400, code: "user_create_failed", component: "auth" });
     }
   });
 
@@ -194,7 +195,7 @@ function registerAuthRoutes({
       authentication.invalidatePrincipalSessions(target.principal.principal_id);
       res.json({ ok: true });
     } catch (error) {
-      res.status(400).json({ error: error.message });
+      return errorResponse(req, res, error, { status: 400, code: "invalid_request", component: "auth" });
     }
   });
 
@@ -212,7 +213,7 @@ function registerAuthRoutes({
       if (req.params.state === 'disable') authentication.invalidatePrincipalSessions(principal.principal_id);
       res.json({ principal });
     } catch (error) {
-      res.status(error.message.includes('Owner') ? 409 : 400).json({ error: error.message, code: 'principal_state_change_rejected' });
+      return errorResponse(req, res, error, { status: String(error?.message || "").includes("Owner") ? 409 : 400, code: "principal_state_change_rejected", component: "auth" });
     }
   }
 
@@ -225,7 +226,7 @@ function registerAuthRoutes({
     try {
       res.status(201).json({ principal: identity.assignRole(req.params.id, req.body?.role, req.authPrincipal.principal_id) });
     } catch (error) {
-      res.status(400).json({ error: error.message });
+      return errorResponse(req, res, error, { status: 400, code: "invalid_request", component: "auth" });
     }
   });
 
@@ -234,7 +235,7 @@ function registerAuthRoutes({
     try {
       res.json({ principal: identity.removeRole(req.params.id, req.params.role, req.authPrincipal.principal_id) });
     } catch (error) {
-      res.status(400).json({ error: error.message });
+      return errorResponse(req, res, error, { status: 400, code: "invalid_request", component: "auth" });
     }
   });
 
@@ -254,7 +255,7 @@ function registerAuthRoutes({
       const delegation = authorization.createDelegation({ delegatorPrincipalId, delegatePrincipalId: req.body?.delegate_principal_id, permissions: req.body?.permissions, expiresAt: req.body?.expires_at, actorPrincipalId: req.authPrincipal.principal_id });
       res.status(201).json({ delegation });
     } catch (error) {
-      res.status(400).json({ error: error.message });
+      return errorResponse(req, res, error, { status: 400, code: "invalid_request", component: "auth" });
     }
   });
 
@@ -263,7 +264,7 @@ function registerAuthRoutes({
     try {
       res.json({ delegation: authorization.revokeDelegation(req.params.id, req.authPrincipal.principal_id) });
     } catch (error) {
-      res.status(403).json({ error: error.message, code: "insufficient_delegation" });
+      return errorResponse(req, res, error, { status: 403, code: "insufficient_delegation", component: "auth" });
     }
   });
 
@@ -279,7 +280,7 @@ function registerAuthRoutes({
       const created = authentication.createCredential({ principalId: req.body?.principal_id, displayName: req.body?.display_name, scopes: req.body?.scopes, expiresAt: req.body?.expires_at, createdByPrincipalId: req.authPrincipal.principal_id });
       res.status(201).json({ credential: created.credential, token: created.token });
     } catch (error) {
-      res.status(400).json({ error: error.message });
+      return errorResponse(req, res, error, { status: 400, code: "invalid_request", component: "auth" });
     }
   });
 
@@ -294,7 +295,7 @@ function registerAuthRoutes({
       const replacement = authentication.rotateCredential(req.params.id, req.authPrincipal.principal_id);
       res.status(201).json({ credential: replacement.credential, token: replacement.token });
     } catch (error) {
-      res.status(400).json({ error: error.message });
+      return errorResponse(req, res, error, { status: 400, code: "invalid_request", component: "auth" });
     }
   });
 

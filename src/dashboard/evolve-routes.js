@@ -13,29 +13,42 @@ function registerEvolveRoutes({
   redactSensitive,
   auditLog,
   dynamicTools,
+  logError,
+  errorResponse,
 }) {
-  app.post("/api/evolve/analyze", (req, res) => evolveDashboardAction(req, res, "analyze"));
-  app.post("/api/evolve/:id/validate", (req, res) => evolveDashboardAction(req, res, "validate"));
-  // Approval must carry the authenticated principal, never the dashboard actor.
-  app.post("/api/evolve/:id/approve", (req, res) =>
-    evolveDashboardAction(req, res, "approve", { approver: authenticatedUser(req) || undefined }));
-  app.post("/api/evolve/:id/promote", (req, res) => evolveDashboardAction(req, res, "promote"));
-  app.post("/api/evolve/:id/reject", (req, res) => evolveDashboardAction(req, res, "reject"));
-  app.post("/api/evolve/:id/deprecate", (req, res) => evolveDashboardAction(req, res, "deprecate"));
-  app.post("/api/evolve/:id/feedback", (req, res) => evolveDashboardAction(req, res, "feedback"));
+  const guarded = (handler, component = "evolve") => (req, res) => {
+    try {
+      const result = handler(req, res);
+      return result && typeof result.catch === "function"
+        ? result.catch(error => errorResponse(req, res, error, { status: 500, code: "service_unavailable", component }))
+        : result;
+    } catch (error) {
+      return errorResponse(req, res, error, { status: 500, code: "service_unavailable", component });
+    }
+  };
 
-  app.get("/api/evolve/executions", (req, res) => {
+  app.post("/api/evolve/analyze", guarded((req, res) => evolveDashboardAction(req, res, "analyze")));
+  app.post("/api/evolve/:id/validate", guarded((req, res) => evolveDashboardAction(req, res, "validate")));
+  // Approval must carry the authenticated principal, never the dashboard actor.
+  app.post("/api/evolve/:id/approve", guarded((req, res) =>
+    evolveDashboardAction(req, res, "approve", { approver: authenticatedUser(req) || undefined })));
+  app.post("/api/evolve/:id/promote", guarded((req, res) => evolveDashboardAction(req, res, "promote")));
+  app.post("/api/evolve/:id/reject", guarded((req, res) => evolveDashboardAction(req, res, "reject")));
+  app.post("/api/evolve/:id/deprecate", guarded((req, res) => evolveDashboardAction(req, res, "deprecate")));
+  app.post("/api/evolve/:id/feedback", guarded((req, res) => evolveDashboardAction(req, res, "feedback")));
+
+  app.get("/api/evolve/executions", guarded((req, res) => {
     const executions = dbStore.listGeneratedToolExecutions({ capabilityId: req.query.capability_id, limit: req.query.limit }).map(shapeExecution);
     res.json({ ok: true, executions });
-  });
+  }));
 
-  app.get("/api/evolve/executions/:executionId", (req, res) => {
+  app.get("/api/evolve/executions/:executionId", guarded((req, res) => {
     const execution = dbStore.getGeneratedToolExecution(req.params.executionId);
     if (!execution) return res.status(404).json({ ok: false, error: "Execution not found" });
     res.json({ ok: true, execution: shapeExecution(execution) });
-  });
+  }));
 
-  app.post("/api/evolve/:id/run", (req, res) => {
+  app.post("/api/evolve/:id/run", guarded((req, res) => {
     // Generated capabilities execute model-authored code on the host and need
     // the same authenticated attribution as approval and promotion.
     const actor = requireAttributedActor(req, res, "Running a generated tool");
@@ -64,17 +77,18 @@ function registerEvolveRoutes({
             dbStore.updateGeneratedToolExecution(executionId, {
               state: "failed",
               completedAt: new Date().toISOString(),
-              finalSummary: redactSensitive(result.content?.[0]?.text || result.code || "generated tool dispatch failed"),
+              finalSummary: "generated tool dispatch failed",
               errorCategory: result.code || "error",
               successCriteriaSatisfied: false,
             });
           }
         }
       } catch (error) {
+        if (logError) logError(req.originalUrl, 500, error, "evolve", req.headers["user-agent"], req);
         dbStore.updateGeneratedToolExecution(executionId, {
           state: "failed",
           completedAt: new Date().toISOString(),
-          finalSummary: redactSensitive(error.message),
+          finalSummary: "generated tool dispatch failed",
           errorCategory: "error",
           successCriteriaSatisfied: false,
         });
@@ -82,16 +96,16 @@ function registerEvolveRoutes({
     });
     auditLog(req, "evolve.run", { id: cap.id, execution_id: executionId });
     res.json({ ok: true, execution_id: executionId, execution: shapeExecution(dbStore.getGeneratedToolExecution(executionId)) });
-  });
+  }));
 
-  app.post("/api/evolve/executions/:executionId/cancel", (req, res) => {
+  app.post("/api/evolve/executions/:executionId/cancel", guarded((req, res) => {
     const execution = dynamicTools.cancelExecution(req.params.executionId);
     if (!execution) return res.status(404).json({ ok: false, error: "Execution not found" });
     auditLog(req, "evolve.cancel", { execution_id: execution.id });
     res.json({ ok: true, execution: shapeExecution(execution) });
-  });
+  }));
 
-  app.get("/api/evolve/executions/:executionId/stream", (req, res) => {
+  app.get("/api/evolve/executions/:executionId/stream", guarded((req, res) => {
     res.writeHead(200, {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
@@ -105,7 +119,7 @@ function registerEvolveRoutes({
     if (current) res.write(`event: execution\ndata: ${JSON.stringify(shapeExecution(current))}\n\n`);
     const off = dynamicTools.onExecutionEvent(send);
     req.on("close", off);
-  });
+  }));
 }
 
 module.exports = { registerEvolveRoutes };

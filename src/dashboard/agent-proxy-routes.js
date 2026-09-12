@@ -1,5 +1,5 @@
 /** Browser-facing Agent relay. The Agent service owns task authorization and execution. */
-function registerAgentProxyRoutes({ app, http, agentPort }) {
+function registerAgentProxyRoutes({ app, http, agentPort, errorResponse }) {
   function proxyAgent(req, res, method, body) {
     const headers = { "Content-Type": "application/json" };
     if (req.authPrincipal?.principal_id) headers["X-Sidekick-Principal-ID"] = String(req.authPrincipal.principal_id).slice(0, 160);
@@ -7,7 +7,7 @@ function registerAgentProxyRoutes({ app, http, agentPort }) {
     if (req.authPrincipal?.delegation_id) headers["X-Sidekick-Delegation-ID"] = String(req.authPrincipal.delegation_id).slice(0, 160);
     if (body) headers["Content-Length"] = Buffer.byteLength(body);
     const upstream = http.request({ hostname: "127.0.0.1", port: agentPort, path: req.originalUrl, method, headers }, response => { res.writeHead(response.statusCode, response.headers); response.pipe(res); });
-    upstream.on("error", error => { if (!res.headersSent) res.status(502).json({ error: "Agent bridge unavailable: " + error.message }); else res.end(); });
+    upstream.on("error", error => { if (!res.headersSent) errorResponse(req, res, error, { status: 502, code: "upstream_unavailable", component: "agent_proxy" }); else res.end(); });
     if (body) upstream.write(body);
     upstream.end();
   }

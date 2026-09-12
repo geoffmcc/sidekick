@@ -1,7 +1,80 @@
 {
-  "version": 1,
+  "version": 3,
   "provider": "c8 with NODE_V8_COVERAGE subprocess merging",
+  "baseline": "docs/coverage-baseline.json",
   "minimums": { "lines": 40, "statements": 40, "functions": 40, "branches": 20 },
   "critical_domains": ["identity", "authorization", "approvals", "dispatcher", "path-policy", "network", "redaction", "workflow", "pack-lifecycle", "durability"],
-  "note": "Statements use the built-in line metric because Node's standard reporter does not expose a separate aggregate statement column. Critical-domain branch coverage is reviewed from the per-file report and is not hidden by exclusions."
+  "required_files": [
+    "src/core/identity.js", "src/core/authentication.js", "src/core/authorization.js",
+    "src/approvals/store.js", "src/approvals/continuation.js", "src/tools/approvals.js",
+    "src/tools/dispatcher.js", "src/tools/dispatch-seam.js", "src/tools/path-policy.js",
+    "src/security/network-scope.js", "src/security/network-scopes.js", "src/tools/families/net-fetch.js",
+    "src/redact.js", "src/tools/sensitive-result.js", "src/workflows/runner.js",
+    "src/workflows/schema.js", "src/packs/lifecycle.js", "src/packs/repository.js",
+    "src/platform/kernel.js", "src/platform/execution-guards.js", "src/agent/task-store.js"
+  ],
+  "required_fragments": ["src/core/", "src/approvals/", "src/tools/", "src/security/", "src/workflows/", "src/packs/", "src/platform/", "src/agent/"],
+  "security_domains": [
+    {
+      "name": "identity",
+      "production_files": ["src/core/identity.js", "src/core/authentication.js", "src/core/auth-rate-limit.js"],
+      "minimums": { "lines": 80, "branches": 50, "functions": 80 },
+      "file_minimums": { "src/core/identity.js": { "lines": 80, "branches": 60 }, "src/core/authentication.js": { "lines": 80, "branches": 60 }, "src/core/auth-rate-limit.js": { "lines": 80, "branches": 60 } }
+    },
+    {
+      "name": "authorization",
+      "production_files": ["src/core/authorization.js"],
+      "minimums": { "lines": 80, "branches": 60, "functions": 80 },
+      "file_minimums": { "src/core/authorization.js": { "lines": 80, "branches": 60 } }
+    },
+    {
+      "name": "approvals",
+      "production_files": ["src/approvals/store.js", "src/approvals/continuation.js", "src/tools/approvals.js", "src/tools/platform-approval.js"],
+      "minimums": { "lines": 80, "branches": 55, "functions": 80 },
+      "file_minimums": { "src/approvals/store.js": { "lines": 80, "branches": 70 }, "src/approvals/continuation.js": { "lines": 80, "branches": 65 }, "src/tools/approvals.js": { "lines": 80, "branches": 80 }, "src/tools/platform-approval.js": { "lines": 80, "branches": 55 } }
+    },
+    {
+      "name": "dispatcher",
+      "production_files": ["src/tools/dispatcher.js", "src/tools/dispatch-seam.js"],
+      "minimums": { "lines": 85, "branches": 65, "functions": 85 },
+      "file_minimums": { "src/tools/dispatcher.js": { "lines": 80, "branches": 60 }, "src/tools/dispatch-seam.js": { "lines": 80, "branches": 80 } }
+    },
+    {
+      "name": "path-policy",
+      "production_files": ["src/tools/path-policy.js"],
+      "minimums": { "lines": 90, "branches": 75, "functions": 90 },
+      "file_minimums": { "src/tools/path-policy.js": { "lines": 85, "branches": 75 } }
+    },
+    {
+      "name": "network",
+      "production_files": ["src/security/network-scope.js", "src/security/network-scopes.js", "src/tools/families/net-fetch.js", "src/tools/families/network-scopes.js"],
+      "minimums": { "lines": 65, "branches": 40, "functions": 55 },
+      "file_minimums": { "src/security/network-scope.js": { "lines": 80, "branches": 65 }, "src/security/network-scopes.js": { "lines": 80, "branches": 50 }, "src/tools/families/net-fetch.js": { "lines": 70, "branches": 50 }, "src/tools/families/network-scopes.js": { "lines": 60, "branches": 40 } }
+    },
+    {
+      "name": "redaction",
+      "production_files": ["src/redact.js", "src/tools/sensitive-result.js"],
+      "minimums": { "lines": 90, "branches": 85, "functions": 90 },
+      "file_minimums": { "src/redact.js": { "lines": 90, "branches": 85 }, "src/tools/sensitive-result.js": { "lines": 90, "branches": 85 } }
+    },
+    {
+      "name": "workflow",
+      "production_files": ["src/workflows/runner.js", "src/workflows/schema.js"],
+      "minimums": { "lines": 80, "branches": 70, "functions": 90 },
+      "file_minimums": { "src/workflows/runner.js": { "lines": 80, "branches": 70 }, "src/workflows/schema.js": { "lines": 90, "branches": 90 } }
+    },
+    {
+      "name": "pack-lifecycle",
+      "production_files": ["src/packs/lifecycle.js", "src/packs/repository.js", "src/packs/manifest.js"],
+      "minimums": { "lines": 85, "branches": 60, "functions": 90 },
+      "file_minimums": { "src/packs/lifecycle.js": { "lines": 80, "branches": 60 }, "src/packs/repository.js": { "lines": 85, "branches": 55 }, "src/packs/manifest.js": { "lines": 90, "branches": 70 } }
+    },
+    {
+      "name": "durability",
+      "production_files": ["src/platform/kernel.js", "src/platform/execution-guards.js", "src/agent/task-store.js"],
+      "minimums": { "lines": 85, "branches": 65, "functions": 85 },
+      "file_minimums": { "src/platform/kernel.js": { "lines": 85, "branches": 65 }, "src/platform/execution-guards.js": { "lines": 90, "branches": 85 }, "src/agent/task-store.js": { "lines": 90, "branches": 50 } }
+    }
+  ],
+  "note": "Statements use the built-in line metric because Node's standard reporter does not expose a separate aggregate statement column. Domain and file branch gates are intentionally stronger than the global 20% floor. Required files, fragments, baseline entries, and coverage reports are all fail-closed."
 }
