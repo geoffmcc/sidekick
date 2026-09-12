@@ -68,14 +68,19 @@ async function waitFor(label, check, timeoutMs = 30000) {
   while (true) {
     const remaining = deadline - Date.now();
     if (remaining <= 0) break;
+    let timer;
     try {
       const result = await Promise.race([
         check(),
-        delay(remaining).then(() => { throw new Error(`${label} check was still pending when the ${timeoutMs}ms budget expired`); }),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`${label} check was still pending when the ${timeoutMs}ms budget expired`)), remaining);
+        }),
       ]);
       if (result) return result;
     } catch (error) {
       lastError = error;
+    } finally {
+      clearTimeout(timer);
     }
     await delay(100);
   }
