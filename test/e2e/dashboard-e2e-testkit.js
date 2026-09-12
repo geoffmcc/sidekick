@@ -78,6 +78,7 @@ async function waitFor(label, check, timeoutMs = 30000) {
       ]);
       if (result) return result;
     } catch (error) {
+      if (error.fatal) throw error;
       lastError = error;
     } finally {
       clearTimeout(timer);
@@ -98,6 +99,7 @@ function serviceEnvironment({ dataDir, dashboardPort, agentPort, mcpPort, ollama
     SIDEKICK_DASHBOARD_BIND_HOST: "127.0.0.1",
     SIDEKICK_DASHBOARD_USER: dashboardUser,
     SIDEKICK_DASHBOARD_PASS: dashboardPassword,
+    SIDEKICK_API_KEY: "sk-e2e-testkit",
     SIDEKICK_SECRET_KEY: secretKey,
     SIDEKICK_PORT: String(mcpPort),
     SIDEKICK_AGENT_PORT: String(agentPort),
@@ -171,7 +173,11 @@ async function launchDashboard(fixture) {
   fixture.dashboardOutput = { stdout: "", stderr: "", exit: null };
   fixture.dashboard = startProcess(process.execPath, ["src/dashboard.js"], env, fixture.dashboardOutput);
   await waitFor("Dashboard", async () => {
-    if (fixture.dashboardOutput.exit !== null) throw new Error(`exit=${fixture.dashboardOutput.exit}`);
+    if (fixture.dashboardOutput.exit !== null) {
+      const error = new Error(`exit=${fixture.dashboardOutput.exit}\ndashboard stdout:\n${bounded(fixture.dashboardOutput.stdout)}\ndashboard stderr:\n${bounded(fixture.dashboardOutput.stderr)}`);
+      error.fatal = true;
+      throw error;
+    }
     const result = await request(fixture.dashboardPort, "GET", "/api/capabilities");
     return result.status === 200;
   }, 90000);
@@ -185,7 +191,11 @@ async function launchAgent(fixture) {
   fixture.agentOutput = { stdout: "", stderr: "", exit: null };
   fixture.agent = startProcess(process.execPath, ["src/agent.js"], env, fixture.agentOutput);
   await waitFor("Agent", async () => {
-    if (fixture.agentOutput.exit !== null) throw new Error(`exit=${fixture.agentOutput.exit}`);
+    if (fixture.agentOutput.exit !== null) {
+      const error = new Error(`exit=${fixture.agentOutput.exit}\nagent stdout:\n${bounded(fixture.agentOutput.stdout)}\nagent stderr:\n${bounded(fixture.agentOutput.stderr)}`);
+      error.fatal = true;
+      throw error;
+    }
     const result = await request(fixture.agentPort, "GET", "/api/health", null, { auth: false });
     return result.status === 200;
   }, 90000);
@@ -207,14 +217,22 @@ async function startFixture({ withAgent = false } = {}) {
     ollama: null,
     baseUrl: `http://127.0.0.1:${dashboardPort}`,
   };
-  if (withAgent) fixture.ollama = await startOllamaBoundary();
-  if (withAgent) await launchAgent(fixture);
-  await launchDashboard(fixture);
-  if (withAgent) {
-    await waitFor("Compute provider backed by the local inference boundary", async () => {
-      const result = await request(fixture.dashboardPort, "GET", "/api/compute");
-      return result.status === 200 && result.body?.overview?.providers?.healthy > 0;
-    }, 120000);
+  try {
+    if (withAgent) fixture.ollama = await startOllamaBoundary();
+    if (withAgent) await launchAgent(fixture);
+    await launchDashboard(fixture);
+    if (withAgent) {
+      await waitFor("Compute provider backed by the local inference boundary", async () => {
+        const result = await request(fixture.dashboardPort, "GET", "/api/compute");
+        return result.status === 200 && result.body?.overview?.providers?.healthy > 0;
+      }, 120000);
+    }
+  } catch (error) {
+    await stopProcess(fixture.agent);
+    await stopProcess(fixture.dashboard);
+    if (fixture.ollama) await new Promise(resolve => fixture.ollama.server.close(() => resolve()));
+    await fs.rm(fixture.dataDir, { recursive: true, force: true });
+    throw error;
   }
   fixture.request = (method, requestPath, body, options) => request(fixture.dashboardPort, method, requestPath, body, options);
   fixture.restartDashboard = async () => {
