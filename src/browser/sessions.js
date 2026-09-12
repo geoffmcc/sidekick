@@ -245,6 +245,7 @@ async function openSession(options = {}, executionContext = null) {
     activePageId: null,
     pageCounter: 0,
     downloads: [],
+    downloadConsumed: 0,
     blockedRequests: [],
     warnings: [],
     requestCount: 0,

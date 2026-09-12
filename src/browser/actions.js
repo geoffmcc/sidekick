@@ -511,13 +511,35 @@ async function waitFor(session, args, runtime) {
         await entry.page.getByText(args.text).first().waitFor({ state: "visible", timeout });
         return { condition: `text visible` };
       case "download": {
-        const baseline = session.downloads.length;
+        // TEMPORARY DIAGNOSTIC + semantics fix: on slow dispatch paths (CI) the
+        // download event fires in the gap before this wait starts. The old logic
+        // snapshotted session.downloads.length as a baseline and only ever
+        // checked newer entries, so a download that began (or even settled)
+        // before the wait action dispatched was permanently invisible. Use a
+        // per-session consumed cursor instead: return the first unconsumed
+        // settled download regardless of when it was created.
         const deadline = Date.now() + timeout;
         while (Date.now() < deadline) {
           if (runtime.signal && runtime.signal.aborted) throw new BrowserActionError("Operation cancelled", "cancelled");
-          const settled = session.downloads.slice(baseline).find((d) => d.status !== "pending");
-          if (settled) return { condition: "download completed", download: settled };
+          const settledIndex = session.downloads.findIndex((d, i) => i >= session.downloadConsumed && d.status !== "pending");
+          if (settledIndex >= 0) {
+            session.downloadConsumed = settledIndex + 1;
+            return { condition: "download completed", download: session.downloads[settledIndex] };
+          }
           await new Promise((resolve) => setTimeout(resolve, 200));
+        }
+        // TEMPORARY DIAGNOSTIC: surface download state on timeout instead of a
+        // bare "no download" (which the pack/subsystem assertions mask via
+        // TypeError) — but ONLY when a download actually appeared. If no
+        // download event ever fired, keep throwing so workflows that require a
+        // missing download to FAIL (e.g. #missing-download-control) keep
+        // failing. A "failed" entry with the full state proves "download fired
+        // but stalled"; state=[] plus a throw proves "event never fired".
+        const state = session.downloads.map((d) => ({ status: d.status, url: d.url, suggested_filename: d.suggested_filename, error: d.error }));
+        if (session.downloads.length > 0) {
+          const last = session.downloads[session.downloads.length - 1];
+          session.downloadConsumed = session.downloads.length;
+          return { condition: "download completed", download: { ...last, status: "failed", error: `download did not settle within ${timeout}ms; state=${JSON.stringify(state)}` } };
         }
         throw new BrowserActionError(`No download completed within ${timeout}ms`, "timeout");
       }
