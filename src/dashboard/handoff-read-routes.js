@@ -25,7 +25,14 @@ function registerHandoffReadRoutes({ app, dbStore, errorResponse }) {
   app.get("/api/handoffs", (req, res) => {
     try {
       const handoffs = dbStore.listHandoffs({ project: req.query.project, includeArchived: req.query.include_archived === "true", limit: Math.min(Number(req.query.limit) || 50, 500) });
-      res.json({ ok: true, handoffs: handoffs.filter(handoff => canRead(req, handoff)) });
+      const visible = handoffs.filter(handoff => canRead(req, handoff));
+      if (req.query.include === "start_here") {
+        for (const handoff of visible) {
+          try { handoff.projection = dbStore.getHandoffReceiverProjection(handoff.id); }
+          catch (_) { /* Client will fall back to targeted request. */ }
+        }
+      }
+      res.json({ ok: true, handoffs: visible });
     } catch (error) { errorResponse(req, res, error, { status: 500, code: "service_unavailable", component: "handoffs" }); }
   });
 
