@@ -152,6 +152,66 @@ function authFetch(url, options) {
   });
 }
 
+// -- Page data cache (stale-while-revalidate) ---------------------------------- //
+// In-flight dedup ensures a single fetch per URL even when multiple loaders run.
+// Fresh cached data is served immediately; stale data is returned instantly while
+// a background refresh silently keeps the cache warm.
+var pageDataCache = {};       // url -> { data, at, revalidating }
+var pageDataInFlight = {};    // url -> Promise (pending fetch+parse)
+
+function cachedJson(url, opts) {
+  opts = opts || {};
+  var ttl     = opts.ttl     || 30000;   // fresh window (ms)
+  var maxAge  = opts.maxAge  || 300000;  // stale-while-revalidate window (ms)
+
+  // If this URL is already being fetched, reuse the in-flight promise.
+  if (pageDataInFlight[url]) return pageDataInFlight[url];
+
+  var entry = pageDataCache[url];
+  if (!entry) return cachedJsonFetch(url, opts);
+
+  var age = Date.now() - entry.at;
+
+  // Fresh: return cached, no server hit.
+  if (age < ttl) return Promise.resolve(entry.data);
+
+  // Stale but within maxAge: serve stale + start background revalidate
+  // (once per stale window; a fresh entry is inserted when the background
+  // fetch resolves so that the next call within maxAge is also fast).
+  if (age < maxAge) {
+    if (!entry.revalidating) {
+      entry.revalidating = true;
+      cachedJsonFetch(url, opts).then(function () {
+        var e = pageDataCache[url];
+        if (e) e.revalidating = false;
+      }, function () {
+        var e = pageDataCache[url];
+        if (e) e.revalidating = false;
+      });
+    }
+    return Promise.resolve(entry.data);
+  }
+
+  // Expired: refetch synchronously.
+  return cachedJsonFetch(url, opts);
+}
+
+function cachedJsonFetch(url, opts) {
+  var promise = authFetch(url).then(function (res) { return res.json(); }).then(function (data) {
+    pageDataCache[url] = { data: data, at: Date.now() };
+    return data;
+  }).catch(function (err) {
+    // On error, fall back to a stale entry if one exists (resilience).
+    var stale = pageDataCache[url];
+    if (stale && stale.data) return stale.data;
+    throw err;
+  });
+  pageDataInFlight[url] = promise;
+  promise.then(function () { delete pageDataInFlight[url]; },
+               function () { delete pageDataInFlight[url]; });
+  return promise;
+}
+
 // Fetch tool categories from API
 async function fetchToolCategories() {
   try {
@@ -471,8 +531,8 @@ function loadBrainControlRoom() {
   }
   if (input) input.value = taskId;
   $('brainStatus').textContent = 'Loading durable task metadata...';
-  authFetch('/api/agent/tasks/' + encodeURIComponent(taskId) + '/control-room').then(r => r.json().then(data => ({ ok: r.ok, data }))).then(({ ok, data }) => {
-    if (!ok || data.error) throw new Error(data.error || 'Brain control-room request failed');
+  cachedJson('/api/agent/tasks/' + encodeURIComponent(taskId) + '/control-room', { ttl: 20000 }).then(data => {
+    if (data.error) throw new Error(data.error || 'Brain control-room request failed');
     const task = data.task || {}; const brain = data.brain_v3 || {}; const graph = brain.graph || {};
     const coverage = Array.isArray(graph.coverage) ? graph.coverage : [];
     const recipes = data.verification_recipes || data.verification || [];
@@ -817,14 +877,14 @@ function renderServiceStatus(services) {
 }
 
 function loadServices(){
-  authFetch('/api/services').then(r=>r.json()).then(d=>{
+  cachedJson('/api/services', { ttl: 15000 }).then(d=>{
     renderServiceStatus(d.services || null);
   }).catch(e => { renderServiceStatus(null); apiError('/api/services', e, 0); });
 }
 
 // -- System -- //
 function loadSystem(){
-  return authFetch('/api/system').then(r=>r.json()).then(d=>{
+  return cachedJson('/api/system', { ttl: 15000 }).then(d=>{
     if(d.error){ if ($('s-uptime')) $('s-uptime').textContent='error'; return }
     if ($('s-uptime')) $('s-uptime').textContent = d.uptime || '?';
     // load_1m is the 1-minute load average (not a percentage — the old code
@@ -843,7 +903,7 @@ function loadDashboardSummary(){
   const statsRange = getToolStatsRange(statsWindow);
   const statsQuery = `?since=${encodeURIComponent(statsRange.since)}&until=${encodeURIComponent(statsRange.until)}`;
   // Fetch dashboard summary data
-  authFetch('/api/dashboard-summary').then(r=>r.json()).then(d=>{
+  cachedJson('/api/dashboard-summary', { ttl: 30000 }).then(d=>{
     if(d.error) return;
     
     // Health score
@@ -901,7 +961,7 @@ function loadDashboardSummary(){
   }).catch(e => apiError('/api/dashboard-summary', e, 0));
   
   // Fetch tool stats
-  authFetch('/api/stats' + statsQuery).then(r=>r.json()).then(d=>{
+  cachedJson('/api/stats' + statsQuery, { ttl: 30000 }).then(d=>{
     if(d.error || !d.stats) return;
     
     // Calculate totals
@@ -935,11 +995,11 @@ function loadMissionControl(){
   const statsRange = getToolStatsRange(getToolStatsWindow());
   const statsQuery = `?since=${encodeURIComponent(statsRange.since)}&until=${encodeURIComponent(statsRange.until)}`;
   const requests = [
-    authFetch('/api/dashboard-summary').then(r=>r.json()),
-    authFetch('/api/system').then(r=>r.json()),
-    authFetch('/api/services').then(r=>r.json()),
-    authFetch('/api/stats' + statsQuery).then(r=>r.json()),
-    authFetch('/api/logs?limit=10').then(r=>r.json())
+    cachedJson('/api/dashboard-summary', { ttl: 30000 }),
+    cachedJson('/api/system', { ttl: 15000 }),
+    cachedJson('/api/services', { ttl: 15000 }),
+    cachedJson('/api/stats' + statsQuery, { ttl: 30000 }),
+    cachedJson('/api/logs?limit=10', { ttl: 15000 })
   ];
 
   Promise.all(requests).then(([summary, system, services, stats, logs]) => {
@@ -1136,7 +1196,7 @@ function loadLLM(){
   // /api/llm reflects the Compute provider/model registry (the inference
   // authority), not a single Ollama daemon. The endpoint never returned a
   // `size` field; render the provider and health fields it actually sends.
-  authFetch('/api/llm').then(r=>r.json()).then(d=>{
+  cachedJson('/api/llm', { ttl: 30000 }).then(d=>{
     const el = $('llmStatus');
     if (d.status === "unreachable") {
       el.innerHTML = '<div class="llm-card"><span class="llm-dot off"></span><span class="empty">Compute provider registry unavailable' + (d.error ? ': ' + esc(d.error) : '') + '</span></div>';
@@ -2627,7 +2687,7 @@ function refreshCompute(){
 function loadComputeOverview(){
   const el = $('computeSummary');
   if (!el) return;
-  authFetch('/api/compute').then(r=>r.json()).then(d=>{
+  cachedJson('/api/compute', { ttl: 10000 }).then(d=>{
     const o = d.overview || {};
     const workers = o.workers || {};
     const jobs = o.jobs || {};
@@ -2666,7 +2726,7 @@ function loadComputeWorkers(){
   const el = $('computeWorkers');
   if (!el) return;
   el.innerHTML = '<div class="empty">Loading workers...</div>';
-  authFetch('/api/compute/workers').then(r=>r.json()).then(d=>{
+  cachedJson('/api/compute/workers', { ttl: 10000 }).then(d=>{
     const workers = d.workers || [];
     const telemetryByWorker = Object.fromEntries((d.telemetry || []).map(t => [t.workerId, t]));
     workers.forEach(w => { w.telemetry = telemetryByWorker[w.workerId] || null; });
@@ -2764,7 +2824,7 @@ function loadComputeJobs(){
   let url = '/api/compute/jobs?limit=50';
   if (status) url += '&status=' + encodeURIComponent(status);
   el.innerHTML = '<div class="empty">Loading jobs...</div>';
-  authFetch(url).then(r=>r.json()).then(d=>{
+  cachedJson(url, { ttl: 10000 }).then(d=>{
     const jobs = d.jobs || [];
     // Show the real total, not the page size — the list is capped at 50, so the
     // header used to read "Jobs (50)" no matter how many existed.
@@ -4289,10 +4349,17 @@ async function exportBlackboxIncident(id){
 }
 
 // -- Refresh -- //
+var _lastRefreshByPage = {};
 function refresh(){
   // Only refresh live overview pages AND tab is visible
   if (currentPage !== 'mission' && currentPage !== 'system' && currentPage !== 'compute') return;
   if (document.hidden) return;
+  // Throttle: skip if this page was refreshed less than 8 s ago (the 10 s
+  // interval combined with cachedJson TTLs means most refresh ticks are
+  // served from cache anyway; this avoids overlap during rapid tab switches).
+  var now = Date.now();
+  if (now - (_lastRefreshByPage[currentPage] || 0) < 8000) return;
+  _lastRefreshByPage[currentPage] = now;
 
   if (currentPage === 'compute') {
     refreshCompute();
@@ -4301,8 +4368,7 @@ function refresh(){
   if (currentPage === 'mission') {
     loadMissionControl();
   } else {
-    const now = new Date();
-    $('lastUpdate').textContent = 'updated ' + now.toLocaleTimeString();
+    $('lastUpdate').textContent = 'updated ' + new Date().toLocaleTimeString();
     loadSystem(); loadDashboardSummary(); loadLLM(); loadServices();
   }
 }
@@ -4789,22 +4855,29 @@ async function loadHandoffs() {
   status.textContent = 'Loading handoffs...';
   list.innerHTML = '';
   try {
-    const response = await authFetch('/api/handoffs?limit=50');
-    const data = await response.json();
-    if (!response.ok || !data.ok) throw new Error(data.error || 'handoff request failed');
-    const results = await Promise.all((data.handoffs || []).map(async handoff => {
-      try {
-        const result = await authFetch('/api/handoffs/' + encodeURIComponent(handoff.id) + '/start-here');
-        const body = await result.json();
-        if (!result.ok || !body.ok || !body.projection) throw new Error(body.error || 'handoff receiver request failed');
-        return { projection: body.projection };
-      } catch (error) {
-        return { handoff, error: dashboardSafeErrorMessage(error) || 'handoff receiver request failed' };
+    const data = await cachedJson('/api/handoffs?limit=50&include=start_here', { ttl: 30000 });
+    if (!data.ok) throw new Error(data.error || 'handoff request failed');
+    const handoffs = Array.isArray(data.handoffs) ? data.handoffs : [];
+    const missing = handoffs.filter(handoff => !handoff.projection);
+    const extraProjections = {};
+    if (missing.length) {
+      const results = await Promise.all(missing.map(async handoff => {
+        try {
+          const result = await authFetch('/api/handoffs/' + encodeURIComponent(handoff.id) + '/start-here');
+          const body = await result.json();
+          if (!result.ok || !body.ok || !body.projection) throw new Error(body.error || 'handoff receiver request failed');
+          return { id: handoff.id, projection: body.projection };
+        } catch (error) {
+          return { id: handoff.id, error: dashboardSafeErrorMessage(error) || 'handoff receiver request failed' };
+        }
+      }));
+      for (const item of results) {
+        if (item.projection) extraProjections[item.id] = item.projection;
       }
-    }));
-    const projections = results.filter(result => result.projection).map(result => result.projection);
-    const failures = results.filter(result => result.error);
-    status.textContent = projections.length + ' handoff' + (projections.length === 1 ? '' : 's') + (failures.length ? ' · ' + failures.length + ' unavailable' : '');
+    }
+    const projections = handoffs.map(handoff => handoff.projection || extraProjections[handoff.id]).filter(Boolean);
+    const failures = handoffs.length - projections.length;
+    status.textContent = projections.length + ' handoff' + (projections.length === 1 ? '' : 's') + (failures ? ' · ' + failures + ' unavailable' : '');
     if (!projections.length) { list.innerHTML = '<div class="card"><div class="empty">Handoff receiver data unavailable.</div></div>'; return; }
     list.innerHTML = projections.map(projection => {
       const start = projection.start_here || {};
@@ -4824,7 +4897,7 @@ async function loadHandoffs() {
          '<div class="mission-metrics"><div><span>Quality</span><strong>' + (quality.valid ? 'Ready' : 'Needs work') + '</strong></div><div><span>Evidence</span><strong>' + esc(String(evidence.fresh || 0)) + ' fresh / ' + esc(String(evidence.stale || 0)) + ' stale / ' + esc(String((evidence.unknown || 0) + (evidence.invalid || 0))) + ' unresolved</strong></div><div><span>Blockers</span><strong>' + esc(String(blockers.length)) + '</strong></div><div><span>Questions</span><strong>' + esc(String(questions.length)) + '</strong></div></div>' +
          '<details><summary>Receiver details</summary><pre class="agent-log handoff-details">' + esc(JSON.stringify({ current_state: start.current_state || null, completed_steps: projection.completed_steps || [], decisions: start.decisions || [], blockers, open_questions: questions, risks: start.risks || [], acceptance_criteria: projection.acceptance_criteria || [], artifacts: projection.artifacts || [], relationships: projection.relationships || [], provenance: projection.provenance || null, evidence: evidence.items || [], claim: projection.claim || null, reasons: readiness.reasons || quality.issues || [] }, null, 2)) + '</pre></details>' +
         '</div>';
-     }).join('') + (failures.length ? '<div class="card"><div class="empty">' + esc(String(failures.length)) + ' handoff receiver record' + (failures.length === 1 ? '' : 's') + ' could not be loaded. Refresh to retry.</div></div>' : '');
+     }).join('') + (failures ? '<div class="card"><div class="empty">' + esc(String(failures)) + ' handoff receiver record' + (failures === 1 ? '' : 's') + ' could not be loaded. Refresh to retry.</div></div>' : '');
   } catch (error) {
     status.textContent = 'Unable to load handoffs: ' + dashboardSafeErrorMessage(error);
     list.innerHTML = '<div class="card"><div class="empty">Handoff receiver data unavailable.</div></div>';
