@@ -271,6 +271,52 @@ console.log('Running Tools Tests...\n');
     const linkedCheck = await resume({ action: 'check', project: 'resume_linked_test', format: 'json' });
     const linkedCheckData = JSON.parse(linkedCheck.content[0].text);
     assert.strictEqual(linkedCheckData.handoff_validation.valid, true, 'Resume check should validate linked handoff');
+
+    const completedLinkedHandoff = JSON.parse((await handoff({
+      action: 'create',
+      project: 'resume_completed_linked_test',
+      content: 'Fact: completed linked resume handoff.',
+      packet: {
+        objective: 'Automatically close a completed linked handoff',
+        status: 'ready',
+        next_step: 'Complete the linked task',
+        acceptance_criteria: ['The linked resume item closes automatically'],
+        blockers: []
+      }
+    })).content[0].text);
+    await resume({
+      action: 'set',
+      project: 'resume_completed_linked_test',
+      summary: 'Complete linked handoff',
+      next_step: 'Complete the linked task',
+      handoff_id: completedLinkedHandoff.handoff.id
+    });
+    const completedTransition = JSON.parse((await handoff({
+      action: 'transition',
+      id: completedLinkedHandoff.handoff.id,
+      lifecycle_state: 'completed',
+      expected_version: completedLinkedHandoff.handoff.version
+    })).content[0].text);
+    assert.strictEqual(completedTransition.handoff.lifecycle_state, 'completed', 'Linked handoff should transition to completed');
+    const repeatedCompletion = JSON.parse((await handoff({
+      action: 'transition',
+      id: completedLinkedHandoff.handoff.id,
+      lifecycle_state: 'completed'
+    })).content[0].text);
+    assert.strictEqual(repeatedCompletion.no_op, true, 'Repeated handoff completion should be idempotent');
+    const completedCheck = await resume({ action: 'check', project: 'resume_completed_linked_test' });
+    assert.ok(completedCheck.content[0].text.includes('No pending resume item'), 'Completed linked handoff should close its resume item automatically');
+    const completedList = JSON.parse((await resume({ action: 'list', include_cleared: true, format: 'json' })).content[0].text);
+    const completedItem = completedList.items.find(item => item.project === 'resume_completed_linked_test');
+    assert.strictEqual(completedItem.status, 'complete', 'Auto-closed linked resume item should be complete');
+    assert.ok(completedItem.completed_at, 'Auto-closed linked resume item should record completion time');
+    const activeHandoffs = JSON.parse((await handoff({ action: 'list', project: 'resume_completed_linked_test' })).content[0].text);
+    assert.ok(!activeHandoffs.handoffs.some(item => item.id === completedLinkedHandoff.handoff.id), 'Default handoff list should hide completed records');
+    const completedHandoffs = JSON.parse((await handoff({ action: 'list', project: 'resume_completed_linked_test', include_completed: true })).content[0].text);
+    assert.ok(completedHandoffs.handoffs.some(item => item.id === completedLinkedHandoff.handoff.id && item.lifecycle_state === 'completed'), 'include_completed should recover completed records');
+    await resume({ action: 'clear', project: 'resume_completed_linked_test' });
+    await handoff({ action: 'archive', id: completedLinkedHandoff.handoff.id });
+
     await handoff({ action: 'update', id: linkedHandoff.handoff.id, packet: { objective: 'Validate a linked resume handoff', status: 'active', next_step: null, acceptance_criteria: ['Resume check validates the packet'], blockers: [] } });
     const blockedCheck = await resume({ action: 'check', project: 'resume_linked_test', format: 'json' });
     assert.ok(blockedCheck.isError, 'Resume should fail closed for an invalid linked handoff');
