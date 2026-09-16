@@ -1,9 +1,9 @@
 {
   "schema": "sidekick.compatibility-pack-inventory.v1",
   "source": "bundled pack manifests and repository files",
-  "source_commit": "f6160b0a7e562e5fa23b7e34ed2ebb5ddf78e0c5",
-  "source_commit_date": "2026-09-16T10:43:51-04:00",
-  "source_fingerprint": "sha256:f3ee038d22743400e8ced9da0a4e4058696ad9f6c5068ef68015f7f4b6f43c7b",
+  "source_commit": "f0d5e86e021387a34529394e97c236e43a6a0622",
+  "source_commit_date": "2026-09-16T13:17:46-04:00",
+  "source_fingerprint": "sha256:2e6bcf5d4a31b722b4a26dd5ea6c27f6510889863bc53f6cdc0d934c7cdce3d8",
   "pack_count": 27,
   "packs": [
     {
@@ -11313,6 +11313,7 @@
               "packs/proxmox/knowledge/proxmox-least-privilege.md",
               "packs/proxmox/knowledge/proxmox-operating.md",
               "packs/proxmox/knowledge/proxmox-provisioning.md",
+              "packs/proxmox/knowledge/proxmox-readonly.md",
               "packs/proxmox/knowledge/proxmox-safety.md",
               "packs/proxmox/knowledge/proxmox-storage-backup-readiness.md",
               "packs/proxmox/knowledge/proxmox-storage-backups.md",
