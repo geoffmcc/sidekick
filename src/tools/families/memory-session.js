@@ -6,7 +6,7 @@ const platformKernel = require("../../platform/kernel");
 const { redactSensitive } = require("../../redact");
 const { buildMemoryBrief } = require("../../memory");
 const toolContext = require("../context");
-const { canonicalizeProjectName } = require("../../core/project-identity");
+const { PROJECT_RE, canonicalizeProjectName } = require("../../core/project-identity");
 const authorization = require("../../core/authorization");
 
 function jsonText(value) {
@@ -17,6 +17,21 @@ function normalizeTags(tags) {
   if (Array.isArray(tags)) return tags.map(String).filter(Boolean);
   if (typeof tags === "string") return tags.split(",").map(s => s.trim()).filter(Boolean);
   return [];
+}
+
+// A continuity record without a project cannot be safely resumed or scoped.
+// Resolve only from explicit input or the trusted dispatch context; never guess
+// ownership from prompt text, repository names, or working-directory basenames.
+function resolveSessionProject(project) {
+  const contextProject = toolContext.getExecutionContext().project || null;
+  const supplied = project || contextProject;
+  if (!supplied) return { ok: false, message: "project is required to start a session and its handoff" };
+  const resolved = canonicalizeProjectName(supplied);
+  if (!PROJECT_RE.test(resolved)) return { ok: false, message: "project must match /^[a-z][a-z0-9_]*$/" };
+  if (project && contextProject && resolved !== canonicalizeProjectName(contextProject)) {
+    return { ok: false, message: "project does not match the trusted execution project scope" };
+  }
+  return { ok: true, project: resolved };
 }
 
 function mergePacketEntries(...groups) {
@@ -162,6 +177,9 @@ async function sidekick_session({ action, id, goal, project, source, working_dir
   const actorPrincipalId = authIdentity?.principal_id || null;
   if (action === "begin") {
     if (!goal) return { content: [{ type: "text", text: "goal required" }], isError: true };
+    const resolvedProject = resolveSessionProject(project);
+    if (!resolvedProject.ok) return { content: [{ type: "text", text: resolvedProject.message }], isError: true };
+    project = resolvedProject.project;
     const brief = buildScopedMemoryBrief(goal, project, { limit: 12 });
     const session = dbStore.saveTaskSession({ id, goal, project, source: source || toolContext.getExecutionSource(), client_session_id, working_directory, repository, branch, environment, tags: normalizeTags(tags), supplied_context, state: "active", memory_brief: brief, owner_principal_id: ownerPrincipalId, created_by_principal_id: actorPrincipalId });
     const initialPacket = {
@@ -286,7 +304,7 @@ const descriptors = Object.freeze([Object.freeze({
     action: z.enum(["begin", "update", "checkpoint", "end", "abandon", "resume", "status", "list"]).describe("Session action"),
     id: z.string().optional().describe("Task/session ID"), goal: z.string().optional().describe("Task goal, required for begin"), project: z.string().optional().describe("Project scope"), source: z.string().optional().describe("Client/source label"), working_directory: z.string().optional(), repository: z.string().optional(), branch: z.string().optional(), environment: z.string().optional(), client_session_id: z.string().optional(), tags: z.union([z.string(), z.array(z.string())]).optional(), supplied_context: z.string().optional(), current_plan: z.string().optional(), completed_steps: z.array(z.any()).optional(), current_hypothesis: z.string().optional(), evidence: z.union([z.string(), z.array(z.string())]).optional(), next_step: z.string().optional(), blockers: z.array(z.any()).optional(), artifacts: z.array(z.any()).optional(), reports: z.array(z.any()).optional(), risks: z.array(z.any()).optional(), relationships: z.array(z.any()).optional(), do_not_repeat: z.array(z.any()).optional(), handoff_id: z.string().optional().describe("Structured handoff to finalize with the continuation packet on end/abandon"), outcome: z.string().optional(), final_summary: z.string().optional(), user_visible_result: z.string().optional(), acceptance_state: z.string().optional(), decisions: z.array(z.string()).optional(), verified_facts: z.array(z.string()).optional(), unresolved_issues: z.array(z.string()).optional(), resolved_issues: z.array(z.string()).optional(), failed_approaches: z.array(z.string()).optional(), procedures_learned: z.array(z.string()).optional(), follow_ups: z.array(z.string()).optional(), usefulness_feedback: z.string().optional(), limit: z.number().optional(),
   }),
-  args: { action: "string (begin|update|checkpoint|end|abandon|resume|status|list)", id: "string (optional task/session id)", goal: "string (required for begin)", project: "string (optional)", source: "string (optional)", working_directory: "string (optional)", repository: "string (optional)", branch: "string (optional)", environment: "string (optional)", tags: "string|array (optional)", current_plan: "string (optional)", completed_steps: "array (optional)", blockers: "array (optional)", next_step: "string (optional)", artifacts: "array (optional)", reports: "array of subagent reports (optional, retained on linked handoff)", handoff_id: "string (optional, required to finalize a handoff on end/abandon)", risks: "array (optional)", relationships: "array (optional)", do_not_repeat: "array (optional)", outcome: "string (optional)", final_summary: "string (optional)", acceptance_state: "string (optional)", verified_facts: "array (optional)", decisions: "array (optional)", failed_approaches: "array (optional)", follow_ups: "array (optional)" },
+  args: { action: "string (begin|update|checkpoint|end|abandon|resume|status|list)", id: "string (optional task/session id)", goal: "string (required for begin)", project: "string (required for begin unless trusted execution scope supplies it)", source: "string (optional)", working_directory: "string (optional)", repository: "string (optional)", branch: "string (optional)", environment: "string (optional)", tags: "string|array (optional)", current_plan: "string (optional)", completed_steps: "array (optional)", blockers: "array (optional)", next_step: "string (optional)", artifacts: "array (optional)", reports: "array of subagent reports (optional, retained on linked handoff)", handoff_id: "string (optional, required to finalize a handoff on end/abandon)", risks: "array (optional)", relationships: "array (optional)", do_not_repeat: "array (optional)", outcome: "string (optional)", final_summary: "string (optional)", acceptance_state: "string (optional)", verified_facts: "array (optional)", decisions: "array (optional)", failed_approaches: "array (optional)", follow_ups: "array (optional)" },
   risk: "medium",
   category: "Context & Learning",
   source: "builtin",
