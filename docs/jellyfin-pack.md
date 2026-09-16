@@ -153,10 +153,32 @@ capability action="configure" name="jellyfin" config={
 | `allow_insecure_http` | no | Default false. Explicit opt-in for internal plain-HTTP deployments. |
 | `allow_writes` | no | Default false. Must be true for `jellyfin_maintenance` to act on this profile. |
 | `allow_playback_control` | no | Default false. Must be true for `jellyfin_playback` to issue targeted pause, resume, stop, seek, volume, or PlayNow commands. |
+| `dlna_rendering_controls` | no | Per-renderer direct UPnP volume control; see below. |
 | `default` | no | Marks the default profile when several are configured. |
 | `request_timeout_ms` | no | Per-request timeout (default 15000, max 120000). |
 | `verify_poll_interval_ms` | no | Postcondition poll interval for maintenance verification (default 2000, min 50). |
 | `storage_provider` | no | Independent storage-evidence source; see below. |
+
+### `dlna_rendering_controls`
+
+Direct UPnP RenderingControl volume control for DLNA renderers whose
+Jellyfin-side `SetVolume` command is rejected with `invalid_input` (for
+example Samsung TVs). Each entry:
+
+- `device` — required; matched case-insensitively against the active DLNA
+  session's `DeviceName`. Multiple entries must not match the same device.
+- `base_url` — required; renderer origin as a **literal IP** over http(s).
+  No credentials, query, or fragment.
+- `control_path` — optional; the renderer's RenderingControl `controlURL` path
+  starting with `/`, e.g. `/upnp/control/RenderingControl1`. When omitted,
+  the pack discovers it from the renderer's device description during
+  execution (dry runs report discovery-required without network access).
+
+The selected control URL is only used when its host matches the active
+session's `RemoteEndPoint` host; the renderer address must not point at the
+Jellyfin server. Non-DLNA sessions and DLNA renderers without a matching
+entry keep the regular Jellyfin command route. See `jellyfin_playback`
+semantics for the set/verify behavior and error codes.
 
 ### `storage_provider`
 
@@ -285,10 +307,32 @@ Per-action honesty notes:
   can route pause, stop, and seek through the session play-state endpoints.
   The pack permits those controls only for an explicitly identified DLNA
   session with `SupportsMediaControl: true`; seek additionally requires
-  `PlayState.CanSeek: true`. DLNA `SetVolume` compatibility for issue #506 is
-   likewise limited to sessions with explicit `SupportsMediaControl: true`;
-   volume remains a high-risk, profile-opt-in mutation and is never part of the
-   read tool.
+  `PlayState.CanSeek: true`. Volume remains a high-risk, profile-opt-in
+  mutation and is never part of the read tool.
+- DLNA `set_volume` is preferred over the Jellyfin `/Sessions/{id}/Command`
+  route (which many DLNA renderers, such as Samsung TVs, reject with
+  `invalid_input`) when the profile declares matching renderer entries in
+  `dlna_rendering_controls`. Each entry requires a `device` name (matched
+  case-insensitively against the session's `DeviceName`), a literal-IP
+  `base_url` (no credentials, query, or fragment), and an optional
+  `control_path` starting with `/`. The pack issues a bounded UPnP
+  RenderingControl SOAP `SetVolume` (instance 0, `Master` channel) at that
+  URL and verifies with a `GetVolume` read-back (`volume_observed`); a
+  renderer that answers with a different value reports `request_accepted`
+  rather than `verified`.
+- Direct DLNA volume is scoped to the **active** session: the control URL is
+  only used when its host matches the selected session's `RemoteEndPoint`
+  host (ports may differ), and `set_volume` is refused (`state_conflict`)
+  when the renderer host mismatches, the session has no `RemoteEndPoint`, or
+  multiple renderer entries match the same device. When `control_path` is
+  omitted the pack discovers it from the renderer's device description
+  (trying `/dmr`, `/DeviceDescription.xml`, `/device_description.xml`, and
+  `/`); a dry run of that path reports discovery-required without touching
+  the network, and discovery/control failures map to the standard
+  `connection_failed`, `timeout`, `invalid_input`, or `server_error` codes.
+  Renderers without a matching `dlna_rendering_controls` entry fall back to
+  the Jellyfin command route, and non-DLNA sessions never use the direct
+  RenderingControl path even when renderer entries are configured.
 - The pack's ten manifest-registered knowledge documents cover operating
   model, catalog, Live TV, server audit, user media, analytics, safety,
   playback diagnosis, targeted playback control, and maintenance. New users

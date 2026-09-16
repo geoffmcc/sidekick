@@ -14,6 +14,7 @@ const storageLib = require(
   path.join(pack, "modules/jellyfin-tools/lib/storage"),
 );
 const logsLib = require(path.join(pack, "modules/jellyfin-tools/lib/logs"));
+const dlna = require(path.join(pack, "modules/jellyfin-tools/lib/dlna"));
 let failures = 0;
 function test(name, fn) {
   try {
@@ -1363,6 +1364,424 @@ async function asyncTest(name, fn) {
       assert.strictEqual(result.parsed.compatibility, "dlna_session_playstate");
     }
   });
+
+  await asyncTest("DLNA set_volume uses the configured RenderingControl URL instead of the Jellyfin command route", async () => {
+    setFixtures(baseFixtures());
+    fixtures["/Sessions"][0] = {
+      ...fixtures["/Sessions"][0],
+      Client: "DLNA",
+      RemoteEndPoint: "127.0.0.1:49152",
+      SupportedCommands: ["SetVolume"],
+    };
+    const { playback } = tools(servicesFor({
+      profileExtra: {
+        allow_playback_control: true,
+        dlna_rendering_controls: [
+          { device: "tv", base_url: "http://127.0.0.1:9197", control_path: "/upnp/control/RenderingControl1" },
+        ],
+      },
+    }));
+    const origSet = dlna.setVolume;
+    const origGet = dlna.getVolume;
+    const setCalls = [];
+    const getCalls = [];
+    dlna.setVolume = async (url, volume) => { setCalls.push({ url: url.toString(), volume }); };
+    dlna.getVolume = async (url) => { getCalls.push(url.toString()); return 35; };
+    try {
+      const result = await call(playback, { action: "set_volume", volume: 35, device_id: "tv-device-1" });
+      assert.ok(!result.out.isError, result.out.content[0].text);
+      assert.strictEqual(result.parsed.compatibility, "dlna_rendering_control");
+      assert.strictEqual(result.parsed.outcome, "verified");
+      assert.deepStrictEqual(result.parsed.postcondition, {
+        playback_observed: true,
+        rendering_control: "RenderingControl:1",
+        desired_volume: 35,
+        volume_observed: 35,
+      });
+      assert.deepStrictEqual(setCalls, [
+        { url: "http://127.0.0.1:9197/upnp/control/RenderingControl1", volume: 35 },
+      ]);
+      assert.strictEqual(getCalls.length, 1);
+      assert.deepStrictEqual(postLog, []);
+    } finally {
+      dlna.setVolume = origSet;
+      dlna.getVolume = origGet;
+    }
+  });
+
+  await asyncTest("DLNA dry-run set_volume plans the RenderingControl URL without touching the network", async () => {
+    setFixtures(baseFixtures());
+    fixtures["/Sessions"][0] = {
+      ...fixtures["/Sessions"][0],
+      Client: "DLNA",
+      RemoteEndPoint: "127.0.0.1:49152",
+      SupportedCommands: ["SetVolume"],
+    };
+    const { playback } = tools(servicesFor({
+      profileExtra: {
+        allow_playback_control: true,
+        dlna_rendering_controls: [
+          { device: "tv", base_url: "http://127.0.0.1:9197", control_path: "/upnp/control/RenderingControl1" },
+        ],
+      },
+    }));
+    const result = await call(playback, { action: "set_volume", volume: 35, device_id: "tv-device-1", dry_run: true });
+    assert.ok(!result.out.isError, result.out.content[0].text);
+    assert.strictEqual(result.parsed.dry_run, true);
+    assert.strictEqual(result.parsed.compatibility, "dlna_rendering_control");
+    assert.ok(result.parsed.endpoint.includes("/upnp/control/RenderingControl1"));
+    assert.ok(result.parsed.command.discovery_required === false);
+    assert.deepStrictEqual(postLog, []);
+  });
+
+  await asyncTest("DLNA dry-run set_volume reports discovery-required when control_path is omitted", async () => {
+    setFixtures(baseFixtures());
+    fixtures["/Sessions"][0] = {
+      ...fixtures["/Sessions"][0],
+      Client: "DLNA",
+      RemoteEndPoint: "127.0.0.1:49152",
+      SupportedCommands: ["SetVolume"],
+    };
+    const { playback } = tools(servicesFor({
+      profileExtra: {
+        allow_playback_control: true,
+        dlna_rendering_controls: [
+          { device: "tv", base_url: "http://127.0.0.1:9197" },
+        ],
+      },
+    }));
+    const result = await call(playback, { action: "set_volume", volume: 35, device_id: "tv-device-1", dry_run: true });
+    assert.ok(!result.out.isError, result.out.content[0].text);
+    assert.strictEqual(result.parsed.dry_run, true);
+    assert.strictEqual(result.parsed.compatibility, "dlna_rendering_control");
+    assert.ok(result.parsed.endpoint.includes("RenderingControl discovery required"));
+    assert.ok(result.parsed.command.discovery_required);
+    assert.deepStrictEqual(postLog, []);
+  });
+
+  await asyncTest("DLNA set_volume keeps the Jellyfin command route when no renderer config matches", async () => {
+    setFixtures(baseFixtures());
+    fixtures["/Sessions"][0] = {
+      ...fixtures["/Sessions"][0],
+      Client: "DLNA",
+      RemoteEndPoint: "127.0.0.1:49152",
+      SupportedCommands: ["SetVolume"],
+    };
+    const { playback } = tools(servicesFor({
+      profileExtra: { allow_playback_control: true },
+    }));
+    const result = await call(playback, { action: "set_volume", volume: 35, device_id: "tv-device-1" });
+    assert.ok(!result.out.isError, result.out.content[0].text);
+    assert.strictEqual(result.parsed.compatibility, "dlna_session_playstate");
+    assert.strictEqual(postLog[0].path, "/Sessions/s1/Command");
+    assert.deepStrictEqual(postLog[0].body, { Name: "SetVolume", Arguments: { volume: "35" } });
+  });
+
+  await asyncTest("DLNA set_volume is refused when the configured renderer host does not match the active session", async () => {
+    setFixtures(baseFixtures());
+    fixtures["/Sessions"][0] = {
+      ...fixtures["/Sessions"][0],
+      Client: "DLNA",
+      RemoteEndPoint: "127.0.0.1:49152",
+      SupportedCommands: ["SetVolume"],
+    };
+    const { playback } = tools(servicesFor({
+      profileExtra: {
+        allow_playback_control: true,
+        dlna_rendering_controls: [
+          { device: "tv", base_url: "http://192.0.2.55:9197", control_path: "/upnp/control/RenderingControl1" },
+        ],
+      },
+    }));
+    const result = await call(playback, { action: "set_volume", volume: 35, device_id: "tv-device-1" });
+    assert.ok(result.out.isError);
+    assert.strictEqual(result.out.code, "state_conflict");
+    assert.deepStrictEqual(postLog, []);
+  });
+
+  await asyncTest("DLNA set_volume is refused when the selected session has no RemoteEndPoint", async () => {
+    setFixtures(baseFixtures());
+    fixtures["/Sessions"][0] = {
+      ...fixtures["/Sessions"][0],
+      Client: "DLNA",
+      RemoteEndPoint: null,
+      SupportedCommands: ["SetVolume"],
+    };
+    const { playback } = tools(servicesFor({
+      profileExtra: {
+        allow_playback_control: true,
+        dlna_rendering_controls: [
+          { device: "tv", base_url: "http://127.0.0.1:9197", control_path: "/upnp/control/RenderingControl1" },
+        ],
+      },
+    }));
+    const result = await call(playback, { action: "set_volume", volume: 35, device_id: "tv-device-1" });
+    assert.ok(result.out.isError);
+    assert.strictEqual(result.out.code, "state_conflict");
+    assert.deepStrictEqual(postLog, []);
+  });
+
+  await asyncTest("DLNA renderer config ambiguity is refused when multiple entries match the same device name", async () => {
+    setFixtures(baseFixtures());
+    fixtures["/Sessions"][0] = {
+      ...fixtures["/Sessions"][0],
+      Client: "DLNA",
+      RemoteEndPoint: "127.0.0.1:49152",
+      SupportedCommands: ["SetVolume"],
+    };
+    const { playback } = tools(servicesFor({
+      profileExtra: {
+        allow_playback_control: true,
+        dlna_rendering_controls: [
+          { device: "tv", base_url: "http://10.0.0.1:9197", control_path: "/ctrl" },
+          { device: "tv", base_url: "http://10.0.0.2:9197", control_path: "/ctrl" },
+        ],
+      },
+    }));
+    const result = await call(playback, { action: "set_volume", volume: 35, device_id: "tv-device-1" });
+    assert.ok(result.out.isError);
+    assert.strictEqual(result.out.code, "state_conflict");
+    assert.deepStrictEqual(postLog, []);
+  });
+
+  await asyncTest("non-DLNA session keeps the Jellyfin command path even when DLNA renderer config is present", async () => {
+    setFixtures(baseFixtures());
+    const { playback } = tools(servicesFor({
+      profileExtra: {
+        allow_playback_control: true,
+        dlna_rendering_controls: [
+          { device: "tv", base_url: "http://127.0.0.1:9197", control_path: "/upnp/control/RenderingControl1" },
+        ],
+      },
+    }));
+    const result = await call(playback, { action: "set_volume", volume: 35, device_id: "tv-device-1" });
+    assert.ok(!result.out.isError, result.out.content[0].text);
+    assert.strictEqual(result.parsed.compatibility, null);
+    assert.strictEqual(postLog[0].path, "/Sessions/s1/Command");
+    assert.deepStrictEqual(postLog[0].body, { Name: "SetVolume", Arguments: { volume: "35" } });
+  });
+
+  test("dlna hostFromEndPoint extracts bare IPs and IPv6 bracketed IPs", () => {
+    assert.strictEqual(dlna.hostFromEndPoint("192.168.1.10:12345"), "192.168.1.10");
+    assert.strictEqual(dlna.hostFromEndPoint("[fd00::1]:8096"), "fd00::1");
+    assert.strictEqual(dlna.hostFromEndPoint("192.168.1.10"), "192.168.1.10");
+    assert.strictEqual(dlna.hostFromEndPoint(""), null);
+    assert.strictEqual(dlna.hostFromEndPoint(undefined), null);
+  });
+
+  test("dlna envelopes produce correctly quoted SOAPAction and XML structure", () => {
+    const setXml = dlna.setVolumeEnvelope(42);
+    assert.ok(setXml.includes("DesiredVolume>42</DesiredVolume>"));
+    assert.ok(setXml.includes('xmlns:u="urn:schemas-upnp-org:service:RenderingControl:1"'));
+    assert.ok(setXml.includes("<Channel>Master</Channel>"));
+    const getXml = dlna.getVolumeEnvelope();
+    assert.ok(getXml.includes("GetVolume"));
+    assert.ok(!getXml.includes("DesiredVolume"));
+  });
+
+  test("dlna parseCurrentVolume extracts and validates 0-100 values", () => {
+    assert.strictEqual(dlna.parseCurrentVolume("<CurrentVolume>42</CurrentVolume>"), 42);
+    assert.strictEqual(dlna.parseCurrentVolume("<CurrentVolume> 0 </CurrentVolume>"), 0);
+    assert.strictEqual(dlna.parseCurrentVolume("<CurrentVolume>100</CurrentVolume>"), 100);
+    assert.strictEqual(dlna.parseCurrentVolume("<CurrentVolume>101</CurrentVolume>"), null);
+    assert.strictEqual(dlna.parseCurrentVolume("<CurrentVolume>-1</CurrentVolume>"), null);
+    assert.strictEqual(dlna.parseCurrentVolume(""), null);
+    assert.strictEqual(dlna.parseCurrentVolume(null), null);
+  });
+
+  test("dlna extractControlUrl finds RenderingControl service and resolves relative controlURL", () => {
+    const desc = `
+      <root xmlns="urn:schemas-upnp-org:device-1-0">
+        <service>
+          <serviceType>urn:schemas-upnp-org:service:AVTransport:1</serviceType>
+          <controlURL>/upnp/control/AVTransport1</controlURL>
+        </service>
+        <service>
+          <serviceType>urn:schemas-upnp-org:service:RenderingControl:1</serviceType>
+          <controlURL>/upnp/control/RenderingControl1</controlURL>
+        </service>
+      </root>`;
+    const result = dlna.extractControlUrl(desc, "http://10.0.0.1:9197");
+    assert.ok(result);
+    assert.strictEqual(result.url.pathname, "/upnp/control/RenderingControl1");
+    assert.strictEqual(result.service_type, "urn:schemas-upnp-org:service:RenderingControl:1");
+  });
+
+  test("dlna extractControlUrl returns null for descriptions without RenderingControl", () => {
+    const desc = `
+      <root>
+        <service>
+          <serviceType>urn:schemas-upnp-org:service:AVTransport:1</serviceType>
+          <controlURL>/upnp/control/AVTransport1</controlURL>
+        </service>
+      </root>`;
+    assert.strictEqual(dlna.extractControlUrl(desc, "http://10.0.0.1:9197"), null);
+  });
+
+  test("dlna sanitizeBaseUrl rejects non-IP hostnames, credentials, and non-http schemes", () => {
+    assert.throws(
+      () => dlna.sanitizeBaseUrl("https://tv.local:9197/", "x"),
+      (e) => e.code === "invalid_input",
+    );
+    assert.throws(
+      () => dlna.sanitizeBaseUrl("ftp://10.0.0.1:9197/", "x"),
+      (e) => e.code === "invalid_input",
+    );
+    assert.throws(
+      () => dlna.sanitizeBaseUrl("http://user:pass@10.0.0.1:9197/", "x"),
+      (e) => e.code === "invalid_input",
+    );
+    assert.throws(
+      () => dlna.sanitizeBaseUrl("http://10.0.0.1:9197/?foo", "x"),
+      (e) => e.code === "invalid_input",
+    );
+    const url = dlna.sanitizeBaseUrl("http://10.0.0.1:9197/", "x");
+    assert.strictEqual(url.hostname, "10.0.0.1");
+  });
+
+  test("dlna normalizeControlPath rejects bare paths without leading slash", () => {
+    assert.throws(
+      () => dlna.normalizeControlPath("upnp/control"),
+      (e) => e.code === "invalid_input",
+    );
+    assert.strictEqual(dlna.normalizeControlPath("/upnp/control"), "/upnp/control");
+  });
+
+  test("dlna configuredControlUrl throws state_conflict when host does not match the session", async () => {
+    await assert.rejects(
+      async () => dlna.configuredControlUrl(
+        { base_url: "http://192.0.2.55:9197", control_path: "/upnp/control/RenderingControl1" },
+        "127.0.0.1",
+      ),
+      (e) => e.code === "state_conflict",
+    );
+  });
+
+  await asyncTest("dlna SOAP round-trip and device-description discovery succeed against a loopback server", async () => {
+    const http = require("http");
+    let currentVolume = 50;
+    const deviceDesc = `
+      <root xmlns="urn:schemas-upnp-org:device-1-0">
+        <service>
+          <serviceType>urn:schemas-upnp-org:service:AVTransport:1</serviceType>
+          <controlURL>/upnp/control/AVTransport1</controlURL>
+        </service>
+        <service>
+          <serviceType>urn:schemas-upnp-org:service:RenderingControl:1</serviceType>
+          <controlURL>/upnp/control/RenderingControl1</controlURL>
+        </service>
+      </root>`;
+    const soapEnvelope = (body) => `<?xml version="1.0" encoding="utf-8"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
+  <s:Body>${body}</s:Body>
+</s:Envelope>`;
+    const server = http.createServer((req, res) => {
+      const u = new URL(req.url, "http://localhost");
+      if (req.method === "GET" && ["/dmr", "/DeviceDescription.xml", "/"].includes(u.pathname)) {
+        res.writeHead(200, { "Content-Type": "text/xml" });
+        res.end(deviceDesc);
+        return;
+      }
+      if (req.method === "POST" && u.pathname === "/upnp/control/RenderingControl1") {
+        const action = req.headers.soapaction || "";
+        const chunks = [];
+        req.on("data", (c) => chunks.push(c));
+        req.on("end", () => {
+          const body = Buffer.concat(chunks).toString("utf8");
+          if (action.includes("SetVolume")) {
+            const m = /<DesiredVolume[^>]*>\s*(\d+)\s*<\/DesiredVolume>/i.exec(body);
+            currentVolume = m ? Number(m[1]) : currentVolume;
+            res.writeHead(200, { "Content-Type": 'text/xml; charset="utf-8"' });
+            res.end(soapEnvelope(
+              `<u:SetVolumeResponse xmlns:u="urn:schemas-upnp-org:service:RenderingControl:1"></u:SetVolumeResponse>`,
+            ));
+          } else if (action.includes("GetVolume")) {
+            res.writeHead(200, { "Content-Type": 'text/xml; charset="utf-8"' });
+            res.end(soapEnvelope(
+              `<u:GetVolumeResponse xmlns:u="urn:schemas-upnp-org:service:RenderingControl:1">
+                <CurrentVolume>${currentVolume}</CurrentVolume>
+              </u:GetVolumeResponse>`,
+            ));
+          } else {
+            res.writeHead(400);
+            res.end("bad action");
+          }
+        });
+        return;
+      }
+      res.writeHead(404);
+      res.end("not found");
+    });
+    await new Promise((r) => server.listen(0, "127.0.0.1", r));
+    const port = server.address().port;
+    const baseUrl = `http://127.0.0.1:${port}`;
+    try {
+      const resolved = await dlna.resolveControlUrl(
+        { base_url: baseUrl },
+        { expectedHost: "127.0.0.1", timeoutMs: 2000 },
+      );
+      assert.strictEqual(resolved.method, "discovered");
+      assert.ok(resolved.url.pathname.startsWith("/upnp/control/RenderingControl1"));
+      await dlna.setVolume(resolved.url, 42, { timeoutMs: 2000 });
+      const vol = await dlna.getVolume(resolved.url, { timeoutMs: 2000 });
+      assert.strictEqual(vol, 42);
+      assert.strictEqual(currentVolume, 42);
+      const configured = dlna.configuredControlUrl(
+        { base_url: baseUrl, control_path: "/upnp/control/RenderingControl1" },
+        "127.0.0.1",
+      );
+      assert.strictEqual(configured.method, "configured");
+      await dlna.setVolume(configured.url, 0, { timeoutMs: 2000 });
+      const volZero = await dlna.getVolume(configured.url, { timeoutMs: 2000 });
+      assert.strictEqual(volZero, 0);
+    } finally {
+      server.close();
+    }
+  });
+
+  await asyncTest("dlna SOAP errors surface as invalid_input (400) or server_error (500)", async () => {
+    const http = require("http");
+    const server = http.createServer((req, res) => {
+      const u = new URL(req.url, "http://localhost");
+      if (u.pathname === "/reject-400") {
+        res.writeHead(400, { "Content-Type": "text/plain" });
+        res.end("bad");
+      } else if (u.pathname === "/reject-500") {
+        res.writeHead(500, { "Content-Type": "text/plain" });
+        res.end("down");
+      } else {
+        res.writeHead(404);
+        res.end("missing");
+      }
+    });
+    await new Promise((r) => server.listen(0, "127.0.0.1", r));
+    const port = server.address().port;
+    try {
+      const url400 = new URL(`http://127.0.0.1:${port}/reject-400`);
+      const url500 = new URL(`http://127.0.0.1:${port}/reject-500`);
+      await assert.rejects(
+        () => dlna.setVolume(url400, 42, { timeoutMs: 2000 }),
+        (e) => e.code === "invalid_input" && e.details?.status === 400,
+      );
+      await assert.rejects(
+        () => dlna.setVolume(url500, 42, { timeoutMs: 2000 }),
+        (e) => e.code === "server_error" && e.details?.status === 500,
+      );
+    } finally {
+      server.close();
+    }
+  });
+
+  await asyncTest("dlna refuses the selected control URL when the resolved host differs from the active session", async () => {
+    await assert.rejects(
+      async () => dlna.resolveControlUrl(
+        { base_url: "http://192.0.2.55:9197", control_path: "/upnp/control/RenderingControl1" },
+        { expectedHost: "127.0.0.1", timeoutMs: 100 },
+      ),
+      (e) => e.code === "state_conflict",
+    );
+  });
+
   await asyncTest("user_status and user_access_audit surface policy evidence", async () => {
     setFixtures(baseFixtures());
     const { read } = tools(servicesFor());

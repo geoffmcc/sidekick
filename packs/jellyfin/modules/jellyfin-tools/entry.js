@@ -3,6 +3,7 @@ const { requireFromSidekick } = require("./lib/deps");
 const { z } = requireFromSidekick("zod");
 const profiles = require("./lib/profiles"),
   { createClient } = require("./lib/client"),
+  dlna = require("./lib/dlna"),
   n = require("./lib/normalize"),
   storage = require("./lib/storage"),
   logs = require("./lib/logs"),
@@ -1871,6 +1872,50 @@ function isDlnaSession(session) {
     .some((value) => /^dlna$/i.test(String(value).trim()));
 }
 
+// Match the selected session to a configured direct RenderingControl target
+// (issue #506). Returns null when the profile lists none; refuses ambiguous
+// matches so a misconfigured profile can never route a command to the wrong
+// renderer.
+function dlnaRendererFor(profile, target) {
+  const devices = Array.isArray(profile.dlna_rendering_controls) ? profile.dlna_rendering_controls : [];
+  if (!devices.length) return null;
+  const name = String(target?.DeviceName || "").toLowerCase().trim();
+  if (!name) return null;
+  const matches = devices.filter(
+    (renderer) => String(renderer.device).toLowerCase().trim() === name,
+  );
+  if (matches.length > 1)
+    throw new JellyfinError(
+      "state_conflict",
+      "dlna rendering control config is ambiguous for the selected device",
+      { device_name: target.DeviceName, matches: matches.map((m) => m.base_url) },
+    );
+  return matches[0] || null;
+}
+
+function remoteHostFromSession(session) {
+  return dlna.hostFromEndPoint(session?.RemoteEndPoint);
+}
+
+// Prepare the direct RenderingControl path when this set_volume targets a
+// configured DLNA renderer. Fast-fails on missing RemoteEndPoint or a control
+// URL that points at a different host than the active session.
+function dlnaVolumeContext(profile, target) {
+  if (!isDlnaSession(target)) return null;
+  const renderer = dlnaRendererFor(profile, target);
+  if (!renderer) return null;
+  const remoteHost = remoteHostFromSession(target);
+  if (!remoteHost)
+    throw new JellyfinError(
+      "state_conflict",
+      "the selected DLNA session exposes no remote endpoint to resolve the renderer control URL",
+      { target: playbackCandidateView(target) },
+    );
+  const context = { renderer, remoteHost };
+  if (renderer.control_path) context.control = dlna.configuredControlUrl(renderer, remoteHost);
+  return context;
+}
+
 function supportsPlaybackCommand(session, action, requiredCommand) {
   const supported = Array.isArray(session?.SupportedCommands) ? session.SupportedCommands : [];
   if (!requiredCommand || !supported.length || supported.includes(requiredCommand)) return true;
@@ -1968,26 +2013,44 @@ async function playback(services, args, runtime) {
     seekPositionTicks = Math.max(0, Math.round(requestedSeconds * 10000000));
   }
 
+  // Direct RenderingControl path for DLNA renderers whose Jellyfin session
+  // rejects the generic SetVolume command. Only used for set_volume on a
+  // DLNA session with a matching profile entry; every other action keeps the
+  // existing Jellyfin session command path.
+  const dlnaVolume = args.action === "set_volume" ? dlnaVolumeContext(p, target) : null;
+
   const plan = {
     profile: p.name,
     operation: args.action,
     target: playbackCandidateView(target),
     user: { id: target.UserId, name: target.UserName || null, source: "target_session" },
     item: resolvedItem ? { id: resolvedItem.id, name: resolvedItem.name, type: resolvedItem.type } : null,
-    endpoint: args.action === "play"
-      ? `/Sessions/${target.Id}/Playing`
-      : args.action === "set_volume"
-        ? `/Sessions/${target.Id}/Command`
-        : `/Sessions/${target.Id}/Playing/${args.action === "resume" ? "Unpause" : args.action[0].toUpperCase() + args.action.slice(1)}`,
-    command: args.action === "play"
-      ? { play_command: "PlayNow", item_ids: [resolvedItem.id] }
-      : isSeekAction(args.action)
-        ? { playstate_command: "Seek", seek_position_ticks: seekPositionTicks }
+    endpoint: dlnaVolume
+      ? dlnaVolume.control
+        ? `${dlnaVolume.control.url} (${dlnaVolume.control.method} RenderingControl)`
+        : `${dlnaVolume.renderer.base_url} (RenderingControl discovery required)`
+      : args.action === "play"
+        ? `/Sessions/${target.Id}/Playing`
         : args.action === "set_volume"
-          ? { general_command: "SetVolume", volume: args.volume }
-          : { playstate_command: requiredCommand },
+          ? `/Sessions/${target.Id}/Command`
+          : `/Sessions/${target.Id}/Playing/${args.action === "resume" ? "Unpause" : args.action[0].toUpperCase() + args.action.slice(1)}`,
+    command: dlnaVolume
+      ? {
+          rendering_control: "SetVolume",
+          channel: "Master",
+          desired_volume: args.volume,
+          control_url: dlnaVolume.control ? dlnaVolume.control.url.toString() : null,
+          discovery_required: !dlnaVolume.control,
+        }
+      : args.action === "play"
+        ? { play_command: "PlayNow", item_ids: [resolvedItem.id] }
+        : isSeekAction(args.action)
+          ? { playstate_command: "Seek", seek_position_ticks: seekPositionTicks }
+          : args.action === "set_volume"
+            ? { general_command: "SetVolume", volume: args.volume }
+            : { playstate_command: requiredCommand },
     watch_state_source: "Jellyfin session user and user-scoped item lookup",
-    compatibility: isDlnaSession(target) ? "dlna_session_playstate" : null,
+    compatibility: isDlnaSession(target) ? (dlnaVolume ? "dlna_rendering_control" : "dlna_session_playstate") : null,
   };
   if (args.dry_run === true) return { dry_run: true, ...plan, changes_made: false };
 
@@ -2000,6 +2063,20 @@ async function playback(services, args, runtime) {
     await c.post(`/Sessions/${encodeURIComponent(target.Id)}/Playing/Seek`, null, {
       seekPositionTicks,
     });
+  } else if (dlnaVolume) {
+    let control = dlnaVolume.control;
+    if (!control) {
+      control = await dlna.resolveControlUrl(dlnaVolume.renderer, {
+        expectedHost: dlnaVolume.remoteHost,
+        signal: runtime?.signal,
+        timeoutMs: p.timeout,
+      });
+      dlnaVolume.control = control;
+    }
+    await dlna.setVolume(control.url, args.volume, {
+      signal: runtime?.signal,
+      timeoutMs: p.timeout,
+    });
   } else if (args.action === "set_volume") {
     await c.post(`/Sessions/${encodeURIComponent(target.Id)}/Command`, {
       Name: "SetVolume",
@@ -2010,9 +2087,27 @@ async function playback(services, args, runtime) {
   }
   let observed = false;
   let observedSession = null;
+  let dlnaObservedVolume = null;
   for (let i = 0; i < 3; i += 1) {
     await sleep(p.verify_poll_interval_ms, runtime?.signal);
     if (runtime?.signal?.aborted) break;
+    if (dlnaVolume) {
+      try {
+        const current = await dlna.getVolume(dlnaVolume.control.url, {
+          signal: runtime?.signal,
+          timeoutMs: p.timeout,
+        });
+        dlnaObservedVolume = current;
+        if (current === args.volume) {
+          observed = true;
+          break;
+        }
+      } catch {
+        // The renderer did not confirm the value; keep polling, and degrade
+        // to request_accepted rather than claiming a verified outcome.
+      }
+      continue;
+    }
     const now = await c.get("/Sessions");
     observedSession = (Array.isArray(now) ? now : []).find((session) => session.Id === target.Id) || null;
     const stateObserved = args.action === "play"
@@ -2034,13 +2129,20 @@ async function playback(services, args, runtime) {
   return {
     ...plan,
     outcome: observed ? "verified" : "request_accepted",
-    postcondition: {
-      playback_observed: observed,
-      now_playing_item_id: observedSession?.NowPlayingItem?.Id || null,
-      position_ticks: observedSession?.PlayState?.PositionTicks ?? null,
-      paused: observedSession?.PlayState?.IsPaused ?? null,
-      volume: observedSession?.PlayState?.VolumeLevel ?? null,
-    },
+    postcondition: dlnaVolume
+      ? {
+          playback_observed: observed,
+          rendering_control: "RenderingControl:1",
+          desired_volume: args.volume,
+          volume_observed: dlnaObservedVolume,
+        }
+      : {
+          playback_observed: observed,
+          now_playing_item_id: observedSession?.NowPlayingItem?.Id || null,
+          position_ticks: observedSession?.PlayState?.PositionTicks ?? null,
+          paused: observedSession?.PlayState?.IsPaused ?? null,
+          volume: observedSession?.PlayState?.VolumeLevel ?? null,
+        },
     changes_made: true,
   };
 }

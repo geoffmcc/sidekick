@@ -60,6 +60,16 @@
               "endpoint": { "type": "string" }, "api_key_ref": { "type": "string" },
               "ca_pem": { "type": "string" }, "ca_secret_ref": { "type": "string" },
               "allow_insecure_http": { "type": "boolean" }, "request_timeout_ms": { "type": "integer", "minimum": 1000, "maximum": 120000 }, "default": { "type": "boolean" }, "allow_writes": { "type": "boolean" }, "allow_playback_control": { "type": "boolean", "description": "Explicitly permit targeted remote playback commands for active Jellyfin device sessions." },
+              "dlna_rendering_controls": {
+                "type": "array",
+                "description": "Direct UPnP RenderingControl volume targets for DLNA sessions whose SetVolume is rejected by Jellyfin (e.g. Samsung TVs). base_url must be the renderer's literal IP; the resolved control URL host must equal the active session's RemoteEndPoint host.",
+                "items": { "type": "object", "additionalProperties": false,
+                  "properties": {
+                    "device": { "type": "string", "description": "Case-insensitive exact match on the active session DeviceName." },
+                    "base_url": { "type": "string", "description": "Renderer origin, e.g. http://10.47.60.122:9197. Literal IP required." },
+                    "control_path": { "type": "string", "description": "Optional RenderingControl control path, e.g. /upnp/control/RenderingControl1. Omitted to auto-discover from the device description." }
+                  }, "required": ["device", "base_url"] }
+              },
               "verify_poll_interval_ms": { "type": "integer", "minimum": 50, "maximum": 10000, "description": "Postcondition verification poll interval for maintenance operations (default 2000)." },
               "storage_provider": {
                 "type": "object", "additionalProperties": false,
