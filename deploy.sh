@@ -346,7 +346,8 @@ if [ "$SCP_MODE" = true ]; then
   echo -e "\033[33mSCP/offline mode: syncing files individually. This does not create a Git working tree.\033[0m"
 
   echo -e "\033[32mSyncing source files...\033[0m"
-  for f in tools.js index.js dashboard.js agent.js memory.js redact.js env.js db.js pg.js redis.js qdrant.js crypto-utils.js; do
+  run_remote "mkdir -p $REMOTE_DIR/src/tools/families" >/dev/null
+  for f in tools.js index.js dashboard.js agent.js memory.js redact.js env.js db.js pg.js redis.js qdrant.js crypto-utils.js tools/families/memory-session.js tools/families/memory-handoff.js; do
     if [ ! -f "$PROJECT_DIR/src/$f" ]; then
       echo -e "  \033[33mWarning: src/$f not found, skipping\033[0m"
       continue
