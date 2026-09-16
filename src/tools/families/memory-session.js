@@ -31,7 +31,7 @@ function resolveSessionProject(project) {
   if (project && contextProject && resolved !== canonicalizeProjectName(contextProject)) {
     return { ok: false, message: "project does not match the trusted execution project scope" };
   }
-  return { ok: true, project: resolved };
+  return { ok: true, project: String(supplied).trim() };
 }
 
 function mergePacketEntries(...groups) {

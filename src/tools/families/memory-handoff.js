@@ -97,13 +97,13 @@ async function sidekick_handoff({ action, id, key, project, title, content, sour
   }
   if (action === "create" || action === "update") {
     const existing = id ? scopedHandoff(id, project, authIdentity) : null;
-    if (action === "create") {
+    if (action === "create" && !existing) {
       const requestedProject = project || agentTask?.project_id || boundProject;
       const resolvedProject = canonicalizeProjectName(requestedProject);
       if (!requestedProject) return { content: [{ type: "text", text: "project is required to create a handoff" }], isError: true };
       if (!PROJECT_RE.test(resolvedProject)) return { content: [{ type: "text", text: "project must match /^[a-z][a-z0-9_]*$/" }], isError: true };
       if (project && boundProject && resolvedProject !== canonicalizeProjectName(boundProject)) return { content: [{ type: "text", text: "project does not match the trusted execution project scope" }], isError: true };
-      project = resolvedProject;
+      project = String(requestedProject).trim();
     }
     const handoffContent = content !== undefined && content !== null
       ? content

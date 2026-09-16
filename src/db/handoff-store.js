@@ -47,10 +47,10 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
   function gitCheckpoint(workingDirectory) {
     const root = String(workingDirectory || "");
     if (!root || !fs.existsSync(root)) return { workspace: { root: root || null, visible: false }, repository: null };
-    const git = (args) => execFileSync("git", ["-C", root, ...args], { encoding: "utf8", env: childProcessEnv(), maxBuffer: 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] }).trim();
+    const git = (args) => execFileSync("git", ["-C", root, "-c", `safe.directory=${root}`, ...args], { encoding: "utf8", env: childProcessEnv(), maxBuffer: 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] }).trim();
     try {
       const repositoryRoot = git(["rev-parse", "--show-toplevel"]);
-      const status = execFileSync("git", ["-C", root, "status", "--porcelain=v1", "-z"], { encoding: "utf8", env: childProcessEnv(), maxBuffer: 1024 * 1024 }).split("\0").filter(Boolean).slice(0, 2000);
+      const status = git(["status", "--porcelain=v1", "-z"]).split("\0").filter(Boolean).slice(0, 2000);
       return { workspace: { root: repositoryRoot, visible: true }, repository: { root: repositoryRoot, branch: git(["branch", "--show-current"]) || null, head: git(["rev-parse", "HEAD"]), upstream: (() => { try { return git(["rev-parse", "--abbrev-ref", "@{upstream}"]); } catch { return null; } })(), status } };
     } catch { return { workspace: { root, visible: true }, repository: { root, state: "unavailable" } }; }
   }
@@ -330,11 +330,12 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
       checks.push({ name: "commit", status: "unverifiable", detail: "provenance.commit_sha is missing" });
     } else {
       try {
-        execFileSync("git", ["-C", repo, "cat-file", "-e", `${commit}^{commit}`], { stdio: "ignore", env: childProcessEnv() });
+        const gitArgs = (args) => ["-C", repo, "-c", `safe.directory=${repo}`, ...args];
+        execFileSync("git", gitArgs(["cat-file", "-e", `${commit}^{commit}`]), { stdio: "ignore", env: childProcessEnv() });
         checks.push({ name: "commit", status: "verified", commit_sha: commit });
         if (provenance.branch) {
           try {
-            execFileSync("git", ["-C", repo, "merge-base", "--is-ancestor", commit, String(provenance.branch)], { stdio: "ignore", env: childProcessEnv() });
+            execFileSync("git", gitArgs(["merge-base", "--is-ancestor", commit, String(provenance.branch)]), { stdio: "ignore", env: childProcessEnv() });
             checks.push({ name: "branch", status: "verified", branch: String(provenance.branch) });
           } catch {
             checks.push({ name: "branch", status: "stale", branch: String(provenance.branch), detail: "branch is missing or does not contain the recorded commit" });
