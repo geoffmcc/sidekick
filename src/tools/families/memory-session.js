@@ -195,7 +195,7 @@ async function sidekick_session({ action, id, goal, project, source, working_dir
     const initialPlan = planFromText(session.current_plan, session.completed_steps);
     const initialPacket = {
       objective: session.goal,
-      summary: "Interactive session initialized; continuity will be refreshed at each session checkpoint.",
+      summary: `Interactive session ${session.id} initialized; continuity will be refreshed at each session checkpoint.`,
       status: "active",
       current_state: "intake",
       next_step: session.next_step || "Continue the session from the current plan",
@@ -211,7 +211,12 @@ async function sidekick_session({ action, id, goal, project, source, working_dir
       risks: [],
       provenance: { task_id: session.id, handoff_id: null, working_directory: session.working_directory || process.cwd(), repository: session.repository || null, branch: session.branch || null, environment: session.environment || null },
     };
-    const initialHandoff = dbStore.saveHandoff({ project: session.project, title: `Session continuity: ${session.goal}`.slice(0, 500), source: "session", task_id: session.id, content: initialPacket.summary, packet: initialPacket, extraction_state: "pending", owner_principal_id: session.owner_principal_id || ownerPrincipalId, created_by_principal_id: session.created_by_principal_id || actorPrincipalId });
+    // Session handoffs must be unique per session. The initial summary is
+    // intentionally stable, so deriving an id from content would collide when
+    // multiple sessions start with the same goal shape. Binding the id to the
+    // durable session identity keeps retries idempotent without cross-session
+    // deduplication.
+    const initialHandoff = dbStore.saveHandoff({ id: `handoff_${session.id}`, project: session.project, title: `Session continuity: ${session.goal}`.slice(0, 500), source: "session", task_id: session.id, content: initialPacket.summary, packet: initialPacket, extraction_state: "pending", owner_principal_id: session.owner_principal_id || ownerPrincipalId, created_by_principal_id: session.created_by_principal_id || actorPrincipalId });
     initialPacket.provenance.handoff_id = initialHandoff.id;
     dbStore.captureHandoffCheckpoint(initialHandoff.id, { working_directory: session.working_directory || process.cwd(), actor: actorPrincipalId || ownerPrincipalId || "session", source: "session", metadata: { session_id: session.id, boundary: "session.begin" } });
     dbStore.refreshHandoffEvidence(initialHandoff.id, { working_directory: session.working_directory || process.cwd(), actor: actorPrincipalId || ownerPrincipalId || "session" });

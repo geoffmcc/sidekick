@@ -369,7 +369,8 @@ try {
     Write-Host "  SCP/offline mode: syncing files individually. This does not create a Git working tree." -ForegroundColor Yellow
 
     Write-Host "  Syncing source files..." -ForegroundColor Green
-    $files = @("tools.js", "index.js", "dashboard.js", "agent.js", "memory.js", "redact.js", "env.js", "db.js", "pg.js", "redis.js", "qdrant.js", "crypto-utils.js")
+    Run-Remote "mkdir -p $REMOTE_DIR/src/tools/families" | Out-Null
+    $files = @("tools.js", "index.js", "dashboard.js", "agent.js", "memory.js", "redact.js", "env.js", "db.js", "pg.js", "redis.js", "qdrant.js", "crypto-utils.js", "tools/families/memory-session.js", "tools/families/memory-handoff.js")
     foreach ($file in $files) {
       $localPath = Join-Path $PROJECT_DIR "src\$file"
       if (-not (Test-Path $localPath)) {
