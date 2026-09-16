@@ -5,6 +5,7 @@ const crypto = require("crypto");
 const { execFileSync } = require("child_process");
 const { childProcessEnv } = require("./security/child-process");
 const { createMemoryDomain } = require("./db/memory-domain");
+const { createMemoryMaintenance } = require("./db/memory-maintenance");
 const { createHandoffStore } = require("./db/handoff-store");
 const { splitSqlStatements, parseAddColumn } = require("./core/sql-statements");
 const { createKvStore } = require("./db/kv-store");
@@ -1268,6 +1269,8 @@ function auditMemoryEvent(eventType, targetType, targetId, details = {}, actor =
   return result.lastInsertRowid;
 }
 
+const memoryMaintenance = createMemoryMaintenance({ db: dbHandle, hasTable, nowIso, stableId, auditMemoryEvent });
+
 const handoffStore = createHandoffStore({
   db: dbHandle,
   execFileSync,
@@ -2454,6 +2457,10 @@ module.exports = {
   getPendingConfirmations,
   setAutoExpire,
   processAutoExpirations,
+  memoryMaintenancePreview: memoryMaintenance.preview,
+  applyMemoryMaintenance: memoryMaintenance.apply,
+  getMemoryMaintenanceRun: memoryMaintenance.getRun,
+  cancelMemoryMaintenance: memoryMaintenance.cancel,
   auditMemoryEvent,
   saveHandoff,
   getHandoff,

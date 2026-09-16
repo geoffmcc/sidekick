@@ -85,7 +85,7 @@ Extracted descriptor-owned families live under `src/tools/families/` and are agg
 - `capability-packs.js` — `capability` (aliases `capability_pack`, `pack`; `critical` risk). Capability-pack lifecycle, catalog, maturity, and proving: list/available/show/inspect/validate/install/configure/enable/disable/health/maturity/prove/record_verification/doctor/upgrade/uninstall. `critical` because installing or enabling a pack activates executable module code in the Sidekick process. Owns no lifecycle logic itself; delegates to `src/packs/`.
 - `workflow-definitions.js` — `workflow` (alias `workflows`; `high` risk). List/show/run/resume registered workflow definitions. Each step is dispatched through the same dispatcher, so each individual tool's own policy and approval still apply on top.
 
-Descriptor families plus `src/tools/families/compute.js` own all 108 built-in
+Descriptor families plus `src/tools/families/compute.js` own all 110 built-in
 descriptors; the `data-utilities` module contributes its six tools at runtime
 through the same module registry path. Capability-pack modules contribute
 further descriptors through that same path. Compute handlers remain implemented
