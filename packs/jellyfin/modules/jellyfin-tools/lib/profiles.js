@@ -139,6 +139,45 @@ function parse(name, raw, globalConfig = {}) {
     Math.max(50, Number.isFinite(configuredPoll) ? Math.trunc(configuredPoll) : 2000),
   );
 
+  // Optional direct DLNA RenderingControl volume targets (issue #506). A
+  // Samsung TV whose Jellyfin session rejects the generic SetVolume command
+  // can be driven SOAP-directly once the operator registers the renderer.
+  // Shape validation keeps a half-configured entry from silently degrading;
+  // full URL/path validation and the session address cross-check happen in
+  // lib/dlna.js at call time.
+  let dlnaRenderingControls = [];
+  if (raw.dlna_rendering_controls !== undefined && raw.dlna_rendering_controls !== null) {
+    const list = raw.dlna_rendering_controls;
+    if (!Array.isArray(list))
+      throw new JellyfinError(
+        "invalid_input",
+        `profile "${name}" dlna_rendering_controls must be an array`,
+      );
+    dlnaRenderingControls = list.map((renderer, idx) => {
+      if (!renderer || typeof renderer !== "object" || Array.isArray(renderer))
+        throw new JellyfinError(
+          "invalid_input",
+          `profile "${name}" dlna_rendering_controls[${idx}] must be an object`,
+        );
+      if (typeof renderer.device !== "string" || !renderer.device.trim())
+        throw new JellyfinError(
+          "invalid_input",
+          `profile "${name}" dlna_rendering_controls[${idx}].device is required`,
+        );
+      if (typeof renderer.base_url !== "string" || !renderer.base_url.trim())
+        throw new JellyfinError(
+          "invalid_input",
+          `profile "${name}" dlna_rendering_controls[${idx}].base_url is required`,
+        );
+      if (renderer.control_path !== undefined && typeof renderer.control_path !== "string")
+        throw new JellyfinError(
+          "invalid_input",
+          `profile "${name}" dlna_rendering_controls[${idx}].control_path must be a string`,
+        );
+      return { device: renderer.device, base_url: renderer.base_url, control_path: renderer.control_path ?? null };
+    });
+  }
+
   return {
     name,
     endpoint,
@@ -151,6 +190,7 @@ function parse(name, raw, globalConfig = {}) {
     allow_playback_control: raw.allow_playback_control === true,
     is_default: raw.default === true,
     storage_provider: storageProvider,
+    dlna_rendering_controls: dlnaRenderingControls,
     verify_poll_interval_ms: verifyPollMs,
   };
 }

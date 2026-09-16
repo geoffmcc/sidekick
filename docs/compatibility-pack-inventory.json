@@ -1,9 +1,9 @@
 {
   "schema": "sidekick.compatibility-pack-inventory.v1",
   "source": "bundled pack manifests and repository files",
-  "source_commit": "62908b5c18e31c36b8e472717d14d01aec4a840e",
-  "source_commit_date": "2026-09-06T10:12:00-04:00",
-  "source_fingerprint": "sha256:84974ce7c331fe675fdf4850840eaa2eab853ae5da57368523ee1ea019c0bd78",
+  "source_commit": "b3355f8954d94160c7f0d4d939df96b941e007ea",
+  "source_commit_date": "2026-09-15T12:00:13-04:00",
+  "source_fingerprint": "sha256:cbf06b0484ca5950180498617a89ebaab487610d577a0504f6f3e8bbd8b0a133",
   "pack_count": 27,
   "packs": [
     {
@@ -6236,6 +6236,32 @@
                   "allow_playback_control": {
                     "type": "boolean",
                     "description": "Explicitly permit targeted remote playback commands for active Jellyfin device sessions."
+                  },
+                  "dlna_rendering_controls": {
+                    "type": "array",
+                    "description": "Direct UPnP RenderingControl volume targets for DLNA sessions whose SetVolume is rejected by Jellyfin (e.g. Samsung TVs). base_url must be the renderer's literal IP; the resolved control URL host must equal the active session's RemoteEndPoint host.",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "device": {
+                          "type": "string",
+                          "description": "Case-insensitive exact match on the active session DeviceName."
+                        },
+                        "base_url": {
+                          "type": "string",
+                          "description": "Renderer origin, e.g. http://10.47.60.122:9197. Literal IP required."
+                        },
+                        "control_path": {
+                          "type": "string",
+                          "description": "Optional RenderingControl control path, e.g. /upnp/control/RenderingControl1. Omitted to auto-discover from the device description."
+                        }
+                      },
+                      "required": [
+                        "device",
+                        "base_url"
+                      ]
+                    }
                   },
                   "verify_poll_interval_ms": {
                     "type": "integer",
