@@ -72,6 +72,7 @@ try {
 const tasks = new Map();
 let lastAuthHeader = null;
 let failNextConfigPost = false;
+let failedTaskRows = [];
 
 function send(res, status, data) {
   const body = JSON.stringify({ data });
@@ -230,7 +231,7 @@ function handle(req, res, raw) {
   if (method === "GET" && p === "/cluster/ceph/status") return sendError(res, 500, "binary not installed: /usr/bin/ceph-mon");
   if (method === "GET" && p === "/cluster/sdn/vnets") return send(res, 200, []);
   if (method === "GET" && p === "/cluster/backup") return send(res, 200, []);
-  if (method === "GET" && p === "/nodes/pve1/tasks") return send(res, 200, []);
+  if (method === "GET" && p === "/nodes/pve1/tasks") return send(res, 200, failedTaskRows);
   if (method === "GET" && p === "/nodes/pve1/qemu") return send(res, 200, [...store.values()].map(g => ({ vmid: g.vmid, name: g.config.name, status: g.status, maxmem: (g.config.memory || 512) * 1048576, maxcpu: g.config.cores || 1 })));
   if (cfgMatch && method === "GET") {
     const g = store.get(Number(cfgMatch[1]));
@@ -408,6 +409,36 @@ function storeToken() {
     assert.strictEqual(compliance.ha.total, 1);
     assert.strictEqual(compliance.replication.jobs[0].guest, 100);
     assert.strictEqual(compliance.task_trends.failed, 0);
+  });
+
+  await test("PX.5aa: cluster health assesses only recent failures while retaining historical task evidence", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const recent = { upid: "UPID:recent", node: "pve1", type: "qmshutdown", user: "root@pam", status: "command failed", starttime: now - 3600, endtime: now - 3500 };
+    const historical = { upid: "UPID:historical", node: "pve1", type: "vzdump", user: "root@pam", status: "command failed", starttime: now - (10 * 24 * 60 * 60), endtime: now - (10 * 24 * 60 * 60) + 100 };
+    try {
+      failedTaskRows = [historical];
+      let health = json(await callInternalTool("proxmox", { action: "cluster_health", profile: "main" }));
+      assert.strictEqual(health.status, "healthy", JSON.stringify(health));
+      assert.strictEqual(health.recent_failed_tasks.total, 0);
+      assert.strictEqual(health.historical_failed_tasks.total, 1);
+      assert.strictEqual(health.historical_failed_tasks.tasks[0].failure_timestamp !== null, true);
+      assert.strictEqual(health.historical_failed_tasks.tasks[0].failure_age_seconds > 24 * 60 * 60, true);
+      assert.strictEqual(health.failed_tasks.tasks.length, 1, "the full bounded history remains available");
+
+      failedTaskRows = [recent];
+      health = json(await callInternalTool("proxmox", { action: "cluster_health", profile: "main" }));
+      assert.strictEqual(health.status, "attention", JSON.stringify(health));
+      assert.strictEqual(health.recent_failed_tasks.total, 1);
+      assert.strictEqual(health.historical_failed_tasks.total, 0);
+
+      failedTaskRows = [recent, historical];
+      health = json(await callInternalTool("proxmox", { action: "cluster_health", profile: "main" }));
+      assert.strictEqual(health.status, "attention", JSON.stringify(health));
+      assert.strictEqual(health.recent_failed_tasks.total, 1);
+      assert.strictEqual(health.historical_failed_tasks.total, 1);
+    } finally {
+      failedTaskRows = [];
+    }
   });
 
   await test("PX.5c: storage health and backup history preserve unknown evidence", async () => {

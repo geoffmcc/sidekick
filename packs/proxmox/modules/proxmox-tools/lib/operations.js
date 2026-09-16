@@ -18,6 +18,37 @@ const { isFeatureAbsent } = require("./service");
 const { ProxmoxError } = require("./errors");
 const validate = require("./validate");
 
+// Health is concerned with failures that may still need an operator's
+// attention, rather than the complete (and often long-lived) task audit log.
+// Proxmox task times are Unix seconds, while Date.now() is milliseconds.
+const RECENT_TASK_FAILURE_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+function describeTaskFailure(task, nowMs = Date.now()) {
+  const failureTime = task.end_time ?? task.start_time;
+  if (failureTime === null || failureTime === undefined) {
+    return { ...task, failure_timestamp: null, failure_age_seconds: null };
+  }
+  const failureMs = failureTime * 1000;
+  return {
+    ...task,
+    failure_timestamp: new Date(failureMs).toISOString(),
+    failure_age_seconds: Math.max(0, Math.floor((nowMs - failureMs) / 1000)),
+  };
+}
+
+function classifyFailedTasks(tasks, { nowMs = Date.now(), windowMs = RECENT_TASK_FAILURE_WINDOW_MS } = {}) {
+  const recent = [];
+  const historical = [];
+  const unassessed = [];
+  for (const task of tasks.filter(task => task && task.ok === false)) {
+    const described = describeTaskFailure(task, nowMs);
+    if (described.failure_age_seconds === null) unassessed.push(described);
+    else if (described.failure_age_seconds * 1000 <= windowMs) recent.push(described);
+    else historical.push(described);
+  }
+  return { recent, historical, unassessed };
+}
+
 async function clusterResources(client) {
   const rows = await client.get(["cluster", "resources"]);
   return Array.isArray(rows) ? rows : [];
@@ -542,10 +573,12 @@ async function versionStatus(client) {
 async function clusterHealth(client) {
   const summary = await clusterSummary(client);
   const failedTasks = await listTasks(client, { errors: true, limit: 20 });
+  const taskFailures = classifyFailedTasks(failedTasks.tasks);
   const blockers = [];
   if (summary.cluster.quorate === false) blockers.push({ code: "cluster_not_quorate", detail: "Proxmox reports the cluster is not quorate." });
   if (summary.nodes.online < summary.nodes.total) blockers.push({ code: "nodes_offline", detail: `${summary.nodes.total - summary.nodes.online} node(s) are not online.` });
-  if (failedTasks.total > 0) blockers.push({ code: "failed_tasks", detail: `${failedTasks.total} failed task(s) were returned by the bounded task query.` });
+  if (taskFailures.recent.length > 0) blockers.push({ code: "recent_failed_tasks", detail: `${taskFailures.recent.length} failed task(s) occurred within the last 24 hours.` });
+  if (taskFailures.unassessed.length > 0) blockers.push({ code: "failed_tasks_without_timestamp", detail: `${taskFailures.unassessed.length} failed task(s) could not be assessed because Proxmox did not return a task timestamp.` });
   return {
     status: blockers.length ? "attention" : "healthy",
     cluster: summary.cluster,
@@ -553,9 +586,22 @@ async function clusterHealth(client) {
     guests: summary.guests,
     storage: summary.storage,
     failed_tasks: failedTasks,
+    recent_failed_tasks: {
+      total: taskFailures.recent.length,
+      window_hours: RECENT_TASK_FAILURE_WINDOW_MS / (60 * 60 * 1000),
+      tasks: taskFailures.recent,
+    },
+    historical_failed_tasks: {
+      total: taskFailures.historical.length,
+      tasks: taskFailures.historical,
+    },
+    unassessed_failed_tasks: {
+      total: taskFailures.unassessed.length,
+      tasks: taskFailures.unassessed,
+    },
     blockers,
     bounded: true,
-    note: "Health is derived from current cluster, resource and bounded task evidence; it does not prove guest application health.",
+    note: "Health attention is derived from current cluster/resource evidence and failed tasks from the last 24 hours. The full bounded failed-task sample remains available in failed_tasks for investigation; historical failures do not by themselves produce attention. It does not prove guest application health.",
   };
 }
 
@@ -650,4 +696,7 @@ module.exports = {
   storageCapacity,
   storageHealth,
   upgradeReadiness,
+  RECENT_TASK_FAILURE_WINDOW_MS,
+  describeTaskFailure,
+  classifyFailedTasks,
 };

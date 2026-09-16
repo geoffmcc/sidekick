@@ -26,6 +26,7 @@ const provenance = require(path.join(LIB, "provenance.js"));
 const policy = require(path.join(LIB, "policy.js"));
 const ansible = require(path.join(LIB, "ansible.js"));
 const retirement = require(path.join(LIB, "retirement.js"));
+const operations = require(path.join(LIB, "operations.js"));
 const proxmoxEntry = require(path.join(LIB, "..", "entry.js"));
 
 let failures = 0;
@@ -184,6 +185,29 @@ test("U.15: taskOutcome derives success from exitstatus and treats WARNINGS as o
   assert.strictEqual(normalize.taskOutcome({ status: "running" }).running, true);
   // list-row form: outcome lives in status when exitstatus is absent
   assert.strictEqual(normalize.taskOutcome({ status: "OK" }).ok, true);
+});
+
+test("U.15a: failed-task health separates recent, historical, and mixed failures with timestamp evidence", () => {
+  const nowMs = Date.parse("2026-09-16T12:00:00.000Z");
+  const recent = { upid: "UPID:recent", ok: false, start_time: 1789556400, end_time: 1789558200 }; // 30 minutes old
+  const historical = { upid: "UPID:historical", ok: false, start_time: 1788696000, end_time: 1788696000 }; // 10 days old
+  const options = { nowMs, windowMs: operations.RECENT_TASK_FAILURE_WINDOW_MS };
+
+  const onlyRecent = operations.classifyFailedTasks([recent], options);
+  assert.strictEqual(onlyRecent.recent.length, 1);
+  assert.strictEqual(onlyRecent.historical.length, 0);
+  assert.strictEqual(onlyRecent.recent[0].failure_timestamp, "2026-09-16T11:30:00.000Z");
+  assert.strictEqual(onlyRecent.recent[0].failure_age_seconds, 1800);
+
+  const onlyHistorical = operations.classifyFailedTasks([historical], options);
+  assert.strictEqual(onlyHistorical.recent.length, 0);
+  assert.strictEqual(onlyHistorical.historical.length, 1);
+  assert.strictEqual(onlyHistorical.historical[0].failure_age_seconds, 864000);
+
+  const mixed = operations.classifyFailedTasks([recent, historical], options);
+  assert.strictEqual(mixed.recent.length, 1);
+  assert.strictEqual(mixed.historical.length, 1);
+  assert.strictEqual(mixed.unassessed.length, 0);
 });
 
 test("U.16: normalizeClusterStatus distinguishes cluster from standalone", () => {
