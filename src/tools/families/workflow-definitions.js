@@ -43,6 +43,7 @@ function summarize(record) {
 async function sidekick_workflow({ action = "list", name, inputs, project, owner, run_id, include_evidence }) {
   const repository = require("../../workflows/repository");
   const runner = require("../../workflows/runner");
+  require("../../workflows/core-definitions").ensureCoreWorkflowDefinitions();
 
   try {
     if (action === "list") {
