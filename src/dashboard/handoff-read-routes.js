@@ -24,7 +24,7 @@ function registerHandoffReadRoutes({ app, dbStore, errorResponse }) {
 
   app.get("/api/handoffs", (req, res) => {
     try {
-      const handoffs = dbStore.listHandoffs({ project: req.query.project, includeArchived: req.query.include_archived === "true", limit: Math.min(Number(req.query.limit) || 50, 500) });
+      const handoffs = dbStore.listHandoffs({ project: req.query.project, includeArchived: req.query.include_archived === "true", includeCompleted: req.query.include_completed === "true", limit: Math.min(Number(req.query.limit) || 50, 500) });
       const visible = handoffs.filter(handoff => canRead(req, handoff));
       if (req.query.include === "start_here") {
         for (const handoff of visible) {

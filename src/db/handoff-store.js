@@ -764,12 +764,13 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
     return getHandoff(id);
   }
 
-  function listHandoffs({ project, includeArchived = false, limit = 50 } = {}) {
+  function listHandoffs({ project, includeArchived = false, includeCompleted = false, limit = 50 } = {}) {
     if (!hasTable("memory_handoffs")) return [];
     const clauses = [];
     const params = [];
     if (project) { clauses.push("project = ?"); params.push(project); }
     if (!includeArchived) clauses.push("archived_at IS NULL");
+    if (!includeCompleted) clauses.push("lifecycle_state != 'completed'");
     const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
     const rows = db.prepare(`SELECT * FROM memory_handoffs ${where} ORDER BY updated_at DESC LIMIT ?`).all(...params, Math.max(1, Math.min(Number(limit) || 50, 500)));
     return rows.map(normalizeHandoffRow);

@@ -30,6 +30,25 @@ function saveResumeDocument(doc) {
   });
 }
 
+function syncCompletedLinkedHandoffs(doc) {
+  const now = new Date().toISOString();
+  let changed = false;
+  for (const [project, item] of Object.entries(doc.items || {})) {
+    if (!item || !item.handoff_id || ["cleared", "done", "complete"].includes(item.status)) continue;
+    const handoff = dbStore.getHandoff(item.handoff_id);
+    if (!handoff || handoff.lifecycle_state !== "completed") continue;
+    doc.items[project] = {
+      ...item,
+      status: "complete",
+      completed_at: handoff.completed_at || now,
+      updated_at: now,
+    };
+    changed = true;
+  }
+  if (changed) saveResumeDocument(doc);
+  return changed;
+}
+
 function activeResumeItems(doc, includeCleared = false) {
   const items = Object.values(doc.items || {});
   if (includeCleared) return items;
@@ -74,6 +93,7 @@ async function sidekick_resume({ action, project, summary, next_step, status, br
   const selectedAction = action || "check";
   const selectedFormat = format || "text";
   const doc = loadResumeDocument();
+  syncCompletedLinkedHandoffs(doc);
 
   if (selectedAction === "list") {
     const items = activeResumeItems(doc, include_cleared === true).map(validateResumeItem)
@@ -136,6 +156,10 @@ async function sidekick_resume({ action, project, summary, next_step, status, br
       }
       const validation = dbStore.validateHandoffPacket(handoff.packet, { requireResume: true });
       if (!validation.valid) return { content: [{ type: "text", text: `linked handoff is not resumable: ${validation.issues.join("; ")}` }], isError: true };
+      if (handoff.lifecycle_state === "completed") {
+        item.status = "complete";
+        item.completed_at = handoff.completed_at || now;
+      }
     }
     doc.items[project] = item;
     saveResumeDocument(doc);
