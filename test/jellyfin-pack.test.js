@@ -1561,10 +1561,12 @@ async function asyncTest(name, fn) {
     assert.deepStrictEqual(postLog[0].body, { Name: "SetVolume", Arguments: { volume: "35" } });
   });
 
-  test("dlna hostFromEndPoint extracts bare IPs and IPv6 bracketed IPs", () => {
+  test("dlna hostFromEndPoint extracts bare IPs, IPv6 bracketed IPs and URL-form endpoints", () => {
     assert.strictEqual(dlna.hostFromEndPoint("192.168.1.10:12345"), "192.168.1.10");
     assert.strictEqual(dlna.hostFromEndPoint("[fd00::1]:8096"), "fd00::1");
     assert.strictEqual(dlna.hostFromEndPoint("192.168.1.10"), "192.168.1.10");
+    assert.strictEqual(dlna.hostFromEndPoint("http://10.47.60.122:9197/dmr"), "10.47.60.122");
+    assert.strictEqual(dlna.hostFromEndPoint("https://[fd00::1]:9197/dmr"), "fd00::1");
     assert.strictEqual(dlna.hostFromEndPoint(""), null);
     assert.strictEqual(dlna.hostFromEndPoint(undefined), null);
   });

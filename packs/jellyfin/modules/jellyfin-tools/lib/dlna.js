@@ -104,6 +104,13 @@ function extractControlUrl(descriptionXml, baseUrl) {
 function hostFromEndPoint(value) {
   const raw = String(value || "").trim();
   if (!raw) return null;
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) {
+    try {
+      return stripBrackets(new URL(raw).hostname).toLowerCase();
+    } catch {
+      return null;
+    }
+  }
   if (raw.startsWith("[")) {
     const end = raw.indexOf("]");
     if (end === -1) return null;
