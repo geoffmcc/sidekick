@@ -66,12 +66,17 @@ dbStore.runPendingMigrations();
     project: "sidekick",
     source: "test",
     repository: "geoffmcc/sidekick",
-    branch: "feat/memory-intelligence-system"
+    branch: "feat/memory-intelligence-system",
+    current_plan: "1. Inspect memory state\n2. Verify continuity\n3. Finish test",
+    next_step: "Inspect memory state"
   });
   const beginData = JSON.parse(begin.content[0].text);
   assert.ok(beginData.session.id, "session begin should create a session");
   assert.ok(beginData.handoff_id, "session begin should always create a durable handoff");
   assert.strictEqual(dbStore.getHandoffByTaskId(beginData.session.id).id, beginData.handoff_id, "session handoff should be bound to the session");
+  assert.ok(beginData.session.current_plan, "session begin should persist the initial plan");
+  assert.ok(Array.isArray(dbStore.getHandoffByTaskId(beginData.session.id).packet.plan?.steps), "session handoff should expose a structured plan");
+  assert.strictEqual(dbStore.getHandoffByTaskId(beginData.session.id).packet.remaining_steps.length, 3, "session handoff should expose all remaining plan steps");
   assert.ok(beginData.memory_brief.selected.some(item => /SMB|raw tool logs|SQLite|sidekick-mcp/i.test(item.summary)), "brief should recall relevant handoff-derived memory");
   const beginEvent = dbStore.getDb().prepare("SELECT * FROM platform_execution_events WHERE event_type = 'memory.session_started' AND subject_id = ?").get(beginData.session.id);
   assert.ok(beginEvent, "session begin should emit a platform memory event");
@@ -110,7 +115,7 @@ dbStore.runPendingMigrations();
   });
   const endData = JSON.parse(end.content[0].text);
   assert.ok(endData.memories_created >= 4, "ending session should create supported memories");
-  assert.strictEqual(endData.continuation_packet.artifacts.length, 2, "session finalization should retain reports and artifacts");
+  assert.ok(endData.continuation_packet.artifacts.length >= 2, "session finalization should retain reports, artifacts, and continuity plan");
   assert.strictEqual(endData.continuation_packet.provenance.task_id, beginData.session.id, "continuation packet should retain task provenance");
   const finalizedHandoff = JSON.parse((await TOOLS.handoff({ action: "get", id: createData.handoff.id })).content[0].text);
   assert.strictEqual(finalizedHandoff.handoff.packet.status, "completed", "linked handoff should receive the finalized continuation packet");

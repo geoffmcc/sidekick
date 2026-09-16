@@ -48,6 +48,14 @@ function mergePacketEntries(...groups) {
   return merged;
 }
 
+function planFromText(value, completedSteps = []) {
+  const completed = new Set((Array.isArray(completedSteps) ? completedSteps : []).map(step => String(typeof step === "object" ? step.title || step.description || step.id || "" : step).trim().toLowerCase()));
+  return String(value || "").split(/\r?\n/).map(line => line.trim()).filter(Boolean).map((line, index) => {
+    const title = line.replace(/^\s*(?:[-*]|\d+[.)])\s*/, "").trim();
+    return { id: `step-${index + 1}`, title, status: completed.has(title.toLowerCase()) ? "completed" : "pending" };
+  }).filter(step => step.title);
+}
+
 function recordPlatformMemoryEvent(eventType, payload = {}, options = {}) {
   try {
     platformKernel.appendEvent({
@@ -141,6 +149,8 @@ function buildContinuationPacket(existing, input = {}) {
     decisions: input.decisions || priorPacket.decisions || [],
     blockers: input.blockers || existing.blockers || priorPacket.blockers || [],
     next_step: input.next_step || existing.next_step || priorPacket.next_step || null,
+    plan: priorPacket.plan || (() => { const steps = planFromText(existing.current_plan, input.completed_steps || existing.completed_steps); return steps.length ? { steps } : null; })(),
+    remaining_steps: (() => { const plan = priorPacket.plan || (() => { const steps = planFromText(existing.current_plan, input.completed_steps || existing.completed_steps); return steps.length ? { steps } : null; })(); return (plan?.steps || []).filter(step => !["completed", "done", "verified", "skipped"].includes(String(step.status || step.state || "").toLowerCase())); })(),
     acceptance_criteria: acceptanceCriteria,
     risks: input.risks || priorPacket.risks || [],
     provenance: {
@@ -181,14 +191,17 @@ async function sidekick_session({ action, id, goal, project, source, working_dir
     if (!resolvedProject.ok) return { content: [{ type: "text", text: resolvedProject.message }], isError: true };
     project = resolvedProject.project;
     const brief = buildScopedMemoryBrief(goal, project, { limit: 12 });
-    const session = dbStore.saveTaskSession({ id, goal, project, source: source || toolContext.getExecutionSource(), client_session_id, working_directory, repository, branch, environment, tags: normalizeTags(tags), supplied_context, state: "active", memory_brief: brief, owner_principal_id: ownerPrincipalId, created_by_principal_id: actorPrincipalId });
+    const session = dbStore.saveTaskSession({ id, goal, project, source: source || toolContext.getExecutionSource(), client_session_id, working_directory, repository, branch, environment, tags: normalizeTags(tags), supplied_context, current_plan, blockers, next_step, state: "active", memory_brief: brief, owner_principal_id: ownerPrincipalId, created_by_principal_id: actorPrincipalId });
+    const initialPlan = planFromText(session.current_plan, session.completed_steps);
     const initialPacket = {
       objective: session.goal,
       summary: "Interactive session initialized; continuity will be refreshed at each session checkpoint.",
       status: "active",
       current_state: "intake",
-      next_step: "Continue the session from the current plan",
+      next_step: session.next_step || "Continue the session from the current plan",
       completed_steps: [],
+      plan: initialPlan.length ? { steps: initialPlan } : null,
+      remaining_steps: initialPlan.filter(step => step.status !== "completed"),
       blockers: [],
       decisions: [],
       acceptance_criteria: ["Preserve a complete, restartable session continuity record"],
