@@ -78,6 +78,17 @@ async function sidekick_handoff({ action, id, key, project, title, content, sour
   const boundProject = toolContext.getExecutionContext().project || null;
   const ownerPrincipalId = authIdentity?.acting_for_principal_id || authIdentity?.principal_id || null;
   const actorPrincipalId = authIdentity?.principal_id || null;
+  const execution = toolContext.getExecutionContext();
+  const agentTaskId = execution.source === "agent" && execution.taskId ? String(execution.taskId) : null;
+  // The Agent Bridge may have already created the requested continuity record
+  // before the model's first tool turn. Treat a later model-level "create
+  // handoff" as an update to that bound record, never as a duplicate draft.
+  const agentTask = agentTaskId ? require("../../agent/task-store").getTask(agentTaskId) : null;
+  if (agentTaskId && !agentTask) return { content: [{ type: "text", text: `Agent task "${agentTaskId}" was not found; refusing to create an untracked handoff` }], isError: true };
+  if (agentTask?.handoff_id && action === "create" && !id) {
+    id = agentTask.handoff_id;
+    action = "update";
+  }
   if (authIdentity?.principal_id && !project && !boundProject) {
     return { content: [{ type: "text", text: "authenticated handoff access requires a project scope" }], isError: true };
   }
@@ -119,7 +130,28 @@ async function sidekick_handoff({ action, id, key, project, title, content, sour
     }
     let handoff;
     try {
-      handoff = dbStore.saveHandoff({ id, project, title, source: source || toolContext.getExecutionSource(), task_id, content: handoffContent, packet, extraction_state: "pending", expectedVersion: action === "update" ? expected_version : undefined, owner_principal_id: existing?.owner_principal_id || ownerPrincipalId, created_by_principal_id: existing?.created_by_principal_id || actorPrincipalId });
+      handoff = dbStore.saveHandoff({ id, project, title, source: source || toolContext.getExecutionSource(), task_id: task_id || agentTaskId, content: handoffContent, packet, extraction_state: "pending", expectedVersion: action === "update" ? expected_version : undefined, owner_principal_id: existing?.owner_principal_id || ownerPrincipalId, created_by_principal_id: existing?.created_by_principal_id || actorPrincipalId });
+      // An Agent-created handoff is a request for durable continuity, not an
+      // unowned note. Link it immediately so every following Agent boundary
+      // captures task state, provenance, and a repository checkpoint.
+      if (agentTaskId) {
+        const tasks = require("../../agent/task-store");
+        if (agentTask.project_id && handoff.project && agentTask.project_id !== handoff.project) throw new Error("handoff project does not match Agent task project");
+        tasks.attachHandoff(agentTaskId, handoff.id);
+        const taskDirectory = agentTask.working_directory || agentTask.repository || process.cwd();
+        const checkpointed = dbStore.captureHandoffCheckpoint(handoff.id, {
+          working_directory: taskDirectory,
+          expectedVersion: handoff.version,
+          actor: agentTask.actor_id || "agent",
+          source: "agent",
+          metadata: { task_id: agentTask.task_id, reason: "agent.handoff_tool", safe_boundary: "handoff_tool", task_state: agentTask.state, phase: agentTask.phase, plan_revision: Number(agentTask.current_plan_revision) || 0 },
+        });
+        dbStore.refreshHandoffEvidence(handoff.id, { working_directory: taskDirectory, actor: agentTask.actor_id || "agent" });
+        if (checkpointed.lifecycle_state === "draft") {
+          dbStore.transitionHandoff(handoff.id, "active", { expectedVersion: checkpointed.version, actor: agentTask.actor_id || "agent", source: "agent", reason: "Agent created or updated its maintained handoff" });
+        }
+        handoff = dbStore.getHandoff(handoff.id);
+      }
     } catch (error) {
       return { content: [{ type: "text", text: String(error && error.message ? error.message : error) }], isError: true };
     }

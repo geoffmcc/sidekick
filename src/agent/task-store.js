@@ -74,6 +74,28 @@ function updateTask(taskId, patch, eventType = "task.updated") {
     appendEventInternal(db, taskId, eventType, next.actor_id, { state: next.state, phase: next.phase, next_action: next.next_action, ...(elapsedKey && elapsed > 0 ? { accounted_ms: { [elapsedKey]: elapsed } } : {}) });
   }); tx(); return getTask(taskId);
 }
+// A handoff created from within an Agent task must become part of that task's
+// durable continuity record.  Keeping this as an explicit, guarded operation
+// avoids a generic tool call creating an untracked draft that the Agent loop
+// can never checkpoint or refresh.
+function attachHandoff(taskId, handoffId) {
+  const task = getTask(taskId);
+  if (!task) throw new Error("task not found");
+  const idValue = String(handoffId || "").trim();
+  if (!idValue || idValue.length > 180) throw new Error("handoff id is invalid");
+  if (task.handoff_id && task.handoff_id !== idValue) {
+    throw new Error(`task already has handoff "${task.handoff_id}"`);
+  }
+  if (task.handoff_id === idValue) return task;
+  const updatedAt = now();
+  const db = dbStore.getDb();
+  db.transaction(() => {
+    const result = db.prepare("UPDATE agent_tasks SET handoff_id = ?, updated_at = ? WHERE task_id = ? AND handoff_id IS NULL").run(idValue, updatedAt, taskId);
+    if (!result.changes) throw new Error("task handoff changed concurrently");
+    appendEventInternal(db, taskId, "task.handoff_attached", task.actor_id, { handoff_id: idValue });
+  })();
+  return getTask(taskId);
+}
 function checkpointTask(taskId, checkpoint) { const task = getTask(taskId); if (!task) throw new Error("task not found"); const safe = model.assertCheckpoint(task, checkpoint); return updateTask(taskId, { checkpoint: safe, next_action: safe.next_action }, "task.checkpoint"); }
 function addPlanRevision(taskId, plan, source = "planner") { const task = getTask(taskId); if (!task) throw new Error("task not found"); if (!plan || typeof plan !== "object" || Array.isArray(plan)) throw new Error("plan must be an object"); const revision = task.current_plan_revision + 1; const db = dbStore.getDb(); db.prepare("INSERT INTO agent_task_plan_revisions (task_id,revision,plan_json,source,created_at) VALUES (?,?,?,?,?)").run(taskId, revision, json(plan), String(source).slice(0, 100), now()); return updateTask(taskId, { current_plan_revision: revision }, "task.plan_revision"); }
 function addFailure(taskId, failure) { const task = getTask(taskId); if (!task) throw new Error("task not found"); const record = { ...failure, failure_id: id("atf"), action_fingerprint: String(failure.action_fingerprint || "").slice(0, 128), capability: failure.capability ? String(failure.capability).slice(0, 120) : null, error_class: String(failure.error_class || "unknown").slice(0, 80), retryable: failure.retryable === true ? 1 : 0, attempt: Math.max(1, Number(failure.attempt) || 1), changed_condition: failure.changed_condition === true ? 1 : 0, detail: redactSensitive(String(failure.detail || "")).slice(0, 2000), created_at: now() }; dbStore.getDb().prepare("INSERT INTO agent_task_failures (failure_id,task_id,action_fingerprint,capability,error_class,retryable,attempt,changed_condition,detail,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)").run(record.failure_id, taskId, record.action_fingerprint, record.capability, record.error_class, record.retryable, record.attempt, record.changed_condition, record.detail, record.created_at); return updateTask(taskId, {}, "task.failure"); }
@@ -193,4 +215,4 @@ function reserveChildTask(taskId) {
 function recordChildRequest(taskId, childTaskId, kind, actorId = "user") { const task = getTask(taskId); if (!task) throw new Error("task not found"); const db = dbStore.getDb(); db.transaction(() => appendEventInternal(db, taskId, "task.child_requested", actorId, { child_task_id: String(childTaskId).slice(0, 80), kind: String(kind || "continue").slice(0, 80) }))(); return task; }
 function recordCompletedOperation(taskId, operation = {}) { const task = getTask(taskId); if (!task) throw new Error("task not found"); const continuation = task.continuation || { version: 1, completed_operations: [], ambiguous_operations: [] }; const item = { fingerprint: String(operation.fingerprint || "").slice(0, 128), capability: String(operation.capability || "").slice(0, 120), read_only: operation.read_only === true, receipt_ref: operation.receipt_ref ? redactSensitive(String(operation.receipt_ref)).slice(0, 300) : null, summary: redactSensitive(String(operation.summary || "")).slice(0, 500), completed_at: now() }; if (!item.fingerprint || !item.capability) throw new Error("operation fingerprint and capability are required"); const completed = [...(continuation.completed_operations || []).filter(row => row.fingerprint !== item.fingerprint), item].slice(-100); return updateTask(taskId, { continuation: { version: 1, completed_operations: completed, ambiguous_operations: continuation.ambiguous_operations || [] } }, "task.operation_completed"); }
 function recordAmbiguousOperation(taskId, operation = {}) { const task = getTask(taskId); if (!task) throw new Error("task not found"); const continuation = task.continuation || { version: 1, completed_operations: [], ambiguous_operations: [] }; const item = { fingerprint: String(operation.fingerprint || "").slice(0, 128), capability: String(operation.capability || "").slice(0, 120), reason: redactSensitive(String(operation.reason || "")).slice(0, 500), created_at: now() }; const ambiguous = [...(continuation.ambiguous_operations || []).filter(row => row.fingerprint !== item.fingerprint), item].slice(-100); return updateTask(taskId, { continuation: { version: 1, completed_operations: continuation.completed_operations || [], ambiguous_operations: ambiguous }, state: "blocked", phase: "recovery", next_action: "verify_ambiguous_operation" }, "task.operation_ambiguous"); }
-module.exports = { insertTask, getTask, listTasks, listDescendants, updateTask, checkpointTask, addPlanRevision, addFailure, saveResult, listEvents, listPlans, listFailures, recordGuidance, recordAuthorityDecision, incrementUsage, adjustConcurrentOperations, adjustConcurrentOperationsInDb, reserveChildTask, recordChildRequest, recordCompletedOperation, recordAmbiguousOperation, ensureTaskSchema };
+module.exports = { insertTask, getTask, listTasks, listDescendants, updateTask, attachHandoff, checkpointTask, addPlanRevision, addFailure, saveResult, listEvents, listPlans, listFailures, recordGuidance, recordAuthorityDecision, incrementUsage, adjustConcurrentOperations, adjustConcurrentOperationsInDb, reserveChildTask, recordChildRequest, recordCompletedOperation, recordAmbiguousOperation, ensureTaskSchema };

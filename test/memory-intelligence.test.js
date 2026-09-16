@@ -69,6 +69,8 @@ dbStore.runPendingMigrations();
   });
   const beginData = JSON.parse(begin.content[0].text);
   assert.ok(beginData.session.id, "session begin should create a session");
+  assert.ok(beginData.handoff_id, "session begin should always create a durable handoff");
+  assert.strictEqual(dbStore.getHandoffByTaskId(beginData.session.id).id, beginData.handoff_id, "session handoff should be bound to the session");
   assert.ok(beginData.memory_brief.selected.some(item => /SMB|raw tool logs|SQLite|sidekick-mcp/i.test(item.summary)), "brief should recall relevant handoff-derived memory");
   const beginEvent = dbStore.getDb().prepare("SELECT * FROM platform_execution_events WHERE event_type = 'memory.session_started' AND subject_id = ?").get(beginData.session.id);
   assert.ok(beginEvent, "session begin should emit a platform memory event");

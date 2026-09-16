@@ -239,10 +239,13 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
         risks: packet.risks || [],
       },
       completed_steps: packet.completed_steps || [],
+      remaining_steps: packet.remaining_steps || [],
       acceptance_criteria: packet.acceptance_criteria || [],
       provenance: packet.provenance || null,
       artifacts: packet.artifacts || [],
       relationships: packet.relationships || [],
+      plan: packet.plan || null,
+      continuation: packet.continuation || null,
       evidence: { items: freshness, fresh: freshness.filter(item => item.freshness === "fresh").length, stale: freshness.filter(item => item.freshness === "stale").length, unknown: freshness.filter(item => item.freshness === "unknown").length, invalid: freshness.filter(item => item.freshness === "invalid").length },
       quality,
       readiness,
@@ -655,6 +658,12 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
     return created;
   }
 
+  function getHandoffByTaskId(taskId) {
+    if (!hasTable("memory_handoffs") || !taskId) return null;
+    const row = db.prepare("SELECT * FROM memory_handoffs WHERE task_id = ? AND archived_at IS NULL ORDER BY updated_at DESC LIMIT 1").get(String(taskId));
+    return normalizeHandoffRow(row);
+  }
+
   function listHandoffEvents(handoffId, limit = 100) {
     if (!hasTable("memory_handoff_events")) return [];
     return db.prepare("SELECT * FROM memory_handoff_events WHERE handoff_id = ? ORDER BY event_seq DESC LIMIT ?").all(handoffId, Math.max(1, Math.min(Number(limit) || 100, 500))).map(row => ({ id: row.id, handoff_id: row.handoff_id, event_seq: row.event_seq, version: row.version, event_type: row.event_type, actor: row.actor, source: row.source, payload: parseJson(row.payload_json, {}), previous_hash: row.previous_hash, event_hash: row.event_hash, created_at: row.created_at }));
@@ -691,7 +700,11 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
     const handoff = getHandoff(id);
     if (!handoff) return { status: "invalid", reasons: ["handoff not found"] };
     const validation = validateHandoffPacket(handoff.packet, { requireResume: true });
-    const reasons = [...validation.issues];
+    // Claimability must use the same complete receiver contract shown in the
+    // dashboard.  A syntactically valid packet without provenance, acceptance
+    // criteria, or verification is not a trustworthy continuity handoff.
+    const quality = evaluateHandoffQuality(handoff.packet, { requireResume: true });
+    const reasons = [...new Set([...validation.issues, ...quality.issues])];
     if (!["ready", "claimed", "verifying", "active", "released", "completed"].includes(handoff.lifecycle_state)) reasons.push(`lifecycle state is ${handoff.lifecycle_state}`);
     const drift = handoff.checkpoint ? checkpointDrift(handoff.checkpoint, working_directory) : { status: "unknown", severity: "blocking", reasons: ["no checkpoint captured"] };
     if (handoff.checkpoint && handoff.checkpoint_hash && continuityHash(handoff.checkpoint) !== handoff.checkpoint_hash) {
@@ -898,7 +911,7 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
   }
 
 
-  return { normalizeHandoffPacket, validateHandoffPacket, evaluateHandoffQuality, evidenceFreshness, getHandoffReceiverProjection, compareHandoffVersions, getHandoffResumePreflight, getHandoffEvidenceState, refreshHandoffEvidence, renewHandoffClaim, beginHandoffResume, verifyHandoffProvenance, getHandoffLinks, saveHandoff, getHandoff, listHandoffs, listHandoffVersions, getHandoffVersion, restoreHandoffVersion, updateHandoffExtraction, archiveHandoff, unarchiveHandoff, purgeHandoffVersion, saveTaskSession, getTaskSession, listTaskSessions, captureHandoffCheckpoint, checkpointDrift, getHandoffReadiness, listHandoffEvents, transitionHandoff, claimHandoff, releaseHandoff };
+  return { normalizeHandoffPacket, validateHandoffPacket, evaluateHandoffQuality, evidenceFreshness, getHandoffReceiverProjection, compareHandoffVersions, getHandoffResumePreflight, getHandoffEvidenceState, refreshHandoffEvidence, renewHandoffClaim, beginHandoffResume, verifyHandoffProvenance, getHandoffLinks, saveHandoff, getHandoff, getHandoffByTaskId, listHandoffs, listHandoffVersions, getHandoffVersion, restoreHandoffVersion, updateHandoffExtraction, archiveHandoff, unarchiveHandoff, purgeHandoffVersion, saveTaskSession, getTaskSession, listTaskSessions, captureHandoffCheckpoint, checkpointDrift, getHandoffReadiness, listHandoffEvents, transitionHandoff, claimHandoff, releaseHandoff };
 }
 
 module.exports = { createHandoffStore };

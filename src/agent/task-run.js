@@ -16,7 +16,7 @@ function createTaskRunner({ taskEmitters, taskCancels, emit, runAgent, redactSen
     }
     taskEmitters[taskId] = new EventEmitter();
     taskCancels[taskId] = new AbortController();
-    const payload = { taskId };
+    const payload = { taskId, ...(creation?.handoffId ? { handoffId: creation.handoffId } : {}) };
     if (parentContext) {
       payload.parentTaskId = parentContext.parentTaskId;
       payload.rootTaskId = parentContext.rootTaskId;

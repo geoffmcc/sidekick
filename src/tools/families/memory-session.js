@@ -164,15 +164,43 @@ async function sidekick_session({ action, id, goal, project, source, working_dir
     if (!goal) return { content: [{ type: "text", text: "goal required" }], isError: true };
     const brief = buildScopedMemoryBrief(goal, project, { limit: 12 });
     const session = dbStore.saveTaskSession({ id, goal, project, source: source || toolContext.getExecutionSource(), client_session_id, working_directory, repository, branch, environment, tags: normalizeTags(tags), supplied_context, state: "active", memory_brief: brief, owner_principal_id: ownerPrincipalId, created_by_principal_id: actorPrincipalId });
+    const initialPacket = {
+      objective: session.goal,
+      summary: "Interactive session initialized; continuity will be refreshed at each session checkpoint.",
+      status: "active",
+      current_state: "intake",
+      next_step: "Continue the session from the current plan",
+      completed_steps: [],
+      blockers: [],
+      decisions: [],
+      acceptance_criteria: ["Preserve a complete, restartable session continuity record"],
+      evidence: [{ type: "continuity_checkpoint", label: "Initial session snapshot", status: "verified", observed_at: new Date().toISOString() }],
+      artifacts: [],
+      relationships: [{ type: "task_session", session_id: session.id, project: session.project || null }],
+      risks: [],
+      provenance: { task_id: session.id, handoff_id: null, working_directory: session.working_directory || process.cwd(), repository: session.repository || null, branch: session.branch || null, environment: session.environment || null },
+    };
+    const initialHandoff = dbStore.saveHandoff({ project: session.project, title: `Session continuity: ${session.goal}`.slice(0, 500), source: "session", task_id: session.id, content: initialPacket.summary, packet: initialPacket, extraction_state: "pending", owner_principal_id: session.owner_principal_id || ownerPrincipalId, created_by_principal_id: session.created_by_principal_id || actorPrincipalId });
+    initialPacket.provenance.handoff_id = initialHandoff.id;
+    dbStore.captureHandoffCheckpoint(initialHandoff.id, { working_directory: session.working_directory || process.cwd(), actor: actorPrincipalId || ownerPrincipalId || "session", source: "session", metadata: { session_id: session.id, boundary: "session.begin" } });
+    dbStore.refreshHandoffEvidence(initialHandoff.id, { working_directory: session.working_directory || process.cwd(), actor: actorPrincipalId || ownerPrincipalId || "session" });
+    dbStore.transitionHandoff(initialHandoff.id, "active", { expectedVersion: initialHandoff.version, actor: actorPrincipalId || ownerPrincipalId || "session", source: "session", reason: "session started" });
     recordPlatformMemoryEvent("memory.session_started", { session_id: session.id, project: session.project, source: session.source, selected_memories: brief.selected.length }, { subjectType: "memory_task_session", subjectId: session.id, project: session.project, taskId: session.id });
-    return jsonText({ ok: true, session, memory_brief: brief });
+    return jsonText({ ok: true, session, handoff_id: initialHandoff.id, memory_brief: brief });
   }
   if (["update", "checkpoint"].includes(action)) {
     if (!id) return { content: [{ type: "text", text: "id required" }], isError: true };
     const existing = dbStore.getTaskSession(id);
     if (!existing) return { content: [{ type: "text", text: "Task session not found: " + id }], isError: true };
     if (!canManageSession(existing, authIdentity)) return { content: [{ type: "text", text: "Task session not found: " + id }], isError: true };
+    const linkedHandoff = dbStore.getHandoffByTaskId(existing.id);
     const session = dbStore.saveTaskSession({ ...existing, current_plan, completed_steps: completed_steps || existing.completed_steps, current_hypothesis, blockers: blockers || existing.blockers, next_step, artifacts: artifacts || existing.artifacts, state: "active", owner_principal_id: existing.owner_principal_id || ownerPrincipalId, created_by_principal_id: existing.created_by_principal_id || actorPrincipalId });
+    if (linkedHandoff) {
+      const packet = buildContinuationPacket(session, { handoff: linkedHandoff, state: "active", current_plan, completed_steps, blockers, next_step, artifacts, risks, relationships, do_not_repeat, decisions, evidence, reports, verified_facts, unresolved_issues, resolved_issues, failed_approaches, follow_ups });
+      const updated = dbStore.saveHandoff({ id: linkedHandoff.id, project: linkedHandoff.project, title: linkedHandoff.title, source: linkedHandoff.source, task_id: existing.id, content: packet.summary || linkedHandoff.content, packet, extraction_state: "pending", expectedVersion: linkedHandoff.version, owner_principal_id: linkedHandoff.owner_principal_id || ownerPrincipalId, created_by_principal_id: linkedHandoff.created_by_principal_id || actorPrincipalId });
+      dbStore.captureHandoffCheckpoint(updated.id, { working_directory: session.working_directory || process.cwd(), actor: actorPrincipalId || ownerPrincipalId || "session", source: "session", metadata: { session_id: session.id, boundary: action } });
+      dbStore.refreshHandoffEvidence(updated.id, { working_directory: session.working_directory || process.cwd(), actor: actorPrincipalId || ownerPrincipalId || "session" });
+    }
     recordPlatformMemoryEvent(action === "checkpoint" ? "memory.session_checkpointed" : "memory.session_updated", { session_id: session.id, project: session.project, action, completed_steps: Array.isArray(session.completed_steps) ? session.completed_steps.length : 0 }, { subjectType: "memory_task_session", subjectId: session.id, project: session.project, taskId: session.id });
     return jsonText({ ok: true, session, checkpoint: action === "checkpoint" });
   }
@@ -182,14 +210,15 @@ async function sidekick_session({ action, id, goal, project, source, working_dir
     if (!existing) return { content: [{ type: "text", text: "Task session not found: " + id }], isError: true };
     if (!canManageSession(existing, authIdentity)) return { content: [{ type: "text", text: "Task session not found: " + id }], isError: true };
     const state = action === "abandon" ? "abandoned" : "completed";
-    const linkedHandoff = handoff_id ? dbStore.getHandoff(handoff_id) : null;
+    const linkedHandoff = handoff_id ? dbStore.getHandoff(handoff_id) : dbStore.getHandoffByTaskId(existing.id);
+    const effectiveHandoffId = linkedHandoff?.id || null;
     if (handoff_id && (!linkedHandoff || (existing.project && canonicalizeProjectName(linkedHandoff.project) !== canonicalizeProjectName(existing.project)))) {
       return { content: [{ type: "text", text: `handoff quality gate failed: handoff "${handoff_id}" was not found in the session project` }], isError: true };
     }
-    const continuationPacket = handoff_id ? buildContinuationPacket(existing, { handoff: linkedHandoff, state, evidence, artifacts, reports, risks, relationships, do_not_repeat, outcome, final_summary, user_visible_result, acceptance_state, decisions, verified_facts, failed_approaches, next_step, completed_steps, blockers }) : null;
+    const continuationPacket = effectiveHandoffId ? buildContinuationPacket(existing, { handoff: linkedHandoff, state, evidence, artifacts, reports, risks, relationships, do_not_repeat, outcome, final_summary, user_visible_result, acceptance_state, decisions, verified_facts, failed_approaches, next_step, completed_steps, blockers }) : null;
     let finalizedHandoff = null;
     let session;
-    if (handoff_id) {
+    if (effectiveHandoffId) {
       const qualityIssues = continuationQualityIssues(continuationPacket);
       const validation = dbStore.validateHandoffPacket(continuationPacket, { requireResume: true });
       if (qualityIssues.length || !validation.valid) {
@@ -230,7 +259,7 @@ async function sidekick_session({ action, id, goal, project, source, working_dir
     }
     add("negative", failed_approaches, "negative", 0.76); add("open_thread", [...(unresolved_issues || []), ...(follow_ups || [])].slice(0, 3), "prospective", 0.78); add("observation", evidence, "observational", 0.62);
     recordPlatformMemoryEvent(action === "abandon" ? "memory.session_abandoned" : "memory.session_completed", { session_id: session.id, project: session.project, memories_created: created.length, state: session.state, outcome }, { subjectType: "memory_task_session", subjectId: session.id, project: session.project, taskId: session.id, severity: action === "abandon" ? "warning" : "info" });
-    return jsonText({ ok: true, session, handoff_id: handoff_id || null, handoff_version: finalizedHandoff ? finalizedHandoff.version : null, continuation_packet: continuationPacket, memories_created: created.length, memories: created });
+    return jsonText({ ok: true, session, handoff_id: effectiveHandoffId, handoff_version: finalizedHandoff ? finalizedHandoff.version : null, continuation_packet: continuationPacket, memories_created: created.length, memories: created });
   }
   if (action === "resume" || action === "status") {
     if (!id && project) return jsonText({ ok: true, sessions: dbStore.listTaskSessions({ project, state: source, limit: limit || 50 }) });

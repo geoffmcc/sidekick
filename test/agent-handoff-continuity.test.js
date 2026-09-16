@@ -15,6 +15,8 @@ const task = {
   checkpoint: { updated_at: "2026-08-24T00:00:00.000Z" },
 };
 const handoff = { id: task.handoff_id };
+let savedPacket = null;
+let evidenceRefreshes = 0;
 const continuity = createHandoffContinuity({
   getTask: () => task,
   getHandoff: () => handoff,
@@ -25,8 +27,14 @@ const continuity = createHandoffContinuity({
     assert.strictEqual(args.metadata.task_id, task.task_id);
     assert.strictEqual(args.metadata.plan_revision, 2);
     assert.strictEqual(args.metadata.work, undefined);
-    return { id };
+    return { id, version: 1 };
   },
+  saveHandoff: input => {
+    savedPacket = input.packet;
+    return { id: input.id, version: 1, content: input.content, packet: input.packet, lifecycle_state: "draft" };
+  },
+  refreshHandoffEvidence: () => { evidenceRefreshes += 1; },
+  listPlans: () => [{ revision: 2, plan: { objective: "complete the task", steps: [{ id: "step_1" }, { id: "step_2" }] } }],
   intervalMs: 60_000,
 });
 
@@ -35,6 +43,11 @@ try {
   assert.strictEqual(continuity.checkpointTask(task.task_id).reason, "coalesced");
   assert.strictEqual(continuity.checkpointTask(task.task_id, { reason: "task.paused", safeBoundary: "pause_boundary" }).captured, true);
   assert.strictEqual(captures, 2);
+  assert.deepStrictEqual(savedPacket.plan.steps.map(step => step.id), ["step_1", "step_2"], "handoff carries the full remaining task plan, not merely the immediate action");
+  assert.deepStrictEqual(savedPacket.remaining_steps.map(step => step.id), ["step_1", "step_2"], "handoff explicitly carries work remaining after restart");
+  assert.strictEqual(savedPacket.provenance.task_id, task.task_id, "handoff snapshot is tied to its durable task");
+  assert.ok(savedPacket.evidence.some(item => item.type === "continuity_checkpoint"), "each automatic snapshot records fresh continuity evidence");
+  assert.strictEqual(evidenceRefreshes, 2, "automatic snapshots refresh their evidence state");
   console.log("Agent handoff continuity: passed");
 } catch (error) {
   console.error(error);
