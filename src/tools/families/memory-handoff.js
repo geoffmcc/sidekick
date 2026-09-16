@@ -4,7 +4,7 @@ const { z } = require("zod");
 const dbStore = require("../../db");
 const { redactSensitive } = require("../../redact");
 const toolContext = require("../context");
-const { canonicalizeProjectName } = require("../../core/project-identity");
+const { PROJECT_RE, canonicalizeProjectName } = require("../../core/project-identity");
 const authorization = require("../../core/authorization");
 
 const HANDOFF_EXTRACTION_VERSION = "handoff-rules-v1";
@@ -78,6 +78,17 @@ async function sidekick_handoff({ action, id, key, project, title, content, sour
   const boundProject = toolContext.getExecutionContext().project || null;
   const ownerPrincipalId = authIdentity?.acting_for_principal_id || authIdentity?.principal_id || null;
   const actorPrincipalId = authIdentity?.principal_id || null;
+  const execution = toolContext.getExecutionContext();
+  const agentTaskId = execution.source === "agent" && execution.taskId ? String(execution.taskId) : null;
+  // The Agent Bridge may have already created the requested continuity record
+  // before the model's first tool turn. Treat a later model-level "create
+  // handoff" as an update to that bound record, never as a duplicate draft.
+  const agentTask = agentTaskId ? require("../../agent/task-store").getTask(agentTaskId) : null;
+  if (agentTaskId && !agentTask) return { content: [{ type: "text", text: `Agent task "${agentTaskId}" was not found; refusing to create an untracked handoff` }], isError: true };
+  if (agentTask?.handoff_id && action === "create" && !id) {
+    id = agentTask.handoff_id;
+    action = "update";
+  }
   if (authIdentity?.principal_id && !project && !boundProject) {
     return { content: [{ type: "text", text: "authenticated handoff access requires a project scope" }], isError: true };
   }
@@ -86,6 +97,14 @@ async function sidekick_handoff({ action, id, key, project, title, content, sour
   }
   if (action === "create" || action === "update") {
     const existing = id ? scopedHandoff(id, project, authIdentity) : null;
+    if (action === "create" && !existing) {
+      const requestedProject = project || agentTask?.project_id || boundProject;
+      const resolvedProject = canonicalizeProjectName(requestedProject);
+      if (!requestedProject) return { content: [{ type: "text", text: "project is required to create a handoff" }], isError: true };
+      if (!PROJECT_RE.test(resolvedProject)) return { content: [{ type: "text", text: "project must match /^[a-z][a-z0-9_]*$/" }], isError: true };
+      if (project && boundProject && resolvedProject !== canonicalizeProjectName(boundProject)) return { content: [{ type: "text", text: "project does not match the trusted execution project scope" }], isError: true };
+      project = String(requestedProject).trim();
+    }
     const handoffContent = content !== undefined && content !== null
       ? content
       : existing?.content;
@@ -119,7 +138,28 @@ async function sidekick_handoff({ action, id, key, project, title, content, sour
     }
     let handoff;
     try {
-      handoff = dbStore.saveHandoff({ id, project, title, source: source || toolContext.getExecutionSource(), task_id, content: handoffContent, packet, extraction_state: "pending", expectedVersion: action === "update" ? expected_version : undefined, owner_principal_id: existing?.owner_principal_id || ownerPrincipalId, created_by_principal_id: existing?.created_by_principal_id || actorPrincipalId });
+      handoff = dbStore.saveHandoff({ id, project, title, source: source || toolContext.getExecutionSource(), task_id: task_id || agentTaskId, content: handoffContent, packet, extraction_state: "pending", expectedVersion: action === "update" ? expected_version : undefined, owner_principal_id: existing?.owner_principal_id || ownerPrincipalId, created_by_principal_id: existing?.created_by_principal_id || actorPrincipalId });
+      // An Agent-created handoff is a request for durable continuity, not an
+      // unowned note. Link it immediately so every following Agent boundary
+      // captures task state, provenance, and a repository checkpoint.
+      if (agentTaskId) {
+        const tasks = require("../../agent/task-store");
+        if (agentTask.project_id && handoff.project && canonicalizeProjectName(agentTask.project_id) !== canonicalizeProjectName(handoff.project)) throw new Error("handoff project does not match Agent task project");
+        tasks.attachHandoff(agentTaskId, handoff.id);
+        const taskDirectory = agentTask.working_directory || agentTask.repository || process.cwd();
+        const checkpointed = dbStore.captureHandoffCheckpoint(handoff.id, {
+          working_directory: taskDirectory,
+          expectedVersion: handoff.version,
+          actor: agentTask.actor_id || "agent",
+          source: "agent",
+          metadata: { task_id: agentTask.task_id, reason: "agent.handoff_tool", safe_boundary: "handoff_tool", task_state: agentTask.state, phase: agentTask.phase, plan_revision: Number(agentTask.current_plan_revision) || 0 },
+        });
+        dbStore.refreshHandoffEvidence(handoff.id, { working_directory: taskDirectory, actor: agentTask.actor_id || "agent" });
+        if (checkpointed.lifecycle_state === "draft") {
+          dbStore.transitionHandoff(handoff.id, "active", { expectedVersion: checkpointed.version, actor: agentTask.actor_id || "agent", source: "agent", reason: "Agent created or updated its maintained handoff" });
+        }
+        handoff = dbStore.getHandoff(handoff.id);
+      }
     } catch (error) {
       return { content: [{ type: "text", text: String(error && error.message ? error.message : error) }], isError: true };
     }
@@ -272,7 +312,7 @@ const descriptors = Object.freeze([Object.freeze({
   name: "handoff",
    description: "First-class versioned Handoff v3 continuity storage with structured resume packets, deterministic checkpoints, lifecycle claims, readiness/drift evaluation, and a bounded tamper-evident journal. Packets preserve objective, state, next steps, decisions, blockers, acceptance criteria, provenance, evidence, artifacts, risks, and relationships alongside every content version.",
     schema: z.object({ action: z.enum(["create", "update", "get", "list", "versions", "restore", "compare", "inspect", "validate", "verify", "start_here", "quality", "preflight", "simulate_resume", "refresh_evidence", "checkpoint", "readiness", "events", "transition", "claim", "renew_claim", "begin_resume", "release", "reprocess", "archive", "unarchive", "purge_version"]).describe("Handoff action"), id: z.string().optional(), project: z.string().optional(), title: z.string().optional(), content: z.string().optional(), source: z.string().optional(), task_id: z.string().optional(), reprocess: z.boolean().optional(), include_archived: z.boolean().optional(), include_completed: z.boolean().optional(), limit: z.number().optional(), version: z.number().optional().describe("Version selector for get/restore/purge/compare source version"), expected_version: z.number().optional().describe("Optimistic concurrency guard or compare target version"), reason: z.string().optional().describe("Reason recorded in the audit trail"), packet: z.record(z.any()).optional().describe("Structured resume packet"), working_directory: z.string().optional(), owner: z.string().optional(), lease_seconds: z.number().optional(), claim_token: z.string().optional(), lifecycle_state: z.string().optional() }).strict(),
-    args: { action: "string (create|update|get|list|versions|restore|compare|inspect|validate|verify|start_here|quality|preflight|simulate_resume|refresh_evidence|checkpoint|readiness|events|transition|claim|renew_claim|begin_resume|release|reprocess|archive|unarchive|purge_version)", id: "string (required for id-scoped actions)", project: "string (optional, for create/update/list/compare)", title: "string (optional)", content: "string (for create/update)", source: "string (optional)", task_id: "string (optional)", packet: "object (structured resume packet, optional)", include_archived: "boolean (optional)", include_completed: "boolean (optional; list completed lifecycle records)", limit: "number (optional)", version: "number (get/restore/purge/compare source version)", expected_version: "number (optimistic concurrency guard or compare target version)", reason: "string (audit reason)", working_directory: "string (optional)", owner: "string (claim/readiness recipient)", lease_seconds: "number (claim/renew_claim lease)", claim_token: "string (release/renew_claim/begin_resume token)", lifecycle_state: "string (transition target)" },
+    args: { action: "string (create|update|get|list|versions|restore|compare|inspect|validate|verify|start_here|quality|preflight|simulate_resume|refresh_evidence|checkpoint|readiness|events|transition|claim|renew_claim|begin_resume|release|reprocess|archive|unarchive|purge_version)", id: "string (required for id-scoped actions)", project: "string (required for create unless trusted task/execution scope supplies it; optional for other actions)", title: "string (optional)", content: "string (for create/update)", source: "string (optional)", task_id: "string (optional)", packet: "object (structured resume packet, optional)", include_archived: "boolean (optional)", include_completed: "boolean (optional; list completed lifecycle records)", limit: "number (optional)", version: "number (get/restore/purge/compare source version)", expected_version: "number (optimistic concurrency guard or compare target version)", reason: "string (audit reason)", working_directory: "string (optional)", owner: "string (claim/readiness recipient)", lease_seconds: "number (claim/renew_claim lease)", claim_token: "string (release/renew_claim/begin_resume token)", lifecycle_state: "string (transition target)" },
   risk: "medium",
   category: "Context & Learning",
   source: "builtin",

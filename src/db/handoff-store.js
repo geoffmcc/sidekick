@@ -47,10 +47,10 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
   function gitCheckpoint(workingDirectory) {
     const root = String(workingDirectory || "");
     if (!root || !fs.existsSync(root)) return { workspace: { root: root || null, visible: false }, repository: null };
-    const git = (args) => execFileSync("git", ["-C", root, ...args], { encoding: "utf8", env: childProcessEnv(), maxBuffer: 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] }).trim();
+    const git = (args) => execFileSync("git", ["-C", root, "-c", `safe.directory=${root}`, ...args], { encoding: "utf8", env: childProcessEnv(), maxBuffer: 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] }).trim();
     try {
       const repositoryRoot = git(["rev-parse", "--show-toplevel"]);
-      const status = execFileSync("git", ["-C", root, "status", "--porcelain=v1", "-z"], { encoding: "utf8", env: childProcessEnv(), maxBuffer: 1024 * 1024 }).split("\0").filter(Boolean).slice(0, 2000);
+      const status = git(["status", "--porcelain=v1", "-z"]).split("\0").filter(Boolean).slice(0, 2000);
       return { workspace: { root: repositoryRoot, visible: true }, repository: { root: repositoryRoot, branch: git(["branch", "--show-current"]) || null, head: git(["rev-parse", "HEAD"]), upstream: (() => { try { return git(["rev-parse", "--abbrev-ref", "@{upstream}"]); } catch { return null; } })(), status } };
     } catch { return { workspace: { root, visible: true }, repository: { root, state: "unavailable" } }; }
   }
@@ -239,10 +239,13 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
         risks: packet.risks || [],
       },
       completed_steps: packet.completed_steps || [],
+      remaining_steps: packet.remaining_steps || [],
       acceptance_criteria: packet.acceptance_criteria || [],
       provenance: packet.provenance || null,
       artifacts: packet.artifacts || [],
       relationships: packet.relationships || [],
+      plan: packet.plan || null,
+      continuation: packet.continuation || null,
       evidence: { items: freshness, fresh: freshness.filter(item => item.freshness === "fresh").length, stale: freshness.filter(item => item.freshness === "stale").length, unknown: freshness.filter(item => item.freshness === "unknown").length, invalid: freshness.filter(item => item.freshness === "invalid").length },
       quality,
       readiness,
@@ -327,11 +330,12 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
       checks.push({ name: "commit", status: "unverifiable", detail: "provenance.commit_sha is missing" });
     } else {
       try {
-        execFileSync("git", ["-C", repo, "cat-file", "-e", `${commit}^{commit}`], { stdio: "ignore", env: childProcessEnv() });
+        const gitArgs = (args) => ["-C", repo, "-c", `safe.directory=${repo}`, ...args];
+        execFileSync("git", gitArgs(["cat-file", "-e", `${commit}^{commit}`]), { stdio: "ignore", env: childProcessEnv() });
         checks.push({ name: "commit", status: "verified", commit_sha: commit });
         if (provenance.branch) {
           try {
-            execFileSync("git", ["-C", repo, "merge-base", "--is-ancestor", commit, String(provenance.branch)], { stdio: "ignore", env: childProcessEnv() });
+            execFileSync("git", gitArgs(["merge-base", "--is-ancestor", commit, String(provenance.branch)]), { stdio: "ignore", env: childProcessEnv() });
             checks.push({ name: "branch", status: "verified", branch: String(provenance.branch) });
           } catch {
             checks.push({ name: "branch", status: "stale", branch: String(provenance.branch), detail: "branch is missing or does not contain the recorded commit" });
@@ -655,6 +659,12 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
     return created;
   }
 
+  function getHandoffByTaskId(taskId) {
+    if (!hasTable("memory_handoffs") || !taskId) return null;
+    const row = db.prepare("SELECT * FROM memory_handoffs WHERE task_id = ? AND archived_at IS NULL ORDER BY updated_at DESC LIMIT 1").get(String(taskId));
+    return normalizeHandoffRow(row);
+  }
+
   function listHandoffEvents(handoffId, limit = 100) {
     if (!hasTable("memory_handoff_events")) return [];
     return db.prepare("SELECT * FROM memory_handoff_events WHERE handoff_id = ? ORDER BY event_seq DESC LIMIT ?").all(handoffId, Math.max(1, Math.min(Number(limit) || 100, 500))).map(row => ({ id: row.id, handoff_id: row.handoff_id, event_seq: row.event_seq, version: row.version, event_type: row.event_type, actor: row.actor, source: row.source, payload: parseJson(row.payload_json, {}), previous_hash: row.previous_hash, event_hash: row.event_hash, created_at: row.created_at }));
@@ -691,7 +701,11 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
     const handoff = getHandoff(id);
     if (!handoff) return { status: "invalid", reasons: ["handoff not found"] };
     const validation = validateHandoffPacket(handoff.packet, { requireResume: true });
-    const reasons = [...validation.issues];
+    // Claimability must use the same complete receiver contract shown in the
+    // dashboard.  A syntactically valid packet without provenance, acceptance
+    // criteria, or verification is not a trustworthy continuity handoff.
+    const quality = evaluateHandoffQuality(handoff.packet, { requireResume: true });
+    const reasons = [...new Set([...validation.issues, ...quality.issues])];
     if (!["ready", "claimed", "verifying", "active", "released", "completed"].includes(handoff.lifecycle_state)) reasons.push(`lifecycle state is ${handoff.lifecycle_state}`);
     const drift = handoff.checkpoint ? checkpointDrift(handoff.checkpoint, working_directory) : { status: "unknown", severity: "blocking", reasons: ["no checkpoint captured"] };
     if (handoff.checkpoint && handoff.checkpoint_hash && continuityHash(handoff.checkpoint) !== handoff.checkpoint_hash) {
@@ -898,7 +912,7 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
   }
 
 
-  return { normalizeHandoffPacket, validateHandoffPacket, evaluateHandoffQuality, evidenceFreshness, getHandoffReceiverProjection, compareHandoffVersions, getHandoffResumePreflight, getHandoffEvidenceState, refreshHandoffEvidence, renewHandoffClaim, beginHandoffResume, verifyHandoffProvenance, getHandoffLinks, saveHandoff, getHandoff, listHandoffs, listHandoffVersions, getHandoffVersion, restoreHandoffVersion, updateHandoffExtraction, archiveHandoff, unarchiveHandoff, purgeHandoffVersion, saveTaskSession, getTaskSession, listTaskSessions, captureHandoffCheckpoint, checkpointDrift, getHandoffReadiness, listHandoffEvents, transitionHandoff, claimHandoff, releaseHandoff };
+  return { normalizeHandoffPacket, validateHandoffPacket, evaluateHandoffQuality, evidenceFreshness, getHandoffReceiverProjection, compareHandoffVersions, getHandoffResumePreflight, getHandoffEvidenceState, refreshHandoffEvidence, renewHandoffClaim, beginHandoffResume, verifyHandoffProvenance, getHandoffLinks, saveHandoff, getHandoff, getHandoffByTaskId, listHandoffs, listHandoffVersions, getHandoffVersion, restoreHandoffVersion, updateHandoffExtraction, archiveHandoff, unarchiveHandoff, purgeHandoffVersion, saveTaskSession, getTaskSession, listTaskSessions, captureHandoffCheckpoint, checkpointDrift, getHandoffReadiness, listHandoffEvents, transitionHandoff, claimHandoff, releaseHandoff };
 }
 
 module.exports = { createHandoffStore };

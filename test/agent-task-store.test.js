@@ -17,6 +17,11 @@ try {
   assert.strictEqual(store.insertTask(task).task_id, "agt_store01");
   assert.strictEqual(store.getTask("agt_store01").state, "created");
   assert.strictEqual(store.getTask("agt_store01").handoff_id, "handoff_test01");
+  const attachable = createTask({ task_id: "agt_handoff01", objective: "maintain continuity", profile: "quick", project_id: "project:handoff" });
+  store.insertTask(attachable);
+  assert.strictEqual(store.attachHandoff(attachable.task_id, "handoff_linked01").handoff_id, "handoff_linked01", "an Agent-created handoff can be durably attached to its task");
+  assert.throws(() => store.attachHandoff(attachable.task_id, "handoff_other"), /already has handoff/, "a task cannot silently replace its continuity record");
+  assert.ok(store.listEvents(attachable.task_id).some(event => event.event_type === "task.handoff_attached"), "handoff attachment is attributable in the task journal");
   const counted = store.incrementUsage("agt_store01", { tool_calls: 2, retries: 1 }, "test.usage");
   assert.strictEqual(counted.usage.tool_calls, 2);
   assert.strictEqual(counted.usage_ledger.retries, 1);

@@ -172,7 +172,7 @@ dbStore.runPendingMigrations();
 const durableReceiptStore = require("./agent/receipt-store");
 const durableWorkspaceTransactions = require("./agent/workspace-transactions");
 const durableOperations = require("./agent/durable-operations");
-const handoffContinuity = createHandoffContinuity({ getTask: durableTaskStore.getTask, getHandoff: dbStore.getHandoff, captureHandoffCheckpoint: dbStore.captureHandoffCheckpoint, saveHandoff: dbStore.saveHandoff, transitionHandoff: dbStore.transitionHandoff });
+const handoffContinuity = createHandoffContinuity({ getTask: durableTaskStore.getTask, getHandoff: dbStore.getHandoff, captureHandoffCheckpoint: dbStore.captureHandoffCheckpoint, saveHandoff: dbStore.saveHandoff, transitionHandoff: dbStore.transitionHandoff, refreshHandoffEvidence: dbStore.refreshHandoffEvidence, listPlans: durableTaskStore.listPlans });
 const { determineEffect, decideAutonomy, intersectEnvelope, governedTargetRef } = require("./agent/authority");
 const { recoverDurableAgentTasks } = require("./agent/recovery-scan");
 const { verifyTaskResult, successfulFreshOutcome, applyRecipeGates, applyReceiptGates, applyPlanGates, runVerificationRepair } = require("./agent/verification");
@@ -1025,9 +1025,17 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
         next_action: "continue_agent_loop",
         state: { phase: "execution", work: state },
       });
-      handoffContinuity.checkpointTask(taskId);
-      if (cognitiveRuntime) { cognitiveRuntime.belief = { ...cognitiveRuntime.belief, remaining_work: taskSpec.requirements.filter(requirement => !cognitiveRuntime.belief.coverage.supported.includes(requirement.id)).slice(0, 32).map(requirement => requirement.id) }; cognitiveRuntime.checkpoint(); }
     } catch {}
+    try {
+      handoffContinuity.checkpointTask(taskId);
+    } catch (error) {
+      // Continuity is now a task invariant. If the requested handoff cannot be
+      // persisted, continuing would create work the next Agent cannot explain.
+      // Park the task visibly so an operator can repair/resume it safely.
+      try { durableTaskStore.updateTask(taskId, { state: "blocked", phase: "recovery", next_action: "repair_handoff", stopping_reason: `handoff continuity update failed: ${redactSensitive(String(error?.message || error)).slice(0, 500)}` }, "task.handoff_continuity_failed"); } catch {}
+      throw error;
+    }
+    try { if (cognitiveRuntime) { cognitiveRuntime.belief = { ...cognitiveRuntime.belief, remaining_work: taskSpec.requirements.filter(requirement => !cognitiveRuntime.belief.coverage.supported.includes(requirement.id)).slice(0, 32).map(requirement => requirement.id) }; cognitiveRuntime.checkpoint(); } } catch {}
   };
 
   // Everything from here to the terminal tail is guarded. An execution that has
@@ -1219,9 +1227,14 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
           };
           if (hierarchical.steps.some(step => !getLiveAgentDescriptor(step.capability))) throw new Error("hierarchical plan references a capability outside the live Agent catalog");
           durableOperations.savePlan(taskId, hierarchical, { source: metadata && metadata.source || "planner", evidence: metadata && metadata.evidence || null, registry_version: current && current.capability_registry_version || null });
-          try { handoffContinuity.checkpointTask(taskId, { reason: "task.plan_revision", safeBoundary: "plan_revision" }); } catch {}
+          try { handoffContinuity.checkpointTask(taskId, { reason: "task.plan_revision", safeBoundary: "plan_revision" }); }
+          catch (error) {
+            durableTaskStore.updateTask(taskId, { state: "blocked", phase: "recovery", next_action: "repair_handoff", stopping_reason: `handoff continuity update failed: ${redactSensitive(String(error?.message || error)).slice(0, 500)}` }, "task.handoff_continuity_failed");
+            throw error;
+          }
         } catch (error) {
           durableTaskStore.addFailure(taskId, { error_class: "plan_persistence", retryable: false, detail: "hierarchical plan could not be persisted safely" });
+          throw error;
         }
         durableTaskStore.incrementUsage(taskId, { plan_revisions: 1 }, "task.plan_revision");
       },
@@ -1559,7 +1572,11 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
       try {
         const boundaryReason = status === "waiting_for_approval" ? "task.waiting_for_approval" : status === "paused" ? "task.paused" : status === "completed" ? "task.completed" : "task.terminal";
         handoffContinuity.checkpointTask(taskId, { reason: boundaryReason, safeBoundary: "task_lifecycle_boundary" });
-      } catch {}
+      } catch (error) {
+        // A terminal task cannot be moved back to blocked, but its durable
+        // record must still make the failed handoff write actionable.
+        try { durableTaskStore.updateTask(taskId, { next_action: "repair_handoff", stopping_reason: `terminal handoff continuity update failed: ${redactSensitive(String(error?.message || error)).slice(0, 500)}` }, "task.handoff_continuity_failed"); } catch {}
+      }
       // `done` describes a completed Agent response, while the durable task
       // projection remains authoritative for whether its verification gates
       // were satisfied. A direct answer can therefore be delivered as `done`
@@ -1645,6 +1662,35 @@ const beginTaskRun = createTaskRunner({
     });
     task.handoff_id = handoffId || null;
     durableTaskStore.insertTask(task);
+    // Continuity is an explicit task-level contract.  When an operator asks
+    // for a maintained handoff, create and bind it before any model/tool work
+    // begins; subsequent durable Agent boundaries refresh the same artifact.
+    const requestedContinuity = !handoffId;
+    if (requestedContinuity) {
+      const packet = {
+        objective: task.objective,
+        summary: "Agent task initialized; this continuity record will be refreshed at every durable boundary.",
+        status: "active",
+        current_state: task.phase,
+        next_step: task.next_action,
+        completed_steps: [],
+        blockers: [],
+        decisions: [],
+        acceptance_criteria: task.goal?.success_criteria?.length ? task.goal.success_criteria : ["Preserve a complete, restartable task continuity record"],
+        evidence: [{ type: "continuity_checkpoint", label: "Initial durable Agent continuity snapshot", status: "verified", observed_at: new Date().toISOString(), task_id: task.task_id }],
+        artifacts: [],
+        relationships: [{ type: "agent_task", task_id: task.task_id, project: task.project_id || null }],
+        risks: [],
+        continuation: { completed_operations: [], ambiguous_operations: [], current_milestone: null, active_work_package: null },
+        provenance: { task_id: task.task_id, workspace_ref: task.workspace_ref || null, working_directory: process.cwd(), plan_revision: 0 },
+      };
+      const created = dbStore.saveHandoff({ project: task.project_id || null, title: `Task continuity: ${task.objective}`.slice(0, 500), source: "agent", task_id: task.task_id, content: packet.summary, packet, extraction_state: "pending", owner_principal_id: task.actor_principal_id || task.requested_by_principal_id || null, created_by_principal_id: task.actor_principal_id || task.requested_by_principal_id || null });
+      durableTaskStore.attachHandoff(task.task_id, created.id);
+      const checkpointed = dbStore.captureHandoffCheckpoint(created.id, { working_directory: process.cwd(), actor: task.actor_id || "agent", source: "agent", metadata: { task_id: task.task_id, reason: "task.handoff_requested", safe_boundary: "task_created", task_state: task.state, phase: task.phase, plan_revision: 0 } });
+      dbStore.refreshHandoffEvidence(created.id, { working_directory: process.cwd(), actor: task.actor_id || "agent" });
+      dbStore.transitionHandoff(created.id, "active", { expectedVersion: checkpointed.version, actor: task.actor_id || "agent", source: "agent", reason: "operator requested maintained task handoff" });
+      return { handoffId: created.id };
+    }
   },
 });
 

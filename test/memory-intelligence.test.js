@@ -12,6 +12,7 @@ process.env.SIDEKICK_EMBEDDINGS = "0";
 
 const dbStore = require("../src/db");
 const { TOOLS } = require("../src/tools");
+const executionContext = require("../src/tools/context");
 
 dbStore.runPendingMigrations();
 
@@ -69,9 +70,23 @@ dbStore.runPendingMigrations();
   });
   const beginData = JSON.parse(begin.content[0].text);
   assert.ok(beginData.session.id, "session begin should create a session");
+  assert.ok(beginData.handoff_id, "session begin should always create a durable handoff");
+  assert.strictEqual(dbStore.getHandoffByTaskId(beginData.session.id).id, beginData.handoff_id, "session handoff should be bound to the session");
   assert.ok(beginData.memory_brief.selected.some(item => /SMB|raw tool logs|SQLite|sidekick-mcp/i.test(item.summary)), "brief should recall relevant handoff-derived memory");
   const beginEvent = dbStore.getDb().prepare("SELECT * FROM platform_execution_events WHERE event_type = 'memory.session_started' AND subject_id = ?").get(beginData.session.id);
   assert.ok(beginEvent, "session begin should emit a platform memory event");
+  assert.strictEqual(beginData.session.project, "sidekick", "session project must be persisted");
+  assert.strictEqual(dbStore.getHandoffByTaskId(beginData.session.id).project, "sidekick", "session handoff must carry the resolved project");
+
+  const missingProject = await TOOLS.session({ action: "begin", goal: "A session without trusted project scope" });
+  assert.ok(missingProject.isError, "session begin must reject missing project scope");
+  assert.match(missingProject.content[0].text, /project is required/i);
+  const derivedProject = await executionContext.runWithContext(
+    executionContext.createTestExecutionContext({ project: "sidekick" }),
+    () => TOOLS.session({ action: "begin", goal: "Derive project from trusted execution scope", source: "test" })
+  );
+  assert.ok(!derivedProject.isError, "session begin should derive project from trusted execution scope");
+  assert.strictEqual(JSON.parse(derivedProject.content[0].text).session.project, "sidekick");
 
   const otherProjectRecall = await TOOLS.memory({ action: "query", query: "sidekick-mcp port", project: "other_project" });
   const otherData = JSON.parse(otherProjectRecall.content[0].text);
