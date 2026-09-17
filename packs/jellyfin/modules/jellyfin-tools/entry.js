@@ -81,10 +81,17 @@ async function resolveActingUser(c, args, p, users) {
     };
   }
   const sessions = (await optional(() => c.get("/Sessions"))) || [];
+  // The Jellyfin executive/automation user is an all-zero GUID. Automation
+  // clients (e.g. a connected Sidekick session or Live TV) register a session
+  // against it, so it must never count as an acting user.
+  const isEmptyUserId = (id) => {
+    const normalized = String(id || "").toLowerCase().replace(/-/g, "");
+    return normalized === "" || /^0+$/.test(normalized);
+  };
   const activeIds = [
     ...new Set(
-      Array.isArray(sessions)
-        ? sessions.map((s) => s && s.UserId).filter(Boolean)
+      Array.isArray(sessions) && sessions.length
+        ? sessions.map((s) => s && s.UserId).filter((id) => !isEmptyUserId(id))
         : [],
     ),
   ];

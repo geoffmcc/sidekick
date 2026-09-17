@@ -1,9 +1,9 @@
 {
   "schema": "sidekick.compatibility-pack-inventory.v1",
   "source": "bundled pack manifests and repository files",
-  "source_commit": "3605e156581b3557e53fd7ac17a35456f72b6513",
-  "source_commit_date": "2026-09-17T08:18:11-04:00",
-  "source_fingerprint": "sha256:437ff29fbd21725e8a67b228b2bd47b5f5b9deb6834dd2f7124437e6096ab498",
+  "source_commit": "e7a9b161b34309e3516a5c8b34daf64179a52a62",
+  "source_commit_date": "2026-09-17T09:34:36-04:00",
+  "source_fingerprint": "sha256:059f2f92df5f3ed43454fea6abcbc6d000af2cc47161c98a902973da8175764f",
   "pack_count": 27,
   "packs": [
     {
@@ -5961,7 +5961,7 @@
     },
     {
       "name": "jellyfin",
-      "version": "1.5.1",
+      "version": "1.5.2",
       "purpose": "Governed Jellyfin media inventory, server discovery, user views, playback diagnosis, library, log and maintenance intelligence over administrator-named profiles.",
       "manifest": "packs/jellyfin/sidekick.pack.json",
       "tools": [

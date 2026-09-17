@@ -798,6 +798,28 @@ async function asyncTest(name, fn) {
     },
   );
   await asyncTest(
+    "automation/executive all-zero sessions are ignored when auto-resolving the acting user",
+    async () => {
+      const fx = baseFixtures();
+      fx["/Sessions"] = [
+        { Id: "s1", UserId: "u1", UserName: "geoff", DeviceName: "[TV] Geoffs TV" },
+        { Id: "s2", UserId: "00000000000000000000000000000000", UserName: "Sidekick", DeviceName: "Sidekick" },
+      ];
+      setFixtures(fx);
+      const { read } = tools(servicesFor());
+      let result = await call(read, { action: "continue_watching" });
+      assert.ok(!result.out.isError, result.out.content[0].text);
+      assert.strictEqual(result.parsed.user.id, "u1");
+      assert.strictEqual(result.parsed.user_resolution.from, "active_sessions");
+      result = await call(read, { action: "next_up" });
+      assert.strictEqual(result.parsed.view, "next_up");
+      assert.strictEqual(result.parsed.user.id, "u1");
+      assert.strictEqual(result.parsed.user_resolution.from, "active_sessions");
+      assert.deepStrictEqual(postLog, []);
+      assert.deepStrictEqual(delLog, []);
+    },
+  );
+  await asyncTest(
     "list_media forwards structured genre/library filters and enumerates the whole library",
     async () => {
       setFixtures(baseFixtures());
