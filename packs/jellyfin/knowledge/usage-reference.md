@@ -1,5 +1,18 @@
 # Jellyfin pack: workflow and action reference
 
+Profiles are selected by exact configured name; never guess profile or user
+values. When unsure, call `list_profiles` (or `list_users`) first — a nonexistent
+profile fails with `profile_not_found` and an enumeration of available profiles.
+
+User-scoped raw actions (`continue_watching`, `next_up`, `user_media_state`,
+`user_unwatched`, `user_status`) accept an optional acting user and auto-resolve
+it when `user_id`/`username` are omitted: (1) the single distinct user with an
+active session, (2) the profile-configured `default_username`, (3) the single
+enabled user. Otherwise they fail closed with a `list_users` hint. The result
+reports `user_resolution` (`from`, `user_id`, `username`) for transparency. Raw
+actions are intended for single bounded checks; prefer the composed workflows
+below for whole answers.
+
 Use `catalog-browse`, `media-info`, and `user-media-overview` for read-only
 catalog and watch-state questions; `library-audit`, `content-health`,
 `library-analytics`, and `metadata-completeness` for library quality; and
@@ -12,7 +25,7 @@ governed `play-now` workflow with `device_name` (exact case-insensitive active
 session device name, e.g. "Geoffs TV") and `item_id`. It confirms active
 sessions and the user's resume list before issuing a single `play` command.
 Resolve the `item_id` from `continue_watching` (`user_id` or `username`
-required) or another item listing; do not guess session or device ids. Playback
+optional) or another item listing; do not guess session or device ids. Playback
 is a mutation: it requires a profile with `allow_playback_control: true` and
 does not override existing active playback elsewhere.
 
@@ -36,8 +49,9 @@ sessions:
 
 Read-only views:
 
-- `user-home` — continue-watching, next-up, and recently added for one
-  `username` in a single snapshot.
+- `user-home` — "what am I currently watching?" and "what should I watch next?"
+  continue-watching, next-up, and recently added for one optional `username` in
+  a single snapshot.
 - `new-arrivals` — recently added media (configurable `include_item_types`) plus
   the server metrics summary.
 - `session-overview` — current sessions, deterministic playback diagnosis, and

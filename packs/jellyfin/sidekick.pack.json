@@ -3,7 +3,7 @@
   "pack_api": 1,
   "name": "jellyfin",
   "display_name": "Jellyfin",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "description": "Governed Jellyfin media inventory, server discovery, user views, playback diagnosis, library, log and maintenance intelligence over administrator-named profiles.",
   "publisher": "Sidekick",
   "compatibility": { "sidekick": ">=1.0.0" },
@@ -68,7 +68,7 @@
             "properties": {
               "endpoint": { "type": "string" }, "api_key_ref": { "type": "string" },
               "ca_pem": { "type": "string" }, "ca_secret_ref": { "type": "string" },
-              "allow_insecure_http": { "type": "boolean" }, "request_timeout_ms": { "type": "integer", "minimum": 1000, "maximum": 120000 }, "default": { "type": "boolean" }, "allow_writes": { "type": "boolean" }, "allow_playback_control": { "type": "boolean", "description": "Explicitly permit targeted remote playback commands for active Jellyfin device sessions." },
+              "allow_insecure_http": { "type": "boolean" }, "request_timeout_ms": { "type": "integer", "minimum": 1000, "maximum": 120000 }, "default": { "type": "boolean" }, "allow_writes": { "type": "boolean" }, "allow_playback_control": { "type": "boolean", "description": "Explicitly permit targeted remote playback commands for active Jellyfin device sessions." }, "default_username": { "type": "string", "maxLength": 100, "description": "Jellyfin username auto-resolved for user-scoped read actions when the caller omits user_id/username and no unambiguous active-session user exists." },
               "dlna_rendering_controls": {
                 "type": "array",
                 "description": "Direct UPnP RenderingControl volume targets for DLNA sessions whose SetVolume is rejected by Jellyfin (e.g. Samsung TVs). base_url must be the renderer's literal IP; the resolved control URL host must equal the active session's RemoteEndPoint host.",

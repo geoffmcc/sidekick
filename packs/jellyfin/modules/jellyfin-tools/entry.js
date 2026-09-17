@@ -50,6 +50,93 @@ async function open(services, args, runtime) {
   // pinned-CA profile actually pins; profile.ca_pem alone misses secret refs.
   return { p, c: createClient(p, c.key, runtime?.signal, c.ca) };
 }
+// User-scoped actions need an acting Jellyfin user. An explicit user_id or
+// username always wins (and must resolve — a non-matching explicit selector is
+// an error, never a reason to pick someone else). When the caller omits both,
+// auto-resolve deterministically: (1) the single distinct user in active
+// sessions, (2) the profile-configured default_username, (3) the single
+// enabled user. Anything else is genuinely ambiguous and fails closed with an
+// actionable enumeration. The returned resolution explains how the user was
+// chosen so callers and agents can verify it.
+async function resolveActingUser(c, args, p, users) {
+  if (!users) users = await getAll(c, "/Users", null, 100);
+  if (args.user_id || args.username) {
+    const explicit =
+      users.find((x) => args.user_id && x.Id === args.user_id) ||
+      users.find(
+        (x) =>
+          args.username &&
+          String(x.Name || "").toLowerCase() ===
+            String(args.username).toLowerCase(),
+      );
+    if (!explicit)
+      throw new JellyfinError("not_found", "no matching Jellyfin user");
+    return {
+      user: explicit,
+      resolution: {
+        from: "explicit",
+        user_id: explicit.Id,
+        username: explicit.Name || null,
+      },
+    };
+  }
+  const sessions = (await optional(() => c.get("/Sessions"))) || [];
+  const activeIds = [
+    ...new Set(
+      Array.isArray(sessions)
+        ? sessions.map((s) => s && s.UserId).filter(Boolean)
+        : [],
+    ),
+  ];
+  if (activeIds.length === 1) {
+    const activeUser = users.find((x) => x.Id === activeIds[0]);
+    if (activeUser)
+      return {
+        user: activeUser,
+        resolution: {
+          from: "active_sessions",
+          user_id: activeUser.Id,
+          username: activeUser.Name || null,
+        },
+      };
+  }
+  if (p.default_username) {
+    const configured = users.find(
+      (x) =>
+        String(x.Name || "").toLowerCase() ===
+        String(p.default_username).toLowerCase(),
+    );
+    if (configured)
+      return {
+        user: configured,
+        resolution: {
+          from: "profile_default",
+          user_id: configured.Id,
+          username: configured.Name || null,
+        },
+      };
+  }
+  const enabled = users.filter((x) => x.Policy?.IsDisabled !== true);
+  if (enabled.length === 1)
+    return {
+      user: enabled[0],
+      resolution: {
+        from: "single_enabled_user",
+        user_id: enabled[0].Id,
+        username: enabled[0].Name || null,
+      },
+    };
+  const candidates = users.slice(0, 25).map((x) => ({
+    user_id: x.Id,
+    name: x.Name || null,
+    disabled: x.Policy?.IsDisabled === true,
+  }));
+  throw new JellyfinError(
+    "invalid_input",
+    "user_id or username is required; no unambiguous Jellyfin user could be auto-resolved (use list_users to enumerate)",
+    { users: candidates },
+  );
+}
 async function optional(fn) {
   try {
     return await fn();
@@ -658,12 +745,7 @@ async function read(services, args, runtime) {
     };
   }
   if (["continue_watching", "next_up"].includes(args.action)) {
-    if (!args.user_id && !args.username)
-      throw new JellyfinError("invalid_input", "user_id or username is required (use list_users to enumerate)");
-    const users = await getAll(c, "/Users", null, 100);
-    const user = users.find((x) => args.user_id && x.Id === args.user_id)
-      || users.find((x) => args.username && String(x.Name || "").toLowerCase() === String(args.username).toLowerCase());
-    if (!user) throw new JellyfinError("not_found", "no matching Jellyfin user");
+    const { user, resolution } = await resolveActingUser(c, args, p);
     const endpoint = args.action === "continue_watching"
       ? `/Users/${encodeURIComponent(user.Id)}/Items/Resume`
       : "/Shows/NextUp";
@@ -678,6 +760,7 @@ async function read(services, args, runtime) {
     return {
       profile: p.name,
       user: { id: user.Id, name: user.Name || null },
+      user_resolution: resolution,
       view: args.action,
       items: items.slice(0, 100).map(mediaListView),
       total_record_count: data?.TotalRecordCount ?? null,
@@ -965,13 +1048,7 @@ async function read(services, args, runtime) {
     };
   }
   if (["user_media_state", "user_unwatched"].includes(args.action)) {
-    if (!args.user_id && !args.username)
-      throw new JellyfinError("invalid_input", "user_id or username is required (use list_users to enumerate)");
-    const users = await getAll(c, "/Users", null, 100);
-    const user =
-      users.find((x) => args.user_id && x.Id === args.user_id) ||
-      users.find((x) => args.username && String(x.Name || "").toLowerCase() === String(args.username).toLowerCase());
-    if (!user) throw new JellyfinError("not_found", "no matching Jellyfin user");
+    const { user, resolution } = await resolveActingUser(c, args, p);
     if (args.action === "user_media_state") {
       if (!args.item_id) throw new JellyfinError("invalid_input", "item_id is required");
       const item = await c.get(`/Users/${encodeURIComponent(user.Id)}/Items/${encodeURIComponent(args.item_id)}`, {
@@ -981,6 +1058,7 @@ async function read(services, args, runtime) {
       return {
         profile: p.name,
         user: { id: user.Id, name: user.Name || null },
+        user_resolution: resolution,
         item: { id: item.Id, name: item.Name || null, type: item.Type || null },
         state: {
           is_favorite: data.IsFavorite === true,
@@ -1011,6 +1089,7 @@ async function read(services, args, runtime) {
     return {
       profile: p.name,
       user: { id: user.Id, name: user.Name || null },
+      user_resolution: resolution,
       items: items.slice(0, 100).map((x) => ({
         id: x.Id,
         name: x.Name,
@@ -1256,22 +1335,11 @@ async function read(services, args, runtime) {
         })),
       };
     if (args.action === "user_status") {
-      if (!args.user_id && !args.username)
-        throw new JellyfinError(
-          "invalid_input",
-          "user_id or username is required (use list_users to enumerate)",
-        );
-      const u =
-        users.find((x) => args.user_id && x.Id === args.user_id) ||
-        users.find(
-          (x) =>
-            args.username &&
-            String(x.Name || "").toLowerCase() === String(args.username).toLowerCase(),
-        );
-      if (!u) throw new JellyfinError("not_found", "no matching Jellyfin user");
+      const { user: u, resolution } = await resolveActingUser(c, args, p, users);
       const pol = u.Policy || {};
       return {
         profile: p.name,
+        user_resolution: resolution,
         user: {
           id: u.Id,
           name: u.Name,
@@ -2456,7 +2524,7 @@ const entry = {
         name: "jellyfin",
         aliases: ["jf"],
         description:
-          "Bounded read-only Jellyfin operations and deterministic operational diagnosis. Selects an administrator-configured named profile; never accepts a server endpoint.",
+          "Bounded read-only Jellyfin operations and deterministic operational diagnosis. Prefer the governed jellyfin workflows (jellyfin/user-home, jellyfin/session-overview, jellyfin/new-arrivals, jellyfin/catalog-browse, jellyfin/media-info, jellyfin/playback-diagnose) for whole answers: they compose multiple actions safely. Use this raw action only for a single bounded check. Selects an administrator-configured named profile; never accepts a server endpoint. When unsure which profile or which Jellyfin user to target, run action list_profiles (or list_users) first rather than guessing: profile values are exact configured names and user_id/username must match a real Jellyfin user. User-scoped actions (continue_watching, next_up, user_media_state, user_unwatched, user_status) auto-resolve the acting user when user_id/username are omitted via active sessions, the profile default_username, or the single enabled user; the result reports how.",
         schema: common,
         args: {
           action: "string",
@@ -2479,8 +2547,8 @@ const entry = {
           all: "boolean (enumerate all matching items through bounded pagination)",
           max_items: "number (full-library cap, default 10000)",
           recently_added: "server-wide recently added items",
-          continue_watching: "user-scoped resume items; requires user_id or username",
-          next_up: "user-scoped next-up episodes; requires user_id or username",
+          continue_watching: "user-scoped resume items; user_id or username optional (auto-resolved when omitted)",
+          next_up: "user-scoped next-up episodes; user_id or username optional (auto-resolved when omitted)",
           fields: "string (item_details groups: core,ratings,credits,artwork,collections,external_links,watch_state,chapters,media_sources)",
           task_id: "string",
           user_id: "string",

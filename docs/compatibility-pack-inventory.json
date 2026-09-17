@@ -1,9 +1,9 @@
 {
   "schema": "sidekick.compatibility-pack-inventory.v1",
   "source": "bundled pack manifests and repository files",
-  "source_commit": "1b4335a7697008268b7019de00693b31bccaccac",
-  "source_commit_date": "2026-09-16T17:10:26-04:00",
-  "source_fingerprint": "sha256:8d9a45931f7b883b33fd4db3e6b9ce1cb44dc8a21f29215e0ef778e43967f8ad",
+  "source_commit": "3605e156581b3557e53fd7ac17a35456f72b6513",
+  "source_commit_date": "2026-09-17T08:18:11-04:00",
+  "source_fingerprint": "sha256:437ff29fbd21725e8a67b228b2bd47b5f5b9deb6834dd2f7124437e6096ab498",
   "pack_count": 27,
   "packs": [
     {
@@ -5961,7 +5961,7 @@
     },
     {
       "name": "jellyfin",
-      "version": "1.5.0",
+      "version": "1.5.1",
       "purpose": "Governed Jellyfin media inventory, server discovery, user views, playback diagnosis, library, log and maintenance intelligence over administrator-named profiles.",
       "manifest": "packs/jellyfin/sidekick.pack.json",
       "tools": [
@@ -6281,6 +6281,11 @@
                   "allow_playback_control": {
                     "type": "boolean",
                     "description": "Explicitly permit targeted remote playback commands for active Jellyfin device sessions."
+                  },
+                  "default_username": {
+                    "type": "string",
+                    "maxLength": 100,
+                    "description": "Jellyfin username auto-resolved for user-scoped read actions when the caller omits user_id/username and no unambiguous active-session user exists."
                   },
                   "dlna_rendering_controls": {
                     "type": "array",
@@ -6724,6 +6729,7 @@
               "packs/jellyfin/knowledge/maintenance.md",
               "packs/jellyfin/knowledge/operating.md",
               "packs/jellyfin/knowledge/playback.md",
+              "packs/jellyfin/knowledge/usage-reference.md",
               "packs/jellyfin/modules/jellyfin-tools/entry.js",
               "test/brain.test.js",
               "test/jellyfin-lifecycle.test.js",

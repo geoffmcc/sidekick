@@ -31,7 +31,7 @@ test("all Jellyfin JSON assets parse", () => {
     .filter((x) => x.endsWith(".json")))
     JSON.parse(fs.readFileSync(path.join(pack, f), "utf8"));
 });
-test("pack and module versions agree at 1.5.0", () => {
+test("pack and module versions agree at 1.5.1", () => {
   const packManifest = JSON.parse(
     fs.readFileSync(path.join(pack, "sidekick.pack.json"), "utf8"),
   );
@@ -41,8 +41,8 @@ test("pack and module versions agree at 1.5.0", () => {
       "utf8",
     ),
   );
-  assert.strictEqual(packManifest.version, "1.5.0");
-  assert.strictEqual(moduleManifest.version, "1.5.0");
+  assert.strictEqual(packManifest.version, "1.5.1");
+  assert.strictEqual(moduleManifest.version, "1.5.1");
   // Every services.dispatch target used by the module must be declared.
   const declared = moduleManifest.permissions.map((x) => x.tool).sort();
   assert.deepStrictEqual(declared, ["proxmox", "status", "web_fetch"]);
@@ -717,6 +717,86 @@ async function asyncTest(name, fn) {
     assert.deepStrictEqual(postLog, []);
     assert.deepStrictEqual(delLog, []);
   });
+  await asyncTest(
+    "user-scoped reads auto-resolve the single active-session user when user args are omitted",
+    async () => {
+      setFixtures(baseFixtures());
+      const { read } = tools(servicesFor());
+      let result = await call(read, { action: "continue_watching" });
+      assert.strictEqual(result.parsed.view, "continue_watching");
+      assert.strictEqual(result.parsed.user.id, "u1");
+      assert.strictEqual(result.parsed.user_resolution.from, "active_sessions");
+      result = await call(read, { action: "next_up" });
+      assert.strictEqual(result.parsed.view, "next_up");
+      assert.strictEqual(result.parsed.user.id, "u1");
+      assert.strictEqual(result.parsed.user_resolution.from, "active_sessions");
+      result = await call(read, { action: "user_status" });
+      assert.strictEqual(result.parsed.user.id, "u1");
+      assert.strictEqual(result.parsed.user_resolution.from, "active_sessions");
+      assert.deepStrictEqual(postLog, []);
+      assert.deepStrictEqual(delLog, []);
+    },
+  );
+  await asyncTest(
+    "ambiguous active users fail closed with an actionable enumeration",
+    async () => {
+      const fx = baseFixtures();
+      fx["/Sessions"] = [
+        { Id: "s1", UserId: "u1", UserName: "admin", DeviceName: "tv" },
+        { Id: "s2", UserId: "u3", UserName: "guest", DeviceName: "phone" },
+      ];
+      fx["/Users"] = fx["/Users"].concat({
+        Id: "u3",
+        Name: "guest",
+        Policy: { IsDisabled: false },
+      });
+      setFixtures(fx);
+      const { read } = tools(servicesFor());
+      const result = await call(read, { action: "continue_watching" });
+      assert.ok(result.out.isError, "ambiguous user should fail closed");
+      const parsed = JSON.parse(result.out.content[0].text);
+      assert.strictEqual(parsed.code, "invalid_input");
+      assert.ok(
+        parsed.error &&
+          parsed.error.includes("list_users to enumerate"),
+        `unexpected error: ${parsed.error}`,
+      );
+      assert.ok(Array.isArray(parsed.details?.users));
+      assert.ok(
+        parsed.details.users.some((x) => x.user_id === "u1") &&
+          parsed.details.users.some((x) => x.user_id === "u3"),
+      );
+      assert.deepStrictEqual(postLog, []);
+      assert.deepStrictEqual(delLog, []);
+    },
+  );
+  await asyncTest(
+    "profile default_username resolves when no active-session user is unambiguous",
+    async () => {
+      const fx = baseFixtures();
+      fx["/Sessions"] = [];
+      fx["/Users"] = fx["/Users"].concat({
+        Id: "u3",
+        Name: "guest",
+        HasPassword: true,
+        Policy: { IsDisabled: false },
+      });
+      fx["/Users/u3/Items/Resume"] = {
+        Items: [{ Id: "g1", Name: "Guest Film", Type: "Movie", ProductionYear: 2023 }],
+        TotalRecordCount: 1,
+      };
+      setFixtures(fx);
+      const { read } = tools(
+        servicesFor({ profileExtra: { default_username: "GUEST" } }),
+      );
+      const result = await call(read, { action: "continue_watching" });
+      assert.ok(!result.out.isError, result.out.content[0].text);
+      assert.strictEqual(result.parsed.user.id, "u3");
+      assert.strictEqual(result.parsed.user_resolution.from, "profile_default");
+      assert.deepStrictEqual(postLog, []);
+      assert.deepStrictEqual(delLog, []);
+    },
+  );
   await asyncTest(
     "list_media forwards structured genre/library filters and enumerates the whole library",
     async () => {
@@ -1787,12 +1867,14 @@ async function asyncTest(name, fn) {
   await asyncTest("user_status and user_access_audit surface policy evidence", async () => {
     setFixtures(baseFixtures());
     const { read } = tools(servicesFor());
-    const missing = await call(read, { action: "user_status" });
-    assert.ok(missing.out.isError);
-    assert.strictEqual(missing.out.code, "invalid_input");
+    const auto = await call(read, { action: "user_status" });
+    assert.ok(!auto.out.isError, auto.out.content[0].text);
+    assert.strictEqual(auto.parsed.user.id, "u1");
+    assert.strictEqual(auto.parsed.user_resolution.from, "active_sessions");
     const byName = await call(read, { action: "user_status", username: "ADMIN" });
     assert.strictEqual(byName.parsed.user.id, "u1");
     assert.strictEqual(byName.parsed.user.policy.is_administrator, true);
+    assert.strictEqual(byName.parsed.user_resolution.from, "explicit");
     const audit = await call(read, { action: "user_access_audit" });
     assert.strictEqual(audit.parsed.summary.administrators, 1);
     assert.strictEqual(audit.parsed.summary.disabled_accounts, 1);
