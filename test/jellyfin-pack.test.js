@@ -31,7 +31,7 @@ test("all Jellyfin JSON assets parse", () => {
     .filter((x) => x.endsWith(".json")))
     JSON.parse(fs.readFileSync(path.join(pack, f), "utf8"));
 });
-test("pack and module versions agree at 1.4.4", () => {
+test("pack and module versions agree at 1.5.0", () => {
   const packManifest = JSON.parse(
     fs.readFileSync(path.join(pack, "sidekick.pack.json"), "utf8"),
   );
@@ -41,8 +41,8 @@ test("pack and module versions agree at 1.4.4", () => {
       "utf8",
     ),
   );
-  assert.strictEqual(packManifest.version, "1.4.4");
-  assert.strictEqual(moduleManifest.version, "1.4.4");
+  assert.strictEqual(packManifest.version, "1.5.0");
+  assert.strictEqual(moduleManifest.version, "1.5.0");
   // Every services.dispatch target used by the module must be declared.
   const declared = moduleManifest.permissions.map((x) => x.tool).sort();
   assert.deepStrictEqual(declared, ["proxmox", "status", "web_fetch"]);

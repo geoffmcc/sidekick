@@ -1,9 +1,9 @@
 {
   "schema": "sidekick.compatibility-pack-inventory.v1",
   "source": "bundled pack manifests and repository files",
-  "source_commit": "f0d5e86e021387a34529394e97c236e43a6a0622",
-  "source_commit_date": "2026-09-16T13:17:46-04:00",
-  "source_fingerprint": "sha256:2e6bcf5d4a31b722b4a26dd5ea6c27f6510889863bc53f6cdc0d934c7cdce3d8",
+  "source_commit": "1b4335a7697008268b7019de00693b31bccaccac",
+  "source_commit_date": "2026-09-16T17:10:26-04:00",
+  "source_fingerprint": "sha256:8d9a45931f7b883b33fd4db3e6b9ce1cb44dc8a21f29215e0ef778e43967f8ad",
   "pack_count": 27,
   "packs": [
     {
@@ -5961,7 +5961,7 @@
     },
     {
       "name": "jellyfin",
-      "version": "1.4.4",
+      "version": "1.5.0",
       "purpose": "Governed Jellyfin media inventory, server discovery, user views, playback diagnosis, library, log and maintenance intelligence over administrator-named profiles.",
       "manifest": "packs/jellyfin/sidekick.pack.json",
       "tools": [
@@ -6038,6 +6038,51 @@
         {
           "path": "workflows/incident.json",
           "file": "packs/jellyfin/workflows/incident.json",
+          "present": true
+        },
+        {
+          "path": "workflows/play-now.json",
+          "file": "packs/jellyfin/workflows/play-now.json",
+          "present": true
+        },
+        {
+          "path": "workflows/play-next.json",
+          "file": "packs/jellyfin/workflows/play-next.json",
+          "present": true
+        },
+        {
+          "path": "workflows/play-resume.json",
+          "file": "packs/jellyfin/workflows/play-resume.json",
+          "present": true
+        },
+        {
+          "path": "workflows/quick-play.json",
+          "file": "packs/jellyfin/workflows/quick-play.json",
+          "present": true
+        },
+        {
+          "path": "workflows/play-recent.json",
+          "file": "packs/jellyfin/workflows/play-recent.json",
+          "present": true
+        },
+        {
+          "path": "workflows/playback-control.json",
+          "file": "packs/jellyfin/workflows/playback-control.json",
+          "present": true
+        },
+        {
+          "path": "workflows/user-home.json",
+          "file": "packs/jellyfin/workflows/user-home.json",
+          "present": true
+        },
+        {
+          "path": "workflows/new-arrivals.json",
+          "file": "packs/jellyfin/workflows/new-arrivals.json",
+          "present": true
+        },
+        {
+          "path": "workflows/session-overview.json",
+          "file": "packs/jellyfin/workflows/session-overview.json",
           "present": true
         }
       ],
@@ -6364,7 +6409,7 @@
       "network_scopes": [],
       "provider_requirements": null,
       "workflow_contract": {
-        "total": 14,
+        "total": 23,
         "missing_result": [],
         "missing_tags": [],
         "missing_step_error_policy": []
@@ -6524,9 +6569,18 @@
           "maintenance preflight",
           "media info",
           "metadata completeness",
+          "new arrivals",
+          "play next",
+          "play now",
+          "play recent",
+          "play resume",
+          "playback control",
           "playback diagnose",
+          "quick play",
           "server audit",
+          "session overview",
           "upgrade readiness",
+          "user home",
           "user media overview"
         ],
         "lifecycle_coverage": {
@@ -6553,9 +6607,18 @@
               "packs/jellyfin/workflows/maintenance-preflight.json",
               "packs/jellyfin/workflows/media-info.json",
               "packs/jellyfin/workflows/metadata-completeness.json",
+              "packs/jellyfin/workflows/new-arrivals.json",
+              "packs/jellyfin/workflows/play-next.json",
+              "packs/jellyfin/workflows/play-now.json",
+              "packs/jellyfin/workflows/play-recent.json",
+              "packs/jellyfin/workflows/play-resume.json",
+              "packs/jellyfin/workflows/playback-control.json",
               "packs/jellyfin/workflows/playback-diagnose.json",
+              "packs/jellyfin/workflows/quick-play.json",
               "packs/jellyfin/workflows/server-audit.json",
+              "packs/jellyfin/workflows/session-overview.json",
               "packs/jellyfin/workflows/upgrade-readiness.json",
+              "packs/jellyfin/workflows/user-home.json",
               "packs/jellyfin/workflows/user-media-overview.json",
               "test/agent-protocol.test.js",
               "test/brain.test.js",
@@ -6578,8 +6641,17 @@
               "packs/jellyfin/workflows/health.json",
               "packs/jellyfin/workflows/incident.json",
               "packs/jellyfin/workflows/library-audit.json",
+              "packs/jellyfin/workflows/new-arrivals.json",
+              "packs/jellyfin/workflows/play-next.json",
+              "packs/jellyfin/workflows/play-now.json",
+              "packs/jellyfin/workflows/play-recent.json",
+              "packs/jellyfin/workflows/play-resume.json",
+              "packs/jellyfin/workflows/playback-control.json",
               "packs/jellyfin/workflows/playback-diagnose.json",
+              "packs/jellyfin/workflows/quick-play.json",
+              "packs/jellyfin/workflows/session-overview.json",
               "packs/jellyfin/workflows/upgrade-readiness.json",
+              "packs/jellyfin/workflows/user-home.json",
               "packs/jellyfin/workflows/user-media-overview.json",
               "test/agent-protocol.test.js",
               "test/brain.test.js",
@@ -6619,6 +6691,7 @@
               "packs/jellyfin/modules/jellyfin-tools/manifest.json",
               "packs/jellyfin/workflows/incident.json",
               "packs/jellyfin/workflows/playback-diagnose.json",
+              "packs/jellyfin/workflows/session-overview.json",
               "test/jellyfin-pack.test.js"
             ]
           },
@@ -6735,9 +6808,18 @@
               "packs/jellyfin/workflows/maintenance-preflight.json",
               "packs/jellyfin/workflows/media-info.json",
               "packs/jellyfin/workflows/metadata-completeness.json",
+              "packs/jellyfin/workflows/new-arrivals.json",
+              "packs/jellyfin/workflows/play-next.json",
+              "packs/jellyfin/workflows/play-now.json",
+              "packs/jellyfin/workflows/play-recent.json",
+              "packs/jellyfin/workflows/play-resume.json",
+              "packs/jellyfin/workflows/playback-control.json",
               "packs/jellyfin/workflows/playback-diagnose.json",
+              "packs/jellyfin/workflows/quick-play.json",
               "packs/jellyfin/workflows/server-audit.json",
+              "packs/jellyfin/workflows/session-overview.json",
               "packs/jellyfin/workflows/upgrade-readiness.json",
+              "packs/jellyfin/workflows/user-home.json",
               "packs/jellyfin/workflows/user-media-overview.json"
             ]
           },
@@ -6859,9 +6941,18 @@
             "packs/jellyfin/workflows/maintenance-preflight.json",
             "packs/jellyfin/workflows/media-info.json",
             "packs/jellyfin/workflows/metadata-completeness.json",
+            "packs/jellyfin/workflows/new-arrivals.json",
+            "packs/jellyfin/workflows/play-next.json",
+            "packs/jellyfin/workflows/play-now.json",
+            "packs/jellyfin/workflows/play-recent.json",
+            "packs/jellyfin/workflows/play-resume.json",
+            "packs/jellyfin/workflows/playback-control.json",
             "packs/jellyfin/workflows/playback-diagnose.json",
+            "packs/jellyfin/workflows/quick-play.json",
             "packs/jellyfin/workflows/server-audit.json",
+            "packs/jellyfin/workflows/session-overview.json",
             "packs/jellyfin/workflows/upgrade-readiness.json",
+            "packs/jellyfin/workflows/user-home.json",
             "packs/jellyfin/workflows/user-media-overview.json",
             "test/agent-protocol.test.js",
             "test/brain.test.js",
