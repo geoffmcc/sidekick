@@ -1,6 +1,6 @@
 # Jellyfin Capability Pack
 
-Status: in development (v1.5.0, next bundled first-party release)
+Status: in development (v1.5.1, next bundled first-party release)
 Depends on: Capability Packs v1
 
 The Jellyfin pack lets Sidekick securely inspect, diagnose and maintain
@@ -250,8 +250,15 @@ Per-action honesty notes:
   `IncludeItemTypes` so Jellyfin returns all item types across all libraries;
   pagination remains capped by `max_items`.
 - `continue_watching` uses `/Users/{id}/Items/Resume` and `next_up` uses
-  `/Shows/NextUp` with an explicitly resolved user. Neither endpoint writes
-  watch state.
+  `/Shows/NextUp` with a resolved user (see auto-resolution below). Neither
+  endpoint writes watch state.
+- The user-scoped actions (`continue_watching`, `next_up`, `user_media_state`,
+  `user_unwatched`, `user_status`) accept an optional `user_id`/`username`.
+  When both are omitted the acting user is auto-resolved deterministically:
+  the single distinct user with an active session, else the profile-configured
+  `default_username`, else the single enabled user; otherwise the action fails
+  closed with an enumeration and a `list_users` hint. Results report
+  `user_resolution` (`from`, `user_id`, `username`).
 - `metadata_issues` / `duplicate_candidates` are bounded samples and return
   the exact filters used; duplicate groups are labelled *candidates*, never
   confirmed duplicates.
@@ -264,13 +271,15 @@ Per-action honesty notes:
 - `live_tv_channels`, `live_tv_guide` and `live_tv_timers` are GET-only and
   report bounded channel/program/timer data when Live TV is enabled.
 - `list_collections` and `list_playlists` are bounded catalog reads. The
-  user-scoped `user_media_state` and `user_unwatched` actions require an
-  explicit `user_id` or exact `username`; the latter is an unplayed view, not
-  a recommendation or behavioral inference.
-- `user_status` requires `user_id` or `username`; `plugin_status` requires
-  `plugin_id` (or `query` for an exact name match). `user_access_audit`
-  flags administrators, disabled accounts, remote access, all-folder vs
-  restricted access, and inactivity from `/Users` policy evidence.
+  user-scoped `user_media_state` and `user_unwatched` actions accept an
+  optional `user_id` or exact `username` (auto-resolved per the rules above);
+  the latter is an unplayed view, not a recommendation or behavioral
+  inference.
+- `user_status` accepts an optional `user_id` or `username` (auto-resolved);
+  `plugin_status` requires `plugin_id` (or `query` for an exact name match).
+  `user_access_audit` flags administrators, disabled accounts, remote access,
+  all-folder vs restricted access, and inactivity from `/Users` policy
+  evidence.
 - `activity` handles the real `{Items, TotalRecordCount}` response shape and
   supports `start_index`.
 - `logs_summary` accepts `log_file`, but only names the server itself listed

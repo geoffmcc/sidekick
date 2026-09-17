@@ -750,7 +750,7 @@
       "id": "pack-proving.jellyfin",
       "version": 1,
       "pack": "jellyfin",
-      "supported_versions": "=1.5.0",
+      "supported_versions": "=1.5.1",
       "preconditions": [
         "pack package hash is inspectable",
         "pack configuration validates",

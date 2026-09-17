@@ -73,6 +73,25 @@ function parse(name, raw, globalConfig = {}) {
     );
   }
 
+  // Optional default acting user for this profile. User-scoped read actions
+  // (continue_watching, next_up, user_media_state, user_unwatched, user_status)
+  // auto-resolve to this user when the caller omits user_id/username and no
+  // unambiguous active-session user can be picked.
+  let defaultUsername = null;
+  if (raw.default_username !== undefined && raw.default_username !== null) {
+    if (
+      typeof raw.default_username !== "string" ||
+      !raw.default_username.trim() ||
+      raw.default_username.trim().length > 100
+    ) {
+      throw new JellyfinError(
+        "invalid_input",
+        `profile "${name}" default_username must be a non-empty string of 100 characters or fewer`,
+      );
+    }
+    defaultUsername = raw.default_username.trim();
+  }
+
   const configuredTimeout = Number(raw.request_timeout_ms);
   const timeout = Math.min(
     120000,
@@ -189,6 +208,7 @@ function parse(name, raw, globalConfig = {}) {
     allow_writes: raw.allow_writes === true,
     allow_playback_control: raw.allow_playback_control === true,
     is_default: raw.default === true,
+    default_username: defaultUsername,
     storage_provider: storageProvider,
     dlna_rendering_controls: dlnaRenderingControls,
     verify_poll_interval_ms: verifyPollMs,
@@ -246,7 +266,8 @@ function resolve(config, requestedName) {
   if (!Object.prototype.hasOwnProperty.call(configured, name)) {
     throw new JellyfinError(
       "profile_not_found",
-      `No Jellyfin profile named "${name}"`,
+      `No Jellyfin profile named "${name}" (use list_profiles; configured: ${names.join(", ")})`,
+      { available_profiles: names },
     );
   }
   return parse(name, configured[name], config);
