@@ -1,7 +1,7 @@
 {
   "name": "jellyfin-tools",
   "displayName": "Jellyfin Tools",
-  "version": "1.4.4",
+  "version": "1.5.0",
   "description": "Secure, bounded Jellyfin media inventory, user views, inspection, diagnosis, log intelligence, evidence-based readiness checks and governed maintenance.",
   "sidekick": ">=1.0.0",
   "type": "plugin",

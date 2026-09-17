@@ -3,7 +3,7 @@
   "pack_api": 1,
   "name": "jellyfin",
   "display_name": "Jellyfin",
-  "version": "1.4.4",
+  "version": "1.5.0",
   "description": "Governed Jellyfin media inventory, server discovery, user views, playback diagnosis, library, log and maintenance intelligence over administrator-named profiles.",
   "publisher": "Sidekick",
   "compatibility": { "sidekick": ">=1.0.0" },
@@ -22,7 +22,16 @@
     { "path": "workflows/playback-diagnose.json" },
     { "path": "workflows/maintenance-preflight.json" },
     { "path": "workflows/upgrade-readiness.json" },
-    { "path": "workflows/incident.json" }
+    { "path": "workflows/incident.json" },
+    { "path": "workflows/play-now.json" },
+    { "path": "workflows/play-next.json" },
+    { "path": "workflows/play-resume.json" },
+    { "path": "workflows/quick-play.json" },
+    { "path": "workflows/play-recent.json" },
+    { "path": "workflows/playback-control.json" },
+    { "path": "workflows/user-home.json" },
+    { "path": "workflows/new-arrivals.json" },
+    { "path": "workflows/session-overview.json" }
   ],
   "knowledge": [
     { "path": "knowledge/operating.md", "title": "Jellyfin pack: operating model", "category": "operations", "tags": ["jellyfin", "operations"] },
