@@ -1,6 +1,6 @@
 # Jellyfin Capability Pack
 
-Status: in development (v1.5.1, next bundled first-party release)
+Status: in development (v1.5.2, next bundled first-party release)
 Depends on: Capability Packs v1
 
 The Jellyfin pack lets Sidekick securely inspect, diagnose and maintain
