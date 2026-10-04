@@ -1,8 +1,8 @@
 {
   "schema": "sidekick.compatibility-pack-inventory.v1",
   "source": "bundled pack manifests and repository files",
-  "source_commit": "c26ca276488b8351ab58523c3214182036b09e0b",
-  "source_commit_date": "2026-10-04T05:49:33-04:00",
+  "source_commit": "a13ad523c7f088a218c7d3ea341ae7d2346cb1a5",
+  "source_commit_date": "2026-10-04T12:53:57-04:00",
   "source_fingerprint": "sha256:3157d9f431c71cb6276637b54c827a9160a6ca474a4fc94c80da554712ebb55e",
   "pack_count": 27,
   "packs": [
@@ -9167,6 +9167,7 @@
               "test/jellyfin-pack.test.js",
               "test/modules-builtin.test.js",
               "test/network-firewall-pack.test.js",
+              "test/network-scope-fetch.test.js",
               "test/openvino-executor.test.js",
               "test/pack-manifest-lifecycle.test.js",
               "test/platform-event-consumption.test.js",
