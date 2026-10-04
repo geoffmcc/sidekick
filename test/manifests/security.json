@@ -12,5 +12,5 @@
   "platforms": ["linux", "win32", "darwin"],
   "live": false,
   "owner": "security",
-  "patterns": ["test/security*.test.{js,cjs}", "test/*security*.test.{js,cjs}", "test/identity-*.test.{js,cjs}", "test/approval.test.js", "test/per-action-risk.test.js", "test/sensitive-result-boundary.test.js", "test/security/**/*.test.{js,cjs}"]
+  "patterns": ["test/security*.test.{js,cjs}", "test/*security*.test.{js,cjs}", "test/network-failure-guidance.test.js", "test/identity-*.test.{js,cjs}", "test/approval.test.js", "test/per-action-risk.test.js", "test/sensitive-result-boundary.test.js", "test/static-source-scan.test.js", "test/security/**/*.test.{js,cjs}"]
 }

@@ -17,11 +17,9 @@ const path = require("path");
 const { execFileSync } = require("child_process");
 
 const REPO = path.resolve(__dirname, "..");
-const TEST_DATA_DIR = path.join(__dirname, "test-data-security-research-pack");
-fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
-fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
-
-const WORKSPACE = fs.mkdtempSync(path.join(os.tmpdir(), "sr-pack-ws-"));
+const SUITE_ROOT = process.env.SIDEKICK_TEST_SUITE_ROOT || os.tmpdir();
+const TEST_DATA_DIR = fs.mkdtempSync(path.join(SUITE_ROOT, "sr-pack-data-"));
+const WORKSPACE = fs.mkdtempSync(path.join(SUITE_ROOT, "sr-pack-ws-"));
 
 process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
 process.env.SIDEKICK_DB_FILE = path.join(TEST_DATA_DIR, "sidekick.db");

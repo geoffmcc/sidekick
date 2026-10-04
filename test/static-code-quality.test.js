@@ -1,32 +1,12 @@
 const assert = require('assert');
-const fs = require('fs');
 const path = require('path');
+const { collectTextFiles, readTextFiles } = require('./helpers/static-source-scan');
 
 const root = path.join(__dirname, '..');
-const excludedDirs = new Set(['.git', 'node_modules', 'data', '.opencode', 'spike-openvino-node', 'spike-openvino-python', 'test-data-capability-packs']);
-const excludedFiles = new Set(['opencode.json', 'package-lock.json', 'security.test.js', 'github-setup.test.js', 'static-code-quality.test.js']);
-const textExtensions = new Set(['.js', '.json', '.md', '.yml', '.yaml', '.sh', '.ps1', '.service', '.example', '.gitignore', '.gitattributes']);
 
 console.log('Running static code quality tests...\n');
 
-function walk(dir) {
-  const entries = [];
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (entry.isDirectory() && excludedDirs.has(entry.name)) continue;
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) entries.push(...walk(full));
-    else entries.push(full);
-  }
-  return entries;
-}
-
-function isTextFile(file) {
-  if (excludedFiles.has(path.basename(file))) return false;
-  const ext = path.extname(file);
-  return textExtensions.has(ext);
-}
-
-const files = walk(root).filter(isTextFile);
+const files = collectTextFiles(root);
 assert.ok(files.length > 0, 'Expected text files to scan');
 
 const forbidden = [
@@ -38,9 +18,8 @@ const forbidden = [
 ];
 
 const violations = [];
-for (const file of files) {
+for (const { file, content } of readTextFiles(files)) {
   const rel = path.relative(root, file);
-  const content = fs.readFileSync(file, 'utf8');
   assert.ok(!content.includes('\r\n'), `${rel} should use LF line endings`);
   for (const rule of forbidden) {
     if (rule.pattern.test(content)) violations.push(`${rel}: ${rule.name}`);
@@ -71,9 +50,8 @@ const developerPathRules = [
   { name: 'authorization header value', pattern: /Authorization:\s*Bearer\s+[A-Za-z0-9._-]{8,}/i },
 ];
 const researchViolations = [];
-for (const file of researchSurface) {
+for (const { file, content } of readTextFiles(researchSurface)) {
   const rel = path.relative(root, file);
-  const content = fs.readFileSync(file, 'utf8');
   for (const rule of developerPathRules) {
     if (rule.pattern.test(content)) researchViolations.push(`${rel}: ${rule.name}`);
   }
@@ -83,9 +61,7 @@ assert.deepStrictEqual(researchViolations, [], 'Security Research surface leaked
 const toolsFacadePath = path.join(root, 'src', 'tools.js');
 const toolsLegacyPath = path.join(root, 'src', 'tools-legacy.js');
 const shellFamilyPath = path.join(root, 'src', 'tools', 'families', 'shell.js');
-const toolsFacade = fs.readFileSync(toolsFacadePath, 'utf8');
-const toolsLegacy = fs.readFileSync(toolsLegacyPath, 'utf8');
-const shellFamily = fs.readFileSync(shellFamilyPath, 'utf8');
+const [toolsFacade, toolsLegacy, shellFamily] = readTextFiles([toolsFacadePath, toolsLegacyPath, shellFamilyPath]).map(item => item.content);
 assert.match(toolsFacade, /module\.exports\s*=\s*require\("\.\/tools\/index"\)/, 'tools.js should remain a compatibility facade to the authoritative tool layer');
 assert.match(shellFamily, /function isDangerous\s*\(/, 'families/shell.js should define isDangerous (moved from tools-legacy in B-5)');
 assert.match(toolsLegacy, /module\.exports\s*=\s*\{[\s\S]*isDangerous/, 'tools-legacy.js should re-export isDangerous for security tests during migration');
