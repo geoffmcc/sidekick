@@ -59,6 +59,10 @@ function createExecutionContext(input = {}) {
     authorityApprovalRequired: input.authorityApprovalRequired === true || parent?.authorityApprovalRequired === true,
     authorityRisk: input.authorityRisk || parent?.authorityRisk || null,
     authorityReason: input.authorityReason || parent?.authorityReason || null,
+    // Agent task authority is an internal execution envelope. It is inherited
+    // by composed workflow dispatch so nested steps cannot lose the caller's
+    // effect and target restrictions when source changes to `internal`.
+    agentAuthorityContext: input.agentAuthorityContext || parent?.agentAuthorityContext || null,
     approvedExecution: input.approvedExecution === true || parent?.approvedExecution === true,
     generatedProcedure: input.generatedProcedure || input.generated_procedure || parent?.generatedProcedure || null,
     executionId: input.executionId || input.execution_id || parent?.executionId || null,

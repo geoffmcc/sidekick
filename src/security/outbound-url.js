@@ -138,13 +138,13 @@ async function resolveOutboundUrl(value, label = "url", options = {}) {
   if (options.networkScope) {
     const scopes = require("./network-scopes");
     const scope = typeof options.networkScope === "object" ? options.networkScope : scopes.get(options.networkScope, options.networkScopeRevision);
-    if (!scope) return { refusal: "named network scope is missing or invalid" };
+    if (!scope) return { refusal: "named network scope is missing or invalid", code: "network_scope_unavailable" };
     const scoped = await require("./network-scope").resolveDestination(scope, value, { allowedHosts: options.allowedHosts });
-    if (!scoped.ok) return { refusal: `network scope denied destination (${scoped.reason})` };
+    if (!scoped.ok) return { refusal: `network scope denied destination (${scoped.reason})`, code: "network_scope_denied" };
     return scoped;
   }
   const refusal = validateOutboundUrl(value, label, options);
-  if (refusal) return { refusal };
+  if (refusal) return { refusal, code: /operator-created named network scope/i.test(refusal) ? "network_scope_required" : "outbound_target_denied" };
 
   const url = new URL(String(value));
   const hostname = stripBrackets(url.hostname).toLowerCase();
@@ -155,18 +155,18 @@ async function resolveOutboundUrl(value, label = "url", options = {}) {
   try {
     records = await dns.lookup(hostname, { all: true, verbatim: true });
   } catch (error) {
-    return { refusal: `Unable to resolve ${label}: ${error.code || "DNS lookup failed"}` };
+    return { refusal: `Unable to resolve ${label}: ${error.code || "DNS lookup failed"}`, code: "dns_resolution_failed" };
   }
-  if (!records || records.length === 0) return { refusal: `Unable to resolve ${label}: no addresses returned` };
+  if (!records || records.length === 0) return { refusal: `Unable to resolve ${label}: no addresses returned`, code: "dns_resolution_failed" };
 
   for (const record of records) {
     const address = stripBrackets(String(record.address || "").toLowerCase());
     if (METADATA_HOSTS.has(address) || isLinkLocal(address)) {
-      return { refusal: `Refused ${label}: resolved address is a protected link-local or metadata endpoint` };
+      return { refusal: `Refused ${label}: resolved address is a protected link-local or metadata endpoint`, code: "outbound_target_denied" };
     }
     const allowPrivate = options.allowPrivate === true;
     if (isPrivateAddress(address) && !allowPrivate) {
-      return { refusal: `Refused ${label}: hostname resolves to a private or loopback address` };
+      return { refusal: `Refused ${label}: hostname resolves to a private or loopback address`, code: "network_scope_required" };
     }
   }
 

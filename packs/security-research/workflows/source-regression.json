@@ -3,8 +3,8 @@
   "name": "security-research/source-regression",
   "version": "1.0.0",
   "title": "Source-only version comparison",
-  "description": "Read-only source comparison between two revisions: resolve each commit, produce a diffstat, and record a candidate explanation as an analysis-only hypothesis. Proves the research methodology is not Proxmox-specific — it needs only the Git capability and touches no lab. Never modifies the repository.",
-  "mode": "read_only",
+  "description": "Inspect source history and compare two revisions without changing the repository or a lab. Records the candidate explanation as a persistent analysis-only hypothesis in Sidekick.",
+  "mode": "mutating",
   "tags": ["security-research", "source", "regression", "git"],
   "inputs": {
     "repo_path": { "type": "string", "required": true, "description": "Path to a local checkout of the source under research (in the private workspace)." },

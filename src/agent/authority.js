@@ -2,9 +2,9 @@
 
 const crypto = require("crypto");
 const { getToolAnnotations } = require("../tools/annotations");
-const { getStaticToolRisk, TOOL_ACTION_RISK } = require("../tools/metadata");
+const { getStaticToolRisk, TOOL_ACTION_RISK, resolveDeclaredActionEffects } = require("../tools/metadata");
 
-const EFFECTS = Object.freeze(["read_only", "workspace_reversible", "build_test", "local_process", "external", "production", "destructive", "credential", "identity", "policy", "unknown"]);
+const EFFECTS = Object.freeze(["read_only", "artifact", "application_state", "workspace_reversible", "build_test", "local_process", "external", "production", "destructive", "credential", "identity", "policy", "unknown"]);
 const RISKS = Object.freeze(["low", "medium", "high", "critical"]);
 const MAX = 40;
 function cleanRef(value, label) { const s = String(value || "").trim(); if (!s) return null; if (!/^[A-Za-z0-9_.:/-]{1,160}$/.test(s)) throw new Error(`${label} must be a governed reference`); return s; }
@@ -40,13 +40,55 @@ function determineEffect(descriptor, args = {}) {
   const actionRiskOverride = action && TOOL_ACTION_RISK[name] && Object.prototype.hasOwnProperty.call(TOOL_ACTION_RISK[name], action)
     ? TOOL_ACTION_RISK[name][action]
     : null;
-   const actionRisk = actionRiskOverride || descriptor.risk || staticRisk();
+  const actionRisk = actionRiskOverride || descriptor.risk || staticRisk();
   // Creating or selecting a local task branch is a reversible workspace
   // operation. Keep its structured risk distinct from the generic Git
   // descriptor risk so routine authorized workspace setup does not inherit a
   // critical approval threshold. Commit/push/pull retain their own stronger
   // policy paths.
   const branchPreparationRisk = name === "git" && ["branch", "checkout"].includes(action) ? "medium" : actionRisk;
+  const declaredActionEffects = resolveDeclaredActionEffects(name, action, args);
+  if (Array.isArray(declaredActionEffects)) {
+    const effects = [...new Set(declaredActionEffects.filter(value => ["read_only", "target_read", "artifact", "application_state", "workspace_reversible", "build_test", "local_process", "external", "unknown"].includes(value)))];
+    const effect = effects.includes("unknown") ? "unknown"
+      : effects.includes("external") ? "external"
+        : effects.includes("application_state") ? "application_state"
+          : effects.includes("artifact") ? "artifact"
+            : effects.includes("workspace_reversible") ? "workspace_reversible"
+              : effects.includes("build_test") ? "build_test"
+                : effects.includes("local_process") ? "local_process"
+                  : "read_only";
+    const effectRisk = name === "git" && action === "commit" ? "critical"
+      : name === "git" && action === "checkout" ? branchPreparationRisk
+        : name === "git" && ["push", "pull"].includes(action) ? "critical"
+          : actionRisk;
+    return { effect, effects, risk: effectRisk, authoritative: effect !== "unknown", idempotent: effect === "read_only", reversible: !["external", "unknown"].includes(effect) };
+  }
+  if (name === "workflow" && ["run", "resume"].includes(action)) {
+    let record = null;
+    let inputs = args.inputs && typeof args.inputs === "object" ? args.inputs : {};
+    try {
+      const workflowRepository = require("../workflows/repository");
+      const workflowName = args.name || (action === "resume" && args.run_id ? require("../platform/kernel").getWorkflow(args.run_id)?.name : null);
+      record = workflowName ? workflowRepository.getWorkflowDefinition(workflowName) : null;
+      if (action === "resume" && args.run_id) {
+        const run = require("../platform/kernel").getWorkflow(args.run_id);
+        const checkpoint = run?.checkpoint_json ? JSON.parse(run.checkpoint_json) : {};
+        inputs = checkpoint.inputs || inputs;
+      }
+    } catch {}
+    if (!record || record.state !== "registered") return { effect: "unknown", risk: actionRisk, authoritative: false, idempotent: false, reversible: false };
+    const effects = require("../workflows/effects").analyzeWorkflowEffects(record.definition, inputs).effects;
+    const effect = effects.includes("unknown") ? "unknown"
+      : effects.includes("external") ? "external"
+        : effects.includes("application_state") ? "application_state"
+          : effects.includes("artifact") ? "artifact"
+            : effects.includes("workspace_reversible") ? "workspace_reversible"
+              : effects.includes("build_test") ? "build_test"
+                : effects.includes("local_process") ? "local_process"
+                  : "read_only";
+    return { effect, effects, risk: actionRisk, authoritative: effect !== "unknown", idempotent: effect === "read_only", reversible: !["external", "unknown"].includes(effect) };
+  }
   // Mixed-surface tools may be destructive at the tool level while exposing
   // explicitly allowlisted metadata-only actions (for example
   // project_registry(action=list)). TOOL_ACTION_RISK is maintained as a

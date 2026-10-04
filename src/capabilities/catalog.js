@@ -49,21 +49,62 @@ function toolRows(source) {
   const registry = tools.getBuiltinRegistry();
   const packs = require("../packs/repository");
   const modules = require("../modules/repository");
+  const moduleLifecycle = require("../modules/lifecycle");
   const rows = registry.listInDefinitionOrder().map(descriptor => ({ descriptor, generated: null }));
   for (const generated of require("../db").listGeneratedCapabilities({ states: ["trial", "active"] })) rows.push({ generated, descriptor: { name: generated.name, description: generated.description, risk: generated.risk, source: "generated", family: "generated", aliases: [], capabilities: [] } });
   return rows.map(({ descriptor, generated }) => {
     const moduleName = String(descriptor.source || "").startsWith("module:") ? descriptor.source.slice(7) : null;
     const module = moduleName ? modules.getModule(moduleName) : null;
+    const moduleHealth = moduleName ? moduleLifecycle.health(moduleName, { runCheck: false }) : null;
     const policy = tools.getToolPolicyDecision ? tools.getToolPolicyDecision(descriptor.name, source) : { allowed: true, reason: "not_available" };
     const approval = tools.getApprovalDecision ? tools.getApprovalDecision(descriptor.name, source) : { required: false, reason: "not_available" };
     const live = !generated || ["trial", "active"].includes(generated.state);
-    const available = live && policy.allowed === true && (!module || ["enabled", "healthy"].includes(module.state));
-    return { kind: "tool", id: descriptor.name, name: descriptor.name, owner: moduleName ? packOwner("module", moduleName) : packOwner("tool", descriptor.name), state: generated?.state || module?.state || "registered", available, availability: { state: available ? "available" : "unavailable", reasons: [...(!live ? [`generated_state:${generated.state}`] : []), ...(policy.allowed ? [] : [`policy:${policy.reason}`]), ...(module && !["enabled", "healthy"].includes(module.state) ? [`module_state:${module.state}`] : [])] }, version: descriptor.version || generated?.version || null, description: descriptor.description, dependencies: { placement: descriptor.placement?.requirements || {}, module: module?.manifest?.dependencies || [] }, configuration: module ? { schema: module.manifest?.configSchema || null, values: module.config || {} } : null, health: module ? module.health || {} : { status: live ? "registered" : "unavailable" }, permissions: module?.manifest?.permissions || (descriptor.authorizationPermission ? [{ capability: descriptor.authorizationPermission }] : []), network_scopes: descriptor.placement?.requirements?.networkScopes || [], policy: { source, allowed: policy.allowed === true, reason: policy.reason || null, approval_required: approval.required === true, approval_reason: approval.reason || null }, risk: descriptor.risk, category: descriptor.category, capabilities: descriptor.capabilities || [], aliases: descriptor.aliases || [] };
+    const moduleAvailable = !module || (["enabled", "healthy"].includes(module.state) && moduleHealth?.ok === true);
+    const available = live && policy.allowed === true && moduleAvailable;
+    return { kind: "tool", id: descriptor.name, name: descriptor.name, owner: moduleName ? packOwner("module", moduleName) : packOwner("tool", descriptor.name), state: generated?.state || module?.state || "registered", available, availability: { state: available ? "available" : "unavailable", reasons: [...(!live ? [`generated_state:${generated.state}`] : []), ...(policy.allowed ? [] : [`policy:${policy.reason}`]), ...(module && !["enabled", "healthy"].includes(module.state) ? [`module_state:${module.state}`] : []), ...(module && module.state !== "disabled" && moduleHealth?.ok !== true ? [`module_health:${moduleHealth?.status || "unknown"}`] : [])] }, version: descriptor.version || generated?.version || null, description: descriptor.description, dependencies: { placement: descriptor.placement?.requirements || {}, module: module?.manifest?.dependencies || [] }, configuration: module ? { schema: module.manifest?.configSchema || null, values: module.config || {} } : null, health: module ? moduleHealth || module.health || {} : { status: live ? "registered" : "unavailable" }, permissions: module?.manifest?.permissions || (descriptor.authorizationPermission ? [{ capability: descriptor.authorizationPermission }] : []), network_scopes: descriptor.placement?.requirements?.networkScopes || [], policy: { source, allowed: policy.allowed === true, reason: policy.reason || null, approval_required: approval.required === true, approval_reason: approval.reason || null }, risk: descriptor.risk, effects: require("../tools/metadata").getToolEffectMetadata(descriptor.name), category: descriptor.category, capabilities: descriptor.capabilities || [], aliases: descriptor.aliases || [] };
   });
 }
 
 function workflowRows() {
-  return require("../workflows/repository").listWorkflowDefinitions().map(record => { const available = record.state === "registered"; return { kind: "workflow", id: record.name, name: record.name, owner: { kind: record.owner_kind, name: record.owner_name || null }, state: record.state, available, availability: { state: available ? "available" : "unavailable", reasons: available ? [] : [`workflow_state:${record.state}`] }, version: record.version, description: record.description, dependencies: { steps: (record.definition.steps || []).map(step => step.tool).filter(Boolean) }, configuration: { inputs: record.definition.inputs || {} }, health: { status: available ? "registered" : "disabled", ok: available }, permissions: [], network_scopes: [], definition: { mode: record.mode, title: record.title, tags: record.definition.tags || [] } }; });
+  const definitions = require("../workflows/repository").listWorkflowDefinitions();
+  const packRepository = require("../packs/repository");
+  const packLifecycle = require("../packs/lifecycle");
+  const registry = require("../tools").getBuiltinRegistry();
+  const agentTools = new Map(toolRows("agent").map(row => [row.name, row]));
+  return definitions.map(record => {
+    const reasons = [];
+    if (record.state !== "registered") reasons.push(`workflow_state:${record.state}`);
+    if (record.owner_kind === "pack") {
+      const owner = packRepository.getPack(record.owner_name);
+      if (!owner) reasons.push(`owner_pack_missing:${record.owner_name}`);
+      else if (owner.state !== "enabled") reasons.push(`owner_pack_state:${owner.state}`);
+      else {
+        const health = packLifecycle.describe(record.owner_name, { includeHealth: true }).health;
+        if (health?.ok !== true) reasons.push(`owner_pack_health:${health?.status || "unknown"}`);
+      }
+    }
+    const steps = (record.definition.steps || []).map(step => {
+      const descriptor = registry.get(step.tool);
+      const canonical = descriptor?.name || null;
+      const capability = canonical ? agentTools.get(canonical) : null;
+      const reason = !descriptor ? "not_registered" : !capability ? "not_agent_visible" : !capability.available ? (capability.availability.reasons.join(",") || "unavailable") : null;
+      if (reason) reasons.push(`step:${step.name}:${step.tool}:${reason}`);
+      return { step: step.name, requested: step.tool, canonical, available: !reason, reason };
+    });
+    const available = reasons.length === 0;
+    return {
+      kind: "workflow", id: record.name, name: record.name,
+      owner: { kind: record.owner_kind, name: record.owner_name || null },
+      state: record.state, available,
+      availability: { state: available ? "available" : "unavailable", reasons },
+      version: record.version, description: record.description,
+      dependencies: { steps }, configuration: { inputs: record.definition.inputs || {} },
+      effects: require("../workflows/effects").analyzeWorkflowEffects(record.definition),
+      health: { status: available ? "registered" : "unavailable", ok: available },
+      permissions: [], network_scopes: [],
+      definition: { mode: record.mode, title: record.title, tags: record.definition.tags || [] },
+    };
+  });
 }
 
 function project(options = {}) {

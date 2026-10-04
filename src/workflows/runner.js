@@ -33,6 +33,7 @@ const authorization = require("../core/authorization");
 const definitionRepository = require("./repository");
 const { validateInputs, resolveValue, isTruthy } = require("./definition");
 const { canonicalStatus } = require("../tools/result");
+const { analyzeWorkflowEffects } = require("./effects");
 const {
   createScheduledPlatformExecution,
   transitionScheduledPlatformExecution,
@@ -121,6 +122,7 @@ async function runWorkflowDefinition(name, inputs = {}, options = {}) {
     return { ok: false, code: "workflow_unavailable", error: `Workflow "${name}" is ${record.state}` };
   }
   const definition = record.definition;
+  let workflowEffects = null;
   const executionContext = toolContext.getExecutionContext();
   let requestedByPrincipalId = options.requestedByPrincipalId || executionContext.authIdentity?.requested_by_principal_id || executionContext.authIdentity?.principal_id || null;
   let actorPrincipalId = options.actorPrincipalId || executionContext.authIdentity?.principal_id || null;
@@ -135,6 +137,9 @@ async function runWorkflowDefinition(name, inputs = {}, options = {}) {
     if (!workflow) return { ok: false, code: "unknown_run", error: `Workflow run ${options.resumeWorkflowId} not found` };
     if (workflow.name !== definition.name) {
       return { ok: false, code: "run_mismatch", error: `Run ${options.resumeWorkflowId} belongs to workflow "${workflow.name}"` };
+    }
+    if (workflow.metadata?.definition_checksum && workflow.metadata.definition_checksum !== record.checksum) {
+      return { ok: false, status: "failed", code: "workflow_definition_changed", error: "Workflow definition changed after this run was created; re-create the run so changed actions and arguments receive fresh authorization" };
     }
     if (!["paused", "running", "defined"].includes(workflow.state)) {
       return { ok: false, code: "run_not_resumable", error: `Workflow run ${workflow.workflow_id} is ${workflow.state}` };
@@ -174,6 +179,7 @@ async function runWorkflowDefinition(name, inputs = {}, options = {}) {
       nextStep: Number.isInteger(checkpoint.next_step) ? checkpoint.next_step : 0,
       totalSteps: definition.steps.length,
     };
+    workflowEffects = analyzeWorkflowEffects(definition, state.inputs);
     executionId = workflow.execution_id || null;
     if (["paused", "defined"].includes(workflow.state)) platformKernel.startWorkflow(workflow.workflow_id, { source: "workflow-runner" });
   } else {
@@ -182,12 +188,13 @@ async function runWorkflowDefinition(name, inputs = {}, options = {}) {
       return { ok: false, code: "invalid_inputs", error: `Invalid workflow inputs: ${validated.errors.join("; ")}`, errors: validated.errors };
     }
     state = { inputs: validated.values, steps: {}, nextStep: 0, totalSteps: definition.steps.length };
+    workflowEffects = analyzeWorkflowEffects(definition, state.inputs);
 
     const runItem = { id: `wfrun_${Date.now().toString(36)}`, name: definition.name };
     const execution = createScheduledPlatformExecution("workflow", runItem, {
       operationType: "workflow_definition_run",
       state: "running",
-      risk: definition.mode === "mutating" ? "medium" : "low",
+      risk: workflowEffects.strict_no_write && definition.mode === "read_only" ? "low" : "medium",
       projectId: options.project || null,
       allowConcurrent: true,
       metadata: {
@@ -196,6 +203,7 @@ async function runWorkflowDefinition(name, inputs = {}, options = {}) {
         owner_kind: record.owner_kind,
         owner_name: record.owner_name,
         mode: definition.mode,
+        effects: workflowEffects,
         steps: definition.steps.length,
         requested_by_principal_id: requestedByPrincipalId,
         actor_principal_id: actorPrincipalId,
@@ -335,7 +343,26 @@ async function runWorkflowDefinition(name, inputs = {}, options = {}) {
       // and audit all apply exactly as they would for a direct call.
       let result;
       try {
-        result = await require("../tools/dispatcher").callInternalTool(step.tool, args, {
+        const dispatcher = require("../tools/dispatcher");
+        const inheritedAuthority = executionContext.agentAuthorityContext || null;
+        let authorityDecision = null;
+        if (inheritedAuthority) {
+          const descriptor = dispatcher.getBuiltinRegistry().get(step.tool);
+          authorityDecision = require("../agent/authority").decideAutonomy({
+            descriptor,
+            args,
+            envelope: inheritedAuthority.envelope,
+            principalRef: inheritedAuthority.principal_ref,
+            projectRef: options.project || inheritedAuthority.project_ref,
+            workspaceRef: inheritedAuthority.workspace_ref,
+            repositoryRef: inheritedAuthority.repository_ref,
+            capabilityRef: step.tool,
+          });
+          if (authorityDecision.decision === "deny") {
+            result = require("../tools/result").errorResult("Workflow step denied by the inherited Agent authority envelope", "agent_authority_denied", { status: "denied" });
+          }
+        }
+        if (!result) result = await dispatcher.callInternalTool(step.tool, args, {
           actor: options.actor || "workflow-runner",
           authIdentity: executionContext.authIdentity || (actorPrincipalId ? {
             principal_id: actorPrincipalId,
@@ -347,10 +374,14 @@ async function runWorkflowDefinition(name, inputs = {}, options = {}) {
           timeoutMs: step.timeout_ms || options.stepTimeoutMs || DEFAULT_STEP_TIMEOUT_MS,
           executionId,
           project: options.project || undefined,
+          taskId: executionContext.taskId || undefined,
+          agentAuthorityContext: inheritedAuthority || undefined,
+          authorityApprovalRequired: authorityDecision?.approval_required === true,
+          authorityRisk: authorityDecision?.risk_class || undefined,
+          authorityReason: authorityDecision?.reason || undefined,
           correlationId: workflow.workflow_id,
         });
       } catch (error) {
-        if (!hasAlwaysSteps) throw error;
         // Preserve cleanup after an unexpected dispatcher exception without
         // echoing an unsanitized error (which could contain a secret). The
         // normal governed result path records the bounded failure and lets an
@@ -364,10 +395,15 @@ async function runWorkflowDefinition(name, inputs = {}, options = {}) {
       }
       const durationMs = Date.now() - stepStarted;
 
-      if (result && result.approvalRequired) {
+      const resultPayload = parseJsonResult(resultText(result));
+      const resultStatus = canonicalStatus(result?.status || result?.result_status || resultPayload?.status || resultPayload?.result_status, result?.isError ? "failed" : "succeeded");
+      if (result && (result.approvalRequired || resultStatus === "approval_required")) {
         // Park rather than fail: the operator has a decision to make, and the
         // run must be resumable at exactly this step afterwards.
-        approval = { step: step.name, tool: step.tool, approval_id: result.approvalId || null };
+        const nestedApproval = resultPayload?.approval || resultPayload?.result?.approval || null;
+        const nestedId = nestedApproval?.approval_id || nestedApproval?.approvalId || null;
+        approval = { step: step.name, tool: step.tool, approval_id: result.approvalId || nestedId || null, nested_run_id: resultPayload?.run_id || resultPayload?.result?.run_id || null };
+        state.steps[step.name] = { ok: false, status: "approval_required", code: result.code || resultPayload?.code || "approval_required", approval_state: "required", text: truncate(resultText(result), 1000).text, json: resultPayload };
         state.nextStep = index;
         checkpointState(workflow.workflow_id, state, { awaiting_approval: approval });
         platformKernel.pauseWorkflow(workflow.workflow_id, { source: "workflow-runner", actor_id: options.actor });
@@ -418,7 +454,14 @@ async function runWorkflowDefinition(name, inputs = {}, options = {}) {
     }
   } catch (error) {
     verdict = "failed";
-    failure = { step: definition.steps[state.nextStep]?.name || null, error: String(error && error.message ? error.message : error) };
+    const failedStep = definition.steps[state.nextStep] || null;
+    const code = error && error.code ? String(error.code).slice(0, 120) : "workflow_step_error";
+    if (failedStep) {
+      state.steps[failedStep.name] = { ok: false, status: "failed", code, text: `Workflow step failed (${code})`, json: null };
+      stepReports.push({ step: failedStep.name, tool: failedStep.tool, status: "failed", error_code: code });
+      checkpointState(workflow.workflow_id, state);
+    }
+    failure = { step: failedStep?.name || null, code, error: `Workflow step failed (${code})` };
   }
 
   const result = resolveValue(definition.result, stepScope(state));
@@ -464,6 +507,7 @@ async function runWorkflowDefinition(name, inputs = {}, options = {}) {
     execution_id: executionId,
     duration_ms: Date.now() - started,
     inputs: state.inputs,
+    effects: workflowEffects,
     steps: stepReports,
     evidence: state.steps,
     result,

@@ -65,10 +65,10 @@ const definitionSchema = z.object({
   version: z.string(),
   title: z.string().min(1),
   description: z.string().min(1),
-  // Declarative honesty about what running this does. `read_only` workflows
-  // may only reference tools the pack declared as read-only intent; the runner
-  // does NOT rely on this for enforcement (the dispatcher's policy and
-  // approval path does that) — it is operator-facing intent.
+  // Declarative workflow intent. Detailed effects are derived from each
+  // action/condition and exposed separately by workflows/effects.js. This mode
+  // is not authorization: the runner evaluates the caller's authority and the
+  // dispatcher rechecks policy and approval for every resolved step.
   mode: z.enum(["read_only", "mutating"]).default("read_only"),
   inputs: z.record(INPUT_SCHEMA).default({}),
   steps: z.array(STEP_SCHEMA).min(1).max(MAX_STEPS),

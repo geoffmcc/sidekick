@@ -321,8 +321,11 @@ new verification is recorded. No manifest field can declare certification.
 
 Pack health must report an unconfigured provider as unavailable or degraded,
 not healthy. Nested dispatcher failures retain their stable error code and are
-not converted into successful-looking results. Read-only workflows declare
-`mode: "read_only"`; workflows that can change state remain approval-gated.
+not converted into successful-looking results. Workflow `mode` is descriptive;
+per-action effects and every step's dispatcher authorization remain
+authoritative. See [workflow effect semantics and Agent smoke coverage](workflow-effects.md)
+for the effect categories, input/default handling, nested authority, and offline
+smoke-test contract.
 
 The reproducible repository audit matrix is generated with
 `npm run pack:inventory` and committed at

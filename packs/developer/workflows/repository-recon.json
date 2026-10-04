@@ -3,8 +3,8 @@
   "name": "developer/repository-recon",
   "version": "1.0.0",
   "title": "Repository Reconnaissance",
-  "description": "Understand an unfamiliar software repository before modifying it. Read-only: establishes project identity, repository state, instructions, structure, verification paths and recent history, and leaves a durable handoff.",
-  "mode": "read_only",
+  "description": "Understand an unfamiliar software repository before modifying it. Inspects project identity, repository state, instructions, structure, verification paths and recent history. By default it records a durable handoff; set record_handoff=false to omit that persistent Sidekick write.",
+  "mode": "mutating",
   "tags": ["developer", "recon", "read-only"],
   "inputs": {
     "path": { "type": "string", "required": true, "description": "Repository path to profile" },

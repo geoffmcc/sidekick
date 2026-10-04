@@ -40,6 +40,19 @@ test("permanent denials and explicit denials override allows", () => {
   assert.strictEqual(policy.decision(scope, { address: "fe80::1", protocol: "http", port: 80 }).reason, "permanent_denial");
 });
 
+test("private address decisions cover IPv4 and IPv6 policy branches", () => {
+  const disabled = policy.normalizeScope({ name: "private_disabled", allowed_cidrs: ["0.0.0.0/0", "::/0"], allowed_protocols: ["https"], allow_private_addresses: false });
+  assert.strictEqual(policy.decision(disabled, { address: "10.4.0.2", protocol: "https", port: 443 }).reason, "private_address_not_enabled");
+  assert.strictEqual(policy.isPrivate("fc00::2"), true, "IPv6 unique-local space is private");
+  assert.strictEqual(policy.isPrivate("fd00::2"), true, "both fc00::/7 halves are private");
+  assert.strictEqual(policy.isPrivate("not-an-address"), false, "malformed address parsing fails closed without throwing");
+  assert.strictEqual(policy.decision(disabled, { address: "fd00::2", protocol: "https", port: 443 }).reason, "private_address_not_enabled");
+  assert.strictEqual(policy.decision(disabled, { address: "::1", protocol: "https", port: 443 }).reason, "private_address_not_enabled");
+
+  const enabled = policy.normalizeScope({ name: "private_enabled", allowed_cidrs: ["10.0.0.0/8"], allowed_protocols: ["https"], allow_private_addresses: true });
+  assert.strictEqual(policy.decision(enabled, { address: "10.4.0.2", protocol: "https", port: 443 }).ok, true);
+});
+
 test("named scopes persist immutable revisions and disable live authority", () => {
   const created = scopes.create({ name: "persisted_scope", allowed_ips: ["192.0.2.10"], allowed_protocols: ["https"], allowed_ports: [443] }, "operator");
   assert.strictEqual(created.revision, 1);

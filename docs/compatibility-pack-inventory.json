@@ -1,9 +1,9 @@
 {
   "schema": "sidekick.compatibility-pack-inventory.v1",
   "source": "bundled pack manifests and repository files",
-  "source_commit": "acf04db0ade94e442ce4ad7a8a671e6664f9918b",
-  "source_commit_date": "2026-09-17T10:17:08-04:00",
-  "source_fingerprint": "sha256:059f2f92df5f3ed43454fea6abcbc6d000af2cc47161c98a902973da8175764f",
+  "source_commit": "a13ad523c7f088a218c7d3ea341ae7d2346cb1a5",
+  "source_commit_date": "2026-10-04T12:53:57-04:00",
+  "source_fingerprint": "sha256:3157d9f431c71cb6276637b54c827a9160a6ca474a4fc94c80da554712ebb55e",
   "pack_count": 27,
   "packs": [
     {
@@ -205,7 +205,8 @@
         "test/pack-maturity.test.js",
         "test/pack-proving-evidence.test.js",
         "test/proving-runner.test.js",
-        "test/target-pack-buildout.test.js"
+        "test/target-pack-buildout.test.js",
+        "test/workflow-effects.test.js"
       ],
       "maturity_gaps": [
         "no stored fixture verification evidence",
@@ -241,7 +242,8 @@
               "test/pack-maturity.test.js",
               "test/pack-proving-evidence.test.js",
               "test/proving-runner.test.js",
-              "test/target-pack-buildout.test.js"
+              "test/target-pack-buildout.test.js",
+              "test/workflow-effects.test.js"
             ]
           },
           "inventory": {
@@ -270,7 +272,8 @@
               "test/dashboard-api.test.js",
               "test/dashboard-capability-action.test.js",
               "test/pack-manifest-lifecycle.test.js",
-              "test/target-pack-buildout.test.js"
+              "test/target-pack-buildout.test.js",
+              "test/workflow-effects.test.js"
             ]
           },
           "diagnosis": {
@@ -289,7 +292,8 @@
               "test/campaign-packs-6-10.test.js",
               "test/cross-pack-workflow-fixtures.test.js",
               "test/dashboard-api.test.js",
-              "test/target-pack-buildout.test.js"
+              "test/target-pack-buildout.test.js",
+              "test/workflow-effects.test.js"
             ]
           },
           "execution": {
@@ -307,7 +311,8 @@
               "test/pack-maturity.test.js",
               "test/pack-proving-evidence.test.js",
               "test/proving-runner.test.js",
-              "test/target-pack-buildout.test.js"
+              "test/target-pack-buildout.test.js",
+              "test/workflow-effects.test.js"
             ]
           },
           "verification": {
@@ -329,7 +334,8 @@
               "test/pack-maturity.test.js",
               "test/pack-proving-evidence.test.js",
               "test/proving-runner.test.js",
-              "test/target-pack-buildout.test.js"
+              "test/target-pack-buildout.test.js",
+              "test/workflow-effects.test.js"
             ]
           },
           "recovery": {
@@ -337,7 +343,8 @@
             "implemented": false,
             "evidence": [
               "test/dashboard-api.test.js",
-              "test/target-pack-buildout.test.js"
+              "test/target-pack-buildout.test.js",
+              "test/workflow-effects.test.js"
             ]
           },
           "health": {
@@ -377,7 +384,8 @@
               "test/campaign-packs-6-10.test.js",
               "test/dashboard-capability-action.test.js",
               "test/proving-runner.test.js",
-              "test/target-pack-buildout.test.js"
+              "test/target-pack-buildout.test.js",
+              "test/workflow-effects.test.js"
             ]
           },
           "security": {
@@ -400,7 +408,8 @@
               "test/pack-maturity.test.js",
               "test/pack-proving-evidence.test.js",
               "test/proving-runner.test.js",
-              "test/target-pack-buildout.test.js"
+              "test/target-pack-buildout.test.js",
+              "test/workflow-effects.test.js"
             ]
           },
           "fixtures": {
@@ -467,7 +476,8 @@
             "test/pack-maturity.test.js",
             "test/pack-proving-evidence.test.js",
             "test/proving-runner.test.js",
-            "test/target-pack-buildout.test.js"
+            "test/target-pack-buildout.test.js",
+            "test/workflow-effects.test.js"
           ]
         },
         "weaknesses": [
@@ -1668,6 +1678,7 @@
         "behavior": "explicit_unavailable_or_degraded_states"
       },
       "current_tests": [
+        "test/agent-workflow-smoke.test.js",
         "test/brain.test.js",
         "test/browser-automation-pack.test.js",
         "test/browser-egress.test.js",
@@ -1704,6 +1715,7 @@
               "packs/browser-automation/knowledge/browser-scope-and-credentials.md",
               "packs/browser-automation/modules/browser-tools/entry.js",
               "packs/browser-automation/modules/browser-tools/manifest.json",
+              "test/agent-workflow-smoke.test.js",
               "test/brain.test.js",
               "test/browser-automation-pack.test.js",
               "test/browser-subsystem.test.js",
@@ -1722,6 +1734,7 @@
               "packs/browser-automation/workflows/authenticated-ui-check.json",
               "packs/browser-automation/workflows/download-verification.json",
               "packs/browser-automation/workflows/ui-smoke.json",
+              "test/agent-workflow-smoke.test.js",
               "test/brain.test.js",
               "test/browser-automation-pack.test.js",
               "test/browser-egress.test.js",
@@ -1738,6 +1751,7 @@
               "packs/browser-automation/knowledge/browser-evidence.md",
               "packs/browser-automation/knowledge/browser-scope-and-credentials.md",
               "packs/browser-automation/modules/browser-tools/entry.js",
+              "test/agent-workflow-smoke.test.js",
               "test/brain.test.js",
               "test/browser-automation-pack.test.js",
               "test/browser-subsystem.test.js",
@@ -1749,6 +1763,7 @@
             "status": "not_observed",
             "implemented": false,
             "evidence": [
+              "test/agent-workflow-smoke.test.js",
               "test/target-pack-buildout.test.js"
             ]
           },
@@ -1782,6 +1797,7 @@
               "packs/browser-automation/workflows/authenticated-ui-check.json",
               "packs/browser-automation/workflows/download-verification.json",
               "packs/browser-automation/workflows/ui-smoke.json",
+              "test/agent-workflow-smoke.test.js",
               "test/brain.test.js",
               "test/browser-automation-pack.test.js",
               "test/browser-egress.test.js",
@@ -1803,6 +1819,7 @@
               "packs/browser-automation/workflows/authenticated-ui-check.json",
               "packs/browser-automation/workflows/download-verification.json",
               "packs/browser-automation/workflows/ui-smoke.json",
+              "test/agent-workflow-smoke.test.js",
               "test/brain.test.js",
               "test/browser-automation-pack.test.js",
               "test/browser-egress.test.js",
@@ -1829,6 +1846,7 @@
               "packs/browser-automation/knowledge/browser-automation-overview.md",
               "packs/browser-automation/modules/browser-tools/entry.js",
               "packs/browser-automation/workflows/ui-smoke.json",
+              "test/agent-workflow-smoke.test.js",
               "test/brain.test.js",
               "test/browser-automation-pack.test.js",
               "test/browser-egress.test.js",
@@ -1856,6 +1874,7 @@
               "packs/browser-automation/modules/browser-tools/entry.js",
               "packs/browser-automation/modules/browser-tools/manifest.json",
               "packs/browser-automation/sidekick.pack.json",
+              "test/agent-workflow-smoke.test.js",
               "test/brain.test.js",
               "test/browser-automation-pack.test.js",
               "test/campaign-packs-6-10.test.js",
@@ -1876,6 +1895,7 @@
               "packs/browser-automation/workflows/authenticated-ui-check.json",
               "packs/browser-automation/workflows/download-verification.json",
               "packs/browser-automation/workflows/ui-smoke.json",
+              "test/agent-workflow-smoke.test.js",
               "test/brain.test.js",
               "test/browser-automation-pack.test.js",
               "test/browser-egress.test.js",
@@ -1889,6 +1909,7 @@
             "status": "observed",
             "implemented": true,
             "evidence": [
+              "test/agent-workflow-smoke.test.js",
               "test/browser-automation-pack.test.js",
               "test/browser-egress.test.js",
               "test/browser-subsystem.test.js",
@@ -1942,6 +1963,7 @@
             "packs/browser-automation/workflows/authenticated-ui-check.json",
             "packs/browser-automation/workflows/download-verification.json",
             "packs/browser-automation/workflows/ui-smoke.json",
+            "test/agent-workflow-smoke.test.js",
             "test/brain.test.js",
             "test/browser-automation-pack.test.js",
             "test/browser-egress.test.js",
@@ -3302,13 +3324,15 @@
         "behavior": "explicit_unavailable_or_degraded_states"
       },
       "current_tests": [
+        "test/agent-bridge-followup.test.js",
         "test/browser-automation-pack.test.js",
         "test/campaign-packs-6-10.test.js",
         "test/container-operations-pack.test.js",
         "test/deploy-scripts.test.js",
         "test/pack-manifest-lifecycle.test.js",
         "test/security-hardening.test.js",
-        "test/security-research-pack.test.js"
+        "test/security-research-pack.test.js",
+        "test/workflow-definitions.test.js"
       ],
       "maturity_gaps": [
         "no stored fixture verification evidence",
@@ -3349,6 +3373,7 @@
               "packs/container-operations/workflows/health-assessment.json",
               "packs/container-operations/workflows/troubleshoot.json",
               "packs/container-operations/workflows/update-check.json",
+              "test/agent-bridge-followup.test.js",
               "test/browser-automation-pack.test.js",
               "test/campaign-packs-6-10.test.js",
               "test/container-operations-pack.test.js",
@@ -3365,11 +3390,13 @@
               "packs/container-operations/knowledge/usage-reference.md",
               "packs/container-operations/modules/container-operations-tools/entry.js",
               "packs/container-operations/workflows/health-assessment.json",
+              "test/agent-bridge-followup.test.js",
               "test/browser-automation-pack.test.js",
               "test/campaign-packs-6-10.test.js",
               "test/container-operations-pack.test.js",
               "test/security-hardening.test.js",
-              "test/security-research-pack.test.js"
+              "test/security-research-pack.test.js",
+              "test/workflow-definitions.test.js"
             ]
           },
           "analysis": {
@@ -3386,11 +3413,13 @@
               "packs/container-operations/modules/container-operations-tools/manifest.json",
               "packs/container-operations/workflows/controlled-update.json",
               "packs/container-operations/workflows/troubleshoot.json",
+              "test/agent-bridge-followup.test.js",
               "test/browser-automation-pack.test.js",
               "test/campaign-packs-6-10.test.js",
               "test/pack-manifest-lifecycle.test.js",
               "test/security-hardening.test.js",
-              "test/security-research-pack.test.js"
+              "test/security-research-pack.test.js",
+              "test/workflow-definitions.test.js"
             ]
           },
           "diagnosis": {
@@ -3413,10 +3442,12 @@
               "packs/container-operations/knowledge/usage-reference.md",
               "packs/container-operations/modules/container-operations-tools/entry.js",
               "packs/container-operations/workflows/controlled-update.json",
+              "test/agent-bridge-followup.test.js",
               "test/browser-automation-pack.test.js",
               "test/campaign-packs-6-10.test.js",
               "test/deploy-scripts.test.js",
-              "test/security-research-pack.test.js"
+              "test/security-research-pack.test.js",
+              "test/workflow-definitions.test.js"
             ]
           },
           "execution": {
@@ -3435,13 +3466,15 @@
               "packs/container-operations/workflows/controlled-update.json",
               "packs/container-operations/workflows/health-assessment.json",
               "packs/container-operations/workflows/update-check.json",
+              "test/agent-bridge-followup.test.js",
               "test/browser-automation-pack.test.js",
               "test/campaign-packs-6-10.test.js",
               "test/container-operations-pack.test.js",
               "test/deploy-scripts.test.js",
               "test/pack-manifest-lifecycle.test.js",
               "test/security-hardening.test.js",
-              "test/security-research-pack.test.js"
+              "test/security-research-pack.test.js",
+              "test/workflow-definitions.test.js"
             ]
           },
           "verification": {
@@ -3462,13 +3495,15 @@
               "packs/container-operations/workflows/controlled-update.json",
               "packs/container-operations/workflows/troubleshoot.json",
               "packs/container-operations/workflows/update-check.json",
+              "test/agent-bridge-followup.test.js",
               "test/browser-automation-pack.test.js",
               "test/campaign-packs-6-10.test.js",
               "test/container-operations-pack.test.js",
               "test/deploy-scripts.test.js",
               "test/pack-manifest-lifecycle.test.js",
               "test/security-hardening.test.js",
-              "test/security-research-pack.test.js"
+              "test/security-research-pack.test.js",
+              "test/workflow-definitions.test.js"
             ]
           },
           "recovery": {
@@ -3485,9 +3520,11 @@
               "packs/container-operations/modules/container-operations-tools/entry.js",
               "packs/container-operations/workflows/controlled-update.json",
               "packs/container-operations/workflows/health-assessment.json",
+              "test/agent-bridge-followup.test.js",
               "test/browser-automation-pack.test.js",
               "test/deploy-scripts.test.js",
-              "test/security-research-pack.test.js"
+              "test/security-research-pack.test.js",
+              "test/workflow-definitions.test.js"
             ]
           },
           "health": {
@@ -3507,12 +3544,14 @@
               "packs/container-operations/workflows/health-assessment.json",
               "packs/container-operations/workflows/troubleshoot.json",
               "packs/container-operations/workflows/update-check.json",
+              "test/agent-bridge-followup.test.js",
               "test/browser-automation-pack.test.js",
               "test/campaign-packs-6-10.test.js",
               "test/container-operations-pack.test.js",
               "test/deploy-scripts.test.js",
               "test/pack-manifest-lifecycle.test.js",
-              "test/security-research-pack.test.js"
+              "test/security-research-pack.test.js",
+              "test/workflow-definitions.test.js"
             ]
           },
           "workflows": {
@@ -3539,12 +3578,14 @@
               "packs/container-operations/modules/container-operations-tools/entry.js",
               "packs/container-operations/modules/container-operations-tools/manifest.json",
               "packs/container-operations/sidekick.pack.json",
+              "test/agent-bridge-followup.test.js",
               "test/browser-automation-pack.test.js",
               "test/campaign-packs-6-10.test.js",
               "test/container-operations-pack.test.js",
               "test/deploy-scripts.test.js",
               "test/security-hardening.test.js",
-              "test/security-research-pack.test.js"
+              "test/security-research-pack.test.js",
+              "test/workflow-definitions.test.js"
             ]
           },
           "security": {
@@ -3563,24 +3604,28 @@
               "packs/container-operations/modules/container-operations-tools/manifest.json",
               "packs/container-operations/sidekick.pack.json",
               "packs/container-operations/workflows/troubleshoot.json",
+              "test/agent-bridge-followup.test.js",
               "test/browser-automation-pack.test.js",
               "test/campaign-packs-6-10.test.js",
               "test/container-operations-pack.test.js",
               "test/deploy-scripts.test.js",
               "test/pack-manifest-lifecycle.test.js",
               "test/security-hardening.test.js",
-              "test/security-research-pack.test.js"
+              "test/security-research-pack.test.js",
+              "test/workflow-definitions.test.js"
             ]
           },
           "fixtures": {
             "status": "observed",
             "implemented": true,
             "evidence": [
+              "test/agent-bridge-followup.test.js",
               "test/browser-automation-pack.test.js",
               "test/campaign-packs-6-10.test.js",
               "test/container-operations-pack.test.js",
               "test/pack-manifest-lifecycle.test.js",
-              "test/security-research-pack.test.js"
+              "test/security-research-pack.test.js",
+              "test/workflow-definitions.test.js"
             ]
           },
           "docs": {
@@ -3644,13 +3689,15 @@
             "packs/container-operations/workflows/health-assessment.json",
             "packs/container-operations/workflows/troubleshoot.json",
             "packs/container-operations/workflows/update-check.json",
+            "test/agent-bridge-followup.test.js",
             "test/browser-automation-pack.test.js",
             "test/campaign-packs-6-10.test.js",
             "test/container-operations-pack.test.js",
             "test/deploy-scripts.test.js",
             "test/pack-manifest-lifecycle.test.js",
             "test/security-hardening.test.js",
-            "test/security-research-pack.test.js"
+            "test/security-research-pack.test.js",
+            "test/workflow-definitions.test.js"
           ]
         },
         "weaknesses": [
@@ -4593,6 +4640,7 @@
         "test/agent-bridge-prompt.test.js",
         "test/agent-capability-broker.test.js",
         "test/agent-protocol.test.js",
+        "test/agent-workflow-smoke.test.js",
         "test/brain.test.js",
         "test/campaign-packs-6-10.test.js",
         "test/capability-packs.test.js",
@@ -4610,7 +4658,8 @@
         "test/semantic-repository.test.js",
         "test/static-code-quality.test.js",
         "test/target-pack-buildout.test.js",
-        "test/tool-log-correlation.test.js"
+        "test/tool-log-correlation.test.js",
+        "test/workflow-effects.test.js"
       ],
       "maturity_gaps": [
         "no stored fixture verification evidence",
@@ -4656,6 +4705,7 @@
               "test/agent-bridge-prompt.test.js",
               "test/agent-capability-broker.test.js",
               "test/agent-protocol.test.js",
+              "test/agent-workflow-smoke.test.js",
               "test/brain.test.js",
               "test/campaign-packs-6-10.test.js",
               "test/capability-packs.test.js",
@@ -4668,9 +4718,9 @@
               "test/production-compatibility-packs-11-15.test.js",
               "test/security-research-unit.test.js",
               "test/semantic-repository.test.js",
-              "test/static-code-quality.test.js",
               "test/target-pack-buildout.test.js",
-              "test/tool-log-correlation.test.js"
+              "test/tool-log-correlation.test.js",
+              "test/workflow-effects.test.js"
             ]
           },
           "inventory": {
@@ -4688,6 +4738,7 @@
               "test/agent-bridge-prompt.test.js",
               "test/agent-capability-broker.test.js",
               "test/agent-protocol.test.js",
+              "test/agent-workflow-smoke.test.js",
               "test/brain.test.js",
               "test/campaign-packs-6-10.test.js",
               "test/developer-pack.test.js",
@@ -4724,6 +4775,7 @@
               "test/agent-bridge-prompt.test.js",
               "test/agent-capability-broker.test.js",
               "test/agent-protocol.test.js",
+              "test/agent-workflow-smoke.test.js",
               "test/brain.test.js",
               "test/campaign-packs-6-10.test.js",
               "test/capability-packs.test.js",
@@ -4737,7 +4789,8 @@
               "test/security-research-source.test.js",
               "test/security-research-unit.test.js",
               "test/semantic-repository.test.js",
-              "test/target-pack-buildout.test.js"
+              "test/target-pack-buildout.test.js",
+              "test/workflow-effects.test.js"
             ]
           },
           "diagnosis": {
@@ -4747,6 +4800,7 @@
               "packs/developer/knowledge/ci-triage.md",
               "packs/developer/knowledge/usage-reference.md",
               "packs/developer/workflows/ci-triage.json",
+              "test/agent-workflow-smoke.test.js",
               "test/capability-packs.test.js",
               "test/pack-contract.test.js",
               "test/pack-manifest-consistency.test.js",
@@ -4777,7 +4831,8 @@
               "test/security-research-unit.test.js",
               "test/semantic-repository.test.js",
               "test/target-pack-buildout.test.js",
-              "test/tool-log-correlation.test.js"
+              "test/tool-log-correlation.test.js",
+              "test/workflow-effects.test.js"
             ]
           },
           "execution": {
@@ -4794,6 +4849,7 @@
               "packs/developer/workflows/pull-request-review.json",
               "packs/developer/workflows/release-preparation.json",
               "packs/developer/workflows/repository-recon.json",
+              "test/agent-workflow-smoke.test.js",
               "test/brain.test.js",
               "test/campaign-packs-6-10.test.js",
               "test/capability-packs.test.js",
@@ -4809,7 +4865,8 @@
               "test/semantic-repository.test.js",
               "test/static-code-quality.test.js",
               "test/target-pack-buildout.test.js",
-              "test/tool-log-correlation.test.js"
+              "test/tool-log-correlation.test.js",
+              "test/workflow-effects.test.js"
             ]
           },
           "verification": {
@@ -4838,6 +4895,7 @@
               "test/agent-bridge-prompt.test.js",
               "test/agent-capability-broker.test.js",
               "test/agent-protocol.test.js",
+              "test/agent-workflow-smoke.test.js",
               "test/brain.test.js",
               "test/campaign-packs-6-10.test.js",
               "test/capability-packs.test.js",
@@ -4855,7 +4913,8 @@
               "test/semantic-repository.test.js",
               "test/static-code-quality.test.js",
               "test/target-pack-buildout.test.js",
-              "test/tool-log-correlation.test.js"
+              "test/tool-log-correlation.test.js",
+              "test/workflow-effects.test.js"
             ]
           },
           "recovery": {
@@ -4867,7 +4926,8 @@
               "test/execution-node-protocol.test.js",
               "test/pack-contract.test.js",
               "test/security-research-unit.test.js",
-              "test/target-pack-buildout.test.js"
+              "test/target-pack-buildout.test.js",
+              "test/workflow-effects.test.js"
             ]
           },
           "health": {
@@ -4888,6 +4948,7 @@
               "packs/developer/workflows/release-preparation.json",
               "test/agent-capability-broker.test.js",
               "test/agent-protocol.test.js",
+              "test/agent-workflow-smoke.test.js",
               "test/brain.test.js",
               "test/campaign-packs-6-10.test.js",
               "test/capability-packs.test.js",
@@ -4937,6 +4998,7 @@
               "test/agent-bridge-prompt.test.js",
               "test/agent-capability-broker.test.js",
               "test/agent-protocol.test.js",
+              "test/agent-workflow-smoke.test.js",
               "test/brain.test.js",
               "test/campaign-packs-6-10.test.js",
               "test/capability-packs.test.js",
@@ -4948,7 +5010,8 @@
               "test/phase-packs-16-20.test.js",
               "test/security-research-unit.test.js",
               "test/semantic-repository.test.js",
-              "test/target-pack-buildout.test.js"
+              "test/target-pack-buildout.test.js",
+              "test/workflow-effects.test.js"
             ]
           },
           "security": {
@@ -4973,6 +5036,7 @@
               "test/agent-bridge-prompt.test.js",
               "test/agent-capability-broker.test.js",
               "test/agent-protocol.test.js",
+              "test/agent-workflow-smoke.test.js",
               "test/brain.test.js",
               "test/campaign-packs-6-10.test.js",
               "test/capability-packs.test.js",
@@ -4990,7 +5054,8 @@
               "test/semantic-repository.test.js",
               "test/static-code-quality.test.js",
               "test/target-pack-buildout.test.js",
-              "test/tool-log-correlation.test.js"
+              "test/tool-log-correlation.test.js",
+              "test/workflow-effects.test.js"
             ]
           },
           "fixtures": {
@@ -4999,6 +5064,7 @@
             "evidence": [
               "test/agent-bridge-prompt.test.js",
               "test/agent-protocol.test.js",
+              "test/agent-workflow-smoke.test.js",
               "test/campaign-packs-6-10.test.js",
               "test/capability-packs.test.js",
               "test/cross-pack-workflow-fixtures.test.js",
@@ -5078,6 +5144,7 @@
             "test/agent-bridge-prompt.test.js",
             "test/agent-capability-broker.test.js",
             "test/agent-protocol.test.js",
+            "test/agent-workflow-smoke.test.js",
             "test/brain.test.js",
             "test/campaign-packs-6-10.test.js",
             "test/capability-packs.test.js",
@@ -5095,7 +5162,8 @@
             "test/semantic-repository.test.js",
             "test/static-code-quality.test.js",
             "test/target-pack-buildout.test.js",
-            "test/tool-log-correlation.test.js"
+            "test/tool-log-correlation.test.js",
+            "test/workflow-effects.test.js"
           ]
         },
         "weaknesses": [
@@ -5357,6 +5425,7 @@
               "packs/documentation-knowledge/knowledge/operating.md",
               "packs/documentation-knowledge/knowledge/usage-reference.md",
               "packs/documentation-knowledge/modules/documentation-knowledge-tools/entry.js",
+              "packs/documentation-knowledge/workflows/knowledge-operation.json",
               "test/production-compatibility-packs-11-15.test.js"
             ]
           },
@@ -5388,7 +5457,8 @@
             "status": "observed",
             "implemented": true,
             "evidence": [
-              "packs/documentation-knowledge/modules/documentation-knowledge-tools/entry.js"
+              "packs/documentation-knowledge/modules/documentation-knowledge-tools/entry.js",
+              "packs/documentation-knowledge/workflows/knowledge-operation.json"
             ]
           },
           "verification": {
@@ -5819,6 +5889,7 @@
               "packs/infrastructure-as-code/knowledge/infrastructure-as-code.md",
               "packs/infrastructure-as-code/knowledge/usage-reference.md",
               "packs/infrastructure-as-code/modules/infrastructure-as-code-tools/entry.js",
+              "packs/infrastructure-as-code/workflows/iac-inspection.json",
               "packs/infrastructure-as-code/workflows/iac-plan.json",
               "packs/infrastructure-as-code/workflows/iac-preflight.json",
               "test/campaign-packs-6-10.test.js",
@@ -7287,6 +7358,7 @@
             "evidence": [
               "packs/linux-systems-administration/knowledge/operating.md",
               "packs/linux-systems-administration/modules/linux-systems-tools/entry.js",
+              "packs/linux-systems-administration/workflows/linux-systems-administration/process-audit.json",
               "test/target-pack-buildout.test.js"
             ]
           },
@@ -8705,6 +8777,7 @@
         "test/jellyfin-pack.test.js",
         "test/kernel-migration-parity.test.js",
         "test/modules-builtin.test.js",
+        "test/network-failure-guidance.test.js",
         "test/network-firewall-pack.test.js",
         "test/network-scope-fetch.test.js",
         "test/network-scope.test.js",
@@ -8816,6 +8889,7 @@
               "test/jellyfin-pack.test.js",
               "test/kernel-migration-parity.test.js",
               "test/modules-builtin.test.js",
+              "test/network-failure-guidance.test.js",
               "test/network-scope-fetch.test.js",
               "test/network-scope.test.js",
               "test/openvino-executor.test.js",
@@ -8894,6 +8968,7 @@
               "packs/network-firewall/modules/network-firewall-tools/entry.js",
               "packs/network-firewall/workflows/change-preflight.json",
               "packs/network-firewall/workflows/safe-change.json",
+              "test/agent-bridge-followup.test.js",
               "test/agent-bridge-prompt.test.js",
               "test/agent-cancel.test.js",
               "test/blackbox-lifecycle.test.js",
@@ -8954,6 +9029,7 @@
               "test/jellyfin-pack.test.js",
               "test/kernel-migration-parity.test.js",
               "test/modules-builtin.test.js",
+              "test/network-failure-guidance.test.js",
               "test/network-firewall-pack.test.js",
               "test/network-scope-fetch.test.js",
               "test/network-scope.test.js",
@@ -9008,6 +9084,7 @@
               "test/jellyfin-pack.test.js",
               "test/kernel-migration-parity.test.js",
               "test/modules-builtin.test.js",
+              "test/network-failure-guidance.test.js",
               "test/network-firewall-pack.test.js",
               "test/network-scope-fetch.test.js",
               "test/network-scope.test.js",
@@ -9090,6 +9167,7 @@
               "test/jellyfin-pack.test.js",
               "test/modules-builtin.test.js",
               "test/network-firewall-pack.test.js",
+              "test/network-scope-fetch.test.js",
               "test/openvino-executor.test.js",
               "test/pack-manifest-lifecycle.test.js",
               "test/platform-event-consumption.test.js",
@@ -9121,6 +9199,7 @@
               "packs/network-firewall/knowledge/network-firewall-operating.md",
               "packs/network-firewall/modules/network-firewall-tools/entry.js",
               "packs/network-firewall/sidekick.pack.json",
+              "test/agent-bridge-followup.test.js",
               "test/agent-bridge-prompt.test.js",
               "test/agent-capability-broker.test.js",
               "test/brain-integration.test.js",
@@ -9184,6 +9263,7 @@
               "test/jellyfin-pack.test.js",
               "test/kernel-migration-parity.test.js",
               "test/modules-builtin.test.js",
+              "test/network-failure-guidance.test.js",
               "test/network-firewall-pack.test.js",
               "test/network-scope-fetch.test.js",
               "test/network-scope.test.js",
@@ -9224,6 +9304,7 @@
               "test/download-custody.test.js",
               "test/health.test.js",
               "test/jellyfin-pack.test.js",
+              "test/network-failure-guidance.test.js",
               "test/network-firewall-pack.test.js",
               "test/network-scope-fetch.test.js",
               "test/network-scope.test.js",
@@ -9313,6 +9394,7 @@
             "test/jellyfin-pack.test.js",
             "test/kernel-migration-parity.test.js",
             "test/modules-builtin.test.js",
+            "test/network-failure-guidance.test.js",
             "test/network-firewall-pack.test.js",
             "test/network-scope-fetch.test.js",
             "test/network-scope.test.js",
@@ -10158,6 +10240,7 @@
             "implemented": true,
             "evidence": [
               "packs/observability-incident-response/modules/observability-incident-tools/entry.js",
+              "packs/observability-incident-response/workflows/observability-incident-response/incident-review.json",
               "test/target-pack-buildout.test.js"
             ]
           },
@@ -13328,6 +13411,7 @@
       },
       "current_tests": [
         "test/agent-protocol.test.js",
+        "test/agent-workflow-smoke.test.js",
         "test/brain.test.js",
         "test/dashboard-research-source-routes.test.js",
         "test/execution-node-protocol.test.js",
@@ -13384,8 +13468,8 @@
               "packs/security-research/knowledge/security-research-safety.md",
               "packs/security-research/modules/security-research-tools/entry.js",
               "packs/security-research/modules/security-research-tools/manifest.json",
-              "packs/security-research/workflows/source-regression.json",
               "test/agent-protocol.test.js",
+              "test/agent-workflow-smoke.test.js",
               "test/brain.test.js",
               "test/dashboard-research-source-routes.test.js",
               "test/execution-node.test.js",
@@ -13394,8 +13478,7 @@
               "test/platform-kernel.test.js",
               "test/security-research-adapter.test.js",
               "test/security-research-pack.test.js",
-              "test/security-research-unit.test.js",
-              "test/static-code-quality.test.js"
+              "test/security-research-unit.test.js"
             ]
           },
           "inventory": {
@@ -13409,6 +13492,7 @@
               "packs/security-research/modules/security-research-tools/manifest.json",
               "packs/security-research/workflows/version-regression-check.json",
               "test/agent-protocol.test.js",
+              "test/agent-workflow-smoke.test.js",
               "test/brain.test.js",
               "test/kernel-migration-parity.test.js",
               "test/pack-manifest-consistency.test.js",
@@ -13432,6 +13516,7 @@
               "packs/security-research/workflows/source-regression.json",
               "packs/security-research/workflows/version-regression-check.json",
               "test/agent-protocol.test.js",
+              "test/agent-workflow-smoke.test.js",
               "test/brain.test.js",
               "test/dashboard-research-source-routes.test.js",
               "test/phase-packs-16-20.test.js",
@@ -13446,6 +13531,7 @@
             "status": "not_observed",
             "implemented": false,
             "evidence": [
+              "test/agent-workflow-smoke.test.js",
               "test/kernel-migration-parity.test.js",
               "test/pack-manifest-consistency.test.js"
             ]
@@ -13482,6 +13568,7 @@
               "packs/security-research/modules/security-research-tools/manifest.json",
               "packs/security-research/workflows/source-regression.json",
               "packs/security-research/workflows/version-regression-check.json",
+              "test/agent-workflow-smoke.test.js",
               "test/brain.test.js",
               "test/dashboard-research-source-routes.test.js",
               "test/execution-node-protocol.test.js",
@@ -13509,6 +13596,7 @@
               "packs/security-research/workflows/source-regression.json",
               "packs/security-research/workflows/version-regression-check.json",
               "test/agent-protocol.test.js",
+              "test/agent-workflow-smoke.test.js",
               "test/brain.test.js",
               "test/dashboard-research-source-routes.test.js",
               "test/execution-node-protocol.test.js",
@@ -13556,6 +13644,7 @@
               "packs/security-research/modules/security-research-tools/manifest.json",
               "packs/security-research/workflows/version-regression-check.json",
               "test/agent-protocol.test.js",
+              "test/agent-workflow-smoke.test.js",
               "test/brain.test.js",
               "test/dashboard-research-source-routes.test.js",
               "test/execution-node-protocol.test.js",
@@ -13586,9 +13675,9 @@
               "packs/security-research/modules/security-research-tools/entry.js",
               "packs/security-research/modules/security-research-tools/manifest.json",
               "packs/security-research/sidekick.pack.json",
-              "packs/security-research/workflows/source-regression.json",
               "packs/security-research/workflows/version-regression-check.json",
               "test/agent-protocol.test.js",
+              "test/agent-workflow-smoke.test.js",
               "test/brain.test.js",
               "test/pack-manifest-consistency.test.js",
               "test/phase-packs-16-20.test.js",
@@ -13612,6 +13701,7 @@
               "packs/security-research/workflows/source-regression.json",
               "packs/security-research/workflows/version-regression-check.json",
               "test/agent-protocol.test.js",
+              "test/agent-workflow-smoke.test.js",
               "test/brain.test.js",
               "test/dashboard-research-source-routes.test.js",
               "test/execution-node-protocol.test.js",
@@ -13635,6 +13725,7 @@
             "implemented": true,
             "evidence": [
               "test/agent-protocol.test.js",
+              "test/agent-workflow-smoke.test.js",
               "test/execution-node-protocol.test.js",
               "test/execution-node.test.js",
               "test/platform-kernel.test.js",
@@ -13691,6 +13782,7 @@
             "packs/security-research/workflows/source-regression.json",
             "packs/security-research/workflows/version-regression-check.json",
             "test/agent-protocol.test.js",
+            "test/agent-workflow-smoke.test.js",
             "test/brain.test.js",
             "test/dashboard-research-source-routes.test.js",
             "test/execution-node-protocol.test.js",
@@ -15345,7 +15437,8 @@
         "test/campaign-packs-6-10.test.js",
         "test/cross-pack-workflow-fixtures.test.js",
         "test/pack-manifest-lifecycle.test.js",
-        "test/scripts-quality-gates.test.js"
+        "test/scripts-quality-gates.test.js",
+        "test/workflow-effects.test.js"
       ],
       "maturity_gaps": [
         "no stored fixture verification evidence",
@@ -15375,7 +15468,8 @@
               "packs/testing-quality-engineering/modules/testing-quality-tools/manifest.json",
               "test/campaign-packs-6-10.test.js",
               "test/cross-pack-workflow-fixtures.test.js",
-              "test/pack-manifest-lifecycle.test.js"
+              "test/pack-manifest-lifecycle.test.js",
+              "test/workflow-effects.test.js"
             ]
           },
           "inventory": {
@@ -15397,7 +15491,8 @@
               "packs/testing-quality-engineering/workflows/quality-gate.json",
               "test/campaign-packs-6-10.test.js",
               "test/cross-pack-workflow-fixtures.test.js",
-              "test/pack-manifest-lifecycle.test.js"
+              "test/pack-manifest-lifecycle.test.js",
+              "test/workflow-effects.test.js"
             ]
           },
           "diagnosis": {
@@ -15421,7 +15516,8 @@
               "packs/testing-quality-engineering/workflows/quality-lifecycle.json",
               "test/campaign-packs-6-10.test.js",
               "test/cross-pack-workflow-fixtures.test.js",
-              "test/scripts-quality-gates.test.js"
+              "test/scripts-quality-gates.test.js",
+              "test/workflow-effects.test.js"
             ]
           },
           "execution": {
@@ -15435,7 +15531,8 @@
               "test/campaign-packs-6-10.test.js",
               "test/cross-pack-workflow-fixtures.test.js",
               "test/pack-manifest-lifecycle.test.js",
-              "test/scripts-quality-gates.test.js"
+              "test/scripts-quality-gates.test.js",
+              "test/workflow-effects.test.js"
             ]
           },
           "verification": {
@@ -15452,7 +15549,8 @@
               "test/campaign-packs-6-10.test.js",
               "test/cross-pack-workflow-fixtures.test.js",
               "test/pack-manifest-lifecycle.test.js",
-              "test/scripts-quality-gates.test.js"
+              "test/scripts-quality-gates.test.js",
+              "test/workflow-effects.test.js"
             ]
           },
           "recovery": {
@@ -15461,7 +15559,8 @@
             "evidence": [
               "packs/testing-quality-engineering/modules/testing-quality-tools/entry.js",
               "packs/testing-quality-engineering/workflows/quality-lifecycle.json",
-              "test/scripts-quality-gates.test.js"
+              "test/scripts-quality-gates.test.js",
+              "test/workflow-effects.test.js"
             ]
           },
           "health": {
@@ -15495,7 +15594,8 @@
               "packs/testing-quality-engineering/modules/testing-quality-tools/manifest.json",
               "packs/testing-quality-engineering/sidekick.pack.json",
               "test/campaign-packs-6-10.test.js",
-              "test/scripts-quality-gates.test.js"
+              "test/scripts-quality-gates.test.js",
+              "test/workflow-effects.test.js"
             ]
           },
           "security": {
@@ -15509,7 +15609,8 @@
               "test/campaign-packs-6-10.test.js",
               "test/cross-pack-workflow-fixtures.test.js",
               "test/pack-manifest-lifecycle.test.js",
-              "test/scripts-quality-gates.test.js"
+              "test/scripts-quality-gates.test.js",
+              "test/workflow-effects.test.js"
             ]
           },
           "fixtures": {
@@ -15567,7 +15668,8 @@
             "test/campaign-packs-6-10.test.js",
             "test/cross-pack-workflow-fixtures.test.js",
             "test/pack-manifest-lifecycle.test.js",
-            "test/scripts-quality-gates.test.js"
+            "test/scripts-quality-gates.test.js",
+            "test/workflow-effects.test.js"
           ]
         },
         "weaknesses": [

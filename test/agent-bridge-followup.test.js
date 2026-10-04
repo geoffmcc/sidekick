@@ -334,6 +334,36 @@ let server;
     assert.strictEqual(typeof toolStep.result, "string");
   });
 
+  await ok("15b) a read-only Agent task runs a registered workflow that dispatches a core tool", async () => {
+    const workflows = require("../src/workflows/repository");
+    const dbStore = require("../src/db");
+    const readName = "core/agent-task-read-fixture";
+    workflows.registerWorkflowDefinition({
+      name: readName, version: "1.0.0", title: "Agent task core read", description: "A read-only workflow composed with the canonical core tools",
+      mode: "read_only", inputs: {},
+      steps: [{ name: "catalog", tool: "tools", args: { action: "overview" }, expect: "text" }],
+      result: { catalog: "${steps.catalog.text}" },
+    }, { ownerKind: "core" });
+    fake = fakeToolThenDone([
+      { tool: "workflow", arguments: { action: "run", name: readName, inputs: {} } },
+      { done: true, result: "I inspected the registered core catalog workflow." },
+    ]);
+    const allowed = await request("POST", "/api/agent/run", {
+      goal: "Inspect the tool catalog through the registered workflow and summarize it",
+      goal_spec: { read_only: true, success_criteria: ["the registered workflow returned catalog evidence"] },
+    });
+    assert.equal(allowed.status, 200);
+    const readTranscript = await waitForTranscript(allowed.data.taskId);
+    const workflowCall = readTranscript.steps.find(step => step.type === "tool" && step.tool === "workflow");
+    assert.ok(workflowCall && !/^Error:/.test(workflowCall.result || ""), `the read-only workflow dispatch must succeed: ${JSON.stringify(workflowCall)}`);
+    const readRun = dbStore.getDb().prepare("SELECT workflow_id FROM platform_workflows WHERE name = ? ORDER BY created_at DESC LIMIT 1").get(readName)?.workflow_id;
+    assert.ok(readRun, "the workflow tool created a durable run");
+    const readRecord = dbStore.getDb().prepare("SELECT state FROM platform_workflows WHERE workflow_id = ?").get(readRun);
+    assert.equal(readRecord.state, "completed");
+    const coreStep = dbStore.getDb().prepare("SELECT state FROM platform_workflow_steps WHERE workflow_id = ? AND step_index = 0").get(readRun);
+    assert.equal(coreStep.state, "completed", "the nested core `tools` capability really dispatched");
+  });
+
   // 17) A blocked / non-visible tool remains blocked in a follow-up.
   await ok("17) a tool not visible to the agent source stays blocked in a follow-up", async () => {
     fake = fakeDirect("root");

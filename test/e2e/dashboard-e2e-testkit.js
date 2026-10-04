@@ -129,6 +129,7 @@ function startProcess(command, args, env, output) {
 
 async function startOllamaBoundary() {
   const port = await freePort();
+  const scripted = [];
   const server = http.createServer((req, res) => {
     let text = "";
     req.on("data", chunk => { text += chunk; });
@@ -141,7 +142,9 @@ async function startOllamaBoundary() {
         return;
       }
       if (req.method === "POST" && req.url === "/api/chat") {
-        const content = body.format === "json" ? JSON.stringify({ done: true, result: "E2E task completed" }) : "E2E direct answer";
+        const content = body.format === "json"
+          ? (scripted.length ? scripted.shift() : JSON.stringify({ done: true, result: "E2E task completed" }))
+          : "E2E direct answer";
         res.end(JSON.stringify({ model: "e2e-model", message: { role: "assistant", content }, done: true, done_reason: "stop" }));
         return;
       }
@@ -153,7 +156,7 @@ async function startOllamaBoundary() {
     server.once("error", reject);
     server.listen(port, "127.0.0.1", resolve);
   });
-  return { server, port };
+  return { server, port, setChatResponses(responses) { scripted.splice(0, scripted.length, ...responses.map(value => typeof value === "string" ? value : JSON.stringify(value))); } };
 }
 
 async function stopProcess(child) {

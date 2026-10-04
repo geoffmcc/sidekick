@@ -25,6 +25,19 @@ const { createAgentCatalog } = require("../src/agent/catalog");
   assert.strictEqual(direct.limit, 3);
   assert.strictEqual(direct.entries.every(entry => entry.kind === "tool"), true);
   assert.ok(direct.entries.every(entry => entry.owner && entry.availability && entry.policy));
+  const browserEffects = project({ source: "agent", kind: "tool", query: "browser", limit: 10 }).entries.find(entry => entry.name === "browser");
+  assert.ok(browserEffects.effects.by_action.screenshot.includes("artifact"));
+  assert.ok(browserEffects.effects.by_action.click.includes("external"));
+
+  const workflowRepository = require("../src/workflows/repository");
+  workflowRepository.registerWorkflowDefinition({
+    name: "core/catalog-effect-fixture", version: "1.0.0", title: "Catalog effect fixture",
+    description: "A synthetic state write for capability discovery", mode: "mutating", inputs: {},
+    steps: [{ name: "persist", tool: "store", args: { key: "fixture", value: "fixture" } }], result: {},
+  }, { ownerKind: "core" });
+  const workflowEntry = project({ source: "agent", kind: "workflow", query: "catalog-effect-fixture", limit: 10 }).entries[0];
+  assert.equal(workflowEntry.effects.writes_application_state, true);
+  assert.equal(workflowEntry.available, true);
 
   const filtered = project({ source: "agent", kind: "tool", query: "status", limit: 10 });
   assert.ok(filtered.entries.some(entry => entry.name === "status"));

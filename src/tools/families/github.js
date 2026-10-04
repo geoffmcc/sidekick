@@ -105,6 +105,10 @@ function resolveGithubApiBase() {
   return "https://api.github.com";
 }
 
+function githubCredentialMissing() {
+  return { content: [{ type: "text", text: JSON.stringify({ ok: false, code: "github_credential_missing", error: "No GitHub credential is available from the active connector or supported protected credential sources.", guidance: "Configure an approved connector secret reference or the documented protected GitHub credential store; the tool does not create or expose credentials." }) }], isError: true, code: "github_credential_missing", status: "failed", result_status: "failed" };
+}
+
 // Pure decision helper for per-call connector health observability (unit
 // tested directly). Only state CHANGES are recorded — the kernel's
 // recordConnectorHealth writes a row and appends an event on every call, so
@@ -377,7 +381,7 @@ async function sidekick_ci_status(args = {}) {
   if (selector.error) return { content: [{ type: "text", text: selector.error }], isError: true };
 
   const token = resolveGithubToken();
-  if (!token) return { content: [{ type: "text", text: "github_token not found in secret store" }], isError: true };
+  if (!token) return githubCredentialMissing();
 
   try {
     let ref = String(selector.value);
@@ -417,7 +421,7 @@ async function sidekick_github({ action, repo, args: extraArgs }) {
   const token = resolveGithubToken();
 
   if (!token) {
-    return { content: [{ type: "text", text: "github_token not found in secret store" }], isError: true };
+    return githubCredentialMissing();
   }
 
   const https = require("https");
@@ -593,4 +597,4 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_github, sidekick_ci_status, parseGithubArgs, getGithubArg, getCiRevisionSelector, buildCiStatusResult, formatCiStatusText, resolveGithubToken, resolveGithubApiBase, githubHealthDecision, noteGithubResponse };
+module.exports = { descriptors, sidekick_github, sidekick_ci_status, parseGithubArgs, getGithubArg, getCiRevisionSelector, buildCiStatusResult, formatCiStatusText, resolveGithubToken, resolveGithubApiBase, githubCredentialMissing, githubHealthDecision, noteGithubResponse };

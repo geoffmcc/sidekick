@@ -184,7 +184,7 @@ async function handleAction(args, runtime = {}, { resolveSecret = null } = {}) {
       const plaintext = resolveSecret(args.secret_ref);
       if (!plaintext) {
         throw new BrowserActionError(
-          `secret_ref "${String(args.secret_ref).slice(0, 100)}" did not resolve to a stored secret (use "secret:<name>")`,
+          "The stored credential reference did not resolve. Verify that the secret exists in Sidekick's protected secret store and that the current caller is authorized to use it.",
           "secret_not_found"
         );
       }

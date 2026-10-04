@@ -1,9 +1,9 @@
 const assert = require("assert");
 const path = require("path");
 const fs = require("fs");
+const os = require("os");
 
-const DATA_DIR = path.join(__dirname, "test-data-workflow-runner-" + Date.now());
-fs.mkdirSync(DATA_DIR, { recursive: true });
+const DATA_DIR = fs.mkdtempSync(path.join(process.env.SIDEKICK_TEST_SUITE_ROOT || os.tmpdir(), "workflow-runner-data-"));
 process.env.SIDEKICK_DATA_DIR = DATA_DIR;
 
 delete require.cache[require.resolve("../src/db")];

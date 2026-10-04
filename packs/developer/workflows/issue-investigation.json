@@ -3,8 +3,8 @@
   "name": "developer/issue-investigation",
   "version": "1.0.0",
   "title": "Issue Investigation",
-  "description": "Investigate a GitHub issue or a locally described bug and produce evidence-backed findings. Read-only: never modifies source. Maps issue language to code areas, inspects the implicated source and history, and records a durable investigation handoff.",
-  "mode": "read_only",
+  "description": "Investigate a GitHub issue or a locally described bug and produce evidence-backed findings. It never modifies source. It records a durable investigation handoff by default; set record_handoff=false to omit that persistent Sidekick write.",
+  "mode": "mutating",
   "tags": ["developer", "investigation", "read-only"],
   "inputs": {
     "path": { "type": "string", "required": true, "description": "Repository path" },
@@ -75,7 +75,7 @@
         "project": "${inputs.project}",
         "title": "Issue investigation: ${inputs.symptom}",
         "source": "developer/issue-investigation",
-        "content": "Repository: ${inputs.path}\nBranch: ${steps.profile.json.repository.branch}\nHEAD: ${steps.profile.json.repository.head.sha}\nSymptom: ${inputs.symptom}\n\nCode search matches:\n${steps.code_search.text}\n\nSymptom text matches:\n${steps.symptom_search.text}\n\nRecent history:\n${steps.recent_changes.text}\n\nWorking tree:\n${steps.working_tree.text}\n\nNOTE: this workflow is read-only. It collects evidence and does not modify source; implementation requires developer/implement-change."
+        "content": "Repository: ${inputs.path}\nBranch: ${steps.profile.json.repository.branch}\nHEAD: ${steps.profile.json.repository.head.sha}\nSymptom: ${inputs.symptom}\n\nCode search matches:\n${steps.code_search.text}\n\nSymptom text matches:\n${steps.symptom_search.text}\n\nRecent history:\n${steps.recent_changes.text}\n\nWorking tree:\n${steps.working_tree.text}\n\nThis workflow does not modify source. It records a durable Sidekick handoff by default; set record_handoff=false to omit that write. Implementation requires developer/implement-change."
       },
       "when": "${inputs.record_handoff}",
       "expect": "text",

@@ -5,6 +5,8 @@ const DEFINITIONS = Object.freeze({
   policy_denied: [403, false], approval_required: [202, true], dependency_missing: [503, true],
   capability_unavailable: [503, true], conflict: [409, true], not_found: [404, false],
   operation_ambiguous: [409, false], verification_failed: [422, false], resource_exhausted: [429, true],
+  operator_authentication_required: [401, false], network_scope_required: [403, false], network_scope_unavailable: [403, false], network_scope_denied: [403, false],
+  github_credential_missing: [503, false], service_unreachable: [503, true], dns_resolution_failed: [502, true], network_timeout: [504, true], network_unreachable: [503, true],
   provider_failed: [502, true], timeout: [504, true], cancellation: [499, false], internal_error: [500, false],
 });
 

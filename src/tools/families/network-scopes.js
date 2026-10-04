@@ -14,7 +14,8 @@ async function sidekick_network_scopes(args = {}, runtime = {}) {
   const scopes = require("../../security/network-scopes");
   const action = args.action || "list";
   if (["create", "update", "state"].includes(action) && !runtime?.context?.authIdentity?.principal_id) {
-    return { content: [{ type: "text", text: "Authentication required for network scope mutations" }], isError: true };
+    const message = "An authenticated operator principal is required to mutate network scopes. User consent or approval alone does not establish operator identity.";
+    return { content: [{ type: "text", text: JSON.stringify({ ok: false, code: "operator_authentication_required", error: message, guidance: "Authenticate as an authorized operator, then request the scope change through the governed network-scope tool." }) }], isError: true, code: "operator_authentication_required", status: "failed", result_status: "failed" };
   }
   if (action === "list") return result({ ok: true, action, scopes: scopes.list({ state: args.state, limit: args.limit }) });
   if (action === "get") {

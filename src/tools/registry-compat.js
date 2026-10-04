@@ -92,6 +92,7 @@ function getToolDefsForSource(source = getCurrentSource()) {
         // to invent Agent-facing capability labels.
         capabilities: liveDef?.capabilities || [],
         contextProvider: liveDef?.contextProvider || null,
+        effects: liveDef?.effects || TOOL_DEFS.find(definition => stripSidekickPrefix(definition.name) === stripSidekickPrefix(tool.name))?.effects || null,
         policy: policy.reason,
         approval_required: approval.required,
         approval: approval.reason
