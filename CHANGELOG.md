@@ -4,6 +4,8 @@ All notable changes to Sidekick.
 
 ## Unreleased
 
+## [2.2.0] - 2026-10-04
+
 ### Platform boundaries and Dashboard observability
 
 - Added a repository-owned architecture and cycle check with actionable import
