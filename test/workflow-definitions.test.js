@@ -341,6 +341,38 @@ function baseDefinition(overrides = {}) {
     }
   });
 
+  await test('WD.11g: cancellation skips normal steps but still dispatches bounded always cleanup', async () => {
+    repository.registerWorkflowDefinition({
+      name: 'core/cancel-with-cleanup-flow', version: '1.0.0', title: 'Cancel with cleanup',
+      description: 'Runs an always cleanup step after cancellation', inputs: {},
+      steps: [
+        { name: 'ordinary', tool: 'get', args: { key: 'wf-test-key' } },
+        { name: 'cleanup', tool: 'get', args: { key: 'wf-test-key' }, always: true, on_error: 'continue' },
+      ],
+      result: {},
+    }, { ownerKind: 'core' });
+    const originalGet = platformKernel.getExecutionClaim;
+    let cleanupCalls = 0;
+    const originalDispatch = dispatcher.callInternalTool;
+    platformKernel.getExecutionClaim = function requestedCancel(executionId) {
+      const claim = originalGet.call(this, executionId);
+      return claim ? { ...claim, cancel_requested: true } : claim;
+    };
+    dispatcher.callInternalTool = async (tool, args, options) => {
+      if (args.key === 'wf-test-key') cleanupCalls++;
+      return originalDispatch(tool, args, options);
+    };
+    try {
+      const run = await runner.runWorkflowDefinition('core/cancel-with-cleanup-flow', {});
+      assert.equal(run.status, 'cancelled');
+      assert.deepEqual(run.steps.map(step => step.status), ['cancelled', 'ok']);
+      assert.equal(cleanupCalls, 1, 'only the always-marked cleanup step dispatches');
+    } finally {
+      platformKernel.getExecutionClaim = originalGet;
+      dispatcher.callInternalTool = originalDispatch;
+    }
+  });
+
   await test('WD.11a: caller authority permits a read and denies a misleading read_only target mutation', async () => {
     const envelope = createAuthorityEnvelope({ allowed_effects: ['read_only'] });
     const context = toolContext.createAgentExecutionContext({ agentAuthorityContext: { envelope } });
@@ -412,17 +444,20 @@ function baseDefinition(overrides = {}) {
     repository.registerWorkflowDefinition(originalDefinition, { ownerKind: 'core' });
     const originalDispatch = dispatcher.callInternalTool;
     let dispatches = 0;
-    dispatcher.callInternalTool = async () => {
+    let dispatchOptions = null;
+    dispatcher.callInternalTool = async (_tool, _args, options) => {
       dispatches++;
+      dispatchOptions = options;
       return { isError: true, approvalRequired: true, approvalId: 'approval_fixture', code: 'approval_required', status: 'approval_required', content: [{ type: 'text', text: 'Approval required' }] };
     };
     try {
-      const pending = await runner.runWorkflowDefinition(name, {});
+      const pending = await runner.runWorkflowDefinition(name, {}, { actorPrincipalId: 'actor_fixture', requestedByPrincipalId: 'requester_fixture', scopes: ['tools.execute'], delegationId: 'delegation_fixture' });
       assert.strictEqual(pending.status, 'awaiting_approval');
       assert.strictEqual(pending.ok, false);
       assert.strictEqual(pending.result_status, 'approval_required');
       assert.strictEqual(pending.steps[0].status, 'approval_required');
       assert.strictEqual(pending.steps[0].approval_id, 'approval_fixture');
+      assert.deepStrictEqual(dispatchOptions.authIdentity, { principal_id: 'actor_fixture', requested_by_principal_id: 'requester_fixture', acting_for_principal_id: null, scopes: ['tools.execute'], delegation_id: 'delegation_fixture' });
 
       repository.registerWorkflowDefinition({
         ...originalDefinition,
@@ -482,6 +517,100 @@ function baseDefinition(overrides = {}) {
       assert.strictEqual(parent.approval.approval_id, 'approval_nested_fixture');
       assert.ok(parent.approval.nested_run_id, 'nested run identity remains available to resume/inspect');
       assert.strictEqual(platformKernel.getWorkflow(parent.run_id).state, 'paused');
+    } finally {
+      dispatcher.callInternalTool = originalDispatch;
+    }
+  });
+
+  await test('WD.11f: unexpected runner boundary failures are recorded without raw error text', async () => {
+    repository.registerWorkflowDefinition({
+      name: 'core/runner-boundary-failure', version: '1.0.0', title: 'Runner boundary failure',
+      description: 'Fails before dispatch at a durable workflow boundary', inputs: {},
+      steps: [{ name: 'never_dispatched', tool: 'get', args: { key: 'not-read' } }], result: {},
+    }, { ownerKind: 'core' });
+    const originalAdvance = platformKernel.advanceWorkflow;
+    try {
+      platformKernel.advanceWorkflow = () => { const error = new Error('internal boundary detail'); error.code = 'fixture_boundary_failure'; throw error; };
+      const run = await runner.runWorkflowDefinition('core/runner-boundary-failure', {});
+      assert.strictEqual(run.status, 'failed');
+      assert.strictEqual(run.steps[0].status, 'failed');
+      assert.strictEqual(run.steps[0].error_code, 'fixture_boundary_failure');
+      assert.strictEqual(run.evidence.never_dispatched.code, 'fixture_boundary_failure');
+      assert.ok(!JSON.stringify(run).includes('internal boundary detail'));
+
+      platformKernel.advanceWorkflow = () => { throw new Error('untyped boundary detail'); };
+      const untyped = await runner.runWorkflowDefinition('core/runner-boundary-failure', {});
+      assert.strictEqual(untyped.status, 'failed');
+      assert.strictEqual(untyped.steps[0].error_code, 'workflow_step_error');
+      assert.strictEqual(untyped.evidence.never_dispatched.code, 'workflow_step_error');
+      assert.ok(!JSON.stringify(untyped).includes('untyped boundary detail'));
+    } finally {
+      platformKernel.advanceWorkflow = originalAdvance;
+    }
+  });
+
+  await test('WD.11h: authenticated resume dispatch preserves null optional scope fields', async () => {
+    repository.registerWorkflowDefinition({
+      name: 'core/auth-context-defaults', version: '1.0.0', title: 'Auth context defaults',
+      description: 'Observes the dispatcher identity passed from runner options', inputs: {},
+      steps: [{ name: 'read', tool: 'get', args: { key: 'wf-test-key' } }], result: {},
+    }, { ownerKind: 'core' });
+    const originalDispatch = dispatcher.callInternalTool;
+    let observed = null;
+    dispatcher.callInternalTool = async (_tool, _args, options) => {
+      observed = options;
+      return { isError: true, approvalRequired: true, approvalId: 'approval_context_defaults', code: 'approval_required', status: 'approval_required', content: [{ type: 'text', text: 'Approval required' }] };
+    };
+    try {
+      const pending = await runner.runWorkflowDefinition('core/auth-context-defaults', {}, { actorPrincipalId: 'actor_fixture', requestedByPrincipalId: 'requester_fixture' });
+      assert.equal(pending.status, 'awaiting_approval');
+      assert.deepEqual(observed.authIdentity, { principal_id: 'actor_fixture', requested_by_principal_id: 'requester_fixture', acting_for_principal_id: null, scopes: null, delegation_id: null });
+    } finally {
+      dispatcher.callInternalTool = originalDispatch;
+    }
+  });
+
+  await test('WD.11i: workflow runner normalizes nested approvals and untyped dispatch errors', async () => {
+    const name = 'core/runner-result-normalization';
+    repository.registerWorkflowDefinition({
+      name, version: '1.0.0', title: 'Runner result normalization',
+      description: 'Covers nested approval projections and untyped dispatch errors',
+      inputs: { key: { type: 'string', required: true } },
+      steps: [{ name: 'call', tool: 'get', args: { key: '${inputs.key}' } }], result: {},
+    }, { ownerKind: 'core' });
+    const originalDispatch = dispatcher.callInternalTool;
+    dispatcher.callInternalTool = async (_tool, args) => {
+      if (args.key === 'approval-root') {
+        return { content: [{ type: 'text', text: JSON.stringify({ status: 'approval_required', approval: { approvalId: 'root_approval' }, run_id: 'root_run' }) }] };
+      }
+      if (args.key === 'approval-nested') {
+        return { content: [{ type: 'text', text: JSON.stringify({ result_status: 'approval_required', code: 'payload_approval_code', result: { approval: { approval_id: 'nested_approval' }, run_id: 'nested_run' } }) }] };
+      }
+      if (args.key === 'untyped-error') {
+        return { isError: true, content: [{ type: 'text', text: 'Unspecified fixture error' }] };
+      }
+      throw new Error('untyped dispatcher failure');
+    };
+    try {
+      const rootApproval = await runner.runWorkflowDefinition(name, { key: 'approval-root' });
+      assert.equal(rootApproval.status, 'awaiting_approval');
+      assert.equal(rootApproval.approval.approval_id, 'root_approval');
+      assert.equal(rootApproval.approval.nested_run_id, 'root_run');
+
+      const nestedApproval = await runner.runWorkflowDefinition(name, { key: 'approval-nested' });
+      assert.equal(nestedApproval.status, 'awaiting_approval');
+      assert.equal(nestedApproval.approval.approval_id, 'nested_approval');
+      assert.equal(nestedApproval.approval.nested_run_id, 'nested_run');
+      assert.equal(nestedApproval.evidence.call.code, 'payload_approval_code');
+
+      const resultError = await runner.runWorkflowDefinition(name, { key: 'untyped-error' });
+      assert.equal(resultError.status, 'failed');
+      assert.equal(resultError.steps[0].error_code, undefined);
+
+      const thrownError = await runner.runWorkflowDefinition(name, { key: 'throw-untyped' });
+      assert.equal(thrownError.status, 'failed');
+      assert.equal(thrownError.steps[0].error_code, 'tool_dispatch_error');
+      assert.ok(!JSON.stringify(thrownError).includes('untyped dispatcher failure'));
     } finally {
       dispatcher.callInternalTool = originalDispatch;
     }

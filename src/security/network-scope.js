@@ -156,7 +156,7 @@ function permanentDenial(value) {
    if (address.bits === 128 && (((address.value >> 120n) & 0xffn) === 0xffn || (address.value >> 118n) === 0x3fan)) return PERMANENT_REASON;
   return null;
 }
-function isPrivate(value) { let a; try { a = parseAddress(value); } catch { return false; } if (a.bits === 32) { const n = a.value; const first = Number(n >> 24n), second = Number((n >> 16n) & 255n); return first === 10 || first === 127 || first === 0 || (first === 172 && second >= 16 && second <= 31) || (first === 192 && second === 168) || (first === 100 && second >= 64 && second <= 127); } return ((a.value >> 121n) & 0x7fn) === 0x7e || a.value === 1n; }
+function isPrivate(value) { let a; try { a = parseAddress(value); } catch { return false; } if (a.bits === 32) { const n = a.value; const first = Number(n >> 24n), second = Number((n >> 16n) & 255n); return first === 10 || first === 127 || first === 0 || (first === 172 && second >= 16 && second <= 31) || (first === 192 && second === 168) || (first === 100 && second >= 64 && second <= 127); } return ((a.value >> 121n) & 0x7fn) === 0x7en || a.value === 1n; }
 function portAllowed(port, ranges) { return !ranges.length || ranges.some(range => { const [a, b] = String(range).split("-").map(Number); return port >= a && port <= (b || a); }); }
 function decision(scope, { host: rawHost, address: rawAddress, protocol, port, allowedHosts = null } = {}) {
    if (!scope || !scope.enabled) return { ok: false, reason: "scope_disabled" };
