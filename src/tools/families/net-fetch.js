@@ -15,8 +15,20 @@ const DEFAULT_TIMEOUT_MS = 30000;
 // unbounded body is a memory-exhaustion vector as well as a context flood.
 const MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
 
-function errorText(text) {
-  return { content: [{ type: "text", text }], isError: true };
+function errorText(text, code = "network_request_failed", guidance = null) {
+  const payload = { ok: false, code, error: text, ...(guidance ? { guidance } : {}) };
+  return { content: [{ type: "text", text: JSON.stringify(payload) }], isError: true, code, status: "failed", result_status: "failed" };
+}
+
+function connectionFailure(error) {
+  const code = String(error?.code || "");
+  if (["ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH"].includes(code)) {
+    return { code: "service_unreachable", guidance: "Verify the target service is running and reachable from Sidekick; this result does not establish that a firewall is responsible." };
+  }
+  if (["ENOTFOUND", "EAI_AGAIN", "EAI_FAIL"].includes(code)) {
+    return { code: "dns_resolution_failed", guidance: "Verify the hostname and DNS resolution from the Sidekick host." };
+  }
+  return { code: "network_unreachable", guidance: "Check the target endpoint and network path from the Sidekick host." };
 }
 
 async function sidekick_web_fetch({ url: targetUrl, method, headers, body, network_scope, network_scope_revision }, runtime = {}) {
@@ -26,7 +38,19 @@ async function sidekick_web_fetch({ url: targetUrl, method, headers, body, netwo
   // Destination policy first: this tool makes requests with the server's own
   // network identity, so an unvalidated target reaches anything the host can.
   const destination = await resolveOutboundUrl(targetUrl, "url", network_scope ? { networkScope: network_scope, networkScopeRevision: network_scope_revision } : {});
-  if (destination.refusal) return errorText("Error: " + destination.refusal);
+  if (destination.refusal) {
+    const code = destination.code || "outbound_target_denied";
+    const guidance = code === "network_scope_required"
+      ? "Private destinations require an existing operator-created named network scope; user consent or a tool approval does not create that scope."
+      : code === "network_scope_unavailable"
+        ? "Verify the configured scope name and immutable revision with the operator; scope changes must use the authorized scope-management path."
+        : code === "network_scope_denied"
+          ? "Ask the scope owner to review the current policy; this request did not broaden or change it."
+          : code === "dns_resolution_failed"
+            ? "Verify the hostname and DNS resolution from the Sidekick host."
+            : "Choose a permitted destination and preserve the outbound-target policy.";
+    return errorText(destination.refusal, code, guidance);
+  }
 
   // The dispatcher's deadline governs the socket too, not just the wrapper
   // promise — otherwise a cancelled call leaves the request running.
@@ -91,8 +115,14 @@ async function sidekick_web_fetch({ url: targetUrl, method, headers, body, netwo
         finish({ content: [{ type: "text", text: "Status: " + res.statusCode + "\n\n" + data }] });
       });
     });
-    req.on("error", (err) => finish(errorText("Error: " + err.message)));
-    req.on("timeout", () => { req.destroy(); finish(errorText("Request timed out after " + timeoutMs + "ms")); });
+    req.on("error", err => {
+      const failure = connectionFailure(err);
+      finish(errorText("The outbound request could not reach the target service", failure.code, failure.guidance));
+    });
+    req.on("timeout", () => {
+      req.destroy();
+      finish(errorText(`Request timed out after ${timeoutMs}ms`, "network_timeout", "The target did not respond before the configured timeout; this does not establish whether the service or network path is at fault."));
+    });
     if (body) req.write(body);
     req.end();
   });
@@ -119,4 +149,4 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_web_fetch };
+module.exports = { descriptors, sidekick_web_fetch, connectionFailure, errorText };
