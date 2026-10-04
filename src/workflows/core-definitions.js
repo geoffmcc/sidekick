@@ -22,10 +22,11 @@ const maintenance = Object.freeze({
   result: { maintenance: "${steps.maintenance.json}" },
   tags: ["memory", "maintenance", "governed"],
 });
+const definitions = Object.freeze([maintenance]);
 
 function ensureCoreWorkflowDefinitions() {
   const repository = require("./repository");
-  repository.registerWorkflowDefinition(maintenance, { ownerKind: "core", metadata: { builtin: true } });
+  for (const definition of definitions) repository.registerWorkflowDefinition(definition, { ownerKind: "core", metadata: { builtin: true } });
 }
 
-module.exports = { ensureCoreWorkflowDefinitions };
+module.exports = { ensureCoreWorkflowDefinitions, definitions };

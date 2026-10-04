@@ -5,7 +5,7 @@
   "title": "Linux process audit",
   "description": "Read-only bounded process inspection.",
   "mode": "read_only",
-  "inputs": { "action": { "type": "string", "required": true }, "filter": { "type": "string", "required": false } },
+  "inputs": { "action": { "type": "string", "required": true, "enum": ["list", "top", "tree"] }, "filter": { "type": "string", "required": false } },
   "steps": [{ "name": "processes", "tool": "linux_process_inspection", "args": { "action": "${inputs.action}", "filter": "${inputs.filter}" }, "expect": "json", "on_error": "fail" }],
   "result": { "processes": "${steps.processes.json}" },
   "tags": ["linux", "processes", "audit", "read-only"]

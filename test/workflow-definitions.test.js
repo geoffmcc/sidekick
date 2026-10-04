@@ -8,11 +8,10 @@
 
 const assert = require('assert');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
-const TEST_DATA_DIR = path.join(__dirname, 'test-data-workflow-definitions');
-fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
-fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
+const TEST_DATA_DIR = fs.mkdtempSync(path.join(process.env.SIDEKICK_TEST_SUITE_ROOT || os.tmpdir(), 'workflow-definitions-data-'));
 process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
 process.env.SIDEKICK_DB_FILE = path.join(TEST_DATA_DIR, 'sidekick.db');
 process.env.SIDEKICK_TOOL_POLICY = 'open';
@@ -27,6 +26,8 @@ const runner = require('../src/workflows/runner');
 const platformKernel = require('../src/platform/kernel');
 const dbStore = require('../src/db');
 const dispatcher = require('../src/tools/dispatcher');
+const toolContext = require('../src/tools/context');
+const { createAuthorityEnvelope } = require('../src/agent/authority');
 
 let failures = 0;
 async function test(label, fn) {
@@ -45,7 +46,7 @@ function baseDefinition(overrides = {}) {
     version: '1.0.0',
     title: 'Test flow',
     description: 'A workflow definition used to exercise the runner',
-    mode: 'read_only',
+    mode: 'mutating',
     inputs: { key: { type: 'string', required: true } },
     steps: [
       { name: 'store_value', tool: 'store', args: { key: '${inputs.key}', value: 'workflow-value' }, expect: 'text' },
@@ -337,6 +338,152 @@ function baseDefinition(overrides = {}) {
       assert.strictEqual(execution.state, 'cancelled');
     } finally {
       platformKernel.getExecutionClaim = originalGet;
+    }
+  });
+
+  await test('WD.11a: caller authority permits a read and denies a misleading read_only target mutation', async () => {
+    const envelope = createAuthorityEnvelope({ allowed_effects: ['read_only'] });
+    const context = toolContext.createAgentExecutionContext({ agentAuthorityContext: { envelope } });
+    repository.registerWorkflowDefinition({
+      name: 'core/misleading-readonly-flow', version: '1.0.0', title: 'Misleading workflow',
+      description: 'The label must not suppress the step effect', mode: 'read_only', inputs: {},
+      steps: [{ name: 'click', tool: 'browser', args: { action: 'click', session: 'missing', target: '#submit' } }],
+      result: { completed: '${steps.click.ok}' },
+    }, { ownerKind: 'core' });
+    repository.registerWorkflowDefinition({
+      name: 'core/authority-read-flow', version: '1.0.0', title: 'Read workflow',
+      description: 'A permitted bounded read', mode: 'read_only', inputs: {},
+      steps: [{ name: 'read', tool: 'get', args: { key: 'wf-test-key' } }],
+      result: { value: '${steps.read.text}' },
+    }, { ownerKind: 'core' });
+    const writeKey = 'workflow-authority-write-denied';
+    repository.registerWorkflowDefinition({
+      name: 'core/default-persistent-write', version: '1.0.0', title: 'Persistent write',
+      description: 'The default operation writes durable Sidekick state', mode: 'read_only', inputs: {},
+      steps: [{ name: 'persist', tool: 'store', args: { key: writeKey, value: 'must not persist' } }],
+      result: {},
+    }, { ownerKind: 'core' });
+
+    const permitted = await toolContext.runWithContext(context, () => runner.runWorkflowDefinition('core/authority-read-flow', {}));
+    assert.strictEqual(permitted.status, 'completed');
+    assert.strictEqual(permitted.steps[0].status, 'ok');
+
+    const denied = await toolContext.runWithContext(context, () => runner.runWorkflowDefinition('core/misleading-readonly-flow', {}));
+    assert.strictEqual(denied.status, 'failed');
+    assert.strictEqual(denied.steps[0].status, 'failed');
+    assert.strictEqual(denied.steps[0].error_code, 'agent_authority_denied');
+    assert.strictEqual(denied.evidence.click.code, 'agent_authority_denied');
+
+    const persistent = await toolContext.runWithContext(context, () => runner.runWorkflowDefinition('core/default-persistent-write', {}));
+    assert.strictEqual(persistent.status, 'failed');
+    assert.strictEqual(persistent.steps[0].error_code, 'agent_authority_denied');
+    assert.strictEqual(dbStore.getKV(writeKey), null, 'a strict no-write caller cannot trigger the workflow step default write');
+  });
+
+  await test('WD.11b: nested workflow keeps parent authority even when both mode labels claim read_only', async () => {
+    repository.registerWorkflowDefinition({
+      name: 'core/nested-external-step', version: '1.0.0', title: 'Nested external step',
+      description: 'A synthetic target mutation for authority propagation', mode: 'read_only', inputs: {},
+      steps: [{ name: 'submit', tool: 'browser', args: { action: 'click', session: 'missing', target: '#submit' } }],
+      result: {},
+    }, { ownerKind: 'core' });
+    repository.registerWorkflowDefinition({
+      name: 'core/nested-wrapper', version: '1.0.0', title: 'Nested wrapper',
+      description: 'Calls the child workflow through the standard tool path', mode: 'read_only', inputs: {},
+      steps: [{ name: 'nested', tool: 'workflow', args: { action: 'run', name: 'core/nested-external-step', inputs: {} }, expect: 'json' }],
+      result: { nested: '${steps.nested.json}' },
+    }, { ownerKind: 'core' });
+    const envelope = createAuthorityEnvelope({ allowed_effects: ['read_only', 'application_state'], changes_allowed: true });
+    const context = toolContext.createAgentExecutionContext({ agentAuthorityContext: { envelope } });
+    const before = dbStore.getDb().prepare("SELECT COUNT(*) AS count FROM platform_workflows WHERE name = ?").get('core/nested-external-step').count;
+    const run = await toolContext.runWithContext(context, () => runner.runWorkflowDefinition('core/nested-wrapper', {}));
+    assert.strictEqual(run.status, 'failed');
+    assert.strictEqual(run.steps[0].error_code, 'agent_authority_denied');
+    const after = dbStore.getDb().prepare("SELECT COUNT(*) AS count FROM platform_workflows WHERE name = ?").get('core/nested-external-step').count;
+    assert.strictEqual(after, before, 'the denied nested workflow was never created');
+  });
+
+  await test('WD.11c: approval-pending steps are explicit and definition drift requires fresh authorization', async () => {
+    const name = 'core/approval-drift-flow';
+    const originalDefinition = {
+      name, version: '1.0.0', title: 'Approval drift', description: 'Pending step for drift check', inputs: {},
+      steps: [{ name: 'pending', tool: 'get', args: { key: 'approved-key' }, expect: 'text' }], result: {},
+    };
+    repository.registerWorkflowDefinition(originalDefinition, { ownerKind: 'core' });
+    const originalDispatch = dispatcher.callInternalTool;
+    let dispatches = 0;
+    dispatcher.callInternalTool = async () => {
+      dispatches++;
+      return { isError: true, approvalRequired: true, approvalId: 'approval_fixture', code: 'approval_required', status: 'approval_required', content: [{ type: 'text', text: 'Approval required' }] };
+    };
+    try {
+      const pending = await runner.runWorkflowDefinition(name, {});
+      assert.strictEqual(pending.status, 'awaiting_approval');
+      assert.strictEqual(pending.ok, false);
+      assert.strictEqual(pending.result_status, 'approval_required');
+      assert.strictEqual(pending.steps[0].status, 'approval_required');
+      assert.strictEqual(pending.steps[0].approval_id, 'approval_fixture');
+
+      repository.registerWorkflowDefinition({
+        ...originalDefinition,
+        steps: [{ name: 'pending', tool: 'get', args: { key: 'changed-key' }, expect: 'text' }],
+      }, { ownerKind: 'core' });
+      const resumed = await runner.runWorkflowDefinition(name, {}, { resumeWorkflowId: pending.run_id });
+      assert.strictEqual(resumed.status, 'failed');
+      assert.strictEqual(resumed.code, 'workflow_definition_changed');
+      assert.strictEqual(dispatches, 1, 'a changed material argument must not be dispatched on the old approval');
+    } finally {
+      dispatcher.callInternalTool = originalDispatch;
+    }
+  });
+
+  await test('WD.11d: a thrown step failure appears in workflow steps and evidence', async () => {
+    repository.registerWorkflowDefinition({
+      name: 'core/thrown-step-failure', version: '1.0.0', title: 'Thrown failure', description: 'Records the failed step', inputs: {},
+      steps: [{ name: 'boom', tool: 'get', args: { key: 'throws' } }], result: {},
+    }, { ownerKind: 'core' });
+    const originalDispatch = dispatcher.callInternalTool;
+    dispatcher.callInternalTool = async () => { const error = new Error('unsafe internal text'); error.code = 'fixture_dispatch_failure'; throw error; };
+    try {
+      const run = await runner.runWorkflowDefinition('core/thrown-step-failure', {});
+      assert.strictEqual(run.status, 'failed');
+      assert.strictEqual(run.steps[0].status, 'failed');
+      assert.strictEqual(run.steps[0].error_code, 'fixture_dispatch_failure');
+      assert.strictEqual(run.evidence.boom.code, 'fixture_dispatch_failure');
+      assert.ok(!JSON.stringify(run).includes('unsafe internal text'));
+    } finally {
+      dispatcher.callInternalTool = originalDispatch;
+    }
+  });
+
+  await test('WD.11e: nested approval-pending results remain pending in the parent workflow', async () => {
+    const childName = 'core/nested-approval-flow';
+    const parentName = 'core/nested-approval-parent';
+    repository.registerWorkflowDefinition({
+      name: childName, version: '1.0.0', title: 'Nested approval', description: 'Returns an approval-pending tool result', inputs: {},
+      steps: [{ name: 'read', tool: 'get', args: { key: 'approval-pending-fixture' } }], result: {},
+    }, { ownerKind: 'core' });
+    repository.registerWorkflowDefinition({
+      name: parentName, version: '1.0.0', title: 'Nested approval parent', description: 'Composes the nested workflow', inputs: {},
+      steps: [{ name: 'child', tool: 'workflow', args: { action: 'run', name: childName, inputs: {} }, expect: 'json' }], result: { child: '${steps.child.json}' },
+    }, { ownerKind: 'core' });
+    const originalDispatch = dispatcher.callInternalTool;
+    dispatcher.callInternalTool = async (tool, args, options) => {
+      if (tool === 'get' && args.key === 'approval-pending-fixture') {
+        return { isError: true, approvalRequired: true, approvalId: 'approval_nested_fixture', code: 'approval_required', status: 'approval_required', content: [{ type: 'text', text: 'Approval required' }] };
+      }
+      return originalDispatch(tool, args, options);
+    };
+    try {
+      const parent = await runner.runWorkflowDefinition(parentName, {});
+      assert.strictEqual(parent.status, 'awaiting_approval');
+      assert.strictEqual(parent.ok, false);
+      assert.strictEqual(parent.steps[0].status, 'approval_required');
+      assert.strictEqual(parent.approval.approval_id, 'approval_nested_fixture');
+      assert.ok(parent.approval.nested_run_id, 'nested run identity remains available to resume/inspect');
+      assert.strictEqual(platformKernel.getWorkflow(parent.run_id).state, 'paused');
+    } finally {
+      dispatcher.callInternalTool = originalDispatch;
     }
   });
 

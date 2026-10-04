@@ -210,6 +210,31 @@ function parse(result) {
       assert.ok(run.result.evidence && run.result.evidence.artifact_id, "no evidence artifact from ui-smoke");
     });
 
+    await t("Agent authority permits bounded screenshot evidence without permitting target mutation", async () => {
+      const { runWorkflowDefinition } = require("../src/workflows/runner");
+      const toolContext = require("../src/tools/context");
+      const { createAuthorityEnvelope } = require("../src/agent/authority");
+      const context = toolContext.createAgentExecutionContext({
+        project: "ba-pack-evidence",
+        agentAuthorityContext: {
+          envelope: createAuthorityEnvelope({ allowed_effects: ["read_only", "artifact", "local_process"], changes_allowed: true, approval_threshold: "critical" }),
+          principal_ref: null,
+          project_ref: "ba_pack_evidence",
+        },
+      });
+      const run = await toolContext.runWithContext(context, () => runWorkflowDefinition("browser-automation/ui-smoke", {
+        url: `${base}/`,
+        expect_text: "js-rendered-content",
+        network_scope: "browser-fixture",
+        allowed_hosts: ["127.0.0.1"],
+        project: "ba-pack-evidence",
+      }, { source: "agent", actor: "fixture-agent", project: "ba-pack-evidence" }));
+      assert.equal(run.status, "completed", JSON.stringify(run.steps));
+      assert.ok(run.result.evidence?.artifact_id, "permitted screenshot artifact was not registered");
+      assert.equal(run.effects.no_target_mutation, true);
+      assert.equal(run.effects.produces_artifacts, true);
+    });
+
     await t("download-verification workflow captures a real download artifact and closes on failure", async () => {
       const { runWorkflowDefinition } = require("../src/workflows/runner");
       const run = await runWorkflowDefinition("browser-automation/download-verification", {

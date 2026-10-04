@@ -184,6 +184,8 @@ function buildAgentCapabilityMetadata({ packs = [], modules = [], workflows = []
   for (const workflow of workflows || []) {
     if (!workflow || workflow.state !== "registered") continue;
     const definition = workflow.definition && typeof workflow.definition === "object" ? workflow.definition : {};
+    const effectSummary = require("../workflows/effects").analyzeWorkflowEffects(definition);
+    const effectHint = `workflow_effects=${effectSummary.effects.join(",") || "unknown"}; strict_no_write=${effectSummary.strict_no_write}`;
     const shared = [definition.name, definition.title, definition.description, ...(Array.isArray(definition.tags) ? definition.tags : [])]
       .map(value => boundedText(value, 160)).filter(Boolean);
     for (const step of Array.isArray(definition.steps) ? definition.steps : []) {
@@ -196,10 +198,12 @@ function buildAgentCapabilityMetadata({ packs = [], modules = [], workflows = []
         .map(value => boundedText(value, 160)).filter(Boolean);
       if (!metadata[step.tool]) metadata[step.tool] = { domain: "", description: "", terms: [] };
       const entry = metadata[step.tool];
+      const stepEffects = require("../workflows/effects").effectForAction(step.tool, action || null, step.args || {});
+      entry.workflowEffects = [...new Set([...(entry.workflowEffects || []), `${effectHint}; step_effects=${stepEffects.join(",")}`])].slice(0, 12);
       entry.actions = [...new Set([...(entry.actions || []), ...(action ? [action] : [])])].slice(0, 64);
       entry.actionHints = [...(entry.actionHints || [])];
       if (action) {
-        const hint = boundedText([`action=${action}`, `intent=${step.title || step.name || ""}`, ...shared].filter(Boolean).join("; "), 240);
+        const hint = boundedText([`action=${action}`, `intent=${step.title || step.name || ""}`, `step_effects=${stepEffects.join(",")}`, effectHint, ...shared].filter(Boolean).join("; "), 300);
         if (hint && !entry.actionHints.includes(hint)) entry.actionHints.push(hint);
         entry.actionHints = entry.actionHints.slice(0, 64);
       }

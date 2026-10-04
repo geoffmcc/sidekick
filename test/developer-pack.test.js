@@ -549,9 +549,11 @@ function buildFixtureRepository() {
     const list = json(await callInternalTool('workflow', { action: 'list', owner: 'developer' }));
     assert.strictEqual(list.workflows.length, 7);
     const recon = list.workflows.find(workflow => workflow.name === 'developer/repository-recon');
-    assert.strictEqual(recon.mode, 'read_only');
+    assert.strictEqual(recon.mode, 'mutating');
     assert.strictEqual(recon.owner, 'pack:developer');
     assert.strictEqual(recon.inputs.path.required, true);
+    assert.strictEqual(recon.inputs.record_handoff.default, true);
+    assert.strictEqual(recon.effects.writes_application_state, true);
     const implement = list.workflows.find(workflow => workflow.name === 'developer/implement-change');
     assert.strictEqual(implement.mode, 'mutating');
   });

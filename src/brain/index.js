@@ -74,7 +74,13 @@ function formatToolCatalog(agentTools, metadata = {}) {
       ? "\n  exact registered action tokens (use these values after action=): " + actionTokens.join(" | ")
       : "";
     const semanticBlock = semantic.length ? "\n  registered capability intent guidance: " + semantic.join(" · ") : "";
-    return "- " + t.name + gate + desc + args + actionBlock + semanticBlock;
+    const effectSummary = extra && Array.isArray(extra.workflowEffects) && extra.workflowEffects.length
+      ? "\n  registered workflow effects: " + extra.workflowEffects.join(" | ")
+      : "";
+    const declaredEffects = t.effects
+      ? "\n  declared effects by action: default=" + (t.effects.default || ["unknown"]).join(",") + Object.entries(t.effects.by_action || {}).slice(0, 12).map(([action, effects]) => `; ${action}=${effects.join(",")}`).join("") + (t.effects.conditional || []).slice(0, 8).map(rule => `; if ${rule.argument}=${rule.equals}${rule.action ? ` on ${rule.action}` : ""} then ${rule.effects.join(",")}`).join("")
+      : "";
+    return "- " + t.name + gate + desc + args + actionBlock + semanticBlock + effectSummary + declaredEffects;
   }).join("\n");
 }
 

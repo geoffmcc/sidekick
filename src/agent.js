@@ -934,7 +934,7 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
     }
     if (durable) durableTaskStore.incrementUsage(taskId, { tool_calls: 1 }, "task.tool_call_started");
     try {
-      const result = await callAgentTool(name, args, { ...options, authIdentity: parentContext?.authIdentity || null, authorityApprovalRequired: authorityDecision?.approval_required === true, authorityRisk: authorityDecision?.risk_class || null, authorityReason: authorityDecision?.reason || null, idempotencyKey: options.idempotencyKey || `agent:${taskId}:${fingerprint}` });
+      const result = await callAgentTool(name, args, { ...options, authIdentity: parentContext?.authIdentity || null, agentAuthorityContext: durable ? { envelope: durable.authority_envelope, principal_ref: durable.actor_principal_id || durable.requested_by_principal_id || null, project_ref: durable.project_id || null, workspace_ref: durable.workspace_ref || null, repository_ref: durable.workspace_ref || null } : null, authorityApprovalRequired: authorityDecision?.approval_required === true, authorityRisk: authorityDecision?.risk_class || null, authorityReason: authorityDecision?.reason || null, idempotencyKey: options.idempotencyKey || `agent:${taskId}:${fingerprint}` });
       if (result && result.isError) {
         // The canonical dispatcher reports schema, policy, approval, and
         // handler failures as structured results rather than rejected

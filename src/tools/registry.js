@@ -1,6 +1,6 @@
 const { normalizeDescriptor } = require("./descriptor");
 const { TOOL_SCHEMAS } = require("./schemas");
-const { getStaticToolCategory, getStaticToolRisk } = require("./metadata");
+const { getStaticToolCategory, getStaticToolRisk, getToolEffectMetadata } = require("./metadata");
 const extractedFamilies = require("./families");
 
 function canonicalName(name) {
@@ -112,6 +112,7 @@ function createRegistry(descriptors) {
       // Declarative semantic labels help Agent discovery. They do not grant
       // authority; source policy and the dispatcher remain authoritative.
       capabilities: d.capabilities,
+      effects: getToolEffectMetadata(d.name),
     })),
     schemas: () => Object.fromEntries(definitionOrder.map(d => [d.name, d.schema])),
   });

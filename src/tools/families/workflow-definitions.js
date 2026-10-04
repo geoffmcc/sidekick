@@ -20,12 +20,14 @@ function failure(message, extra = {}) {
 }
 
 function summarize(record) {
+  const effects = require("../../workflows/effects").analyzeWorkflowEffects(record.definition);
   return {
     name: record.name,
     version: record.version,
     title: record.title,
     description: record.description,
     mode: record.mode,
+    effects,
     state: record.state,
     owner: record.owner_name ? `${record.owner_kind}:${record.owner_name}` : record.owner_kind,
     steps: (record.definition.steps || []).length,

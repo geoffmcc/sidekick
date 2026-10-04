@@ -3,8 +3,8 @@
   "name": "browser-automation/download-verification",
   "version": "1.0.0",
   "title": "Download Verification",
-  "description": "Navigate to a page, trigger a permitted download, and report the downloaded file's artifact reference, size and hash. The file is captured through the Core browser tool's artifact custody; no raw host path is returned. Read-only.",
-  "mode": "read_only",
+  "description": "Navigate to a page, trigger a caller-selected control to start a permitted download, and report the file's artifact reference, size and hash. The click may change external target state; the file is saved through bounded artifact custody and no raw host path is returned.",
+  "mode": "mutating",
   "tags": ["browser", "download", "artifacts", "verification"],
   "inputs": {
     "url": { "type": "string", "required": true, "description": "Page URL that hosts the download trigger" },
