@@ -99,3 +99,14 @@
 - Reproduce disclosure, foreign set, and foreign completion synchronization
   through canonical MCP dispatch with a synthetic operator principal. No schema,
   API, or dependency change.
+
+## Handoff purge audit milestone (2026-10-12)
+
+- Historical version purge is destructive and must not commit unless its audit
+  record commits. Keep the version-row lookup, link/version deletion, and audit
+  insertion in one immediate transaction; recheck the current version inside
+  the transaction to avoid stale preflight.
+- Refuse purge if the audit table is unavailable. No new schema, API, or
+  dependency; normal successful purge output and audit shape remain unchanged.
+- A temporary SQLite trigger reproduced audit-write failure. Verify the version
+  and links remain, then drop the trigger and verify a single audited retry.

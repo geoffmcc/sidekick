@@ -1,5 +1,15 @@
 # Reliability baseline
 
+## Handoff purge audit: 2026-10-12
+
+Injected aborting and silently ignored audit writes reproduced a destructive
+partial result: historical handoff content and links were deleted, then audit
+persistence failed or was suppressed. Purge now checks the inserted audit row
+and deletes history, links, and audit within one immediate SQLite transaction.
+The 20-case handoff reliability suite passes, including rollback and successful
+retry. This verifies SQLite logical atomicity under the injected failures, not
+power-loss durability.
+
 ## Resume project scope: 2026-10-12
 
 Canonical MCP integration fixtures showed a trusted project context was ignored

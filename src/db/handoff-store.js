@@ -674,20 +674,31 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
    * audit event records what was removed so the deletion itself is history.
    */
   function purgeHandoffVersion(handoffId, version, { reason, source } = {}) {
-    const current = getHandoff(handoffId);
-    if (!current) throw new Error(`Handoff not found: ${handoffId}`);
-    if (Number(version) === Number(current.version)) {
-      throw new Error(`Handoff "${current.id}" version ${version} is the CURRENT version; update the handoff first, then purge the historical version`);
-    }
     if (!hasTable("memory_handoff_versions")) throw new Error("memory_handoff_versions table is not available; run migrations");
-    const row = db.prepare("SELECT content_hash FROM memory_handoff_versions WHERE handoff_id = ? AND version = ?").get(current.id, Number(version));
-    if (!row) throw new Error(`Handoff "${current.id}" has no historical version ${version}`);
-    db.transaction(() => {
-      db.prepare("DELETE FROM memory_handoff_links WHERE handoff_id = ? AND version = ?").run(current.id, Number(version));
-      db.prepare("DELETE FROM memory_handoff_versions WHERE handoff_id = ? AND version = ?").run(current.id, Number(version));
-    })();
-    auditMemoryEvent("handoff_version_purged", "handoff", current.id, { version: Number(version), content_hash: row.content_hash, reason: String(reason || "unspecified").slice(0, 300) }, source || "system");
-    return { purged: true, handoff_id: current.id, version: Number(version), content_hash: row.content_hash };
+    if (!hasTable("memory_audit_events")) throw new Error("memory_audit_events table is not available; refusing unaudited handoff version purge");
+    const purgedVersion = Number(version);
+    return db.transaction(() => {
+      const current = db.prepare("SELECT version FROM memory_handoffs WHERE id = ?").get(handoffId);
+      if (!current) throw new Error(`Handoff not found: ${handoffId}`);
+      if (purgedVersion === Number(current.version)) {
+        throw new Error(`Handoff "${handoffId}" version ${version} is the CURRENT version; update the handoff first, then purge the historical version`);
+      }
+      const row = db.prepare("SELECT content_hash FROM memory_handoff_versions WHERE handoff_id = ? AND version = ?").get(handoffId, purgedVersion);
+      if (!row) throw new Error(`Handoff "${handoffId}" has no historical version ${version}`);
+      db.prepare("DELETE FROM memory_handoff_links WHERE handoff_id = ? AND version = ?").run(handoffId, purgedVersion);
+      const deleted = db.prepare("DELETE FROM memory_handoff_versions WHERE handoff_id = ? AND version = ?").run(handoffId, purgedVersion);
+      if (deleted.changes !== 1) throw new Error(`Handoff "${handoffId}" version ${version} changed concurrently during purge`);
+      const details = { version: purgedVersion, content_hash: row.content_hash, reason: String(reason || "unspecified").slice(0, 300) };
+      const auditId = auditMemoryEvent("handoff_version_purged", "handoff", handoffId, details, source || "system");
+      const audit = Number.isFinite(Number(auditId))
+        ? db.prepare("SELECT event_type, target_type, target_id, details_json FROM memory_audit_events WHERE id = ?").get(Number(auditId))
+        : null;
+      if (!audit || audit.event_type !== "handoff_version_purged" || audit.target_type !== "handoff"
+        || audit.target_id !== handoffId || JSON.stringify(parseJson(audit.details_json, {})) !== JSON.stringify(details)) {
+        throw new Error("Handoff version purge audit event was not persisted");
+      }
+      return { purged: true, handoff_id: handoffId, version: purgedVersion, content_hash: row.content_hash };
+    }).immediate();
   }
 
   function normalizeHandoffRow(row) {

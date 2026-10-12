@@ -1,5 +1,23 @@
 # Validation results
 
+## Handoff purge audit: 2026-10-12
+
+Windows checkout accessed through WSL, Node v24.18.0, installed dependencies;
+temporary SQLite trigger and disposable handoff fixtures.
+
+| Command | Actual result |
+| --- | --- |
+| `node --test test/handoff-reliability.test.js` | Exit 0; 20 passed, 0 failed/skipped; 7.280 seconds. Includes aborting and silently ignored purge-audit failures, retained version/link checks, and successful audited retry. |
+| `node test/run-all.js test/handoff-reliability.test.js test/memory-maintenance.test.js test/tools.test.js --concurrency=1 --json` | Exit 0; three suites passed, 0 failed/skipped; 15.134 seconds. |
+| `node --check src/db/handoff-store.js` and `node --check test/handoff-reliability.test.js` | PASS. |
+| `node scripts/check-docs.js`, `node scripts/check-architecture.js`, `node scripts/check-test-architecture.js`, and `git diff --check` | PASS; architecture 462 files, test architecture 295 suites. |
+
+The new regression failed against the pre-fix implementation: an aborting audit
+insert threw after the historical version had already been deleted. The
+regression also injects a silently ignored insert and verifies it is detected
+and rolled back. Full test tiers and release validation were not run for this
+scoped change.
+
 ## Resume project-scope milestone: 2026-10-12
 
 Windows checkout accessed through WSL, Node v24.18.0, installed dependencies;

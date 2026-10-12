@@ -90,6 +90,36 @@ test("handoff creation and version updates roll back when journal persistence fa
   assert.equal(store.listHandoffEvents(created.id).filter(event => event.event_type === "created").length, 1);
 });
 
+test("purging handoff history rolls back deletion when its audit write fails", () => {
+  const db = store.getDb();
+  const first = create();
+  store.saveHandoff({
+    id: first.id,
+    project: first.project,
+    content: "Second version retained for purge audit fixture",
+    packet: { ...first.packet, next_step: "Finish the purge audit fixture" },
+    expectedVersion: first.version,
+  });
+  const original = store.getHandoffVersion(first.id, first.version);
+  db.exec("CREATE TEMP TRIGGER reject_purge_audit BEFORE INSERT ON memory_audit_events WHEN NEW.event_type = 'handoff_version_purged' BEGIN SELECT RAISE(ABORT, 'injected purge audit failure'); END");
+  try {
+    assert.throws(() => store.purgeHandoffVersion(first.id, first.version, { reason: "isolated atomicity fixture", source: "test" }), /injected purge audit failure/);
+    assert.deepEqual(store.getHandoffVersion(first.id, first.version), original, "an audit failure must preserve the historical content and links");
+    assert.equal(db.prepare("SELECT COUNT(*) AS count FROM memory_audit_events WHERE event_type = 'handoff_version_purged' AND target_id = ?").get(first.id).count, 0);
+  } finally { db.exec("DROP TRIGGER reject_purge_audit"); }
+
+  db.exec("CREATE TEMP TRIGGER ignore_purge_audit BEFORE INSERT ON memory_audit_events WHEN NEW.event_type = 'handoff_version_purged' BEGIN SELECT RAISE(IGNORE); END");
+  try {
+    assert.throws(() => store.purgeHandoffVersion(first.id, first.version, { reason: "isolated atomicity fixture", source: "test" }), /audit event was not persisted/);
+    assert.deepEqual(store.getHandoffVersion(first.id, first.version), original, "a silently ignored audit insert must also preserve history");
+  } finally { db.exec("DROP TRIGGER ignore_purge_audit"); }
+
+  const result = store.purgeHandoffVersion(first.id, first.version, { reason: "isolated atomicity fixture", source: "test" });
+  assert.equal(result.purged, true);
+  assert.equal(store.getHandoffVersion(first.id, first.version), null);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM memory_audit_events WHERE event_type = 'handoff_version_purged' AND target_id = ?").get(first.id).count, 1);
+});
+
 test("persisted fresh evidence expires before a receiver resumes", () => {
   const h = ready();
   assert.equal(store.getHandoffResumePreflight(h.id).safe_to_resume, true);

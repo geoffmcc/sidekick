@@ -54,6 +54,13 @@ all three. The handler now binds/validates scope and filters both list and
 read-triggered synchronization. The wider interface authorization matrix
 remains open; no broad authorization claim follows from these cases.
 
+Confirmed P2 destructive-audit integrity gap (SK-023): purging historical
+handoff content previously committed the version/link deletion before writing
+its audit event. A rejected insert left content removed with no audit; a
+silently ignored insert could go undetected. The purge now verifies the audit
+row and commits it with deletion in one SQLite transaction. Trigger-based
+regressions cover both cases; no production data was involved.
+
 
 ## Fix and validation status
 

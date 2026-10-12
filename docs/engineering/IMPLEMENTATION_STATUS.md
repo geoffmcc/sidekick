@@ -1,12 +1,12 @@
 # Implementation status
 
-## Current checkpoint: resume project isolation
+## Current checkpoint: handoff purge audit
 
 Updated 2026-10-12. Reference: v2.2.1 at b89247b. Current milestone began on clean
 main at `d4c908cda76b4031bdab05458cb40afb4984954b` (`v2.2.1-1-gd4c908c`).
-Current branch: `improvement/resume-project-scope`, stacked on signed and
-pushed `improvement/handoff-save-atomicity`, `improvement/handoff-project-scope`,
-`improvement/resume-pointer-atomicity`, and
+Current branch: `improvement/handoff-purge-audit`, stacked on signed and
+pushed `improvement/resume-project-scope`, `improvement/handoff-save-atomicity`,
+`improvement/handoff-project-scope`, `improvement/resume-pointer-atomicity`, and
 `improvement/platform-continuity-concurrency`.
 
 Completed:
@@ -62,8 +62,15 @@ Completed:
   pointer. Resume now inherits/rejects project scope, filters list results, and
   confines read-triggered completion synchronization to the bound project.
   Three new regressions failed before the fix and pass after. Changes are
-  uncommitted on the current branch.
-- Current scoped run: handoff reliability (19 cases) passes. The atomicity
+  signed and pushed on `origin/improvement/resume-project-scope`.
+- Confirmed SK-023: purging a historical handoff version deleted its content
+  and links before writing the audit row. A rejected audit insert returned an
+  error after deletion; a silently ignored insert could report success without
+  an audit. Purge now rereads and deletes history/links
+  and verifies the audit row inside one immediate transaction. Abort and ignored
+  insert tests preserve the historical version; retry records one audit.
+  The fix is uncommitted on the current branch.
+- Current scoped run: handoff reliability (20 cases) passes. The atomicity
   milestone's grouped run passed five of six suites; handoff-versioning failed
   at the checkpoint `repository.head` assertion, reproduced directly. A
   separate grouped `security-boundaries.test.js` run had seven assertions
