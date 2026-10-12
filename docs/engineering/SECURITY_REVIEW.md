@@ -40,8 +40,8 @@ project when omitting the optional `project` argument. The source trusted the
 bound project only for the missing-scope check, then queried an unfiltered list
 and relied on principal ownership filtering. A focused two-project fixture
 reproduced the behavior; the handler now inherits the bound project and rejects
-explicit mismatches. No live data was involved. The fix is validated on
-`improvement/handoff-project-scope` but is not yet signed/pushed. The broader
+explicit mismatches. No live data was involved. The signed fix is pushed on
+`improvement/handoff-project-scope`. The broader
 MCP/Agent/Dashboard/resume authorization matrix remains open; do not infer that
 all interfaces now have equivalent scoping.
 

@@ -1,11 +1,12 @@
 # Implementation status
 
-## Current checkpoint: handoff project isolation
+## Current checkpoint: handoff save atomicity
 
 Updated 2026-10-12. Reference: v2.2.1 at b89247b. Current milestone began on clean
 main at `d4c908cda76b4031bdab05458cb40afb4984954b` (`v2.2.1-1-gd4c908c`).
-Current branch: `improvement/handoff-project-scope`, stacked on signed and
-pushed `improvement/resume-pointer-atomicity`, itself stacked on
+Current branch: `improvement/handoff-save-atomicity`, stacked on signed and
+pushed `improvement/handoff-project-scope`, itself stacked on signed and
+pushed `improvement/resume-pointer-atomicity` and
 `improvement/platform-continuity-concurrency`.
 
 Completed:
@@ -46,14 +47,21 @@ Completed:
   omitting the optional `project` argument. The handler now defaults to the
   trusted bound project and rejects explicit scope mismatches. The regression
   failed before and passed after.
+- Confirmed SK-021: `saveHandoff` committed row/version history before writing
+  the audit and tamper-evident journal. A rejected journal event could make the
+  call report failure after durable state changed. Create and update now persist
+  the row, history, audit, event, and links in the same SQLite transaction. The
+  failure-injection regression confirms rollback and retry for both operations.
+- The signed project-scope commit was pushed to origin before starting this
+  branch. Current atomicity changes are uncommitted and not staged.
 - Current scoped run: handoff reliability (15 cases), broad tools and dispatcher
   suites pass. A grouped `security-boundaries.test.js` run had seven assertions
   pass but failed during its existing Windows database cleanup hook with EBUSY;
   it is recorded as failed, not passed.
 
-No dependency, schema or version change on the current scope branch. Rollback
-is code-only but restores the demonstrated cross-project list behavior. No
-deployment or release; prior branch pushes were explicitly authorized.
+No dependency, schema or version change on this atomicity branch. Rollback is
+code-only but restores the demonstrated partial-save behavior. No deployment or
+release; prior branch pushes were explicitly authorized.
 
 Remaining, in priority order:
 
@@ -63,11 +71,15 @@ Remaining, in priority order:
    receiver using supported interfaces; add attributable execution receipts
    (SK-007/SK-009).
 3. Complete the cross-interface scope/authorization matrix (SK-008) and examine
-   wider handoff atomicity (SK-019), including non-list handoff actions.
+   remaining wider handoff atomicity (SK-019), including non-list actions.
 4. Deepen memory quality, scheduler/DST/retries, worker failure, pack rollback,
    operational recovery and current dependency advisory audits.
 
-Limits: the broad inventory is structural; phases 1-6 remain incomplete. Git
+Limits: the broad inventory is structural; phases 1-6 remain incomplete. The
+serial grouped run passed five suites but failed `handoff-versioning.test.js`
+at its `checkpoint.repository.head` assertion (`undefined` versus the current
+Git revision); direct execution reproduced it. Root cause is not established,
+and no assertion was weakened. Git
 reads are not an atomic filesystem snapshot; leases are not exclusive workspace
 locks. Fixture tests do not evaluate model quality, prove exactly-once external
 effects, or power-loss durability (SQLite synchronous=NORMAL is unchanged).

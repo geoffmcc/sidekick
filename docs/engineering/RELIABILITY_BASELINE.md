@@ -1,5 +1,17 @@
 # Reliability baseline
 
+## Handoff save atomicity: 2026-10-12
+
+Failure-injection regression covers handoff create and content update when the
+tamper-evident journal insert fails. After the fix, both operations leave the
+primary row, version history, and journal unchanged; retry after removing the
+failure commits once. `node --test test/handoff-reliability.test.js` passed all
+16 cases. The six-suite supported-runner group passed five suites and failed
+`handoff-versioning.test.js` at a checkpoint `repository.head` assertion; direct
+execution reproduced it. No product-level conclusion about that failure has
+been established. These are logical SQLite transaction tests, not a claim of
+power-loss durability.
+
 ## Current measurement (2026-10-12, d4c908c)
 
 A frozen Windows/Node 24.18.0 snapshot completed a bounded required-tier run:

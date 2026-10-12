@@ -478,6 +478,7 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
       const nextVersion = Number(existing.version || 1) + 1;
       const inTransaction = db.inTransaction;
       if (!inTransaction) db.exec("BEGIN IMMEDIATE");
+      let updated;
       try {
         db.prepare(`
           INSERT OR IGNORE INTO memory_handoff_versions (
@@ -532,15 +533,15 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
         if (outcome.changes === 0) {
           throw new Error(`Handoff "${existing.id}" changed concurrently during save (version ${existing.version} is no longer current)`);
         }
+        auditMemoryEvent("handoff_updated", "handoff", existing.id, { project: project || existing.project, version: nextVersion, content_hash: hash }, source || "system");
+        updated = getHandoff(existing.id);
+        appendHandoffEvent(existing.id, nextVersion, "updated", { content_hash: hash }, { actor: source || "system", source: source || "handoff" });
+        persistHandoffLinks(updated);
         if (!inTransaction) db.exec("COMMIT");
       } catch (error) {
         if (!inTransaction) { try { db.exec("ROLLBACK"); } catch {} }
         throw error;
       }
-      auditMemoryEvent("handoff_updated", "handoff", existing.id, { project: project || existing.project, version: nextVersion, content_hash: hash }, source || "system");
-      const updated = getHandoff(existing.id);
-      appendHandoffEvent(existing.id, nextVersion, "updated", { content_hash: hash }, { actor: source || "system", source: source || "handoff" });
-      persistHandoffLinks(updated);
       return updated;
     }
 
@@ -552,35 +553,45 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
     }
 
     const handoffId = id || stableId("handoff", `${project || "global"}|${hash}`);
-    db.prepare(`
-      INSERT INTO memory_handoffs (
-        id, project, title, source, task_id, version, previous_id, content_hash,
-        content, redacted_content, extraction_state, extraction_version, created_at, updated_at, packet_json,
-        owner_principal_id, created_by_principal_id, schema_version
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      handoffId,
-      project || null,
-      title || "handoff",
-      source || "handoff",
-      task_id || null,
-      1,
-      previous_id || null,
-      hash,
-      String(content || ""),
-      redacted,
-      extraction_state || "pending",
-      extraction_version || null,
-      ts,
-      ts,
-      packetJson || "{}",
-      owner_principal_id || null,
-      created_by_principal_id || null,
-      3
-    );
-    auditMemoryEvent("handoff_created", "handoff", handoffId, { project, version: 1, content_hash: hash }, source || "system");
-    appendHandoffEvent(handoffId, 1, "created", { content_hash: hash }, { actor: source || "system", source: source || "handoff" });
-    return getHandoff(handoffId);
+    const inTransaction = db.inTransaction;
+    if (!inTransaction) db.exec("BEGIN IMMEDIATE");
+    let created;
+    try {
+      db.prepare(`
+        INSERT INTO memory_handoffs (
+          id, project, title, source, task_id, version, previous_id, content_hash,
+          content, redacted_content, extraction_state, extraction_version, created_at, updated_at, packet_json,
+          owner_principal_id, created_by_principal_id, schema_version
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        handoffId,
+        project || null,
+        title || "handoff",
+        source || "handoff",
+        task_id || null,
+        1,
+        previous_id || null,
+        hash,
+        String(content || ""),
+        redacted,
+        extraction_state || "pending",
+        extraction_version || null,
+        ts,
+        ts,
+        packetJson || "{}",
+        owner_principal_id || null,
+        created_by_principal_id || null,
+        3
+      );
+      auditMemoryEvent("handoff_created", "handoff", handoffId, { project, version: 1, content_hash: hash }, source || "system");
+      appendHandoffEvent(handoffId, 1, "created", { content_hash: hash }, { actor: source || "system", source: source || "handoff" });
+      created = getHandoff(handoffId);
+      if (!inTransaction) db.exec("COMMIT");
+    } catch (error) {
+      if (!inTransaction) { try { db.exec("ROLLBACK"); } catch {} }
+      throw error;
+    }
+    return created;
   }
 
   /** Version history for a handoff: prior versions plus the current row, newest first. */

@@ -63,6 +63,33 @@ test("checkpoint and journal roll back together when event persistence fails", (
   assert.equal(store.listHandoffEvents(h.id).filter(e => e.event_type === "checkpoint_captured").length, 1);
 });
 
+test("handoff creation and version updates roll back when journal persistence fails", () => {
+  const db = store.getDb();
+  const original = create();
+  const before = store.getHandoff(original.id);
+  const historyBefore = store.listHandoffVersions(original.id);
+  const eventsBefore = store.listHandoffEvents(original.id);
+
+  db.exec("CREATE TEMP TRIGGER reject_handoff_write BEFORE INSERT ON memory_handoff_events WHEN NEW.event_type IN ('created', 'updated') BEGIN SELECT RAISE(ABORT, 'injected handoff event failure'); END");
+  try {
+    assert.throws(() => store.saveHandoff({ id: original.id, project: original.project, content: "Changed after a failed write", packet: { ...original.packet, next_step: "A different continuation" }, expectedVersion: original.version }), /injected handoff event failure/);
+    assert.deepEqual(store.getHandoff(original.id), before, "an update error must not leave new content or version state");
+    assert.deepEqual(store.listHandoffVersions(original.id), historyBefore, "failed updates must not leave a history snapshot");
+    assert.deepEqual(store.listHandoffEvents(original.id), eventsBefore, "failed updates must not advance the journal");
+
+    assert.throws(() => store.saveHandoff({ id: "failed_handoff_create", project: "continuity", content: "New handoff that must not persist", packet: { objective: "Test atomic create", status: "active", next_step: "Retry after trigger removal" } }), /injected handoff event failure/);
+    assert.equal(store.getHandoff("failed_handoff_create"), null, "a create error must not leave an unjournaled handoff");
+    assert.deepEqual(store.listHandoffEvents("failed_handoff_create"), []);
+  } finally { db.exec("DROP TRIGGER reject_handoff_write"); }
+
+  const updated = store.saveHandoff({ id: original.id, project: original.project, content: "Retry after event storage recovers", packet: { ...original.packet, next_step: "Retry succeeded" }, expectedVersion: original.version });
+  assert.equal(updated.version, original.version + 1);
+  assert.equal(store.listHandoffEvents(original.id).filter(event => event.event_type === "updated").length, 1);
+  const created = store.saveHandoff({ id: "failed_handoff_create", project: "continuity", content: "Retry create after event storage recovers", packet: { objective: "Test atomic create", status: "active", next_step: "Created with journal" } });
+  assert.ok(created);
+  assert.equal(store.listHandoffEvents(created.id).filter(event => event.event_type === "created").length, 1);
+});
+
 test("persisted fresh evidence expires before a receiver resumes", () => {
   const h = ready();
   assert.equal(store.getHandoffResumePreflight(h.id).safe_to_resume, true);

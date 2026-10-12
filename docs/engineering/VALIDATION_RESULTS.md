@@ -1,5 +1,22 @@
 # Validation results
 
+## Handoff save atomicity: 2026-10-12
+
+Windows checkout accessed through WSL, Node v24.18.0, installed dependencies;
+disposable SQLite/Git fixtures. No live database, service, model, or external
+account was used.
+
+| Command | Actual result |
+| --- | --- |
+| `node --test test/handoff-reliability.test.js` | Exit 0; 16 passed, 0 failed/skipped; 8.856 seconds. Includes injected create/update journal failures, state rollback, and safe retry. |
+| `node test/run-all.js test/handoff-reliability.test.js test/handoff-concurrency.test.js test/handoff-versioning.test.js test/agent-handoff-continuity.test.js test/tools.test.js test/dispatcher.test.cjs --concurrency=1 --json` | Exit 1; five suites passed, `handoff-versioning.test.js` failed. It failed at line 255 because `checkpoint.handoff.checkpoint.repository.head` was `undefined` instead of the checkout HEAD. No assertion was changed. |
+| `node test/handoff-versioning.test.js` | Exit 1; independently reproduced the same checkpoint `repository.head` assertion after the preceding versioning cases passed. Cause not established; this is recorded as a failure. |
+
+The new regression injects journal failures for create/update and checks the
+persisted row, version history, and journal are unchanged, then confirms retry
+records exactly one successful event. This establishes logical transaction
+rollback under the tested SQLite failures, not power-loss durability.
+
 ## Continuity concurrency milestone: 2026-10-12
 
 Baseline: d4c908cda76b4031bdab05458cb40afb4984954b, clean main.

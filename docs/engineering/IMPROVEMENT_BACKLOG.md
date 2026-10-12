@@ -16,18 +16,20 @@ baseline: 15 fail, two controls pass. No confirmed P0.
 | SK-017 / audit persistence / confirmed P2 defensive failure handling | Silently-ignored-journal-write test. `appendHandoffEvent` ignores insert result; an injected SQLite trigger suppresses insertion without an error. | Use ordinary INSERT and require one inserted row; caller transaction rolls back on suppression. Normal event shape unchanged. Fault injection, not an externally reachable SQL exploit. | Fixed; suppressed event prevents checkpoint commit. |
 | SK-010 / resume pointer storage / confirmed P2 lost update | Two subprocesses both read the same `json_documents('resume')` value, then set pointers for distinct projects; the final document loses one pointer. Root cause: `resume.js` mutates a stale in-memory whole-document snapshot and upserts it without a transaction. | Read/merge/write the existing document under an immediate SQLite transaction; preserve project entries and schema, no migration/dependency. Writers serialize; cross-process lock contention remains subject to SQLite's configured busy timeout. | Fixed; deterministic barrier reproduction fails before and both pointers persist after. |
 | SK-020 / handoff project isolation / confirmed P1 scope leak | Canonical MCP `handoff list` with trusted execution project `continuity`, omitted argument project, and a valid operator principal returned that principal's `other_project` handoff too. Root cause: the handler required a bound or argument project but passed the omitted argument to an unfiltered list query. | Inherit the trusted bound project when omitted and reject explicit mismatches for all handoff actions. No schema/dependency change; requests attempting project override now fail closed. | Fixed on `improvement/handoff-project-scope`; MCP regression fails before and passes after. |
+| SK-021 / handoff save atomicity / confirmed P2 partial durable mutation | Inject a SQLite trigger that rejects `created` or `updated` inserts in `memory_handoff_events` while calling `saveHandoff`. Before correction, the primary row/history transaction committed before audit/journal persistence; caller received an error after create/update had already changed durable state. | Commit primary row, version snapshot, audit row, journal event, and version links in the existing SQLite transaction. No schema/dependency change; outer transactions remain caller-owned. Failed save now leaves no partial record and may be retried. | Fixed; deterministic trigger regression verifies create/update rollback and successful retry. |
 | SK-018 / validation / confirmed P2 baseline failures | Frozen required-tier command with 180-second bound: 163 pass, 18 fail, one cancelled, 70 not run. Cleanup errors, shell/helper startup issues, compute timeout and research assertions precede these changes. | Triage isolated fixtures; close owned resources where demonstrated; verify behavioral failures on supported platforms. Do not weaken assertions or relabel failures. | Open; aggregate and suite identities in CONTINUITY_VALIDATION_EVIDENCE.json. |
 | SK-019 / wider store atomicity / design weakness P2 | Source review: packet create/update, extraction, restore/archive and metadata-only touches have different transaction boundaries. No general atomicity guarantee established. | Reproduce each boundary before extending the transaction pattern. Preserve deduplication/history semantics; no blanket refactor. | Open; source concern, not a newly confirmed defect. |
 
-SK-007, SK-008, SK-011 and SK-012 remain open. SK-009 now includes deterministic competing
+SK-007, SK-008, SK-011, SK-012 and SK-019 remain open. SK-009 now includes deterministic competing
 writers, checkpoint/begin-resume process-exit coverage, and a fresh-process API
 contract test that discovers a checkpoint from project identity, continues a
 fixed safe repository fixture, and recaptures/verifies the changed state. It
 still lacks actual unfinished-task completion by an independent Agent Bridge
 agent and the full A-G matrix.
 SK-010 is fixed on signed, pushed `improvement/resume-pointer-atomicity`.
-SK-020 is fixed on `improvement/handoff-project-scope`; that branch is stacked
-on the resume-pointer branch and is awaiting signature/push.
+SK-020 is fixed on signed, pushed `improvement/handoff-project-scope`; that
+branch is stacked on the resume-pointer branch. SK-021 is fixed on the current
+`improvement/handoff-save-atomicity` branch, stacked on the project-scope branch.
 SK-013 has new bounded aggregate evidence; full required-tier success and general
 Windows termination behavior remain unverified. Historical records below
 describe the preceding v2.2.1 milestone.

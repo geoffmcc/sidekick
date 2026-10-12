@@ -73,3 +73,16 @@
   were accessed.
 - Keep this scope fix on its own stacked branch because it is a separate
   security boundary from handoff mutation atomicity and resume-document writes.
+
+## Handoff save atomicity milestone (2026-10-12)
+
+- Keep content save/create atomicity on a separate stacked branch; it is a
+  distinct durability issue from project isolation and resume pointer merging.
+- Reuse the existing SQLite transaction and handoff event journal. Commit row,
+  version snapshot, audit row, journal event, and derived version links together;
+  preserve caller-owned outer transactions. No schema, public API, or dependency
+  change.
+- Inject journal insert failures for both create and update. Verify durable row,
+  history, and event state is unchanged, then remove the trigger and verify a
+  retry commits once. This checks logical SQLite transaction behavior, not
+  power-loss durability or filesystem atomicity.
