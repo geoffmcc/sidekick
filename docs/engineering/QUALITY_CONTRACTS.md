@@ -17,4 +17,3 @@ Draft platform contracts grounded in existing interfaces; only the targeted subs
 | Interfaces/operations | Correlate task/project/request and errors; distinguish pending, failed, unverified and safely retryable. Redact outputs and preserve compatibility. |
 
 A simple research handoff need not invent a Git repo. The existing receiver implementation currently expects repository proof for readiness; non-Git contract extensions remain design work. No new irrelevant mandatory packet fields are introduced in this milestone.
-

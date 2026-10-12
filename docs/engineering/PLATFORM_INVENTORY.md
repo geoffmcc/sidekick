@@ -172,4 +172,3 @@ Node v24.18.0, npm 11.16.0, SQLite 3.53.4. Dependencies reused read-only; no ins
 | zod | 4.4.3 | 4.4.3 |
 
 The initial checkout was clean on main; improvement branch: improvement/platform-continuity-audit. Git required explicit work-tree selection in this tool environment. Tests use an exported tracked-source snapshot, no .env, a separate Git repository and disposable data.
-
