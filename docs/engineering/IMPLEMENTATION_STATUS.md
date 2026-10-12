@@ -18,6 +18,12 @@ signed and pushed `improvement/session-handoff-atomicity`,
 
 Completed:
 
+- PR #642 CI follow-up: fixed SK-033, where resume retained the stored terminal
+  timestamp because the session UPSERT treated explicit null as omission.
+  Three targeted suites pass, including the previously failing versioning test.
+  Refreshed the generated pack inventory's missing concurrency-test references;
+  repeated generation is deterministic. Changes await user signing and a CI
+  rerun; the prior provenance commit is signed and pushed as `d7efd53`.
 - Confirmed SK-032: handoff fact labels and session `verified_facts` previously
   created active semantic facts without independent verification. They now
   require confirmation. A shared read-time guard excludes pending claims and

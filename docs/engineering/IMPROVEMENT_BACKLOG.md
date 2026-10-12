@@ -8,6 +8,13 @@ in `VALIDATION_RESULTS.md`. The handoff concurrency suite has 17 cases: 17
 pass after fixes, 15 fail against unchanged baseline, and two controls pass.
 No confirmed P0.
 
+PR #642 follow-up: SK-033 (confirmed P2) — session resume reopened state but
+retained `ended_at` because the UPSERT used COALESCE. Explicit null now clears
+the timestamp while omission preserves it, within the existing audit
+transaction. The versioning reproduction and persisted-state/rollback tests
+pass; hosted CI rerun awaits the signed follow-up commit. Generated inventory
+test-reference drift was also reproduced and refreshed without changing gates.
+
 | ID / subsystem / severity | Reproduction and root cause | Remedy, dependencies and compatibility/security risk | Verification |
 | --- | --- | --- | --- |
 | SK-006 / capture and claims / confirmed P1, stale writer replaces newer state | Concurrent checkpoint, revocation-during-readiness and intervening-lifecycle tests. `captureHandoffCheckpoint` guards packet version only; captures/lifecycle changes do not increment it. `claimHandoff` lacks a current lifecycle guard after repository observation. | Compare row state plus existing journal tip under SQLite writer lock. No migration/dependency. Conflicts require reload/reconciliation. This closes overlapping writes, not arbitrary filesystem races or exclusive ownership. | Fixed; real second-process races fail before and pass after. |

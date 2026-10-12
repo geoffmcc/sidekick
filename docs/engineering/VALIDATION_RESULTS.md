@@ -1,5 +1,30 @@
 # Validation results
 
+## PR #642 CI follow-up: 2026-10-12
+
+- User-supplied CI logs report 61/62 platform suites passing on both Node 22
+  and 24; `handoff-versioning.test.js` failed. A local runner reproduction
+  failed at `resumed session clears terminal timestamp`: the returned
+  `ended_at` retained its completion timestamp. `saveTaskSession` used COALESCE
+  and therefore ignored the explicit null supplied by resume.
+- The store now distinguishes omission from explicit null. Added assertions
+  cover persisted/returned resume state and atomic rollback if the audit fails.
+  `node test/run-all.js test/handoff-versioning.test.js
+  test/handoff-reliability.test.js test/memory-intelligence.test.js
+  --concurrency=1 --json` passed all three suites in 23.121 seconds, with no
+  failures, skips, cancellations, or timeouts.
+- Regenerated `docs/compatibility-pack-inventory.json`: the missing derived
+  references were to `test/handoff-concurrency.test.js`; pack fingerprint and
+  count remain unchanged. Two consecutive `npm run pack:inventory` executions
+  produced identical bytes. `npm run proving:recipes` left its tracked output
+  unchanged. The earlier docs check only validated the pack fingerprint, not
+  these test-derived inventory fields; CI's generation comparison caught them.
+- Syntax checks passed for the store and regression test; `npm run check:docs`,
+  `npm run check:architecture`, `npm run check:tests`, and `git diff --check`
+  also passed. Hosted Node 22/24
+  reruns remain pending the user's signed commit and push; no full local
+  platform-domain pass is claimed.
+
 ## Memory claim provenance: 2026-10-12
 
 - Reconciled `improvement/memory-claim-provenance` at `aaefdb8`, matching the

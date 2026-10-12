@@ -958,7 +958,7 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
         blockers_json = excluded.blockers_json, next_step = COALESCE(excluded.next_step, next_step), artifacts_json = excluded.artifacts_json,
         outcome = COALESCE(excluded.outcome, outcome), final_summary = COALESCE(excluded.final_summary, final_summary),
         acceptance_state = COALESCE(excluded.acceptance_state, acceptance_state), memory_brief_json = COALESCE(excluded.memory_brief_json, memory_brief_json),
-        updated_at = excluded.updated_at, ended_at = COALESCE(excluded.ended_at, ended_at),
+        updated_at = excluded.updated_at, ended_at = CASE WHEN ? THEN excluded.ended_at ELSE ended_at END,
         owner_principal_id = COALESCE(excluded.owner_principal_id, owner_principal_id),
         created_by_principal_id = COALESCE(excluded.created_by_principal_id, created_by_principal_id)
     `).run(
@@ -988,7 +988,9 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
       ts,
       session.ended_at || null,
       session.owner_principal_id || null,
-      session.created_by_principal_id || null
+      session.created_by_principal_id || null,
+      // Omission preserves the timestamp; explicit null clears it on resume.
+      session.ended_at !== undefined ? 1 : 0
     );
     appendRequiredMemoryAudit("task_session_saved", "task_session", id, { state: session.state || "active", project: session.project || null }, session.source || "system");
     return getTaskSession(id);

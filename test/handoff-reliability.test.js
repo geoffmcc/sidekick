@@ -109,6 +109,20 @@ test("task session state and its audit record roll back together", () => {
   assert.equal(store.getDb().prepare("SELECT COUNT(*) AS count FROM memory_audit_events WHERE event_type = 'task_session_saved' AND target_id = ?").get(saved.id).count, 1);
 });
 
+test("task session end timestamp preserves omission and clears explicit null atomically", () => {
+  const endedAt = "2026-01-01T00:00:00.000Z";
+  const session = store.saveTaskSession({ id: "session_timestamp", goal: "Resume without a terminal timestamp", state: "completed", ended_at: endedAt });
+  assert.equal(store.saveTaskSession({ id: session.id, state: "completed", final_summary: "Updated summary" }).ended_at, endedAt);
+  store.getDb().exec("CREATE TEMP TRIGGER reject_timestamp_audit BEFORE INSERT ON memory_audit_events WHEN NEW.event_type = 'task_session_saved' BEGIN SELECT RAISE(ABORT, 'injected timestamp audit failure'); END");
+  try {
+    assert.throws(() => store.saveTaskSession({ id: session.id, state: "active", ended_at: null }), /injected timestamp audit failure/);
+    assert.equal(store.getTaskSession(session.id).ended_at, endedAt);
+    assert.equal(store.getTaskSession(session.id).state, "completed");
+  } finally { store.getDb().exec("DROP TRIGGER reject_timestamp_audit"); }
+  assert.equal(store.saveTaskSession({ id: session.id, state: "active", ended_at: null }).ended_at, null);
+  assert.equal(store.getTaskSession(session.id).ended_at, null);
+});
+
 test("session updates and linked handoff versions roll back together", async () => {
   const session = store.saveTaskSession({ id: "session_handoff_atomic", goal: "Keep session and handoff aligned", project: "continuity", working_directory: repo, current_plan: "Original plan", next_step: "Original next step" });
   const handoff = store.saveHandoff({ id: "handoff_session_handoff_atomic", project: session.project, task_id: session.id, content: "Original continuation", packet: {
@@ -153,6 +167,8 @@ test("resuming a partial task session does not leave its linked handoff complete
   assert.equal(result.isError, undefined);
   const resumed = store.getTaskSession(session.id);
   assert.equal(resumed.state, "active");
+  assert.equal(resumed.ended_at, null, "resume must clear the persisted terminal timestamp");
+  assert.equal(JSON.parse(result.content[0].text).session.ended_at, null);
   const linked = store.getHandoffByTaskId(session.id);
   assert.ok(["active", "ready"].includes(linked.lifecycle_state), "an active session must not point only to a terminal handoff");
   assert.equal(linked.id, pending.id, "retry must complete the same resumable checkpoint rather than creating a duplicate");

@@ -1,5 +1,17 @@
 # Decision log
 
+## Explicit session timestamp clearing and inventory refresh (2026-10-12)
+
+`saveTaskSession` preserves `ended_at` when omitted and clears it when explicitly
+null, in the existing row/audit transaction. Resume already supplies null; no
+API, schema, or dependency change is needed. Retain the versioning assertion
+that exposed the defect and add persisted-state and rollback coverage.
+
+Regenerate the source-derived pack inventory when test evidence changes, even
+if bundled pack bytes and their fingerprint do not. Preserve CI's normalized
+generated-versus-committed comparison; refreshing the artifact addresses the
+observed drift without weakening the freshness gate.
+
 ## Extracted memory claims require confirmation (2026-10-12)
 
 - Treat handoff fact labels and session `verified_facts` as reported claims.
