@@ -36,7 +36,7 @@ function syncCompletedLinkedHandoffs(doc) {
   for (const [project, item] of Object.entries(doc.items || {})) {
     if (!item || !item.handoff_id || ["cleared", "done", "complete"].includes(item.status)) continue;
     const handoff = dbStore.getHandoff(item.handoff_id);
-    if (!handoff || handoff.lifecycle_state !== "completed") continue;
+    if (!handoff || handoff.project !== item.project || handoff.lifecycle_state !== "completed") continue;
     doc.items[project] = {
       ...item,
       status: "complete",
@@ -79,6 +79,7 @@ function validateResumeItem(item) {
     ? dbStore.validateHandoffPacket(handoff.packet, { requireResume: true })
     : { valid: false, issues: ["linked handoff not found"] };
   if (handoff && handoff.project !== item.project) validation.issues.push("linked handoff belongs to a different project");
+  validation.valid = validation.issues.length === 0;
   return {
     ...item,
     handoff_id: handoff?.id || item.handoff_id,

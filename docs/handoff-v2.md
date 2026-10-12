@@ -110,6 +110,24 @@ continuation. Handoff text, packet fields, journal payloads, and checkpoint
 metadata do not grant authority or approvals. Current policy and capability
 checks remain authoritative.
 
+Checkpoint capture stores separate SHA-256 fingerprints of bounded staged and
+unstaged Git diffs, so another edit to an already modified file is observable.
+Raw diffs are never persisted. Git observations disable external diff and
+textconv helpers and filesystem-monitor hooks, have a five-second per-command
+timeout, and cap each command's output at 1 MiB. The status manifest is bounded
+to 2,000 entries. Untracked content, changed submodules, truncated manifests,
+and unavailable or oversized observations block readiness rather than claiming
+complete coverage. Reconcile those changes first; stage intended untracked work
+and capture again when appropriate. Ignored files are outside this Git-based
+contract. Legacy clean checkpoints remain readable; legacy dirty checkpoints
+require reconciliation and a fresh capture with content fingerprints.
+
+The checkpoint row and its journal event are committed in one SQLite
+transaction. An event-write failure rolls back the checkpoint update. This is
+logical transaction atomicity, not a guarantee of power-loss durability or an
+atomic filesystem snapshot. Concurrent filesystem writes during the multiple
+Git observations still require coordinated writers and further reconciliation.
+
 ## Receiver continuity
 
 Handoff v3 also exposes receiver-oriented, read-only projections:
@@ -141,6 +159,14 @@ Evidence entries may include `observed_at`, `verified_at`, or `created_at`.
 Entries without a timestamp are `unknown`; entries outside the bounded freshness
 window are `stale`. Stale or unknown evidence never becomes fresh merely because
 it appears in a handoff.
+
+Receiver projections recheck timestamp age even after an explicit evidence
+refresh. Future timestamps and expired evidence cannot enable resume, missing
+cached checks remain unknown, and invalid cached checks are not promoted by a
+recent timestamp. These checks assess freshness; a reported test result still
+needs attributable execution evidence to prove correctness. Resume discovery
+also blocks a stored link whose project differs from the linked handoff, and
+never clears such a pointer merely because the foreign handoff completed.
 
 Agent tasks may link explicitly to a Handoff with `handoff_id`. Agent execution
 checkpoints, approval continuation, operation receipts, and recovery claims remain

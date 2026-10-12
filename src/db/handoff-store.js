@@ -47,11 +47,29 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
   function gitCheckpoint(workingDirectory) {
     const root = String(workingDirectory || "");
     if (!root || !fs.existsSync(root)) return { workspace: { root: root || null, visible: false }, repository: null };
-    const git = (args) => execFileSync("git", ["-C", root, "-c", `safe.directory=${root}`, ...args], { encoding: "utf8", env: childProcessEnv(), maxBuffer: 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] }).trim();
+    const git = (args) => execFileSync("git", ["-C", root, "-c", `safe.directory=${root}`, "-c", "core.fsmonitor=false", ...args], { encoding: "utf8", env: childProcessEnv(), timeout: 5000, maxBuffer: 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] });
     try {
-      const repositoryRoot = git(["rev-parse", "--show-toplevel"]);
-      const status = git(["status", "--porcelain=v1", "-z"]).split("\0").filter(Boolean).slice(0, 2000);
-      return { workspace: { root: repositoryRoot, visible: true }, repository: { root: repositoryRoot, branch: git(["branch", "--show-current"]) || null, head: git(["rev-parse", "HEAD"]), upstream: (() => { try { return git(["rev-parse", "--abbrev-ref", "@{upstream}"]); } catch { return null; } })(), status } };
+      const repositoryRoot = git(["rev-parse", "--show-toplevel"]).trim();
+      const statusOutput = git(["status", "--porcelain=v1", "-z", "--ignore-submodules=none"]);
+      const entries = statusOutput.split("\0").filter(Boolean);
+      const status = entries.slice(0, 2000);
+      // Porcelain names/statuses do not identify file contents. Hash bounded
+      // staged and unstaged diffs separately; never persist raw diffs. Disable
+      // external diff/textconv helpers for this read-only observation.
+      const diffArgs = ["diff", "--no-ext-diff", "--no-textconv", "--ignore-submodules=none"];
+      const staged = git([...diffArgs, "--cached", "--binary"]);
+      const unstaged = git([...diffArgs, "--binary"]);
+      const raw = git([...diffArgs, "--raw", "-z"]) + git([...diffArgs, "--cached", "--raw", "-z"]);
+      const incomplete = entries.length > 2000 ? "status manifest exceeds capture limit"
+        : entries.some(entry => entry.startsWith("?? ")) ? "untracked contents require reconciliation or staging before capture"
+        : /(?:^|\0):(?:160000 \d+|\d+ 160000) /.test(raw) ? "changed submodule contents require reconciliation"
+        : null;
+      const content_fingerprint = {
+        format: "git-diff-sha256-v1", complete: !incomplete, reason: incomplete,
+        staged: crypto.createHash("sha256").update(staged).digest("hex"),
+        unstaged: crypto.createHash("sha256").update(unstaged).digest("hex"),
+      };
+      return { workspace: { root: repositoryRoot, visible: true }, repository: { root: repositoryRoot, branch: git(["branch", "--show-current"]).trim() || null, head: git(["rev-parse", "HEAD"]).trim(), upstream: (() => { try { return git(["rev-parse", "--abbrev-ref", "@{upstream}"]).trim(); } catch { return null; } })(), status, content_fingerprint } };
     } catch { return { workspace: { root, visible: true }, repository: { root, state: "unavailable" } }; }
   }
 
@@ -59,9 +77,18 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
     if (!checkpoint || !checkpoint.repository) return { status: "unknown", severity: "blocking", reasons: ["checkpoint has no repository state"] };
     const observed = gitCheckpoint(workingDirectory || checkpoint.workspace?.root);
     if (!observed.repository || observed.repository.state === "unavailable") return { status: "unknown", severity: "blocking", expected: checkpoint.repository, observed, reasons: ["repository state is unavailable"] };
+    const expectedFingerprint = checkpoint.repository.content_fingerprint;
+    const observedFingerprint = observed.repository.content_fingerprint;
+    if (expectedFingerprint?.complete === false || observedFingerprint?.complete === false) {
+      return { status: "unknown", severity: "blocking", expected: checkpoint.repository, observed: observed.repository, reasons: [expectedFingerprint?.reason || observedFingerprint?.reason || "repository content capture is incomplete"] };
+    }
+    if (!expectedFingerprint && (checkpoint.repository.status?.length || observed.repository.status?.length)) {
+      return { status: "unknown", severity: "blocking", expected: checkpoint.repository, observed: observed.repository, reasons: ["legacy dirty checkpoint has no content fingerprint; reconcile and capture a new checkpoint"] };
+    }
     const differences = [];
     for (const key of ["root", "branch", "head", "upstream"]) if ((checkpoint.repository[key] || null) !== (observed.repository[key] || null)) differences.push({ field: `repository.${key}`, expected: checkpoint.repository[key] || null, observed: observed.repository[key] || null });
     if (JSON.stringify(checkpoint.repository.status || []) !== JSON.stringify(observed.repository.status || [])) differences.push({ field: "repository.status", expected: checkpoint.repository.status || [], observed: observed.repository.status || [] });
+    if (expectedFingerprint && JSON.stringify(expectedFingerprint) !== JSON.stringify(observedFingerprint)) differences.push({ field: "repository.content_fingerprint", expected: expectedFingerprint, observed: observedFingerprint });
     return { status: differences.length ? "drift" : "clean", severity: differences.length ? "material" : "none", differences, expected: checkpoint.repository, observed: observed.repository };
   }
 
@@ -163,8 +190,8 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
     const evidence = Array.isArray(packet?.evidence) ? packet.evidence : [];
     return evidence.map((item, index) => {
       const stamp = item.observed_at || item.verified_at || item.created_at || null;
-      const ageMs = stamp ? Math.max(0, now - Date.parse(stamp)) : null;
-      const valid = ["passed", "verified"].includes(String(item.status || "").toLowerCase()) && ageMs !== null && Number.isFinite(ageMs) && ageMs <= maxAgeMs;
+      const ageMs = stamp ? now - Date.parse(stamp) : null;
+      const valid = ["passed", "verified"].includes(String(item.status || "").toLowerCase()) && ageMs !== null && Number.isFinite(ageMs) && ageMs >= 0 && ageMs <= maxAgeMs;
       return { index, type: item.type || null, label: item.label || null, status: item.status || "unknown", observed_at: stamp, age_ms: ageMs, freshness: valid ? "fresh" : stamp ? "stale" : "unknown", valid };
     });
   }
@@ -189,8 +216,8 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
     const items = Array.isArray(handoff.packet?.evidence) ? handoff.packet.evidence : [];
     const states = items.map((item, index) => {
       const stamp = item.observed_at || item.verified_at || item.created_at || null;
-      const ageMs = stamp ? Math.max(0, now - Date.parse(stamp)) : null;
-      let state = ["passed", "verified"].includes(String(item.status || "").toLowerCase()) && stamp && Number.isFinite(ageMs) && ageMs <= maxAgeMs ? "fresh" : item.status === "failed" || item.status === "invalid" ? "invalid" : stamp ? "stale" : "unknown";
+      const ageMs = stamp ? now - Date.parse(stamp) : null;
+      let state = ["passed", "verified"].includes(String(item.status || "").toLowerCase()) && stamp && Number.isFinite(ageMs) && ageMs >= 0 && ageMs <= maxAgeMs ? "fresh" : item.status === "failed" || item.status === "invalid" ? "invalid" : stamp ? "stale" : "unknown";
       let reason = state === "fresh" ? "within freshness window" : state === "stale" ? "outside freshness window or not independently verified" : state === "unknown" ? "no evidence timestamp" : "evidence reports failure or invalidity";
       let sourceHash = item.content_hash || item.sha256 || null;
       if (item.artifact_id && hasTable("platform_artifacts")) {
@@ -222,7 +249,14 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
     const quality = evaluateHandoffQuality(packet);
     const readiness = getHandoffReadiness(id, { working_directory, recipient });
     const persistedFreshness = getHandoffEvidenceState(id);
-    const freshness = persistedFreshness.length ? persistedFreshness.map(item => ({ ...item, type: packet.evidence?.[item.evidence_index]?.type || null, label: packet.evidence?.[item.evidence_index]?.label || null, freshness: item.state, valid: item.state === "fresh" })) : evidenceFreshness(packet);
+    const currentFreshness = evidenceFreshness(packet);
+    // Persisted checks attest to a prior observation, not perpetual freshness.
+    // Iterate packet evidence so missing cached rows cannot silently disappear.
+    const freshness = persistedFreshness.length ? currentFreshness.map((current, index) => {
+      const item = persistedFreshness.find(row => row.evidence_index === index && row.evidence_key === evidenceKey(packet.evidence[index], index));
+      const state = !item ? "unknown" : item.state === "fresh" ? current.freshness : item.state;
+      return { ...item, ...current, state, freshness: state, valid: state === "fresh" };
+    }) : currentFreshness;
     return {
       handoff_id: handoff.id,
       version: handoff.version,
@@ -691,9 +725,11 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
     if (expectedVersion !== undefined && Number(expectedVersion) !== Number(handoff.version)) throw new Error(`Handoff "${id}" changed concurrently: expected version ${expectedVersion}, found ${handoff.version}`);
     const checkpoint = { schema_version: 1, captured_at: nowIso(), freshness_seconds: 900, ...gitCheckpoint(working_directory || handoff.packet?.provenance?.working_directory), source_state: handoff.packet?.provenance?.commit_sha || handoff.packet?.provenance?.source_commit || null };
     const hash = continuityHash(checkpoint);
-    const result = db.prepare("UPDATE memory_handoffs SET checkpoint_json = ?, checkpoint_hash = ?, updated_at = ? WHERE id = ? AND version = ?").run(JSON.stringify(checkpoint), hash, nowIso(), id, handoff.version);
-    if (!result.changes) throw new Error(`Handoff "${id}" changed concurrently during checkpoint capture`);
-    appendHandoffEvent(id, handoff.version, "checkpoint_captured", { checkpoint_hash: hash, repository: checkpoint.repository || null, ...(metadata && typeof metadata === "object" ? { metadata: parseJson(JSON.stringify(metadata), {}) } : {}) }, { actor, source });
+    db.transaction(() => {
+      const result = db.prepare("UPDATE memory_handoffs SET checkpoint_json = ?, checkpoint_hash = ?, updated_at = ? WHERE id = ? AND version = ?").run(JSON.stringify(checkpoint), hash, nowIso(), id, handoff.version);
+      if (!result.changes) throw new Error(`Handoff "${id}" changed concurrently during checkpoint capture`);
+      appendHandoffEvent(id, handoff.version, "checkpoint_captured", { checkpoint_hash: hash, repository: checkpoint.repository || null, ...(metadata && typeof metadata === "object" ? { metadata: parseJson(JSON.stringify(metadata), {}) } : {}) }, { actor, source });
+    })();
     return getHandoff(id);
   }
 
