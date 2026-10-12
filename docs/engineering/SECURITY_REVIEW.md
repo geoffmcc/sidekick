@@ -45,6 +45,15 @@ explicit mismatches. No live data was involved. The signed fix is pushed on
 MCP/Agent/Dashboard/resume authorization matrix remains open; do not infer that
 all interfaces now have equivalent scoping.
 
+Confirmed P1 resume project-scope gap (SK-022): canonical MCP dispatch supplied
+a trusted project, but the resume handler ignored that execution context.
+Authenticated `resume list` returned pointers from other projects, `resume set`
+accepted an explicit foreign project, and a scoped read could synchronize a
+completed foreign pointer. Synthetic two-project/operator fixtures reproduced
+all three. The handler now binds/validates scope and filters both list and
+read-triggered synchronization. The wider interface authorization matrix
+remains open; no broad authorization claim follows from these cases.
+
 
 ## Fix and validation status
 

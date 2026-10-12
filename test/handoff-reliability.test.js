@@ -345,3 +345,52 @@ test("handoff list stays within trusted project scope across MCP dispatch", asyn
   });
   assert.equal(override.isError, true, "explicit project arguments cannot broaden a trusted execution scope");
 });
+
+test("resume list inherits trusted project scope across MCP dispatch", async () => {
+  const principal = identity.createPrincipal({ type: "service", displayName: "Resume scope fixture" });
+  identity.assignRole(principal.principal_id, "operator");
+  store.setDocument("resume", { items: {
+    continuity: { project: "continuity", status: "active", summary: "Visible scoped item", next_step: "Continue safely" },
+    other_project: { project: "other_project", status: "active", summary: "Must remain private to its scope", next_step: "Do not expose" },
+  } });
+  const result = await callMcpTool("resume", { action: "list", format: "json" }, {
+    project: "continuity",
+    authIdentity: { principal_id: principal.principal_id },
+  });
+  assert.notEqual(result.isError, true, result.content?.[0]?.text);
+  const visible = JSON.parse(result.content[0].text).items;
+  assert.ok(visible.length > 0);
+  assert.ok(visible.every(item => item.project === "continuity"), "a bound project must constrain resume list results");
+});
+
+test("resume mutations cannot override a trusted project scope", async () => {
+  const principal = identity.createPrincipal({ type: "service", displayName: "Resume mutation scope fixture" });
+  identity.assignRole(principal.principal_id, "operator");
+  store.setDocument("resume", { items: {
+    continuity: { project: "continuity", status: "active", summary: "Scoped item", next_step: "Continue" },
+    other_project: { project: "other_project", status: "active", summary: "Original foreign summary", next_step: "Original next step" },
+  } });
+  const result = await callMcpTool("resume", { action: "set", project: "other_project", summary: "Override", next_step: "Must be rejected" }, {
+    project: "continuity",
+    authIdentity: { principal_id: principal.principal_id },
+  });
+  assert.equal(result.isError, true, "explicit project arguments cannot override a trusted execution scope");
+  assert.equal(store.loadDocument("resume").items.other_project.summary, "Original foreign summary");
+});
+
+test("scoped resume reads do not synchronize foreign project pointers", async () => {
+  const principal = identity.createPrincipal({ type: "service", displayName: "Resume sync scope fixture" });
+  identity.assignRole(principal.principal_id, "operator");
+  const foreignHandoff = create(undefined, { project: "other_project" });
+  store.transitionHandoff(foreignHandoff.id, "completed");
+  store.setDocument("resume", { items: {
+    continuity: { project: "continuity", status: "active", summary: "Visible item", next_step: "Continue" },
+    other_project: { project: "other_project", status: "active", summary: "Foreign item", next_step: "Continue", handoff_id: foreignHandoff.id },
+  } });
+  const result = await callMcpTool("resume", { action: "list", format: "json" }, {
+    project: "continuity",
+    authIdentity: { principal_id: principal.principal_id },
+  });
+  assert.notEqual(result.isError, true, result.content?.[0]?.text);
+  assert.equal(store.loadDocument("resume").items.other_project.status, "active", "scoped reads must not mutate foreign project state");
+});

@@ -2,10 +2,11 @@
 
 ## Current milestone: confirmed findings and disposition
 
-Baseline `d4c908c`; 2026-10-12. All reproductions below use
-`node test/run-all.js test/handoff-concurrency.test.js` in disposable Git/SQLite
-fixtures. Each named case is in that test file. Final suite: 17 pass; unchanged
-baseline: 15 fail, two controls pass. No confirmed P0.
+Baseline `d4c908c`; 2026-10-12. Findings were reproduced in disposable
+Git/SQLite fixtures; the specific test and command are identified per entry or
+in `VALIDATION_RESULTS.md`. The handoff concurrency suite has 17 cases: 17
+pass after fixes, 15 fail against unchanged baseline, and two controls pass.
+No confirmed P0.
 
 | ID / subsystem / severity | Reproduction and root cause | Remedy, dependencies and compatibility/security risk | Verification |
 | --- | --- | --- | --- |
@@ -17,10 +18,13 @@ baseline: 15 fail, two controls pass. No confirmed P0.
 | SK-010 / resume pointer storage / confirmed P2 lost update | Two subprocesses both read the same `json_documents('resume')` value, then set pointers for distinct projects; the final document loses one pointer. Root cause: `resume.js` mutates a stale in-memory whole-document snapshot and upserts it without a transaction. | Read/merge/write the existing document under an immediate SQLite transaction; preserve project entries and schema, no migration/dependency. Writers serialize; cross-process lock contention remains subject to SQLite's configured busy timeout. | Fixed; deterministic barrier reproduction fails before and both pointers persist after. |
 | SK-020 / handoff project isolation / confirmed P1 scope leak | Canonical MCP `handoff list` with trusted execution project `continuity`, omitted argument project, and a valid operator principal returned that principal's `other_project` handoff too. Root cause: the handler required a bound or argument project but passed the omitted argument to an unfiltered list query. | Inherit the trusted bound project when omitted and reject explicit mismatches for all handoff actions. No schema/dependency change; requests attempting project override now fail closed. | Fixed on `improvement/handoff-project-scope`; MCP regression fails before and passes after. |
 | SK-021 / handoff save atomicity / confirmed P2 partial durable mutation | Inject a SQLite trigger that rejects `created` or `updated` inserts in `memory_handoff_events` while calling `saveHandoff`. Before correction, the primary row/history transaction committed before audit/journal persistence; caller received an error after create/update had already changed durable state. | Commit primary row, version snapshot, audit row, journal event, and version links in the existing SQLite transaction. No schema/dependency change; outer transactions remain caller-owned. Failed save now leaves no partial record and may be retried. | Fixed; deterministic trigger regression verifies create/update rollback and successful retry. |
+| SK-022 / resume project isolation / confirmed P1 cross-project disclosure and mutation | Through canonical MCP dispatch with trusted project `continuity` and a valid operator, `resume list` returned another project's resume pointer; `resume set` accepted an explicit foreign project. A scoped list also synchronized a completed foreign handoff pointer. Root cause: `resume.js` did not read dispatcher scope and performed global list/synchronization. | Inherit the bound project, reject mismatches, filter list rows, and constrain read-time completion synchronization to that project. No schema/dependency change; unbound compatibility behavior stays unchanged. | Fixed; three isolated canonical-dispatch regressions fail before and pass after. |
 | SK-018 / validation / confirmed P2 baseline failures | Frozen required-tier command with 180-second bound: 163 pass, 18 fail, one cancelled, 70 not run. Cleanup errors, shell/helper startup issues, compute timeout and research assertions precede these changes. | Triage isolated fixtures; close owned resources where demonstrated; verify behavioral failures on supported platforms. Do not weaken assertions or relabel failures. | Open; aggregate and suite identities in CONTINUITY_VALIDATION_EVIDENCE.json. |
 | SK-019 / wider store atomicity / design weakness P2 | Source review: packet create/update, extraction, restore/archive and metadata-only touches have different transaction boundaries. No general atomicity guarantee established. | Reproduce each boundary before extending the transaction pattern. Preserve deduplication/history semantics; no blanket refactor. | Open; source concern, not a newly confirmed defect. |
 
-SK-007, SK-008, SK-011, SK-012 and SK-019 remain open. SK-009 now includes deterministic competing
+SK-007, SK-008, SK-011, SK-012 and SK-019 remain open. SK-008 is partially
+covered by SK-020 and SK-022; the full cross-interface matrix remains
+outstanding. SK-009 now includes deterministic competing
 writers, checkpoint/begin-resume process-exit coverage, and a fresh-process API
 contract test that discovers a checkpoint from project identity, continues a
 fixed safe repository fixture, and recaptures/verifies the changed state. It
@@ -30,6 +34,8 @@ SK-010 is fixed on signed, pushed `improvement/resume-pointer-atomicity`.
 SK-020 is fixed on signed, pushed `improvement/handoff-project-scope`; that
 branch is stacked on the resume-pointer branch. SK-021 is fixed on the current
 `improvement/handoff-save-atomicity` branch, stacked on the project-scope branch.
+SK-022 is fixed on the current `improvement/resume-project-scope` branch,
+stacked on the handoff-save-atomicity branch.
 SK-013 has new bounded aggregate evidence; full required-tier success and general
 Windows termination behavior remain unverified. Historical records below
 describe the preceding v2.2.1 milestone.

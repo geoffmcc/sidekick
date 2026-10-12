@@ -1,5 +1,16 @@
 # Reliability baseline
 
+## Resume project scope: 2026-10-12
+
+Canonical MCP integration fixtures showed a trusted project context was ignored
+by resume operations: list returned foreign-project pointers, set accepted a
+foreign explicit project, and list synchronized completion for a foreign
+project. After the fix, all 19 handoff reliability cases and five supported
+runner suites (handoff reliability/concurrency, tools, project identity, and
+dispatcher) pass. This is a bounded scope check, not proof of complete
+cross-interface isolation. The prior versioning/checkpoint assertion failure
+remains unresolved.
+
 ## Handoff save atomicity: 2026-10-12
 
 Failure-injection regression covers handoff create and content update when the

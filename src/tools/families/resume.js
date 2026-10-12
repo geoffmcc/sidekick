@@ -11,7 +11,8 @@ const { z } = require("zod");
 const dbStore = require("../../db");
 const { redactSensitive } = require("../../redact");
 const { generateId } = require("../../core/ids");
-const { PROJECT_RE } = require("../../core/project-identity");
+const { PROJECT_RE, canonicalizeProjectName } = require("../../core/project-identity");
+const toolContext = require("../context");
 
 const RESUME_DOCUMENT = "resume";
 
@@ -42,13 +43,18 @@ function updateResumeDocument(mutator) {
   return transaction.immediate();
 }
 
-function syncCompletedLinkedHandoffs(observedDoc) {
-  const mayHaveCompletedLink = Object.values(observedDoc?.items || {}).some(item => item?.handoff_id && !["cleared", "done", "complete"].includes(item.status));
+function syncCompletedLinkedHandoffs(observedDoc, projectScope = null) {
+  const scopedItems = Object.entries(observedDoc?.items || {}).filter(([key, item]) => !projectScope
+    || (canonicalizeProjectName(key) === canonicalizeProjectName(projectScope)
+      && canonicalizeProjectName(item?.project || key) === canonicalizeProjectName(projectScope)));
+  const mayHaveCompletedLink = scopedItems.some(([, item]) => item?.handoff_id && !["cleared", "done", "complete"].includes(item.status));
   if (!mayHaveCompletedLink) return false;
   const now = new Date().toISOString();
   return updateResumeDocument(doc => {
     let changed = false;
     for (const [project, item] of Object.entries(doc.items || {})) {
+      if (projectScope && (canonicalizeProjectName(project) !== canonicalizeProjectName(projectScope)
+        || canonicalizeProjectName(item?.project || project) !== canonicalizeProjectName(projectScope))) continue;
       if (!item || !item.handoff_id || ["cleared", "done", "complete"].includes(item.status)) continue;
       const handoff = dbStore.getHandoff(item.handoff_id);
       if (!handoff || handoff.project !== item.project || handoff.lifecycle_state !== "completed") continue;
@@ -64,8 +70,11 @@ function syncCompletedLinkedHandoffs(observedDoc) {
   });
 }
 
-function activeResumeItems(doc, includeCleared = false) {
-  const items = Object.values(doc.items || {});
+function activeResumeItems(doc, includeCleared = false, projectScope = null) {
+  const entries = Object.entries(doc.items || {}).filter(([key, item]) => !projectScope
+    || (canonicalizeProjectName(key) === canonicalizeProjectName(projectScope)
+      && canonicalizeProjectName(item?.project || key) === canonicalizeProjectName(projectScope)));
+  const items = entries.map(([, item]) => item);
   if (includeCleared) return items;
   return items.filter(item => !["cleared", "done", "complete"].includes(item.status));
 }
@@ -108,12 +117,19 @@ async function sidekick_resume({ action, project, summary, next_step, status, br
   if (handoff_key !== undefined) return { content: [{ type: "text", text: "handoff keys are no longer supported; link the structured handoff by id" }], isError: true };
   const selectedAction = action || "check";
   const selectedFormat = format || "text";
+  const boundProject = toolContext.getExecutionContext().project || null;
+  if (boundProject) {
+    if (project && canonicalizeProjectName(project) !== canonicalizeProjectName(boundProject)) {
+      return { content: [{ type: "text", text: "project does not match the trusted execution project scope" }], isError: true };
+    }
+    if (!project) project = boundProject;
+  }
   const observedDoc = loadResumeDocument();
-  syncCompletedLinkedHandoffs(observedDoc);
+  syncCompletedLinkedHandoffs(observedDoc, boundProject);
   const doc = loadResumeDocument();
 
   if (selectedAction === "list") {
-    const items = activeResumeItems(doc, include_cleared === true).map(validateResumeItem)
+    const items = activeResumeItems(doc, include_cleared === true, boundProject).map(validateResumeItem)
       .sort((a, b) => String(b.updated_at || "").localeCompare(String(a.updated_at || "")));
     const payload = { count: items.length, items };
     const text = selectedFormat === "json"

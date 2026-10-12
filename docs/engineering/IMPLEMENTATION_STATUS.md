@@ -1,12 +1,12 @@
 # Implementation status
 
-## Current checkpoint: handoff save atomicity
+## Current checkpoint: resume project isolation
 
 Updated 2026-10-12. Reference: v2.2.1 at b89247b. Current milestone began on clean
 main at `d4c908cda76b4031bdab05458cb40afb4984954b` (`v2.2.1-1-gd4c908c`).
-Current branch: `improvement/handoff-save-atomicity`, stacked on signed and
-pushed `improvement/handoff-project-scope`, itself stacked on signed and
-pushed `improvement/resume-pointer-atomicity` and
+Current branch: `improvement/resume-project-scope`, stacked on signed and
+pushed `improvement/handoff-save-atomicity`, `improvement/handoff-project-scope`,
+`improvement/resume-pointer-atomicity`, and
 `improvement/platform-continuity-concurrency`.
 
 Completed:
@@ -53,9 +53,20 @@ Completed:
   the row, history, audit, event, and links in the same SQLite transaction. The
   failure-injection regression confirms rollback and retry for both operations.
 - The signed project-scope commit was pushed to origin before starting this
-  branch. Current atomicity changes are uncommitted and not staged.
-- Current scoped run: handoff reliability (15 cases), broad tools and dispatcher
-  suites pass. A grouped `security-boundaries.test.js` run had seven assertions
+  branch.
+- Signed commit `0128592` (handoff create/update atomicity) was verified and
+  pushed to `origin/improvement/handoff-save-atomicity`.
+- Confirmed SK-022 through canonical MCP dispatch: with project `continuity`
+  bound, resume list disclosed another project's pointer, resume set accepted
+  an explicit foreign project, and list synchronized a completed foreign
+  pointer. Resume now inherits/rejects project scope, filters list results, and
+  confines read-triggered completion synchronization to the bound project.
+  Three new regressions failed before the fix and pass after. Changes are
+  uncommitted on the current branch.
+- Current scoped run: handoff reliability (19 cases) passes. The atomicity
+  milestone's grouped run passed five of six suites; handoff-versioning failed
+  at the checkpoint `repository.head` assertion, reproduced directly. A
+  separate grouped `security-boundaries.test.js` run had seven assertions
   pass but failed during its existing Windows database cleanup hook with EBUSY;
   it is recorded as failed, not passed.
 

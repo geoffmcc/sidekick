@@ -86,3 +86,16 @@
   history, and event state is unchanged, then remove the trigger and verify a
   retry commits once. This checks logical SQLite transaction behavior, not
   power-loss durability or filesystem atomicity.
+
+## Resume project-scope milestone (2026-10-12)
+
+- Treat the dispatcher-bound project as authoritative in resume operations.
+  Inherit it when omitted and reject an explicit mismatch; retain existing
+  unbound behavior for callers without a trusted project context.
+- Filter scoped list output by both the resume document key and stored project
+  identity so malformed cross-project links are not surfaced.
+- A scoped read may synchronize completion only for the bound project's resume
+  pointer. This avoids a nominal read mutating another project's state.
+- Reproduce disclosure, foreign set, and foreign completion synchronization
+  through canonical MCP dispatch with a synthetic operator principal. No schema,
+  API, or dependency change.

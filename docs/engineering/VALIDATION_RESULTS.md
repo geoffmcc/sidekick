@@ -1,5 +1,24 @@
 # Validation results
 
+## Resume project-scope milestone: 2026-10-12
+
+Windows checkout accessed through WSL, Node v24.18.0, installed dependencies;
+synthetic principals and disposable SQLite/Git fixtures.
+
+| Command | Actual result |
+| --- | --- |
+| `node --test test/handoff-reliability.test.js` | Exit 0; 19 passed, 0 failed/skipped; 7.641 seconds. The three new scope cases each reproduced a failure before the handler fix and pass after. |
+| `node test/run-all.js test/handoff-reliability.test.js test/handoff-concurrency.test.js test/tools.test.js test/project-identity.test.js test/dispatcher.test.cjs --concurrency=1 --json` | Exit 0; five suites passed, 0 failed/skipped; 32.471 seconds. |
+| `node --check src/tools/families/resume.js` and `node --check test/handoff-reliability.test.js` | PASS. |
+| `node scripts/check-docs.js` | PASS. |
+| `node scripts/check-architecture.js` | PASS; 462 files. |
+| `node scripts/check-test-architecture.js` | PASS; 295 suites. |
+| `git diff --check` | PASS. |
+
+No full required-tier, coverage, mutation, live/model, or release validation was
+run for this scoped change. The prior handoff-versioning checkpoint assertion
+failure remains open and is recorded above.
+
 ## Handoff save atomicity: 2026-10-12
 
 Windows checkout accessed through WSL, Node v24.18.0, installed dependencies;
