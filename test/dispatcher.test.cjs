@@ -207,6 +207,7 @@ console.log('Running Dispatcher Tests...');
     assert.ok(db.queryToolLogs({ tool: 'sidekick_missing', success: false, limit: 10 }).length >= 1, 'unknown tool should be logged');
     assert.ok(db.queryToolLogs({ tool: 'generated_bad_risk', success: false, limit: 10 }).length >= 1, 'risk failure should be logged');
 
+    db.closeDatabase();
     fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
     console.log('Dispatcher Tests passed');
   } catch (error) {

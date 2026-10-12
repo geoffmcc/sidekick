@@ -78,6 +78,7 @@ function maliciousAst(expression) {
 test.after(() => {
   delete globalThis.__hbAstPwned;
   delete globalThis.__hbProtoPwned;
+  require("../src/db").closeDatabase();
   fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
 });
 
