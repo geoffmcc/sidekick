@@ -1,11 +1,12 @@
 # Implementation status
 
-## Current checkpoint: atomic evidence refresh journaling
+## Current checkpoint: atomic task-session audit persistence
 
 Updated 2026-10-12. Reference: v2.2.1 at b89247b. Current milestone began on clean
 main at `d4c908cda76b4031bdab05458cb40afb4984954b` (`v2.2.1-1-gd4c908c`).
-Current branch: `improvement/handoff-evidence-audit-atomicity`, stacked on
-signed and pushed `improvement/handoff-metadata-atomicity`,
+Current branch: `improvement/task-session-audit-atomicity`, stacked on signed
+and pushed `improvement/handoff-evidence-audit-atomicity`,
+`improvement/handoff-metadata-atomicity`,
 `improvement/handoff-extraction-snapshot`, `improvement/handoff-archive-audit`,
 `improvement/handoff-purge-audit`, `improvement/resume-project-scope`,
 `improvement/handoff-save-atomicity`, `improvement/handoff-project-scope`,
@@ -107,6 +108,11 @@ Completed:
   immediate transaction after rechecking the handoff version/hash. The rollback
   and retry regression passes; changes are uncommitted on
   `improvement/handoff-evidence-audit-atomicity`.
+- Confirmed SK-029: `saveTaskSession` could commit the session UPSERT and then
+  return an error if its audit insert failed. The UPSERT and audit now share
+  one immediate transaction; the injected failure rolls back and a retry
+  creates one session and one audit row. Changes are ready for staging on
+  `improvement/task-session-audit-atomicity`.
 - Latest handoff reliability run: 29 cases pass, with syntax and diff checks.
   The four-suite group (handoff reliability, versioning, memory intelligence,
   tools) passed on this evidence branch. A direct

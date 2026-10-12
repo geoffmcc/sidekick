@@ -933,6 +933,10 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
 
   function saveTaskSession(session) {
     if (!hasTable("memory_task_sessions")) throw new Error("memory_task_sessions table is not available; run migrations");
+    // The session row and its audit entry describe one logical mutation. Keep
+    // both in the same transaction so a failed audit cannot leave an
+    // unaudited session create or update behind.
+    return db.transaction(() => {
     const ts = nowIso();
     const id = session.id || `task_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
     db.prepare(`
@@ -986,8 +990,9 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
       session.owner_principal_id || null,
       session.created_by_principal_id || null
     );
-    auditMemoryEvent("task_session_saved", "task_session", id, { state: session.state || "active", project: session.project || null }, session.source || "system");
+    appendRequiredMemoryAudit("task_session_saved", "task_session", id, { state: session.state || "active", project: session.project || null }, session.source || "system");
     return getTaskSession(id);
+    }).immediate();
   }
 
   function normalizeTaskSessionRow(row) {

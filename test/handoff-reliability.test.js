@@ -91,6 +91,23 @@ test("handoff creation and version updates roll back when journal persistence fa
   assert.equal(store.listHandoffEvents(created.id).filter(event => event.event_type === "created").length, 1);
 });
 
+test("task session state and its audit record roll back together", () => {
+  const db = store.getDb();
+  db.exec("CREATE TEMP TRIGGER reject_task_session_audit BEFORE INSERT ON memory_audit_events WHEN NEW.event_type = 'task_session_saved' BEGIN SELECT RAISE(ABORT, 'injected session audit failure'); END");
+  try {
+    assert.throws(() => store.saveTaskSession({ id: "audit_atomic_session", goal: "Preserve session state", state: "active" }), /injected session audit failure/);
+    assert.equal(store.getTaskSession("audit_atomic_session"), null, "a failed audit must roll back a new task session");
+  } finally { db.exec("DROP TRIGGER reject_task_session_audit"); }
+  db.exec("CREATE TEMP TRIGGER suppress_task_session_audit BEFORE INSERT ON memory_audit_events WHEN NEW.event_type = 'task_session_saved' BEGIN SELECT RAISE(IGNORE); END");
+  try {
+    assert.throws(() => store.saveTaskSession({ id: "audit_atomic_session", goal: "Preserve session state", state: "active" }), /was not persisted/);
+    assert.equal(store.getTaskSession("audit_atomic_session"), null, "a suppressed audit must also roll back the session");
+  } finally { db.exec("DROP TRIGGER suppress_task_session_audit"); }
+  const saved = store.saveTaskSession({ id: "audit_atomic_session", goal: "Preserve session state", state: "active" });
+  assert.equal(saved.id, "audit_atomic_session");
+  assert.equal(store.getDb().prepare("SELECT COUNT(*) AS count FROM memory_audit_events WHERE event_type = 'task_session_saved' AND target_id = ?").get(saved.id).count, 1);
+});
+
 test("legacy link repair during handoff lookup is atomic", () => {
   const db = store.getDb();
   const handoff = store.saveHandoff({

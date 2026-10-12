@@ -263,3 +263,16 @@ assertion and remains unresolved here.
 On Windows/Node v24.18.0, the synchronized two-process regression failed before
 the fix: both writers reported success but `resume_race_beta` was absent from the
 final document. After the fix, `node test/run-all.js test/handoff-reliability.test.js test/tools.test.js test/project-identity.test.js --concurrency=1 --json` exited 0: three suites passed, no failures/skips. The handoff suite reports 14 passing cases, including the race; tools and project identity suites passed. No full platform suite was rerun for this scoped change.
+
+## Task-session audit atomicity: 2026-10-12
+
+- Before the fix, a temporary trigger rejecting `task_session_saved` audit
+  inserts caused `saveTaskSession` to throw after the session UPSERT persisted.
+- After the fix, `node --check src/db/handoff-store.js`,
+  `node --check test/handoff-reliability.test.js`, and
+  `node --test test/handoff-reliability.test.js` exited 0. All 30 cases passed,
+  including injected audit rollback and retry. No skip or cancellation.
+- `node test/run-all.js test/handoff-reliability.test.js test/tools.test.js
+  test/identity-resource-authority.test.js --concurrency=1 --json` exited 0:
+  three suites passed, no failure, skip, cancellation, or cleanup error. The
+  full required tiers were not rerun.

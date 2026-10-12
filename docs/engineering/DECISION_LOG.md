@@ -161,3 +161,13 @@ establish broader extraction or metadata-only atomicity; SK-019 remains open.
   writes cannot appear successful. No schema, API, or dependency change.
 - Trigger-injected audit failures must preserve archived state or current/history
   versions; removing the trigger must allow one audited retry.
+
+## Task-session audit atomicity (2026-10-12)
+
+- `saveTaskSession` performs one UPSERT followed by a required audit write. A
+  trigger-injected audit failure confirmed that callers received an error while
+  a newly created task session remained persisted.
+- Keep the UPSERT and audit insert in one immediate SQLite transaction. Reuse
+  the existing session and audit stores; no schema, API, or dependency change.
+- The regression must demonstrate rollback of the session row and a successful
+  retry with exactly one audit entry.
