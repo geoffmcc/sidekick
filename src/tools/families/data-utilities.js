@@ -384,27 +384,87 @@ async function sidekick_validate({ data, schema }) {
 
 // --- Template Tool ---
 
+// sidekick_template deliberately supports caller-authored Handlebars templates
+// (that is the feature), so the trust boundary is here, at the application edge,
+// not inside Handlebars. Handlebars is not a sandbox: this handler only ever
+// passes a validated *string* source with safe render options and bounded work,
+// and the process never registers helpers/partials or exposes application
+// objects. Hardening rationale (Handlebars advisories patched in 4.7.10):
+//   GHSA-8r5x-fm3f-whwj (critical): compile()/precompile() receiving an OBJECT
+//     (pre-parsed AST) lets attacker JavaScript run. Rejected by the string
+//     check below.
+//   GHSA-p8wg-vrv2-v86f (critical): Function-constructor reachable when proto
+//     access is enabled. Proto access is forced off, matching the 4.x default.
+//   GHSA-xw65-4hp5-5hc7 (moderate): unsafe inline embedding of precompiled
+//     output. precompile() is not used by this tool at all.
+const MAX_TEMPLATE_LENGTH = 100000; // template source characters
+const MAX_TEMPLATE_DATA_LENGTH = 1000000; // serialized/JSON data characters
+const MAX_TEMPLATE_OUTPUT_LENGTH = 1000000; // rendered output characters
+
+// Fixed by the application; callers cannot influence these options. Proto
+// access stays disabled even if a future dependency default changed, so the
+// own-property bypass cannot be reached. Escaping stays enabled.
+const TEMPLATE_RENDER_OPTIONS = Object.freeze({
+  allowProtoMethodsByDefault: false,
+  allowProtoPropertiesByDefault: false,
+  noEscape: false,
+});
+
+function templateError(message) {
+  return { content: [{ type: "text", text: message }], isError: true };
+}
+
+// Normalize caller data into a fresh plain-JSON value graph. Only JSON values
+// may enter the rendering context, so live class instances, getters, functions,
+// and other application internals an in-process caller might supply are dropped
+// rather than exposed to a template. String data keeps the documented JSON
+// contract; object data is round-tripped.
+function normalizeTemplateData(data) {
+  if (typeof data === "string") {
+    if (data.length > MAX_TEMPLATE_DATA_LENGTH) throw new RangeError("data is too large");
+    return JSON.parse(data);
+  }
+  const serialized = JSON.stringify(data);
+  if (serialized === undefined) return {};
+  if (serialized.length > MAX_TEMPLATE_DATA_LENGTH) throw new RangeError("data is too large");
+  return JSON.parse(serialized);
+}
+
 async function sidekick_template({ template, data }) {
   if (!template) {
-    return { content: [{ type: "text", text: "template required" }], isError: true };
+    return templateError("template required");
+  }
+  // The MCP descriptor schema already constrains template to z.string(), but
+  // this handler is also reachable in-process, so reject every non-string type
+  // before it can reach compile(). This is the primary defense for the AST
+  // type-confusion advisory regardless of caller path.
+  if (typeof template !== "string") {
+    return templateError("template must be a string");
+  }
+  if (template.length > MAX_TEMPLATE_LENGTH) {
+    return templateError(`template exceeds ${MAX_TEMPLATE_LENGTH} characters`);
   }
 
   let parsedData = {};
 
   if (data) {
     try {
-      parsedData = typeof data === "string" ? JSON.parse(data) : data;
+      parsedData = normalizeTemplateData(data);
     } catch (e) {
-      return { content: [{ type: "text", text: `Data parse error: ${e.message}` }], isError: true };
+      return templateError(`Data parse error: ${e.message}`);
     }
   }
 
   try {
     const compiled = Handlebars.compile(template);
-    const result = compiled(parsedData);
-    return { content: [{ type: "text", text: result }] };
+    const result = compiled(parsedData, TEMPLATE_RENDER_OPTIONS);
+    const text = typeof result === "string" ? result : String(result);
+    if (text.length > MAX_TEMPLATE_OUTPUT_LENGTH) {
+      return templateError(`rendered output exceeds ${MAX_TEMPLATE_OUTPUT_LENGTH} characters`);
+    }
+    return { content: [{ type: "text", text }] };
   } catch (e) {
-    return { content: [{ type: "text", text: `Template error: ${e.message}` }], isError: true };
+    return templateError(`Template error: ${e.message}`);
   }
 }
 
