@@ -1,0 +1,137 @@
+{
+  "date": "2026-10-12",
+  "baseline": "b89247b6b80a3e120c9b755592cf416d047108b3",
+  "code_commits": [
+    "ba17ee5",
+    "7d47816"
+  ],
+  "environment": {
+    "platform": "win32",
+    "node": "v24.18.0",
+    "npm": "11.16.0",
+    "sqlite": "3.53.4"
+  },
+  "full_required_tiers": "incomplete",
+  "baseline_regression": {
+    "passed": 2,
+    "failed": 10
+  },
+  "final_regression": {
+    "passed": 12,
+    "failed": 0
+  },
+  "suites": [
+    {
+      "suite": "test/agent-durable-operations.test.js",
+      "status": "passed",
+      "duration_ms": 310
+    },
+    {
+      "suite": "test/agent-durable-recovery-matrix.test.js",
+      "status": "passed",
+      "duration_ms": 299
+    },
+    {
+      "suite": "test/agent-handoff-continuity.test.js",
+      "status": "passed",
+      "duration_ms": 96
+    },
+    {
+      "suite": "test/agent-handoff-tool.test.js",
+      "status": "passed",
+      "duration_ms": 1358
+    },
+    {
+      "suite": "test/agent-recovery-scan.test.js",
+      "status": "passed",
+      "duration_ms": 115
+    },
+    {
+      "suite": "test/brain-concurrency.test.js",
+      "status": "passed",
+      "duration_ms": 140
+    },
+    {
+      "suite": "test/dispatcher.test.cjs",
+      "status": "passed",
+      "duration_ms": 855
+    },
+    {
+      "suite": "test/handoff-reliability.test.js",
+      "status": "passed",
+      "duration_ms": 16224
+    },
+    {
+      "suite": "test/handoff-versioning.test.js",
+      "status": "passed",
+      "duration_ms": 7564
+    },
+    {
+      "suite": "test/migration-self-containment.test.js",
+      "status": "passed",
+      "duration_ms": 576
+    },
+    {
+      "suite": "test/security-handlebars-template.test.js",
+      "status": "passed",
+      "duration_ms": 766
+    },
+    {
+      "suite": "test/tool-registry-contract.test.cjs",
+      "status": "passed",
+      "duration_ms": 588
+    },
+    {
+      "suite": "test/memory-intelligence.test.js",
+      "status": "passed",
+      "duration_ms": 6237
+    },
+    {
+      "suite": "test/project-context-isolation.test.js",
+      "status": "passed",
+      "duration_ms": 755
+    },
+    {
+      "suite": "test/project-identity.test.js",
+      "status": "passed",
+      "duration_ms": 456
+    },
+    {
+      "suite": "test/security-phase-16-memory-data.test.js",
+      "status": "passed",
+      "duration_ms": 106
+    }
+  ],
+  "files": [
+    {
+      "file": "src/db/handoff-store.js",
+      "sha256": "41f299b0cdfe076f9ba4666284fd831c85fcffdf0ec0791bde85897f13f5cf72",
+      "validation_copy_matches": true
+    },
+    {
+      "file": "src/tools/families/resume.js",
+      "sha256": "e2ab9ff5786b384b60fd1b20dd784d4d8ee58bbc684410188e4ceea1d3d3914d",
+      "validation_copy_matches": true
+    },
+    {
+      "file": "test/handoff-reliability.test.js",
+      "sha256": "2eeaaba9dee7f43f04001d9f1d54c87e9d4fa2c929b81869c4ee6c9e82ca8eac",
+      "validation_copy_matches": true
+    },
+    {
+      "file": "test/dispatcher.test.cjs",
+      "sha256": "d39fb97c37b122f40ed8c861af95d109dd4da91d5d8004524a3ab5d95a45396e",
+      "validation_copy_matches": true
+    },
+    {
+      "file": "test/security-handlebars-template.test.js",
+      "sha256": "e346aa17d9a7fbcde001f7cf9dc2e487078065046f80abd85b2364e13cbc8925",
+      "validation_copy_matches": true
+    },
+    {
+      "file": "docs/handoff-v2.md",
+      "sha256": "575cfbec0becc5276c3f52d59bc3970b86036882f2de2d0fd1e44c95b0bdb104",
+      "validation_copy_matches": true
+    }
+  ]
+}
