@@ -1,5 +1,28 @@
 # Architecture audit
 
+## Continuity concurrency milestone
+
+Reconciled against `d4c908c` on 2026-10-12. The previous fixes are retained.
+The new deterministic harness confirmed that competing captures could overwrite
+one another without changing packet version; claim acquisition could overwrite
+an intervening revocation; and begin-resume could use a preflight invalidated by
+a packet update or lease expiry. Separate row/event writes also exposed partial
+lifecycle and lease commits on failure, including abrupt fixture-process exit.
+
+`handoffMutationState` now reads relevant row state and the existing journal tip
+in one SQLite statement. `commitHandoffMutation` compares that observation under
+an immediate writer transaction, performs the mutation, and appends its event.
+The journal detects intervening changes even when a lifecycle returns to its
+original value. Existing caller transactions compose through SQLite savepoints.
+Git observations remain outside the short transaction. No new source of truth,
+database, schema, or public revision field is introduced.
+
+Scope is deliberately bounded: it does not make repository observations atomic,
+reserve the workspace, prohibit every write by another authorized session, or
+make all handoff-store operations transactional. Packet creation/update,
+extraction, restore/archive and metadata-only writes still warrant a broader
+atomicity review. Durable execution receipts still own ambiguous external effects.
+
 2026-10-12; baseline b89247b6b80a3e120c9b755592cf416d047108b3 (v2.2.1).
 
 Status: initial source-traced baseline and targeted continuity audit; the full campaign is incomplete.

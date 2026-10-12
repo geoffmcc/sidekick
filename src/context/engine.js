@@ -5,6 +5,7 @@ const dbStoreDefault = require("../db");
 const { redactSensitive } = require("../redact");
 const { authorizeScope, sourceAllowed } = require("./scope");
 const { lexicalScore, rankEntry } = require("./ranking");
+const { requiresMemoryConfirmation } = require("../core/memory-trust");
 
 const MAX_QUERY_CHARS = 2000;
 const MAX_ENTRY_CHARS = 1800;
@@ -29,6 +30,7 @@ function normalizeMemory(row) {
     authority: row.source_type || row.source, createdAt: row.created_at, updatedAt: row.updated_at,
     observedAt: row.observed_at || row.last_seen_at, revalidateAfter: row.revalidate_after,
     expiresAt: row.expires_at, current: row.current, enabled: row.enabled, state: row.state,
+    requires_confirmation: requiresMemoryConfirmation(row),
     superseded: !!row.supersedes_id || parseJson(row.metadata_json, {}).state === "superseded",
     conflictGroup: row.conflict_group, provenance: { source: row.source, sourceTool: row.source_tool, sourceRef: row.source_ref },
     searchText: searchText(row),
@@ -109,7 +111,7 @@ function createContextEngine({ dbStore = dbStoreDefault, db = dbStoreDefault.get
     ];
     const out = [];
     for (const [key, type, text] of collections) for (const item of (ctx[key] || [])) {
-      if (item.project !== project || item.enabled === false || item.state === "deleted" || item.state === "expired") continue;
+      if (item.project !== project || lifecycleExcluded(item) || requiresMemoryConfirmation(item)) continue;
       out.push({ source: "legacy_context", sourceId: item.id, type, project, summary: item.summary || item.decision || item.description, content: item.content || text(item), confidence: item.confidence || 0.5, authority: "historical", createdAt: item.date, updatedAt: item.updated_at || item.date, provenance: { legacy: true }, searchText: text(item) });
     }
     return out.sort((a, b) => lexicalScore(query, b.searchText) - lexicalScore(query, a.searchText)).slice(0, limit);
@@ -203,6 +205,7 @@ function createContextEngine({ dbStore = dbStoreDefault, db = dbStoreDefault.get
         const opaqueExact = input.allowOpaqueId === true && row.provenance?.scopeResolvedFromOpaqueId === true;
         if (row.project && row.project !== scope.project && !opaqueExact) { excluded.push({ source, sourceId: row.sourceId, reasonCodes: ["WRONG_PROJECT_EXCLUDED"] }); continue; }
         if (lifecycleExcluded(row)) { excluded.push({ source, sourceId: row.sourceId, reasonCodes: [row.superseded ? "SUPERSEDED_EXCLUDED" : "EXPIRED_EXCLUDED"] }); continue; }
+        if (!exactIdQuery && row.requires_confirmation) { excluded.push({ source, sourceId: row.sourceId, reasonCodes: ["UNCONFIRMED_CLAIM_EXCLUDED"] }); continue; }
         candidates.push(row); count++;
       }
     };
@@ -246,7 +249,7 @@ function createContextEngine({ dbStore = dbStoreDefault, db = dbStoreDefault.get
       if (sourceCount >= budget.maxPerSource || entries.length >= budget.maxEntries) { excluded.push({ source: item.source, sourceId: item.sourceId, reasonCodes: ["CONTEXT_BUDGET_EXCLUDED"] }); continue; }
       if (chars + content.length > budget.maxChars) { excluded.push({ source: item.source, sourceId: item.sourceId, reasonCodes: ["CONTEXT_BUDGET_EXCLUDED"] }); continue; }
       chars += content.length; sourceCounts.set(item.source, sourceCount + 1);
-      entries.push({ source: item.source, sourceId: item.sourceId, type: item.type, project: item.project || null, content, summary: safeText(item.summary || content, 500), provenance: item.provenance || {}, authority: item.authorityScore, confidence: item.confidence, freshness: item.freshnessScore, relevance: item.relevance, score: item.score, reasonCodes: item.reasonCodes, liveValidationRequired: item.liveValidationRequired, conflictState: item.conflictGroup ? "conflict" : "none" });
+      entries.push({ source: item.source, sourceId: item.sourceId, type: item.type, project: item.project || null, content, summary: safeText(item.summary || content, 500), provenance: item.provenance || {}, state: item.state, requires_confirmation: item.requires_confirmation, authority: item.authorityScore, confidence: item.confidence, freshness: item.freshnessScore, relevance: item.relevance, score: item.score, reasonCodes: item.reasonCodes, liveValidationRequired: item.liveValidationRequired, conflictState: item.conflictGroup ? "conflict" : "none" });
     }
     const validation = entries.filter(item => item.liveValidationRequired).map(item => ({ source: item.source, sourceId: item.sourceId, reason: "STALE_REQUIRES_VALIDATION" }));
     const createdAt = new Date(now()).toISOString();

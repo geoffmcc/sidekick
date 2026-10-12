@@ -1,5 +1,6 @@
 "use strict";
 
+const crypto = require("crypto");
 const { z } = require("zod");
 const dbStore = require("../../db");
 const platformKernel = require("../../platform/kernel");
@@ -7,6 +8,7 @@ const { redactSensitive } = require("../../redact");
 const { buildMemoryBrief } = require("../../memory");
 const toolContext = require("../context");
 const { PROJECT_RE, canonicalizeProjectName } = require("../../core/project-identity");
+const { requiresMemoryConfirmation } = require("../../core/memory-trust");
 const authorization = require("../../core/authorization");
 
 function jsonText(value) {
@@ -77,7 +79,7 @@ function recordPlatformMemoryEvent(eventType, payload = {}, options = {}) {
 
 function buildScopedMemoryBrief(goal, project, options = {}) {
   const current = dbStore.searchMemories({ project, type: options.type || "all", limit: options.limit || 30 })
-    .filter(memory => memory.current !== false && memory.state !== "expired" && memory.state !== "deleted")
+    .filter(memory => memory.current !== false && memory.state !== "expired" && memory.state !== "deleted" && !requiresMemoryConfirmation(memory))
     .map(memory => ({
       id: memory.id,
       type: memory.type,
@@ -87,11 +89,13 @@ function buildScopedMemoryBrief(goal, project, options = {}) {
       confidence: memory.confidence,
       source: memory.source,
       source_ref: memory.source_ref,
+      state: memory.state,
+      requires_confirmation: requiresMemoryConfirmation(memory),
       last_verified: memory.last_confirmed_at || memory.last_seen_at,
       why_selected: project && memory.project === project ? "project scope match" : "global or unscoped match",
     }));
   const legacyBrief = buildMemoryBrief(goal || project || "memory", { project }) || null;
-  return { goal: goal || null, project: project || null, selected: current.slice(0, options.limit || 10), sections: legacyBrief, excluded_policy: "Expired, deleted, disabled, superseded, and unrelated project memories are excluded from normal recall.", generated_at: new Date().toISOString() };
+  return { goal: goal || null, project: project || null, selected: current.slice(0, options.limit || 10), sections: legacyBrief, excluded_policy: "Expired, deleted, disabled, superseded, unconfirmed claims, and unrelated project memories are excluded from automatic context.", generated_at: new Date().toISOString() };
 }
 
 function canManageSession(session, authIdentity) {
@@ -230,12 +234,21 @@ async function sidekick_session({ action, id, goal, project, source, working_dir
     if (!existing) return { content: [{ type: "text", text: "Task session not found: " + id }], isError: true };
     if (!canManageSession(existing, authIdentity)) return { content: [{ type: "text", text: "Task session not found: " + id }], isError: true };
     const linkedHandoff = dbStore.getHandoffByTaskId(existing.id);
-    const session = dbStore.saveTaskSession({ ...existing, current_plan, completed_steps: completed_steps || existing.completed_steps, current_hypothesis, blockers: blockers || existing.blockers, next_step, artifacts: artifacts || existing.artifacts, state: "active", owner_principal_id: existing.owner_principal_id || ownerPrincipalId, created_by_principal_id: existing.created_by_principal_id || actorPrincipalId });
-    if (linkedHandoff) {
-      const packet = buildContinuationPacket(session, { handoff: linkedHandoff, state: "active", current_plan, completed_steps, blockers, next_step, artifacts, risks, relationships, do_not_repeat, decisions, evidence, reports, verified_facts, unresolved_issues, resolved_issues, failed_approaches, follow_ups });
-      const updated = dbStore.saveHandoff({ id: linkedHandoff.id, project: linkedHandoff.project, title: linkedHandoff.title, source: linkedHandoff.source, task_id: existing.id, content: packet.summary || linkedHandoff.content, packet, extraction_state: "pending", expectedVersion: linkedHandoff.version, owner_principal_id: linkedHandoff.owner_principal_id || ownerPrincipalId, created_by_principal_id: linkedHandoff.created_by_principal_id || actorPrincipalId });
-      dbStore.captureHandoffCheckpoint(updated.id, { working_directory: session.working_directory || process.cwd(), actor: actorPrincipalId || ownerPrincipalId || "session", source: "session", metadata: { session_id: session.id, boundary: action } });
-      dbStore.refreshHandoffEvidence(updated.id, { working_directory: session.working_directory || process.cwd(), actor: actorPrincipalId || ownerPrincipalId || "session" });
+    let updatedHandoff = null;
+    // The session snapshot and linked handoff version are one continuity write.
+    // Keep workspace observation out of this transaction because Git inspection
+    // can be slow and must not hold the SQLite writer lock.
+    const session = dbStore.getDb().transaction(() => {
+      const savedSession = dbStore.saveTaskSession({ ...existing, current_plan, completed_steps: completed_steps || existing.completed_steps, current_hypothesis, blockers: blockers || existing.blockers, next_step, artifacts: artifacts || existing.artifacts, state: "active", owner_principal_id: existing.owner_principal_id || ownerPrincipalId, created_by_principal_id: existing.created_by_principal_id || actorPrincipalId });
+      if (linkedHandoff) {
+        const packet = buildContinuationPacket(savedSession, { handoff: linkedHandoff, state: "active", current_plan, completed_steps, blockers, next_step, artifacts, risks, relationships, do_not_repeat, decisions, evidence, reports, verified_facts, unresolved_issues, resolved_issues, failed_approaches, follow_ups });
+        updatedHandoff = dbStore.saveHandoff({ id: linkedHandoff.id, project: linkedHandoff.project, title: linkedHandoff.title, source: linkedHandoff.source, task_id: existing.id, content: packet.summary || linkedHandoff.content, packet, extraction_state: "pending", expectedVersion: linkedHandoff.version, owner_principal_id: linkedHandoff.owner_principal_id || ownerPrincipalId, created_by_principal_id: linkedHandoff.created_by_principal_id || actorPrincipalId });
+      }
+      return savedSession;
+    }).immediate();
+    if (updatedHandoff) {
+      dbStore.captureHandoffCheckpoint(updatedHandoff.id, { working_directory: session.working_directory || process.cwd(), actor: actorPrincipalId || ownerPrincipalId || "session", source: "session", metadata: { session_id: session.id, boundary: action } });
+      dbStore.refreshHandoffEvidence(updatedHandoff.id, { working_directory: session.working_directory || process.cwd(), actor: actorPrincipalId || ownerPrincipalId || "session" });
     }
     recordPlatformMemoryEvent(action === "checkpoint" ? "memory.session_checkpointed" : "memory.session_updated", { session_id: session.id, project: session.project, action, completed_steps: Array.isArray(session.completed_steps) ? session.completed_steps.length : 0 }, { subjectType: "memory_task_session", subjectId: session.id, project: session.project, taskId: session.id });
     return jsonText({ ok: true, session, checkpoint: action === "checkpoint" });
@@ -279,19 +292,19 @@ async function sidekick_session({ action, id, goal, project, source, working_dir
     const MAX_AUTOMATIC_MEMORIES = 8;
     const projectName = project || existing.project;
     const existingText = new Set((dbStore.searchMemories({ project: projectName, type: "all", limit: 200 }) || []).map(memory => `${memory.type}:${String(memory.content || "").toLowerCase().replace(/\s+/g, " ")}`));
-    const add = (type, values, memoryClass, confidence) => {
+    const add = (type, values, memoryClass, confidence, requiresConfirmation = false) => {
       for (const value of Array.isArray(values) ? values : values ? [values] : []) {
         const text = redactSensitive(String(value || "").trim());
         if (!text) continue;
         const fingerprint = `${type}:${text.toLowerCase().replace(/\s+/g, " ")}`;
         if (createdText.has(fingerprint) || existingText.has(fingerprint) || created.length >= MAX_AUTOMATIC_MEMORIES) continue;
         createdText.add(fingerprint);
-        const mem = dbStore.upsertMemory({ type, project: projectName, content: text, summary: text, confidence, source: "task_session", source_tool: "sidekick_session", source_task_id: id, source_ref: id, memory_class: memoryClass, evidence_excerpt: text, directness: "direct", source_authority: action === "abandon" ? 4 : 5, metadata: { task_session_id: id, outcome, acceptance_state, usefulness_feedback } });
+        const mem = dbStore.upsertMemory({ type, project: projectName, content: text, summary: text, confidence, source: "task_session", source_tool: "sidekick_session", source_task_id: id, source_ref: id, memory_class: memoryClass, evidence_excerpt: text, directness: "direct", source_authority: action === "abandon" ? 4 : 5, requires_confirmation: requiresConfirmation, metadata: { task_session_id: id, outcome, acceptance_state, usefulness_feedback } });
         if (mem) created.push(mem);
       }
     };
     if (action !== "abandon" && !["rejected", "failed"].includes(String(acceptance_state || "").toLowerCase())) {
-      add("fact", verified_facts, "semantic", 0.82); add("decision", decisions, "semantic", 0.84); add("procedure", procedures_learned, "procedural", 0.78); add("session", final_summary || user_visible_result, "episodic", 0.74);
+      add("fact", verified_facts, "semantic", 0.82, true); add("decision", decisions, "semantic", 0.84); add("procedure", procedures_learned, "procedural", 0.78); add("session", final_summary || user_visible_result, "episodic", 0.74);
     }
     add("negative", failed_approaches, "negative", 0.76); add("open_thread", [...(unresolved_issues || []), ...(follow_ups || [])].slice(0, 3), "prospective", 0.78); add("observation", evidence, "observational", 0.62);
     recordPlatformMemoryEvent(action === "abandon" ? "memory.session_abandoned" : "memory.session_completed", { session_id: session.id, project: session.project, memories_created: created.length, state: session.state, outcome }, { subjectType: "memory_task_session", subjectId: session.id, project: session.project, taskId: session.id, severity: action === "abandon" ? "warning" : "info" });
@@ -304,12 +317,82 @@ async function sidekick_session({ action, id, goal, project, source, working_dir
     if (!session) return { content: [{ type: "text", text: "Task session not found: " + id }], isError: true };
     if (!canManageSession(session, authIdentity)) return { content: [{ type: "text", text: "Task session not found: " + id }], isError: true };
     if (action === "resume" && session.state === "completed" && (session.outcome === "partial" || ["partial", "blocked"].includes(String(session.acceptance_state || "").toLowerCase()))) {
-      dbStore.getDb().prepare("UPDATE memory_task_sessions SET state = 'active', ended_at = NULL, updated_at = ? WHERE id = ?").run(new Date().toISOString(), id);
-      session.state = "active";
-      session.ended_at = null;
-      session.reopened_from = "completed";
+      const prior = dbStore.getHandoffByTaskId(id);
+      if (prior) {
+        const isResumeCheckpoint = prior.source === "session_resume"
+          && ["draft", "active", "ready"].includes(prior.lifecycle_state)
+          && prior.packet?.provenance?.previous_handoff_id;
+        const parent = isResumeCheckpoint ? dbStore.getHandoff(prior.packet.provenance.previous_handoff_id) : prior;
+        if (!parent) return { content: [{ type: "text", text: "Cannot resume task session: the previous handoff referenced by its checkpoint is unavailable" }], isError: true };
+        const resumedId = isResumeCheckpoint
+          ? prior.id
+          : `handoff_${crypto.createHash("sha256").update(`${id}|resume|${session.updated_at}|${parent.id}|${parent.version}`).digest("hex").slice(0, 20)}`;
+        const sourcePacket = isResumeCheckpoint ? prior.packet : parent.packet || {};
+        const resumedPacket = {
+          ...sourcePacket,
+          objective: session.goal,
+          summary: "Partial task resumed. Reconcile the current project state before continuing.",
+          status: "active",
+          next_step: session.next_step || sourcePacket.next_step || "Reconcile the current project state before continuing",
+          completed_steps: session.completed_steps || sourcePacket.completed_steps || [],
+          blockers: session.blockers || sourcePacket.blockers || [],
+          provenance: {
+            ...(sourcePacket.provenance || {}),
+            task_id: id,
+            handoff_id: resumedId,
+            previous_handoff_id: parent.id,
+            previous_handoff_version: parent.version,
+            working_directory: session.working_directory || sourcePacket.provenance?.working_directory || null,
+            repository: session.repository || sourcePacket.provenance?.repository || null,
+            branch: session.branch || sourcePacket.provenance?.branch || null,
+            environment: session.environment || sourcePacket.provenance?.environment || null,
+          },
+          relationships: isResumeCheckpoint
+            ? (Array.isArray(sourcePacket.relationships) ? sourcePacket.relationships : [])
+            : [
+              ...(Array.isArray(sourcePacket.relationships) ? sourcePacket.relationships : []),
+              { type: "resumes", handoff_id: parent.id, version: parent.version },
+            ],
+        };
+        const resumeCheckpointId = resumedId;
+        try {
+          let resumedHandoff = dbStore.getDb().transaction(() => dbStore.saveHandoff({
+            id: resumedId,
+            previous_id: parent.id,
+            project: session.project || parent.project,
+            title: `Resumed session: ${session.goal}`.slice(0, 500),
+            source: "session_resume",
+            task_id: id,
+            content: resumedPacket.summary,
+            packet: resumedPacket,
+            extraction_state: "pending",
+            owner_principal_id: session.owner_principal_id || parent.owner_principal_id || ownerPrincipalId,
+            created_by_principal_id: session.created_by_principal_id || actorPrincipalId,
+          })).immediate();
+          if (resumedHandoff.lifecycle_state === "draft") {
+            dbStore.captureHandoffCheckpoint(resumedHandoff.id, { working_directory: session.working_directory || process.cwd(), actor: actorPrincipalId || ownerPrincipalId || "session", source: "session", metadata: { session_id: id, boundary: "session.resume" } });
+            dbStore.refreshHandoffEvidence(resumedHandoff.id, { working_directory: session.working_directory || process.cwd(), actor: actorPrincipalId || ownerPrincipalId || "session" });
+            resumedHandoff = dbStore.transitionHandoff(resumedHandoff.id, "active", { expectedVersion: resumedHandoff.version, actor: actorPrincipalId || ownerPrincipalId || "session", source: "session", reason: "partial session resumed" }).handoff;
+          }
+          const reopened = dbStore.getDb().transaction(() => dbStore.saveTaskSession({
+            ...session,
+            state: "active",
+            ended_at: null,
+            owner_principal_id: session.owner_principal_id || ownerPrincipalId,
+            created_by_principal_id: session.created_by_principal_id || actorPrincipalId,
+          })).immediate();
+          Object.assign(session, reopened, { reopened_from: "completed", resumed_handoff_id: resumedHandoff.id });
+        } catch (error) {
+          return { content: [{ type: "text", text: `session resume checkpoint failed (${resumeCheckpointId} remains discoverable by task id): ${String(error && error.message ? error.message : error)}` }], isError: true };
+        }
+      } else {
+        dbStore.getDb().transaction(() => dbStore.saveTaskSession({ ...session, state: "active", ended_at: null })).immediate();
+        session.state = "active";
+        session.ended_at = null;
+        session.reopened_from = "completed";
+      }
     }
-    return jsonText({ ok: true, session, memory_brief: buildScopedMemoryBrief(session.goal, session.project, { limit: 12 }) });
+    return jsonText({ ok: true, session, handoff_id: session.resumed_handoff_id || null, memory_brief: buildScopedMemoryBrief(session.goal, session.project, { limit: 12 }) });
   }
   if (action === "list") return jsonText({ ok: true, sessions: dbStore.listTaskSessions({ project, state: source, limit: limit || 50 }) });
   return { content: [{ type: "text", text: "Invalid action. Use begin, update, checkpoint, end, abandon, resume, status, list" }], isError: true };

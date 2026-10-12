@@ -1,4 +1,5 @@
 const dbStore = require("./db");
+const { requiresMemoryConfirmation } = require("./core/memory-trust");
 const { redactSensitive, isSensitiveKey, redactSensitiveKeysDeep } = require("./redact");
 const { stripSidekickPrefix } = require("./core/tool-name");
 const { PROJECT_RE, canonicalizeProjectName } = require("./core/project-identity");
@@ -336,16 +337,16 @@ async function searchMemoriesByEmbedding(query, options = {}) {
     }
 
     const results = await qdrantClient.search(embedding, options.limit || 10, Object.keys(filter).length > 0 ? filter : null);
-    return results.map(r => ({
-      id: r.payload?.memory_id,
-      type: r.payload?.type,
-      project: r.payload?.project,
-      content: r.payload?.content,
-      summary: r.payload?.summary,
-      confidence: r.payload?.confidence,
-      score: r.score,
-      semantic: true
-    }));
+    // Vector payloads may predate confirmation or lifecycle changes. Resolve
+    // current provenance from SQLite before using them as automatic context.
+    return results.flatMap(r => {
+      if (!r.payload?.memory_id) return [];
+      const memory = dbStore.getMemoryById(r.payload?.memory_id, { includeDisabled: false });
+      if (!memory || memory.current === false || ["deleted", "expired", "disabled"].includes(memory.state) || requiresMemoryConfirmation(memory)) return [];
+      if (options.project && memory.project !== options.project) return [];
+      if (options.type && options.type !== "all" && memory.type !== options.type) return [];
+      return [{ ...memory, score: r.score, semantic: true }];
+    });
   } catch {
     return [];
   }
@@ -588,7 +589,7 @@ function recallMemoryForText(query, options = {}) {
     project,
     type: options.type || "all",
     limit: Math.max(limit * 10, 50)
-  }).map(item => ({
+  }).filter(item => !requiresMemoryConfirmation(item)).map(item => ({
     id: item.id,
     type: item.type,
     date: item.last_seen_at || item.updated_at,
@@ -603,6 +604,8 @@ function recallMemoryForText(query, options = {}) {
     confidence: item.confidence,
     times_confirmed: item.times_confirmed,
     source: item.source,
+    state: item.state,
+    requires_confirmation: item.requires_confirmation,
     structured: true
   }));
 
@@ -613,7 +616,7 @@ function recallMemoryForText(query, options = {}) {
     ...ctx.decisions.map(d => ({ ...d, type: "decision", summary: d.decision, notes: d.reasoning })),
     ...ctx.problems.map(p => ({ ...p, type: "problem", summary: p.description, notes: p.solution })),
     ...ctx.patterns.map(p => ({ ...p, type: "pattern", summary: p.description, notes: p.example }))
-  ].filter(item => !project || !item.project || item.project === project);
+  ].filter(item => (!project || !item.project || item.project === project) && !requiresMemoryConfirmation(item));
 
   const results = candidates
     .map(item => ({ item, score: scoreText(query, memoryText(item)) }))
@@ -685,25 +688,25 @@ function buildMemoryBrief(goal, options = {}) {
     type: "preference",
     project,
     limit: maxPerType
-  }).map(m => m.content || m.summary).filter(Boolean);
+  }).filter(m => !requiresMemoryConfirmation(m)).map(m => m.content || m.summary).filter(Boolean);
 
   const facts = dbStore.searchMemories({
     type: "fact",
     project,
     limit: maxPerType
-  }).map(m => m.content || m.summary).filter(Boolean);
+  }).filter(m => !requiresMemoryConfirmation(m)).map(m => m.content || m.summary).filter(Boolean);
 
   const decisions = dbStore.searchMemories({
     type: "decision",
     project,
     limit: maxPerType
-  }).map(m => m.content || m.summary).filter(Boolean);
+  }).filter(m => !requiresMemoryConfirmation(m)).map(m => m.content || m.summary).filter(Boolean);
 
   const openThreads = dbStore.searchMemories({
     type: "open_thread",
     project,
     limit: maxPerType
-  }).map(m => m.content || m.summary).filter(Boolean);
+  }).filter(m => !requiresMemoryConfirmation(m)).map(m => m.content || m.summary).filter(Boolean);
 
   const recalled = recallMemoryForText(goal, { project, limit: 5 });
   const relatedContext = recalled

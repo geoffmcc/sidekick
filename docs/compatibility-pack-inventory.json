@@ -1,8 +1,8 @@
 {
   "schema": "sidekick.compatibility-pack-inventory.v1",
   "source": "bundled pack manifests and repository files",
-  "source_commit": "a13ad523c7f088a218c7d3ea341ae7d2346cb1a5",
-  "source_commit_date": "2026-10-04T12:53:57-04:00",
+  "source_commit": "d7efd53fc1fbf3ad8df58051674b12de2bec1236",
+  "source_commit_date": "2026-10-12T17:54:49-04:00",
   "source_fingerprint": "sha256:3157d9f431c71cb6276637b54c827a9160a6ca474a4fc94c80da554712ebb55e",
   "pack_count": 27,
   "packs": [
@@ -3329,6 +3329,7 @@
         "test/campaign-packs-6-10.test.js",
         "test/container-operations-pack.test.js",
         "test/deploy-scripts.test.js",
+        "test/handoff-concurrency.test.js",
         "test/pack-manifest-lifecycle.test.js",
         "test/security-hardening.test.js",
         "test/security-research-pack.test.js",
@@ -3377,6 +3378,7 @@
               "test/browser-automation-pack.test.js",
               "test/campaign-packs-6-10.test.js",
               "test/container-operations-pack.test.js",
+              "test/handoff-concurrency.test.js",
               "test/pack-manifest-lifecycle.test.js",
               "test/security-hardening.test.js",
               "test/security-research-pack.test.js"
@@ -3416,6 +3418,7 @@
               "test/agent-bridge-followup.test.js",
               "test/browser-automation-pack.test.js",
               "test/campaign-packs-6-10.test.js",
+              "test/handoff-concurrency.test.js",
               "test/pack-manifest-lifecycle.test.js",
               "test/security-hardening.test.js",
               "test/security-research-pack.test.js",
@@ -3446,6 +3449,7 @@
               "test/browser-automation-pack.test.js",
               "test/campaign-packs-6-10.test.js",
               "test/deploy-scripts.test.js",
+              "test/handoff-concurrency.test.js",
               "test/security-research-pack.test.js",
               "test/workflow-definitions.test.js"
             ]
@@ -3471,6 +3475,7 @@
               "test/campaign-packs-6-10.test.js",
               "test/container-operations-pack.test.js",
               "test/deploy-scripts.test.js",
+              "test/handoff-concurrency.test.js",
               "test/pack-manifest-lifecycle.test.js",
               "test/security-hardening.test.js",
               "test/security-research-pack.test.js",
@@ -3500,6 +3505,7 @@
               "test/campaign-packs-6-10.test.js",
               "test/container-operations-pack.test.js",
               "test/deploy-scripts.test.js",
+              "test/handoff-concurrency.test.js",
               "test/pack-manifest-lifecycle.test.js",
               "test/security-hardening.test.js",
               "test/security-research-pack.test.js",
@@ -3523,6 +3529,7 @@
               "test/agent-bridge-followup.test.js",
               "test/browser-automation-pack.test.js",
               "test/deploy-scripts.test.js",
+              "test/handoff-concurrency.test.js",
               "test/security-research-pack.test.js",
               "test/workflow-definitions.test.js"
             ]
@@ -3549,6 +3556,7 @@
               "test/campaign-packs-6-10.test.js",
               "test/container-operations-pack.test.js",
               "test/deploy-scripts.test.js",
+              "test/handoff-concurrency.test.js",
               "test/pack-manifest-lifecycle.test.js",
               "test/security-research-pack.test.js",
               "test/workflow-definitions.test.js"
@@ -3583,6 +3591,7 @@
               "test/campaign-packs-6-10.test.js",
               "test/container-operations-pack.test.js",
               "test/deploy-scripts.test.js",
+              "test/handoff-concurrency.test.js",
               "test/security-hardening.test.js",
               "test/security-research-pack.test.js",
               "test/workflow-definitions.test.js"
@@ -3609,6 +3618,7 @@
               "test/campaign-packs-6-10.test.js",
               "test/container-operations-pack.test.js",
               "test/deploy-scripts.test.js",
+              "test/handoff-concurrency.test.js",
               "test/pack-manifest-lifecycle.test.js",
               "test/security-hardening.test.js",
               "test/security-research-pack.test.js",
@@ -3623,6 +3633,7 @@
               "test/browser-automation-pack.test.js",
               "test/campaign-packs-6-10.test.js",
               "test/container-operations-pack.test.js",
+              "test/handoff-concurrency.test.js",
               "test/pack-manifest-lifecycle.test.js",
               "test/security-research-pack.test.js",
               "test/workflow-definitions.test.js"
@@ -3694,6 +3705,7 @@
             "test/campaign-packs-6-10.test.js",
             "test/container-operations-pack.test.js",
             "test/deploy-scripts.test.js",
+            "test/handoff-concurrency.test.js",
             "test/pack-manifest-lifecycle.test.js",
             "test/security-hardening.test.js",
             "test/security-research-pack.test.js",

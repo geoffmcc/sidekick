@@ -35,13 +35,49 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
       const event = { handoff_id: handoffId, event_seq: Number(previous?.event_seq || 0) + 1, version: Number(version), event_type: eventType, actor: String(actor || "system"), source: String(source || "handoff"), payload: canonicalize(payload), previous_hash: previous?.event_hash || null };
       const eventHash = continuityHash(event);
       const id = stableId("he", `${handoffId}|${eventHash}`);
-      db.prepare("INSERT OR IGNORE INTO memory_handoff_events (id, handoff_id, event_seq, version, event_type, actor, source, payload_json, previous_hash, event_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(id, handoffId, event.event_seq, Number(version), eventType, event.actor, event.source, JSON.stringify(event.payload), event.previous_hash, eventHash, nowIso());
+      const inserted = db.prepare("INSERT INTO memory_handoff_events (id, handoff_id, event_seq, version, event_type, actor, source, payload_json, previous_hash, event_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(id, handoffId, event.event_seq, Number(version), eventType, event.actor, event.source, JSON.stringify(event.payload), event.previous_hash, eventHash, nowIso());
+      if (inserted.changes !== 1) throw new Error("Handoff journal event was not persisted");
       if (!inTransaction) db.exec("COMMIT");
       return { id, ...event, event_hash: eventHash };
     } catch (error) {
       if (!inTransaction) { try { db.exec("ROLLBACK"); } catch {} }
       throw error;
     }
+  }
+
+  function appendRequiredMemoryAudit(eventType, targetType, targetId, details, actor) {
+    if (!hasTable("memory_audit_events")) throw new Error("memory_audit_events table is not available; refusing unaudited handoff mutation");
+    const auditId = auditMemoryEvent(eventType, targetType, targetId, details, actor);
+    const audit = Number.isFinite(Number(auditId))
+      ? db.prepare("SELECT event_type, target_type, target_id, details_json FROM memory_audit_events WHERE id = ?").get(Number(auditId))
+      : null;
+    if (!audit || audit.event_type !== eventType || audit.target_type !== targetType
+      || audit.target_id !== targetId
+      || JSON.stringify(canonicalize(parseJson(audit.details_json, {}))) !== JSON.stringify(canonicalize(details))) {
+      throw new Error(`Handoff audit event "${eventType}" was not persisted`);
+    }
+    return auditId;
+  }
+
+  // Packet versions do not advance for checkpoints, claims or lifecycle changes.
+  // Observe the existing journal tip as well as row state before external reads,
+  // then compare under the SQLite writer lock. No Git I/O occurs under this lock.
+  function handoffMutationState(id) {
+    const journalTip = hasTable("memory_handoff_events")
+      ? "(SELECT event_hash FROM memory_handoff_events WHERE handoff_id = memory_handoffs.id ORDER BY event_seq DESC LIMIT 1)"
+      : "NULL";
+    const row = db.prepare(`SELECT version, lifecycle_state, checkpoint_hash,
+      claim_owner, claim_token, claim_expires_at, archived_at, project,
+      owner_principal_id, created_by_principal_id, ${journalTip} AS journal_tip
+      FROM memory_handoffs WHERE id = ?`).get(id);
+    return JSON.stringify(row || null);
+  }
+
+  function commitHandoffMutation(id, observed, mutate) {
+    return db.transaction(() => {
+      if (handoffMutationState(id) !== observed) throw new Error(`Handoff "${id}" changed concurrently during continuity operation`);
+      return mutate();
+    }).immediate();
   }
 
   function gitCheckpoint(workingDirectory) {
@@ -233,13 +269,16 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
       }
       return { evidence_key: evidenceKey(item, index), evidence_index: index, state, reason, source_hash: sourceHash, observed_at: stamp, checked_at: new Date(now).toISOString() };
     });
-    const tx = db.transaction(() => {
+    return db.transaction(() => {
+      const current = getHandoff(id);
+      if (!current || Number(current.version) !== Number(handoff.version) || current.content_hash !== handoff.content_hash) {
+        throw new Error(`Handoff "${id}" changed during evidence refresh; reload and retry`);
+      }
       db.prepare("DELETE FROM memory_handoff_evidence_state WHERE handoff_id = ? AND version = ?").run(id, handoff.version);
       for (const state of states) db.prepare("INSERT INTO memory_handoff_evidence_state (handoff_id, version, evidence_key, evidence_index, state, reason, source_hash, observed_at, checked_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(id, handoff.version, state.evidence_key, state.evidence_index, state.state, state.reason, state.source_hash, state.observed_at, state.checked_at);
-    });
-    tx();
-    appendHandoffEvent(id, handoff.version, "evidence_refreshed", { actor, counts: states.reduce((out, item) => { out[item.state] = (out[item.state] || 0) + 1; return out; }, {}) }, { actor, source: "handoff" });
-    return { status: "refreshed", handoff_id: id, version: handoff.version, states };
+      appendHandoffEvent(id, handoff.version, "evidence_refreshed", { actor, counts: states.reduce((out, item) => { out[item.state] = (out[item.state] || 0) + 1; return out; }, {}) }, { actor, source: "handoff" });
+      return { status: "refreshed", handoff_id: id, version: handoff.version, states };
+    }).immediate();
   }
 
   function getHandoffReceiverProjection(id, { working_directory, recipient = null } = {}) {
@@ -319,18 +358,22 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
 
   function renewHandoffClaim(id, { claim_token, leaseSeconds = 900, actor = "system", source = "handoff" } = {}) {
     if (!claim_token) throw new Error("handoff claim renewal requires claim_token");
+    const observed = handoffMutationState(id);
     const current = getHandoff(id);
     if (!current || !current.claim) throw new Error("handoff has no active claim");
     const tokenHash = continuityHash({ domain: "claim", token: claim_token });
     const expires = new Date(Date.now() + Math.max(30, Math.min(Number(leaseSeconds) || 900, 86400)) * 1000).toISOString();
-    const result = db.prepare("UPDATE memory_handoffs SET claim_expires_at = ?, updated_at = ? WHERE id = ? AND claim_token = ? AND lifecycle_state = 'claimed' AND claim_expires_at > ?").run(expires, nowIso(), id, tokenHash, nowIso());
-    if (!result.changes) throw new Error("handoff claim is invalid or expired");
-    appendHandoffEvent(id, current.version, "claim_renewed", { expires_at: expires }, { actor, source });
-    return { handoff: getHandoff(id), expires_at: expires };
+    return commitHandoffMutation(id, observed, () => {
+      const result = db.prepare("UPDATE memory_handoffs SET claim_expires_at = ?, updated_at = ? WHERE id = ? AND claim_token = ? AND lifecycle_state = 'claimed' AND claim_expires_at > ?").run(expires, nowIso(), id, tokenHash, new Date(Date.now()).toISOString());
+      if (!result.changes) throw new Error("handoff claim is invalid or expired");
+      appendHandoffEvent(id, current.version, "claim_renewed", { expires_at: expires }, { actor, source });
+      return { handoff: getHandoff(id), expires_at: expires };
+    });
   }
 
   function beginHandoffResume(id, { claim_token, working_directory, recipient = null, actor = "system", source = "handoff" } = {}) {
     if (!claim_token) throw new Error("handoff resume requires claim_token");
+    const observed = handoffMutationState(id);
     const current = getHandoff(id);
     const tokenHash = continuityHash({ domain: "claim", token: claim_token });
     if (!current || !current.claim || current.lifecycle_state !== "claimed") throw new Error("handoff is not actively claimed");
@@ -338,10 +381,12 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
     if (!claimRow || claimRow.claim_token !== tokenHash || new Date(claimRow.claim_expires_at).getTime() <= Date.now()) throw new Error("handoff claim is invalid or expired");
     const preflight = getHandoffResumePreflight(id, { working_directory, recipient, simulate: true });
     if (!preflight.safe_to_resume) throw new Error(`handoff resume preflight blocked: ${preflight.reasons.join("; ")}`);
-    const result = db.prepare("UPDATE memory_handoffs SET lifecycle_state = 'verifying', updated_at = ? WHERE id = ? AND claim_token = ? AND lifecycle_state = 'claimed'").run(nowIso(), id, tokenHash);
-    if (!result.changes) throw new Error("handoff changed before resume began");
-    appendHandoffEvent(id, current.version, "resume_started", { recipient }, { actor, source });
-    return { handoff: getHandoff(id), preflight };
+    return commitHandoffMutation(id, observed, () => {
+      const result = db.prepare("UPDATE memory_handoffs SET lifecycle_state = 'verifying', updated_at = ? WHERE id = ? AND claim_token = ? AND lifecycle_state = 'claimed' AND claim_expires_at > ?").run(nowIso(), id, tokenHash, new Date(Date.now()).toISOString());
+      if (!result.changes) throw new Error("handoff changed before resume began or claim expired");
+      appendHandoffEvent(id, current.version, "resume_started", { recipient }, { actor, source });
+      return { handoff: getHandoff(id), preflight };
+    });
   }
 
   function verifyHandoffProvenance(packet, { requireResume = true } = {}) {
@@ -421,23 +466,31 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
 
     const packetChanged = existing && packetValue !== null && packetJson !== (existing.packet_json || "{}");
     if (existing && existing.content_hash === hash && !packetChanged) {
-      db.prepare(`
-        UPDATE memory_handoffs SET
-          updated_at = ?,
-          project = COALESCE(?, project),
-          title = COALESCE(?, title),
-          source = COALESCE(?, source),
-          task_id = COALESCE(?, task_id),
-          schema_version = MAX(schema_version, 3),
-          extraction_state = COALESCE(?, extraction_state),
-          extraction_version = COALESCE(?, extraction_version),
-          owner_principal_id = COALESCE(?, owner_principal_id),
-          created_by_principal_id = COALESCE(?, created_by_principal_id)
-        WHERE id = ?
-      `).run(ts, project || null, title || null, source || null, task_id || null, extraction_state || null, extraction_version || null, owner_principal_id || null, created_by_principal_id || null, existing.id);
-      const touched = getHandoff(existing.id);
-      persistHandoffLinks(touched);
-      return touched;
+      return db.transaction(() => {
+        // Metadata-only writes still need compare-and-swap: the handoff may
+        // have advanced after the initial read, and a failed compatibility
+        // link repair must roll the metadata write back with it.
+        const outcome = db.prepare(`
+          UPDATE memory_handoffs SET
+            updated_at = ?,
+            project = COALESCE(?, project),
+            title = COALESCE(?, title),
+            source = COALESCE(?, source),
+            task_id = COALESCE(?, task_id),
+            schema_version = MAX(schema_version, 3),
+            extraction_state = COALESCE(?, extraction_state),
+            extraction_version = COALESCE(?, extraction_version),
+            owner_principal_id = COALESCE(?, owner_principal_id),
+            created_by_principal_id = COALESCE(?, created_by_principal_id)
+          WHERE id = ? AND version = ? AND content_hash = ?
+        `).run(ts, project || null, title || null, source || null, task_id || null, extraction_state || null, extraction_version || null, owner_principal_id || null, created_by_principal_id || null, existing.id, existing.version, existing.content_hash);
+        if (outcome.changes !== 1) {
+          throw new Error(`Handoff "${existing.id}" changed concurrently during metadata save (version ${existing.version} is no longer current)`);
+        }
+        const touched = getHandoff(existing.id);
+        persistHandoffLinks(touched);
+        return touched;
+      })();
     }
 
     if (existing) {
@@ -450,6 +503,7 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
       const nextVersion = Number(existing.version || 1) + 1;
       const inTransaction = db.inTransaction;
       if (!inTransaction) db.exec("BEGIN IMMEDIATE");
+      let updated;
       try {
         db.prepare(`
           INSERT OR IGNORE INTO memory_handoff_versions (
@@ -504,15 +558,15 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
         if (outcome.changes === 0) {
           throw new Error(`Handoff "${existing.id}" changed concurrently during save (version ${existing.version} is no longer current)`);
         }
+        auditMemoryEvent("handoff_updated", "handoff", existing.id, { project: project || existing.project, version: nextVersion, content_hash: hash }, source || "system");
+        updated = getHandoff(existing.id);
+        appendHandoffEvent(existing.id, nextVersion, "updated", { content_hash: hash }, { actor: source || "system", source: source || "handoff" });
+        persistHandoffLinks(updated);
         if (!inTransaction) db.exec("COMMIT");
       } catch (error) {
         if (!inTransaction) { try { db.exec("ROLLBACK"); } catch {} }
         throw error;
       }
-      auditMemoryEvent("handoff_updated", "handoff", existing.id, { project: project || existing.project, version: nextVersion, content_hash: hash }, source || "system");
-      const updated = getHandoff(existing.id);
-      appendHandoffEvent(existing.id, nextVersion, "updated", { content_hash: hash }, { actor: source || "system", source: source || "handoff" });
-      persistHandoffLinks(updated);
       return updated;
     }
 
@@ -524,35 +578,45 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
     }
 
     const handoffId = id || stableId("handoff", `${project || "global"}|${hash}`);
-    db.prepare(`
-      INSERT INTO memory_handoffs (
-        id, project, title, source, task_id, version, previous_id, content_hash,
-        content, redacted_content, extraction_state, extraction_version, created_at, updated_at, packet_json,
-        owner_principal_id, created_by_principal_id, schema_version
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      handoffId,
-      project || null,
-      title || "handoff",
-      source || "handoff",
-      task_id || null,
-      1,
-      previous_id || null,
-      hash,
-      String(content || ""),
-      redacted,
-      extraction_state || "pending",
-      extraction_version || null,
-      ts,
-      ts,
-      packetJson || "{}",
-      owner_principal_id || null,
-      created_by_principal_id || null,
-      3
-    );
-    auditMemoryEvent("handoff_created", "handoff", handoffId, { project, version: 1, content_hash: hash }, source || "system");
-    appendHandoffEvent(handoffId, 1, "created", { content_hash: hash }, { actor: source || "system", source: source || "handoff" });
-    return getHandoff(handoffId);
+    const inTransaction = db.inTransaction;
+    if (!inTransaction) db.exec("BEGIN IMMEDIATE");
+    let created;
+    try {
+      db.prepare(`
+        INSERT INTO memory_handoffs (
+          id, project, title, source, task_id, version, previous_id, content_hash,
+          content, redacted_content, extraction_state, extraction_version, created_at, updated_at, packet_json,
+          owner_principal_id, created_by_principal_id, schema_version
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        handoffId,
+        project || null,
+        title || "handoff",
+        source || "handoff",
+        task_id || null,
+        1,
+        previous_id || null,
+        hash,
+        String(content || ""),
+        redacted,
+        extraction_state || "pending",
+        extraction_version || null,
+        ts,
+        ts,
+        packetJson || "{}",
+        owner_principal_id || null,
+        created_by_principal_id || null,
+        3
+      );
+      auditMemoryEvent("handoff_created", "handoff", handoffId, { project, version: 1, content_hash: hash }, source || "system");
+      appendHandoffEvent(handoffId, 1, "created", { content_hash: hash }, { actor: source || "system", source: source || "handoff" });
+      created = getHandoff(handoffId);
+      if (!inTransaction) db.exec("COMMIT");
+    } catch (error) {
+      if (!inTransaction) { try { db.exec("ROLLBACK"); } catch {} }
+      throw error;
+    }
+    return created;
   }
 
   /** Version history for a handoff: prior versions plus the current row, newest first. */
@@ -599,33 +663,38 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
    * recorded version, so even a mistaken restore is recoverable.
    */
   function restoreHandoffVersion(handoffId, version, { source } = {}) {
-    const current = getHandoff(handoffId);
-    if (!current) throw new Error(`Handoff not found: ${handoffId}`);
-    const target = getHandoffVersion(current.id, version);
-    if (!target) throw new Error(`Handoff "${current.id}" has no version ${version}`);
-    // Restoring the current version — or any version whose content already
-    // equals the current content — changes nothing; report that honestly
-    // instead of minting a phantom version transition in the audit trail.
-    if (Number(version) === Number(current.version) || (target.content_hash === current.content_hash && JSON.stringify(target.packet || {}) === JSON.stringify(current.packet || {}))) {
-      return { handoff: current, restored_from: Number(version), no_op: true };
-    }
-    const saved = saveHandoff({
-      id: current.id,
-      content: target.content,
-      packet: target.packet,
-      source: source || "restore",
-      extraction_state: "pending",
-    });
-    auditMemoryEvent("handoff_restored", "handoff", current.id, { restored_from: Number(version), new_version: saved.version }, source || "restore");
-    return { handoff: saved, restored_from: Number(version), no_op: false };
+    return db.transaction(() => {
+      const current = getHandoff(handoffId);
+      if (!current) throw new Error(`Handoff not found: ${handoffId}`);
+      const target = getHandoffVersion(current.id, version);
+      if (!target) throw new Error(`Handoff "${current.id}" has no version ${version}`);
+      // Restoring the current version — or any version whose content already
+      // equals the current content — changes nothing; report that honestly
+      // instead of minting a phantom version transition in the audit trail.
+      if (Number(version) === Number(current.version) || (target.content_hash === current.content_hash && JSON.stringify(target.packet || {}) === JSON.stringify(current.packet || {}))) {
+        return { handoff: current, restored_from: Number(version), no_op: true };
+      }
+      const saved = saveHandoff({
+        id: current.id,
+        content: target.content,
+        packet: target.packet,
+        source: source || "restore",
+        extraction_state: "pending",
+      });
+      appendRequiredMemoryAudit("handoff_restored", "handoff", current.id, { restored_from: Number(version), new_version: saved.version }, source || "restore");
+      return { handoff: saved, restored_from: Number(version), no_op: false };
+    }).immediate();
   }
 
   function unarchiveHandoff(id) {
-    const handoff = getHandoff(id);
-    if (!handoff) return false;
-    db.prepare("UPDATE memory_handoffs SET archived_at = NULL, updated_at = ? WHERE id = ?").run(nowIso(), handoff.id);
-    auditMemoryEvent("handoff_unarchived", "handoff", handoff.id, {}, "system");
-    return true;
+    if (!hasTable("memory_handoffs")) return false;
+    return db.transaction(() => {
+      const handoff = db.prepare("SELECT id FROM memory_handoffs WHERE id = ?").get(id);
+      if (!handoff) return false;
+      db.prepare("UPDATE memory_handoffs SET archived_at = NULL, updated_at = ? WHERE id = ?").run(nowIso(), handoff.id);
+      appendRequiredMemoryAudit("handoff_unarchived", "handoff", handoff.id, {}, "system");
+      return true;
+    }).immediate();
   }
 
   /**
@@ -635,20 +704,23 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
    * audit event records what was removed so the deletion itself is history.
    */
   function purgeHandoffVersion(handoffId, version, { reason, source } = {}) {
-    const current = getHandoff(handoffId);
-    if (!current) throw new Error(`Handoff not found: ${handoffId}`);
-    if (Number(version) === Number(current.version)) {
-      throw new Error(`Handoff "${current.id}" version ${version} is the CURRENT version; update the handoff first, then purge the historical version`);
-    }
     if (!hasTable("memory_handoff_versions")) throw new Error("memory_handoff_versions table is not available; run migrations");
-    const row = db.prepare("SELECT content_hash FROM memory_handoff_versions WHERE handoff_id = ? AND version = ?").get(current.id, Number(version));
-    if (!row) throw new Error(`Handoff "${current.id}" has no historical version ${version}`);
-    db.transaction(() => {
-      db.prepare("DELETE FROM memory_handoff_links WHERE handoff_id = ? AND version = ?").run(current.id, Number(version));
-      db.prepare("DELETE FROM memory_handoff_versions WHERE handoff_id = ? AND version = ?").run(current.id, Number(version));
-    })();
-    auditMemoryEvent("handoff_version_purged", "handoff", current.id, { version: Number(version), content_hash: row.content_hash, reason: String(reason || "unspecified").slice(0, 300) }, source || "system");
-    return { purged: true, handoff_id: current.id, version: Number(version), content_hash: row.content_hash };
+    const purgedVersion = Number(version);
+    return db.transaction(() => {
+      const current = db.prepare("SELECT version FROM memory_handoffs WHERE id = ?").get(handoffId);
+      if (!current) throw new Error(`Handoff not found: ${handoffId}`);
+      if (purgedVersion === Number(current.version)) {
+        throw new Error(`Handoff "${handoffId}" version ${version} is the CURRENT version; update the handoff first, then purge the historical version`);
+      }
+      const row = db.prepare("SELECT content_hash FROM memory_handoff_versions WHERE handoff_id = ? AND version = ?").get(handoffId, purgedVersion);
+      if (!row) throw new Error(`Handoff "${handoffId}" has no historical version ${version}`);
+      db.prepare("DELETE FROM memory_handoff_links WHERE handoff_id = ? AND version = ?").run(handoffId, purgedVersion);
+      const deleted = db.prepare("DELETE FROM memory_handoff_versions WHERE handoff_id = ? AND version = ?").run(handoffId, purgedVersion);
+      if (deleted.changes !== 1) throw new Error(`Handoff "${handoffId}" version ${version} changed concurrently during purge`);
+      const details = { version: purgedVersion, content_hash: row.content_hash, reason: String(reason || "unspecified").slice(0, 300) };
+      appendRequiredMemoryAudit("handoff_version_purged", "handoff", handoffId, details, source || "system");
+      return { purged: true, handoff_id: handoffId, version: purgedVersion, content_hash: row.content_hash };
+    }).immediate();
   }
 
   function normalizeHandoffRow(row) {
@@ -689,7 +761,10 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
     if (!hasTable("memory_handoffs")) return null;
     const row = db.prepare("SELECT * FROM memory_handoffs WHERE id = ?").get(id);
     const created = normalizeHandoffRow(row);
-    persistHandoffLinks(created);
+    // Older records may not have had their packet links materialized yet. Keep
+    // that compatibility repair atomic: a failed insert must not leave only a
+    // prefix of the derived links behind on an otherwise read-only lookup.
+    if (created) db.transaction(() => persistHandoffLinks(created))();
     return created;
   }
 
@@ -720,17 +795,18 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
   }
 
   function captureHandoffCheckpoint(id, { working_directory, expectedVersion, actor = "system", source = "handoff", metadata = null } = {}) {
+    const observed = handoffMutationState(id);
     const handoff = getHandoff(id);
     if (!handoff) throw new Error(`Handoff not found: ${id}`);
     if (expectedVersion !== undefined && Number(expectedVersion) !== Number(handoff.version)) throw new Error(`Handoff "${id}" changed concurrently: expected version ${expectedVersion}, found ${handoff.version}`);
     const checkpoint = { schema_version: 1, captured_at: nowIso(), freshness_seconds: 900, ...gitCheckpoint(working_directory || handoff.packet?.provenance?.working_directory), source_state: handoff.packet?.provenance?.commit_sha || handoff.packet?.provenance?.source_commit || null };
     const hash = continuityHash(checkpoint);
-    db.transaction(() => {
+    return commitHandoffMutation(id, observed, () => {
       const result = db.prepare("UPDATE memory_handoffs SET checkpoint_json = ?, checkpoint_hash = ?, updated_at = ? WHERE id = ? AND version = ?").run(JSON.stringify(checkpoint), hash, nowIso(), id, handoff.version);
       if (!result.changes) throw new Error(`Handoff "${id}" changed concurrently during checkpoint capture`);
       appendHandoffEvent(id, handoff.version, "checkpoint_captured", { checkpoint_hash: hash, repository: checkpoint.repository || null, ...(metadata && typeof metadata === "object" ? { metadata: parseJson(JSON.stringify(metadata), {}) } : {}) }, { actor, source });
-    })();
-    return getHandoff(id);
+      return getHandoff(id);
+    });
   }
 
   function getHandoffReadiness(id, { working_directory, recipient = null } = {}) {
@@ -758,6 +834,7 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
 
   function transitionHandoff(id, target, { expectedVersion, actor = "system", source = "handoff", reason } = {}) {
     if (!HANDOFF_LIFECYCLE.has(target)) throw new Error(`Unknown handoff lifecycle state: ${target}`);
+    const observed = handoffMutationState(id);
     const current = getHandoff(id);
     if (!current) throw new Error(`Handoff not found: ${id}`);
     if (expectedVersion !== undefined && Number(expectedVersion) !== Number(current.version)) throw new Error(`Handoff "${id}" changed concurrently: expected version ${expectedVersion}, found ${current.version}`);
@@ -774,14 +851,17 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
     }
     const ts = nowIso();
     const fields = { lifecycle_state: target, sealed_at: target === "ready" ? ts : current.sealed_at, revoked_at: target === "revoked" ? ts : current.revoked_at, completed_at: target === "completed" ? ts : current.completed_at };
-    const result = db.prepare("UPDATE memory_handoffs SET lifecycle_state = ?, sealed_at = ?, revoked_at = ?, completed_at = ?, updated_at = ? WHERE id = ? AND version = ?").run(fields.lifecycle_state, fields.sealed_at || null, fields.revoked_at || null, fields.completed_at || null, ts, id, current.version);
-    if (!result.changes) throw new Error(`Handoff "${id}" changed concurrently during transition`);
-    appendHandoffEvent(id, current.version, "lifecycle_changed", { from: current.lifecycle_state, to: target, reason: String(reason || "") .slice(0, 300) }, { actor, source });
-    return { handoff: getHandoff(id), no_op: false };
+    return commitHandoffMutation(id, observed, () => {
+      const result = db.prepare("UPDATE memory_handoffs SET lifecycle_state = ?, sealed_at = ?, revoked_at = ?, completed_at = ?, updated_at = ? WHERE id = ? AND version = ?").run(fields.lifecycle_state, fields.sealed_at || null, fields.revoked_at || null, fields.completed_at || null, ts, id, current.version);
+      if (!result.changes) throw new Error(`Handoff "${id}" changed concurrently during transition`);
+      appendHandoffEvent(id, current.version, "lifecycle_changed", { from: current.lifecycle_state, to: target, reason: String(reason || "") .slice(0, 300) }, { actor, source });
+      return { handoff: getHandoff(id), no_op: false };
+    });
   }
 
   function claimHandoff(id, { owner, leaseSeconds = 900, expectedVersion, actor = owner, source = "handoff" } = {}) {
     if (!owner) throw new Error("handoff claim requires owner");
+    const observed = handoffMutationState(id);
     const current = getHandoff(id);
     if (!current) throw new Error(`Handoff not found: ${id}`);
     if (expectedVersion !== undefined && Number(expectedVersion) !== Number(current.version)) throw new Error(`Handoff "${id}" changed concurrently: expected version ${expectedVersion}, found ${current.version}`);
@@ -793,25 +873,32 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
     if (readiness.status !== "ready") throw new Error(`Handoff "${id}" is not ready to claim: ${readiness.reasons.join("; ") || readiness.status}`);
     const token = crypto.randomBytes(24).toString("hex");
     const tokenHash = continuityHash({ domain: "claim", token });
-    const expires = new Date(now + Math.max(30, Math.min(Number(leaseSeconds) || 900, 86400)) * 1000).toISOString();
-    const result = db.prepare("UPDATE memory_handoffs SET lifecycle_state = 'claimed', claim_owner = ?, claim_token = ?, claim_expires_at = ?, updated_at = ? WHERE id = ? AND version = ? AND (claim_expires_at IS NULL OR claim_expires_at <= ? OR claim_owner = ?)").run(owner, tokenHash, expires, nowIso(), id, current.version, new Date(now).toISOString(), owner);
-    if (!result.changes) throw new Error(`Handoff "${id}" changed concurrently during claim`);
-    appendHandoffEvent(id, current.version, "claimed", { owner, expires_at: expires }, { actor, source });
-    return { handoff: getHandoff(id), claim_token: token, expires_at: expires };
+    return commitHandoffMutation(id, observed, () => {
+      const commitTime = Date.now();
+      const expires = new Date(commitTime + Math.max(30, Math.min(Number(leaseSeconds) || 900, 86400)) * 1000).toISOString();
+      const result = db.prepare("UPDATE memory_handoffs SET lifecycle_state = 'claimed', claim_owner = ?, claim_token = ?, claim_expires_at = ?, updated_at = ? WHERE id = ? AND version = ? AND (claim_expires_at IS NULL OR claim_expires_at <= ? OR claim_owner = ?)").run(owner, tokenHash, expires, nowIso(), id, current.version, new Date(commitTime).toISOString(), owner);
+      if (!result.changes) throw new Error(`Handoff "${id}" changed concurrently during claim`);
+      appendHandoffEvent(id, current.version, "claimed", { owner, expires_at: expires }, { actor, source });
+      return { handoff: getHandoff(id), claim_token: token, expires_at: expires };
+    });
   }
 
   function releaseHandoff(id, { claim_token, actor = "system", source = "handoff", reason } = {}) {
     if (!claim_token) throw new Error("handoff release requires claim_token");
+    const observed = handoffMutationState(id);
     const current = getHandoff(id);
     if (!current) throw new Error(`Handoff not found: ${id}`);
+    if (!TRANSITIONS[current.lifecycle_state]?.has("released")) throw new Error(`Handoff cannot release a claim in state ${current.lifecycle_state}`);
     const claimRow = db.prepare("SELECT claim_token FROM memory_handoffs WHERE id = ?").get(id);
     const tokenHash = continuityHash({ domain: "claim", token: claim_token });
     if (!claimRow || claimRow.claim_token !== tokenHash) throw new Error("handoff claim token is invalid");
     if (!current.claim?.active) throw new Error("handoff claim is expired");
-    const result = db.prepare("UPDATE memory_handoffs SET lifecycle_state = 'released', claim_owner = NULL, claim_token = NULL, claim_expires_at = NULL, updated_at = ? WHERE id = ? AND claim_token = ?").run(nowIso(), id, tokenHash);
-    if (!result.changes) throw new Error(`Handoff "${id}" changed concurrently during release`);
-    appendHandoffEvent(id, current.version, "released", { reason: String(reason || "").slice(0, 300) }, { actor, source });
-    return getHandoff(id);
+    return commitHandoffMutation(id, observed, () => {
+      const result = db.prepare("UPDATE memory_handoffs SET lifecycle_state = 'released', claim_owner = NULL, claim_token = NULL, claim_expires_at = NULL, updated_at = ? WHERE id = ? AND claim_token = ? AND claim_expires_at > ?").run(nowIso(), id, tokenHash, new Date(Date.now()).toISOString());
+      if (!result.changes) throw new Error(`Handoff "${id}" changed concurrently during release or claim expired`);
+      appendHandoffEvent(id, current.version, "released", { reason: String(reason || "").slice(0, 300) }, { actor, source });
+      return getHandoff(id);
+    });
   }
 
   function listHandoffs({ project, includeArchived = false, includeCompleted = false, limit = 50 } = {}) {
@@ -834,14 +921,22 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
 
   function archiveHandoff(id, reason = "archived") {
     if (!hasTable("memory_handoffs")) return false;
-    const ts = nowIso();
-    const result = db.prepare("UPDATE memory_handoffs SET archived_at = ?, updated_at = ? WHERE id = ?").run(ts, ts, id);
-    if (result.changes > 0) auditMemoryEvent("handoff_archived", "handoff", id, { reason }, "user");
-    return result.changes > 0;
+    return db.transaction(() => {
+      const handoff = db.prepare("SELECT id FROM memory_handoffs WHERE id = ?").get(id);
+      if (!handoff) return false;
+      const ts = nowIso();
+      db.prepare("UPDATE memory_handoffs SET archived_at = ?, updated_at = ? WHERE id = ?").run(ts, ts, handoff.id);
+      appendRequiredMemoryAudit("handoff_archived", "handoff", handoff.id, { reason }, "user");
+      return true;
+    }).immediate();
   }
 
   function saveTaskSession(session) {
     if (!hasTable("memory_task_sessions")) throw new Error("memory_task_sessions table is not available; run migrations");
+    // The session row and its audit entry describe one logical mutation. Keep
+    // both in the same transaction so a failed audit cannot leave an
+    // unaudited session create or update behind.
+    return db.transaction(() => {
     const ts = nowIso();
     const id = session.id || `task_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
     db.prepare(`
@@ -863,7 +958,7 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
         blockers_json = excluded.blockers_json, next_step = COALESCE(excluded.next_step, next_step), artifacts_json = excluded.artifacts_json,
         outcome = COALESCE(excluded.outcome, outcome), final_summary = COALESCE(excluded.final_summary, final_summary),
         acceptance_state = COALESCE(excluded.acceptance_state, acceptance_state), memory_brief_json = COALESCE(excluded.memory_brief_json, memory_brief_json),
-        updated_at = excluded.updated_at, ended_at = COALESCE(excluded.ended_at, ended_at),
+        updated_at = excluded.updated_at, ended_at = CASE WHEN ? THEN excluded.ended_at ELSE ended_at END,
         owner_principal_id = COALESCE(excluded.owner_principal_id, owner_principal_id),
         created_by_principal_id = COALESCE(excluded.created_by_principal_id, created_by_principal_id)
     `).run(
@@ -893,10 +988,13 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
       ts,
       session.ended_at || null,
       session.owner_principal_id || null,
-      session.created_by_principal_id || null
+      session.created_by_principal_id || null,
+      // Omission preserves the timestamp; explicit null clears it on resume.
+      session.ended_at !== undefined ? 1 : 0
     );
-    auditMemoryEvent("task_session_saved", "task_session", id, { state: session.state || "active", project: session.project || null }, session.source || "system");
+    appendRequiredMemoryAudit("task_session_saved", "task_session", id, { state: session.state || "active", project: session.project || null }, session.source || "system");
     return getTaskSession(id);
+    }).immediate();
   }
 
   function normalizeTaskSessionRow(row) {
