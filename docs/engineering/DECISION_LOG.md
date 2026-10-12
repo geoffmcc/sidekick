@@ -1,5 +1,16 @@
 # Decision log
 
+## Version-safe handoff memory extraction (2026-10-12)
+
+Treat extraction as a derived transaction against a specific handoff revision.
+After acquiring SQLite's immediate writer reservation, reload the handoff and
+reject a caller snapshot whose version, content hash, or project changed. Insert
+all extracted memories and mark that same row processed in the same transaction.
+This prevents stale facts from being labeled current and leaves no partial
+derived set after an insert failure. No migration or new source of truth is
+needed; stale callers reload and retry. The platform event remains emitted
+after the database commit by the existing caller path.
+
 ## Atomic legacy handoff-link repair (2026-10-12)
 
 `getHandoff()` materializes missing `memory_handoff_links` from stored packets

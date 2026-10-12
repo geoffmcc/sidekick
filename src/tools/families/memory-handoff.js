@@ -28,22 +28,41 @@ function classifyHandoffLine(line) {
 }
 
 function extractHandoffMemories(handoff, options = {}) {
-  const project = options.project || handoff.project || null;
-  const lines = String(handoff.redacted_content || handoff.content || "").split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-  const created = [];
-  const seen = new Set();
-  for (const line of lines) {
-    const classification = classifyHandoffLine(line);
-    if (!classification) continue;
-    const content = redactSensitive(line.replace(/^(decision|decided|rationale|next step|follow up|todo|pending|unresolved|open problem|blocker|blocked|risk|failed|failure|do not|don't|avoid|rejected|dead end|procedure|runbook|worked command|validation|rollback|completed|done|changed|implemented|fixed|resolved|fact|verified|current)\s*:?\s*/i, "").trim() || line);
-    const fingerprint = `${handoff.id}|${handoff.content_hash}|${classification.type}|${content.toLowerCase()}`;
-    if (seen.has(fingerprint)) continue;
-    seen.add(fingerprint);
-    const memory = dbStore.upsertMemory({ type: classification.type, project, content, summary: content, tags: ["handoff", classification.type, handoff.id].filter(Boolean), confidence: classification.confidence, source: "handoff", source_tool: "sidekick_handoff", source_task_id: handoff.task_id || null, source_ref: handoff.id, automatic: true, requires_confirmation: classification.requires_confirmation === true, memory_class: classification.memory_class, primary_scope_type: project ? "project" : "global", primary_scope_id: project, source_type: "handoff", evidence_excerpt: content, extraction_method: HANDOFF_EXTRACTION_VERSION, directness: "direct", source_authority: 6, artifact_hash: handoff.content_hash, fingerprint, metadata: { handoff_id: handoff.id, handoff_version: handoff.version, handoff_hash: handoff.content_hash, extraction_version: HANDOFF_EXTRACTION_VERSION, memory_class: classification.memory_class, source_type: "handoff", evidence_excerpt: content } });
-    if (memory) created.push(memory);
-  }
-  dbStore.updateHandoffExtraction(handoff.id, "processed", HANDOFF_EXTRACTION_VERSION);
-  return created;
+  const transaction = dbStore.getDb().transaction(() => {
+    // The input may have been read before another session saved a new version.
+    // Read the authoritative row after taking the SQLite writer reservation so
+    // extraction cannot attach stale facts to the current handoff state.
+    const current = dbStore.getHandoff(handoff.id);
+    if (!current) throw new Error(`Handoff "${handoff.id}" no longer exists`);
+    if (Number(current.version) !== Number(handoff.version)
+      || current.content_hash !== handoff.content_hash
+      || (current.project || null) !== (handoff.project || null)) {
+      throw new Error(`Handoff "${handoff.id}" changed since it was read; reload and retry extraction`);
+    }
+    if (options.project && canonicalizeProjectName(options.project) !== canonicalizeProjectName(current.project)) {
+      throw new Error(`Handoff "${current.id}" project changed or does not match the requested extraction scope`);
+    }
+
+    const project = current.project || null;
+    const lines = String(current.redacted_content || current.content || "").split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+    const created = [];
+    const seen = new Set();
+    for (const line of lines) {
+      const classification = classifyHandoffLine(line);
+      if (!classification) continue;
+      const content = redactSensitive(line.replace(/^(decision|decided|rationale|next step|follow up|todo|pending|unresolved|open problem|blocker|blocked|risk|failed|failure|do not|don't|avoid|rejected|dead end|procedure|runbook|worked command|validation|rollback|completed|done|changed|implemented|fixed|resolved|fact|verified|current)\s*:?\s*/i, "").trim() || line);
+      const fingerprint = `${current.id}|${current.content_hash}|${classification.type}|${content.toLowerCase()}`;
+      if (seen.has(fingerprint)) continue;
+      seen.add(fingerprint);
+      const memory = dbStore.upsertMemory({ type: classification.type, project, content, summary: content, tags: ["handoff", classification.type, current.id].filter(Boolean), confidence: classification.confidence, source: "handoff", source_tool: "sidekick_handoff", source_task_id: current.task_id || null, source_ref: current.id, automatic: true, requires_confirmation: classification.requires_confirmation === true, memory_class: classification.memory_class, primary_scope_type: project ? "project" : "global", primary_scope_id: project, source_type: "handoff", evidence_excerpt: content, extraction_method: HANDOFF_EXTRACTION_VERSION, directness: "direct", source_authority: 6, artifact_hash: current.content_hash, fingerprint, metadata: { handoff_id: current.id, handoff_version: current.version, handoff_hash: current.content_hash, extraction_version: HANDOFF_EXTRACTION_VERSION, memory_class: classification.memory_class, source_type: "handoff", evidence_excerpt: content } });
+      if (memory) created.push(memory);
+    }
+    if (!dbStore.updateHandoffExtraction(current.id, "processed", HANDOFF_EXTRACTION_VERSION)) {
+      throw new Error(`Handoff "${current.id}" extraction state could not be updated`);
+    }
+    return created;
+  });
+  return transaction.immediate();
 }
 
 function recordHandoffEvent(eventType, payload, options = {}) {

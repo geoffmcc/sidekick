@@ -14,6 +14,7 @@ process.env.SIDEKICK_EMBEDDINGS = "0";
 const store = require("../src/db");
 const identity = require("../src/core/identity");
 const { sidekick_resume } = require("../src/tools/families/resume");
+const { extractHandoffMemories } = require("../src/tools/families/memory-handoff");
 const { callMcpTool } = require("../src/tools/dispatcher");
 store.runPendingMigrations();
 const repo = path.join(root, "repo");
@@ -112,6 +113,51 @@ test("legacy link repair during handoff lookup is atomic", () => {
   store.getHandoff(handoff.id);
   const repaired = store.getHandoff(handoff.id);
   assert.deepEqual(repaired.links.map(link => link.type).sort(), ["artifact", "evidence"]);
+});
+
+test("stale handoff snapshots cannot extract memories or mark a newer version processed", () => {
+  const stale = create();
+  const latest = store.saveHandoff({
+    id: stale.id,
+    project: stale.project,
+    content: "Decision: use the latest checkpoint as the source of truth.",
+    packet: { ...stale.packet, next_step: "Verify the current checkpoint" },
+    expectedVersion: stale.version,
+  });
+
+  assert.throws(() => extractHandoffMemories(stale), /changed since it was read/);
+  assert.equal(store.getHandoff(latest.id).extraction_state, "pending");
+  assert.equal(store.getDb().prepare("SELECT COUNT(*) AS count FROM memories WHERE source_ref = ?").get(latest.id).count, 0,
+    "a stale packet must not create derived memories");
+
+  const extracted = extractHandoffMemories(store.getHandoff(latest.id));
+  assert.ok(extracted.some(memory => memory.content === "use the latest checkpoint as the source of truth."));
+  assert.equal(store.getHandoff(latest.id).extraction_state, "processed");
+  const count = store.getDb().prepare("SELECT COUNT(*) AS count FROM memories WHERE source_ref = ?").get(latest.id).count;
+  assert.throws(() => extractHandoffMemories(store.getHandoff(latest.id), { project: "other_project" }), /does not match the requested extraction scope/);
+  assert.equal(store.getDb().prepare("SELECT COUNT(*) AS count FROM memories WHERE source_ref = ?").get(latest.id).count, count,
+    "a mismatched project override must not create cross-project derived memories");
+});
+
+test("handoff memory extraction rolls back the whole derived set on failure", () => {
+  const handoff = store.saveHandoff({
+    project: "continuity",
+    content: "Fact: First derived fact remains useful.\nDecision: Second derived fact completes the extraction.",
+    packet: { objective: "Test extraction rollback", status: "active", next_step: "Retry extraction" },
+  });
+  const db = store.getDb();
+  db.exec(`CREATE TEMP TRIGGER reject_second_extracted_memory BEFORE INSERT ON memories
+    WHEN NEW.source_ref = '${handoff.id}' AND NEW.content = 'Second derived fact completes the extraction.'
+    BEGIN SELECT RAISE(ABORT, 'injected extraction failure'); END`);
+  try {
+    assert.throws(() => extractHandoffMemories(handoff), /injected extraction failure/);
+    assert.equal(db.prepare("SELECT COUNT(*) AS count FROM memories WHERE source_ref = ?").get(handoff.id).count, 0,
+      "a failed extraction must not leave a prefix of its derived memories");
+    assert.equal(store.getHandoff(handoff.id).extraction_state, "pending");
+  } finally { db.exec("DROP TRIGGER reject_second_extracted_memory"); }
+
+  assert.equal(extractHandoffMemories(store.getHandoff(handoff.id)).length, 2);
+  assert.equal(store.getHandoff(handoff.id).extraction_state, "processed");
 });
 
 test("purging handoff history rolls back deletion when its audit write fails", () => {

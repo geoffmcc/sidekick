@@ -1,11 +1,12 @@
 # Implementation status
 
-## Current checkpoint: atomic legacy handoff-link repair
+## Current checkpoint: version-safe handoff memory extraction
 
 Updated 2026-10-12. Reference: v2.2.1 at b89247b. Current milestone began on clean
 main at `d4c908cda76b4031bdab05458cb40afb4984954b` (`v2.2.1-1-gd4c908c`).
-Current branch: `improvement/handoff-archive-audit`, stacked on signed and
-pushed `improvement/handoff-purge-audit`, `improvement/resume-project-scope`,
+Current branch: `improvement/handoff-extraction-snapshot`, stacked on signed
+and pushed `improvement/handoff-archive-audit`,
+`improvement/handoff-purge-audit`, `improvement/resume-project-scope`,
 `improvement/handoff-save-atomicity`, `improvement/handoff-project-scope`,
 `improvement/resume-pointer-atomicity`, and
 `improvement/platform-continuity-concurrency`.
@@ -81,21 +82,26 @@ Completed:
 - Confirmed SK-025: `getHandoff()` lazily materializes links for legacy packets.
   An injected artifact-link insert failure left the earlier evidence link
   persisted while the lookup threw. Link materialization now runs in one
-  transaction; a regression verifies rollback and complete retry. Changes are
-  uncommitted on the current branch.
-- Current scoped run: handoff reliability (24 cases) and four supported runner
-  suites (handoff versioning, memory intelligence, tools, handoff reliability)
-  pass; syntax, documentation, architecture, test-ownership and diff checks
-  pass. The atomicity milestone's earlier grouped run passed five of six suites;
-  handoff-versioning failed
-  at the checkpoint `repository.head` assertion, reproduced directly. A
-  separate grouped `security-boundaries.test.js` run had seven assertions
-  pass but failed during its existing Windows database cleanup hook with EBUSY;
-  it is recorded as failed, not passed.
+  transaction; a regression verifies rollback and complete retry. Signed
+  commit `5c8dd99` was verified and pushed to
+  `origin/improvement/handoff-archive-audit`.
+- Confirmed SK-026: extraction could consume a stale handoff object after a
+  newer version was saved, add old derived memories, and mark the current row
+  processed. It also left a partial derived set on a mid-extraction insert
+  failure. Extraction now reloads/checks version, hash and project under an
+  immediate transaction, and writes memories plus processed state atomically.
+  The new regressions fail before the fix and pass after; changes are
+  uncommitted on `improvement/handoff-extraction-snapshot`.
+- Current scoped run: handoff reliability (26 cases) passes. Syntax and diff
+  checks pass; the four-suite integration group (handoff reliability, versioning,
+  memory intelligence, tools) passed with no failures. A direct
+  `handoff-versioning.test.js` run now passes, so the earlier checkpoint-head
+  failure is not currently reproducible. The separate Windows
+  `security-boundaries.test.js` cleanup EBUSY remains an observed failure.
 
-No dependency, schema or version change on this lifecycle-audit branch. Rollback
-is code-only but restores the demonstrated partial-audit behavior. No deployment or
-release; prior branch pushes were explicitly authorized.
+No dependency, schema or version change in this extraction change. Rollback is
+code-only but restores stale-snapshot and partial-extraction behavior. No
+deployment or release; prior branch pushes were explicitly authorized.
 
 Remaining, in priority order:
 
@@ -105,19 +111,20 @@ Remaining, in priority order:
    receiver using supported interfaces; add attributable execution receipts
    (SK-007/SK-009).
 3. Complete the cross-interface scope/authorization matrix (SK-008) and examine
-   remaining wider handoff atomicity (SK-019), including extraction and
-   metadata-only paths.
+   remaining wider handoff atomicity (SK-019), especially metadata-only paths;
+   extraction is now covered by SK-026.
 4. Deepen memory quality, scheduler/DST/retries, worker failure, pack rollback,
    operational recovery and current dependency advisory audits.
 
-Limits: the broad inventory is structural; phases 1-6 remain incomplete. The
-serial grouped run passed five suites but failed `handoff-versioning.test.js`
-at its `checkpoint.repository.head` assertion (`undefined` versus the current
-Git revision); direct execution reproduced it. Root cause is not established,
-and no assertion was weakened. Git
-reads are not an atomic filesystem snapshot; leases are not exclusive workspace
-locks. Fixture tests do not evaluate model quality, prove exactly-once external
-effects, or power-loss durability (SQLite synchronous=NORMAL is unchanged).
+Limits: the broad inventory is structural; phases 1-6 remain incomplete. An
+earlier `handoff-versioning.test.js` run failed at its
+`checkpoint.repository.head` assertion; the recent runner and direct runs both
+pass, so that failure is not currently reproducible and its cause remains
+unknown. A separate grouped `security-boundaries.test.js` run failed during its
+Windows database cleanup hook with EBUSY. Git reads are not an atomic filesystem
+snapshot; leases are not exclusive workspace locks. Fixture tests do not
+evaluate model quality, prove exactly-once external effects, or power-loss
+durability (SQLite synchronous=NORMAL is unchanged).
 
 The unavailable sandbox required approved local shell escalation. Tests used
 frozen tracked-source copies, clean environments, installed dependencies and

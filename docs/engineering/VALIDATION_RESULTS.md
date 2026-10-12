@@ -1,5 +1,24 @@
 # Validation results
 
+## Version-safe handoff memory extraction: 2026-10-12
+
+Windows checkout accessed through WSL, Node v24.18.0, installed dependencies;
+temporary SQLite triggers and disposable handoff fixtures.
+
+| Command | Actual result |
+| --- | --- |
+| `node --test test/handoff-reliability.test.js` | Exit 0; 26 passed, 0 failed/skipped; 7.555 seconds. Includes stale-snapshot rejection, project-scope mismatch rejection, mid-extraction rollback, and successful retries. |
+| `node test/run-all.js test/handoff-reliability.test.js test/handoff-versioning.test.js test/memory-intelligence.test.js test/tools.test.js --concurrency=1 --json` | Exit 0; four suites passed, 0 failed/skipped/cancelled; 72.124 seconds. |
+| `node test/handoff-versioning.test.js` | Exit 0; all handoff-versioning checks passed, including checkpoint/claim/resume. |
+| `node --check src/tools/families/memory-handoff.js` and `node --check test/handoff-reliability.test.js` | PASS. |
+| `git diff --check` | PASS. |
+
+The stale-snapshot regression failed before the fix because extraction did not
+reject the old version. An earlier grouped attempt failed in `begin_resume`
+while files in this same checkout were changing; that run is not treated as
+clean validation. A fresh grouped run with unchanged source passed. Full tiers
+and release validation were not run.
+
 ## Atomic legacy handoff-link repair: 2026-10-12
 
 Windows checkout accessed through WSL, Node v24.18.0, installed dependencies;
