@@ -8,6 +8,7 @@ const { assembleContext } = require("../../context");
 const { getExecutionContext } = require("../context");
 const { scopedProject: authorizeMemoryProject } = require("./memory-scope");
 const { canonicalizeProjectName } = require("../../core/project-identity");
+const { requiresMemoryConfirmation } = require("../../core/memory-trust");
 
 const DEFAULT_CONTEXT = {
   projects: {},
@@ -84,6 +85,10 @@ function structuredMemoryToContextItem(mem) {
     outcome: mem.metadata?.outcome,
     confidence: mem.confidence,
     times_confirmed: mem.times_confirmed,
+    state: mem.state,
+    requires_confirmation: requiresMemoryConfirmation(mem),
+    source: mem.source,
+    source_ref: mem.source_ref,
     structured: true
   };
 }
@@ -161,7 +166,10 @@ async function searchContext(ctx, query, type, limit = 10) {
       try {
         const filter = type && type !== "all" ? { must: [{ key: "type", match: { value: type } }] } : null;
         const semanticResults = await qdrantStore.search(embedding, limit, filter);
-        for (const r of semanticResults) results.push({ type: r.payload.type, item: r.payload.data, score: r.score });
+        for (const r of semanticResults) {
+          const item = r.payload.type === "memory" ? findStructuredMemoryById(r.payload.data?.id) : r.payload.data;
+          if (contextItemIsActive(item) && !requiresMemoryConfirmation(item)) results.push({ type: r.payload.type, item, score: r.score });
+        }
       } catch (e) {}
     }
   }
@@ -169,9 +177,10 @@ async function searchContext(ctx, query, type, limit = 10) {
   if (type === "all" || type === "memories") {
     const structuredMemories = dbStore.searchMemories({ type: "all", limit: Math.max(limit * 5, 50) });
     for (const mem of structuredMemories) {
+      if (!contextItemIsActive(mem) || requiresMemoryConfirmation(mem)) continue;
       const text = `${mem.type || ""} ${mem.project || ""} ${mem.content || ""} ${mem.summary || ""} ${mem.source_tool || ""} ${(mem.tags || []).join(" ")}`;
       const score = simpleSimilarity(query, text);
-      if (score > 0.1) results.push({ type: "memory", item: { id: mem.id, date: mem.last_seen_at || mem.updated_at, type: mem.type, project: mem.project, summary: mem.summary || mem.content, content: mem.content, tool: mem.source_tool, outcome: mem.metadata?.outcome, confidence: mem.confidence, times_confirmed: mem.times_confirmed, structured: true }, score: score * (mem.confidence || 1) });
+      if (score > 0.1) results.push({ type: "memory", item: structuredMemoryToContextItem(mem), score: score * (mem.confidence || 1) });
     }
   }
 
@@ -185,7 +194,7 @@ async function searchContext(ctx, query, type, limit = 10) {
   for (const [key, entryType, textFor] of collections) {
     if (type !== "all" && type !== key) continue;
     for (const item of (ctx[key] || [])) {
-      if (!contextItemIsActive(item)) continue;
+      if (!contextItemIsActive(item) || requiresMemoryConfirmation(item)) continue;
       const score = simpleSimilarity(query, textFor(item));
       if (score > 0.1) results.push({ type: entryType, item, score });
     }
@@ -260,7 +269,8 @@ async function sidekick_context({ action, project, context, decision, reasoning,
     if (action === "recall") {
       const exactCompatible = manifest.entries.map(entry => {
         const label = entry.source === "memory" ? "Memory" : String(entry.type || "context").replace(/^./, c => c.toUpperCase());
-        return `[${label} ${entry.sourceId}] ${entry.summary || entry.content}`;
+        const status = entry.source === "memory" ? ` state=${entry.state || "unknown"} requires_confirmation=${entry.requires_confirmation === true} source=${entry.provenance?.source || "unknown"}` : "";
+        return `[${label} ${entry.sourceId}]${status} ${entry.summary || entry.content}`;
       });
       return { content: [{ type: "text", text: exactCompatible.join("\n\n") }] };
     }
@@ -314,7 +324,12 @@ async function sidekick_project({ name, include }) {
   }
   if (sections.includes("context")) {
     const ctx = loadSharedContext();
-    const structuredMemories = dbStore.searchMemories({ project: projectName, limit: 20 }).map(i => ({
+    const structuredMemories = dbStore.searchMemories({ project: projectName, limit: 20 }).filter(i => !requiresMemoryConfirmation(i)).map(i => ({
+      id: i.id,
+      state: i.state,
+      requires_confirmation: requiresMemoryConfirmation(i),
+      source: i.source,
+      source_ref: i.source_ref,
       type: i.type || "memory",
       summary: i.summary || i.content,
       created: i.last_seen_at || i.updated_at,
@@ -326,9 +341,14 @@ async function sidekick_project({ name, include }) {
       ...(ctx.problems || []).map(i => ({ type: "problem", summary: i.description, created: i.date, project: i.project })),
       ...(ctx.patterns || []).map(i => ({ type: "pattern", summary: i.description, created: i.date, project: i.project })),
       ...(ctx.sessions || []).map(i => ({ type: "session", summary: i.summary, created: i.date, project: i.project })),
-      ...(ctx.memories || []).map(i => ({ type: i.type || "memory", summary: i.summary || i.goal || i.tool, created: i.date, project: i.project }))
+      ...(ctx.memories || []).filter(i => contextItemIsActive(i) && !requiresMemoryConfirmation(i)).map(i => ({ ...i, type: i.type || "memory", summary: i.summary || i.goal || i.tool, created: i.date, project: i.project }))
     ].filter(i => canonicalizeProjectName(i.project) === projectName);
     output.context = items.slice(-20).map(i => ({
+      id: i.id,
+      state: i.state,
+      requires_confirmation: i.requires_confirmation,
+      source: i.source,
+      source_ref: i.source_ref,
       type: i.type,
       summary: String(i.summary || "").substring(0, 200),
       created: i.created

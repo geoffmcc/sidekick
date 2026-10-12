@@ -8,6 +8,7 @@ const { redactSensitive } = require("../../redact");
 const { buildMemoryBrief } = require("../../memory");
 const toolContext = require("../context");
 const { PROJECT_RE, canonicalizeProjectName } = require("../../core/project-identity");
+const { requiresMemoryConfirmation } = require("../../core/memory-trust");
 const authorization = require("../../core/authorization");
 
 function jsonText(value) {
@@ -78,7 +79,7 @@ function recordPlatformMemoryEvent(eventType, payload = {}, options = {}) {
 
 function buildScopedMemoryBrief(goal, project, options = {}) {
   const current = dbStore.searchMemories({ project, type: options.type || "all", limit: options.limit || 30 })
-    .filter(memory => memory.current !== false && memory.state !== "expired" && memory.state !== "deleted")
+    .filter(memory => memory.current !== false && memory.state !== "expired" && memory.state !== "deleted" && !requiresMemoryConfirmation(memory))
     .map(memory => ({
       id: memory.id,
       type: memory.type,
@@ -88,11 +89,13 @@ function buildScopedMemoryBrief(goal, project, options = {}) {
       confidence: memory.confidence,
       source: memory.source,
       source_ref: memory.source_ref,
+      state: memory.state,
+      requires_confirmation: requiresMemoryConfirmation(memory),
       last_verified: memory.last_confirmed_at || memory.last_seen_at,
       why_selected: project && memory.project === project ? "project scope match" : "global or unscoped match",
     }));
   const legacyBrief = buildMemoryBrief(goal || project || "memory", { project }) || null;
-  return { goal: goal || null, project: project || null, selected: current.slice(0, options.limit || 10), sections: legacyBrief, excluded_policy: "Expired, deleted, disabled, superseded, and unrelated project memories are excluded from normal recall.", generated_at: new Date().toISOString() };
+  return { goal: goal || null, project: project || null, selected: current.slice(0, options.limit || 10), sections: legacyBrief, excluded_policy: "Expired, deleted, disabled, superseded, unconfirmed claims, and unrelated project memories are excluded from automatic context.", generated_at: new Date().toISOString() };
 }
 
 function canManageSession(session, authIdentity) {
@@ -289,19 +292,19 @@ async function sidekick_session({ action, id, goal, project, source, working_dir
     const MAX_AUTOMATIC_MEMORIES = 8;
     const projectName = project || existing.project;
     const existingText = new Set((dbStore.searchMemories({ project: projectName, type: "all", limit: 200 }) || []).map(memory => `${memory.type}:${String(memory.content || "").toLowerCase().replace(/\s+/g, " ")}`));
-    const add = (type, values, memoryClass, confidence) => {
+    const add = (type, values, memoryClass, confidence, requiresConfirmation = false) => {
       for (const value of Array.isArray(values) ? values : values ? [values] : []) {
         const text = redactSensitive(String(value || "").trim());
         if (!text) continue;
         const fingerprint = `${type}:${text.toLowerCase().replace(/\s+/g, " ")}`;
         if (createdText.has(fingerprint) || existingText.has(fingerprint) || created.length >= MAX_AUTOMATIC_MEMORIES) continue;
         createdText.add(fingerprint);
-        const mem = dbStore.upsertMemory({ type, project: projectName, content: text, summary: text, confidence, source: "task_session", source_tool: "sidekick_session", source_task_id: id, source_ref: id, memory_class: memoryClass, evidence_excerpt: text, directness: "direct", source_authority: action === "abandon" ? 4 : 5, metadata: { task_session_id: id, outcome, acceptance_state, usefulness_feedback } });
+        const mem = dbStore.upsertMemory({ type, project: projectName, content: text, summary: text, confidence, source: "task_session", source_tool: "sidekick_session", source_task_id: id, source_ref: id, memory_class: memoryClass, evidence_excerpt: text, directness: "direct", source_authority: action === "abandon" ? 4 : 5, requires_confirmation: requiresConfirmation, metadata: { task_session_id: id, outcome, acceptance_state, usefulness_feedback } });
         if (mem) created.push(mem);
       }
     };
     if (action !== "abandon" && !["rejected", "failed"].includes(String(acceptance_state || "").toLowerCase())) {
-      add("fact", verified_facts, "semantic", 0.82); add("decision", decisions, "semantic", 0.84); add("procedure", procedures_learned, "procedural", 0.78); add("session", final_summary || user_visible_result, "episodic", 0.74);
+      add("fact", verified_facts, "semantic", 0.82, true); add("decision", decisions, "semantic", 0.84); add("procedure", procedures_learned, "procedural", 0.78); add("session", final_summary || user_visible_result, "episodic", 0.74);
     }
     add("negative", failed_approaches, "negative", 0.76); add("open_thread", [...(unresolved_issues || []), ...(follow_ups || [])].slice(0, 3), "prospective", 0.78); add("observation", evidence, "observational", 0.62);
     recordPlatformMemoryEvent(action === "abandon" ? "memory.session_abandoned" : "memory.session_completed", { session_id: session.id, project: session.project, memories_created: created.length, state: session.state, outcome }, { subjectType: "memory_task_session", subjectId: session.id, project: session.project, taskId: session.id, severity: action === "abandon" ? "warning" : "info" });

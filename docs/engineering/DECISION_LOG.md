@@ -1,5 +1,24 @@
 # Decision log
 
+## Extracted memory claims require confirmation (2026-10-12)
+
+- Treat handoff fact labels and session `verified_facts` as reported claims.
+  Create their semantic memories with `requires_confirmation: true`; the
+  existing store assigns `pending`. Labels, confidence scores, observation
+  timestamps, and duplicate-extraction counters are not verification.
+- Use one read-time guard for pending claims and legacy facts whose source is
+  `handoff` or `task_session`. Apply it to selected memories and prose briefs,
+  lexical/vector recall, the active context engine, compatibility search, and
+  project assembly. Resolve vector IDs against current SQLite rows so stale
+  payloads cannot supply content or confirmation state.
+- Keep explicit memory review and exact-ID context lookup available with
+  status/provenance. The existing confirmation action makes claims eligible
+  for automatic context. No schema migration, new database, or dependency.
+- This closes automatic semantic-fact promotion, not independent verification.
+  Original handoff/session artifacts remain source material. Server-verifiable
+  evidence receipts and the broader confirmation authority matrix remain
+  SK-007/SK-008; no claim that an explicit confirmation proves a fact true.
+
 ## Atomic handoff evidence refresh (2026-10-12)
 
 Evidence freshness is persisted state with a matching tamper-evident journal

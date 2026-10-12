@@ -1,5 +1,40 @@
 # Validation results
 
+## Memory claim provenance: 2026-10-12
+
+- Reconciled `improvement/memory-claim-provenance` at `aaefdb8`, matching the
+  local remote-tracking ref for the pushed session-resume continuity branch.
+  Preserved the three inherited uncommitted files. The prior-session regression
+  recorded handoff fact state `active` instead of `pending`; that red run was
+  supplied in continuity and was not rerun against reverted source here.
+- Extended `test/memory-intelligence.test.js` covers pending handoff facts and
+  session `verified_facts`, legacy unconfirmed facts from both sources, a pending
+  non-fact, brief selection and prose, context/project exclusion, exact review,
+  explicit confirmation readmission, and stale/orphan vector payloads. Vector
+  retrieval uses deterministic local doubles; no model/Qdrant service is called.
+  An initial added fixture failed exact lookup because similarity deduplication
+  superseded one fixture fact. Distinct fixture text fixed that test setup.
+- `node test/run-all.js test/memory-intelligence.test.js
+  test/memory-lifecycle.test.js test/automatic-memory.test.js
+  test/context-engine.test.js test/project-context-isolation.test.js
+  test/tool-family-memory-core.test.cjs test/handoff-reliability.test.js
+  --concurrency=1 --json` exited 0: seven suites pass, zero failures/skips,
+  no cancellations/timeouts, cleanup errors, or reported resource leaks.
+  The final grouped run took 20.376 seconds; handoff reliability has 32 cases.
+- After tightening vector hydration to exclude disabled rows, the final
+  `node test/run-all.js test/memory-intelligence.test.js --concurrency=1 --json`
+  rerun exited 0 (one suite, 4.543 seconds), including the disabled confirmed
+  memory regression. No failure, skip, cancellation, or timeout.
+- `node --check` passed for all seven changed source files and the regression
+  test. `npm run check:docs`, `npm run check:architecture` (463 files),
+  `npm run check:tests` (295 suites), and `git diff --check` exited 0.
+- Local sandbox setup intermittently returned `helper_unknown_error`; approved
+  PowerShell escalation allowed source reads and tests. The Sidekick server
+  could not access this checkout for repository profiling/documentation audit.
+  No full required-tier, live-service, deployment, or independent evidence
+  certification was performed. Changes await the user's signed commit and
+  subsequent verification/push; no PR.
+
 ## Atomic handoff evidence refresh: 2026-10-12
 
 Windows checkout accessed through WSL, Node v24.18.0, installed dependencies;

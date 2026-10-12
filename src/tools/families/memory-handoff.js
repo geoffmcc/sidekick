@@ -23,7 +23,7 @@ function classifyHandoffLine(line) {
   if (/^(failed|failure|do not|don't|avoid|rejected|dead end|did not work)\b/.test(lower)) return { type: "negative", memory_class: "negative", confidence: 0.78 };
   if (/^(procedure|runbook|worked command|validation|rollback|steps?)\b/.test(lower)) return { type: "procedure", memory_class: "procedural", confidence: 0.76 };
   if (/^(completed|done|changed|implemented|fixed|resolved)\b/.test(lower)) return { type: "session", memory_class: "episodic", confidence: 0.72 };
-  if (/^(fact|verified|current|host|service|repo|repository|path|environment|uses|runs|is|are)\b/.test(lower)) return { type: "fact", memory_class: "semantic", confidence: 0.74 };
+  if (/^(fact|verified|current|host|service|repo|repository|path|environment|uses|runs|is|are)\b/.test(lower)) return { type: "fact", memory_class: "semantic", confidence: 0.74, requires_confirmation: true };
   return null;
 }
 

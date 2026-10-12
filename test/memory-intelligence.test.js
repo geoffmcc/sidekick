@@ -8,7 +8,16 @@ const path = require("path");
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-memory-intel-test-"));
 process.env.SIDEKICK_DATA_DIR = tempDir;
 process.env.SIDEKICK_AUTO_MEMORY = "1";
-process.env.SIDEKICK_EMBEDDINGS = "0";
+process.env.SIDEKICK_EMBEDDINGS = "1";
+
+// Exercise vector retrieval with deterministic local doubles, never a provider.
+const qdrant = require("../src/qdrant");
+const inference = require("../src/compute/inference-service");
+let vectorResults = [];
+qdrant.isAvailable = async () => true;
+qdrant.search = async () => vectorResults;
+qdrant.upsert = async () => true;
+inference.embed = async () => ({ embedding: [1, 0, 0] });
 
 const dbStore = require("../src/db");
 const { TOOLS } = require("../src/tools");
@@ -44,6 +53,53 @@ dbStore.runPendingMigrations();
   assert.ok(createData.memories.some(memory => memory.type === "decision"), "decision memory should be extracted");
   assert.ok(createData.memories.some(memory => memory.type === "negative"), "negative memory should be extracted");
   assert.ok(createData.memories.some(memory => memory.type === "open_thread"), "open thread should be extracted");
+  const reportedFact = createData.memories.find(memory => memory.type === "fact" && memory.content.includes("sidekick-vm"));
+  assert.ok(reportedFact, "handoff fact claim should remain traceable as a memory record");
+  assert.strictEqual(reportedFact.state, "pending", "a handoff claim is not server-verified merely because it is labeled Fact");
+  assert.strictEqual(reportedFact.requires_confirmation, true, "agent-authored fact claims require confirmation");
+
+  // Simulate rows extracted before confirmation requirements were introduced.
+  const legacyClaims = ["handoff", "task_session"].map(source => dbStore.upsertMemory({
+    type: "fact", project: "sidekick", source, source_tool: `legacy_${source}`,
+    content: source === "handoff" ? "Legacy handoff provenanceclaim: amber orchard harvest storage" : "Legacy task_session provenanceclaim: cobalt satellite orbital telemetry", confidence: 0.99
+  }));
+  const pendingProcedure = dbStore.upsertMemory({ type: "procedure", project: "sidekick", source: "test", content: "Pending procedure provenanceclaim sentinel", requires_confirmation: true });
+  const claims = [reportedFact, ...legacyClaims, pendingProcedure];
+  const memoryApi = require("../src/memory");
+  const contextApi = require("../src/tools/families/context");
+  vectorResults = claims.map(claim => ({ payload: { memory_id: claim.id, type: claim.type, project: "sidekick", content: "stale vector claims to be confirmed" }, score: 1 }));
+  assert.deepStrictEqual(await memoryApi.searchMemoriesByEmbedding("provenanceclaim", { project: "sidekick" }), [], "stale vector payloads must not bypass current confirmation state");
+  assert.deepStrictEqual(memoryApi.recallMemoryForText("provenanceclaim", { project: "sidekick" }), [], "automatic lexical recall must exclude claims");
+  const compatibilitySearch = await contextApi.searchContext(contextApi.loadContext(), "provenanceclaim", "memories", 50);
+  assert.ok(!compatibilitySearch.some(result => claims.some(claim => claim.id === result.item.id)), "compatibility search must exclude claims");
+  const parse = result => {
+    assert.ok(!result.isError, result.content?.[0]?.text);
+    return JSON.parse(result.content[0].text);
+  };
+  const assertBriefExcludes = (brief, excludedClaims) => {
+    for (const claim of excludedClaims) {
+      assert.ok(!brief.selected.some(item => item.id === claim.id), `brief selection must exclude ${claim.id}`);
+      assert.ok(!(brief.sections || "").includes(claim.content), `brief prose must exclude ${claim.id}`);
+    }
+  };
+  async function assertAutomaticContextExcludes(excludedClaims) {
+    const memoryResult = parse(await TOOLS.memory({ action: "query", project: "sidekick", query: "sidekick provenanceclaim", limit: 100 }));
+    assertBriefExcludes(memoryResult.context_brief, excludedClaims);
+    const assembled = parse(await TOOLS.context({ action: "assemble", project: "sidekick", query: "sidekick provenanceclaim", limit: 50 }));
+    const projectResult = parse(await TOOLS.project({ name: "sidekick", include: "context" }));
+    for (const claim of excludedClaims) {
+      assert.ok(!assembled.entries.some(item => item.source === "memory" && item.sourceId === claim.id), `context assembly must exclude ${claim.id}`);
+      assert.ok(!projectResult.context.some(item => item.id === claim.id || item.summary === claim.content), `project context must exclude ${claim.id}`);
+    }
+  }
+  await assertAutomaticContextExcludes(claims);
+  for (const claim of claims) {
+    const direct = parse(await TOOLS.memory({ action: "get", project: "sidekick", id: claim.id }));
+    assert.strictEqual(direct.memory.id, claim.id, "explicit memory review must remain available");
+    const recalled = await TOOLS.context({ action: "recall", project: "sidekick", query: claim.id });
+    assert.ok(recalled.content[0].text.includes(claim.id), `exact context lookup must remain available for ${claim.id}: ${recalled.content[0].text}`);
+    assert.match(recalled.content[0].text, /requires_confirmation=true/, "exact lookup must identify unconfirmed provenance");
+  }
 
   const legacyResumeKey = await TOOLS.resume({ action: "set", project: "sidekick", summary: "legacy resume key", handoff_key: "sidekick-handoff-test" });
   assert.ok(legacyResumeKey.isError, "legacy resume handoff keys must be rejected");
@@ -75,6 +131,8 @@ dbStore.runPendingMigrations();
   assert.ok(beginData.handoff_id, "session begin should always create a durable handoff");
   assert.strictEqual(dbStore.getHandoffByTaskId(beginData.session.id).id, beginData.handoff_id, "session handoff should be bound to the session");
   assert.ok(beginData.session.current_plan, "session begin should persist the initial plan");
+  assert.ok(!beginData.session.memory_brief.selected.some(memory => memory.id === reportedFact.id), "pending fact claims must not enter the default agent memory brief");
+  assertBriefExcludes(beginData.session.memory_brief, claims);
   assert.ok(Array.isArray(dbStore.getHandoffByTaskId(beginData.session.id).packet.plan?.steps), "session handoff should expose a structured plan");
   assert.strictEqual(dbStore.getHandoffByTaskId(beginData.session.id).packet.remaining_steps.length, 3, "session handoff should expose all remaining plan steps");
   const duplicateGoalA = JSON.parse((await TOOLS.session({ action: "begin", goal: "Duplicate goal identity test", project: "sidekick", source: "test" })).content[0].text);
@@ -117,6 +175,40 @@ dbStore.runPendingMigrations();
     follow_ups: ["Add model-assisted extraction after deterministic redaction"]
   });
   const endData = JSON.parse(end.content[0].text);
+  const sessionFact = dbStore.searchMemories({ project: "sidekick", type: "fact", limit: 100 }).find(memory => memory.source_task_id === beginData.session.id);
+  assert.ok(sessionFact, "session verified_facts should remain available for review");
+  assert.strictEqual(sessionFact.state, "pending", "a verified_facts label is not independent verification");
+  assert.strictEqual(sessionFact.requires_confirmation, true);
+  await assertAutomaticContextExcludes([...claims, sessionFact]);
+  const pendingSessionBrief = parse(await TOOLS.session({ action: "begin", goal: "Review provenanceclaim memory", project: "sidekick", source: "test" }));
+  assertBriefExcludes(pendingSessionBrief.memory_brief, [...claims, sessionFact]);
+
+  for (const claim of [reportedFact, ...legacyClaims, sessionFact]) {
+    const confirmed = await TOOLS.memory({ action: "confirm", id: claim.id, project: "sidekick", source: "test-reviewer" });
+    assert.ok(!confirmed.isError, confirmed.content[0].text);
+    assert.strictEqual(dbStore.getMemoryById(claim.id).state, "confirmed");
+    const memoryResult = parse(await TOOLS.memory({ action: "query", project: "sidekick", query: claim.content, limit: 100 }));
+    assert.ok(memoryResult.context_brief.selected.some(item => item.id === claim.id), "confirmed claims should enter memory briefs");
+    const assembled = parse(await TOOLS.context({ action: "assemble", project: "sidekick", query: claim.content, limit: 50 }));
+    const entry = assembled.entries.find(item => item.source === "memory" && item.sourceId === claim.id);
+    assert.ok(entry, "confirmed claims should enter automatic context");
+    assert.strictEqual(entry.state, "confirmed");
+    assert.strictEqual(entry.requires_confirmation, false);
+    assert.strictEqual(entry.provenance.source, claim.source);
+    const projectResult = parse(await TOOLS.project({ name: "sidekick", include: "context" }));
+    assert.ok(projectResult.context.some(item => item.id === claim.id && item.state === "confirmed" && item.source === claim.source), "project context should retain confirmed provenance");
+  }
+  const confirmedSessionBrief = parse(await TOOLS.session({ action: "begin", goal: "Review confirmed provenanceclaim", project: "sidekick", source: "test" }));
+  vectorResults.push({ payload: { memory_id: "mem_missing", content: "orphan vector" }, score: 1 }, { payload: {}, score: 1 });
+  const confirmedVectors = await memoryApi.searchMemoriesByEmbedding("provenanceclaim", { project: "sidekick" });
+  assert.deepStrictEqual(confirmedVectors.map(item => item.id).sort(), [reportedFact, ...legacyClaims].map(item => item.id).sort(), "only confirmed current rows should survive vector hydration");
+  assert.ok(confirmedVectors.every(item => item.state === "confirmed" && item.content !== "stale vector claims to be confirmed"), "vectors must return current SQLite content and provenance");
+  dbStore.disableMemory(legacyClaims[0].id);
+  assert.ok(!(await memoryApi.searchMemoriesByEmbedding("provenanceclaim", { project: "sidekick" })).some(item => item.id === legacyClaims[0].id), "disabled confirmed rows must not return through stale vectors");
+  dbStore.enableMemory(legacyClaims[0].id);
+  assert.ok(confirmedSessionBrief.memory_brief.selected.some(item => item.id === reportedFact.id), "session briefs should admit confirmed claims");
+  assert.ok(confirmedSessionBrief.memory_brief.sections.includes(legacyClaims[0].content), "brief prose should admit confirmed facts");
+  await assertAutomaticContextExcludes([pendingProcedure]);
   assert.ok(endData.memories_created >= 4, "ending session should create supported memories");
   assert.ok(endData.continuation_packet.artifacts.length >= 2, "session finalization should retain reports, artifacts, and continuity plan");
   assert.strictEqual(endData.continuation_packet.provenance.task_id, beginData.session.id, "continuation packet should retain task provenance");

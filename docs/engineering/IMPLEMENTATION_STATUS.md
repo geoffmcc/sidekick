@@ -1,10 +1,11 @@
 # Implementation status
 
-## Current checkpoint: resumable handoff after partial session completion
+## Current checkpoint: confirmation for extracted memory claims
 
 Updated 2026-10-12. Reference: v2.2.1 at b89247b. Current milestone began on clean
 main at `d4c908cda76b4031bdab05458cb40afb4984954b` (`v2.2.1-1-gd4c908c`).
-Current branch: `improvement/session-resume-handoff-continuity`, stacked on
+Current branch: `improvement/memory-claim-provenance`, based on `aaefdb8` on
+the pushed `improvement/session-resume-handoff-continuity` branch, stacked on
 signed and pushed `improvement/session-handoff-atomicity`,
 `improvement/task-session-audit-atomicity`,
 `improvement/handoff-evidence-audit-atomicity`,
@@ -17,6 +18,14 @@ signed and pushed `improvement/session-handoff-atomicity`,
 
 Completed:
 
+- Confirmed SK-032: handoff fact labels and session `verified_facts` previously
+  created active semantic facts without independent verification. They now
+  require confirmation. A shared read-time guard excludes pending claims and
+  legacy unconfirmed handoff/session facts from automatic memory briefs,
+  lexical/vector recall, context assembly, and project context. Vector matches
+  reload current SQLite content and provenance. Explicit review and confirmation
+  remain available; confirmed claims become eligible for automatic context.
+  The changes are local, awaiting the user's signed commit; no PR or deployment.
 - Reconciled prior engineering/source state with PR #641. It incorporated the
   preceding audit and SK-001 through SK-005 fixes; old commit IDs below are
   pre-squash history.
@@ -125,16 +134,25 @@ Completed:
   handoff, creates a deterministic linked checkpoint, captures/revalidates the
   current workspace, and only then reopens the session. Interrupted checkpoint
   retries reuse the draft; later partial cycles create a new linked checkpoint.
-- Latest handoff reliability run: 29 cases pass, with syntax and diff checks.
+- Earlier handoff reliability checkpoint: 29 cases passed, with syntax and
+  diff checks.
   The four-suite group (handoff reliability, versioning, memory intelligence,
   tools) passed on this evidence branch. A direct
   `handoff-versioning.test.js` run now passes, so the earlier checkpoint-head
   failure is not currently reproducible. The separate Windows
   `security-boundaries.test.js` cleanup EBUSY remains an observed failure.
 
-No dependency, schema or version change in this extraction change. Rollback is
-code-only but restores stale-snapshot and partial-extraction behavior. No
-deployment or release; prior branch pushes were explicitly authorized.
+Current provenance validation: seven relevant suites pass, with no failures,
+skips, cancellations, timeouts, cleanup errors, or reported resource leaks.
+The handoff suite now has 32 passing cases. Syntax, documentation, architecture,
+test-ownership, and whitespace checks pass; full required tiers were not run.
+Exact commands and limits are in `VALIDATION_RESULTS.md`.
+
+No dependency, schema or version change in this provenance fix. Rollback is
+code-only but restores automatic promotion of unconfirmed claims. No deployment
+or release; prior branch pushes were explicitly authorized. Confirmation is an
+existing lifecycle action, not independent execution evidence; SK-007 remains
+open. Original handoff/session artifacts remain retrievable as source material.
 
 Remaining, in priority order:
 
@@ -159,10 +177,14 @@ snapshot; leases are not exclusive workspace locks. Fixture tests do not
 evaluate model quality, prove exactly-once external effects, or power-loss
 durability (SQLite synchronous=NORMAL is unchanged).
 
-The unavailable sandbox required approved local shell escalation. Tests used
+Historical validation setup: the unavailable sandbox required approved local
+shell escalation. Tests used
 frozen tracked-source copies, clean environments, installed dependencies and
 disposable data. Connected metadata checks were read-only; the server could
-not access this checkout. No live session records were written. Ignored `.cache`
+not access this checkout. That earlier validation wrote no live session records.
+The provenance follow-up uses a live typed session for continuity and local
+isolated test fixtures; its server-side repository profile/documentation audit
+could not access the Windows checkout. Ignored `.cache`
 snapshots/logs retain raw evidence. Some baseline suites left their own fixtures
 after Windows cleanup failures; no user-data cleanup was attempted. Nothing is
 scheduled to continue after this turn.
@@ -197,6 +219,9 @@ Branch: improvement/platform-continuity-audit.
 4. Distinguish reported evidence from independently verifiable receipts; implement a real unfinished-task receiver continuation harness, then remaining A-G cases.
 5. Continue the scoped authorization matrix before broad capability work.
 
-No live service, production database, deployment, release, push, external account, model service or credential access occurred. Work has stopped at this documented milestone; nothing is scheduled to continue autonomously.
+At the original audit milestone, no live service, production database,
+deployment, release, push, external account, model service or credential access
+occurred. Later branch pushes and this follow-up's live continuity session are
+recorded above. Nothing is scheduled to continue autonomously.
 
 Audit documents initially committed as 0684085; implementation commits are listed above. Read the latest Git log for the final documentation checkpoint.
