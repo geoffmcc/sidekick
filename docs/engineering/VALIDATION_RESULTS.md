@@ -41,6 +41,19 @@ unbounded npm test, test:all, coverage, mutation, live/model evaluation,
 Linux/Node 22 and release rehearsal are not claimed passing. Process-exit tests
 are not power-failure or arbitrary external-effect tests. Historical evidence follows.
 
+## Independent receiver API fixture: 2026-10-12
+
+`node test/run-all.js test/handoff-reliability.test.js --concurrency=1 --json`
+on Windows/Node v24.18.0 exited 0: one suite passed, with 13 tests passed,
+0 failed and 0 skipped (11.067 seconds). The added case starts a
+fresh Node process with only the project identifier, discovers the ready
+handoff through the handoff interface, checks the receiver projection, performs
+a fixed local tracked-file fixture action, captures a new checkpoint through
+the interface, and verifies the checkpoint/readiness against repository state.
+No model or live service is involved. This validates API continuity and fixture
+reconciliation; it does not establish that an autonomous Agent Bridge agent
+can complete an arbitrary unfinished task.
+
 2026-10-12; baseline b89247b6b80a3e120c9b755592cf416d047108b3 (v2.2.1).
 
 Environment: Windows; Node v24.18.0, npm 11.16.0, better-sqlite3 13.0.3 / SQLite 3.53.4. Tracked-source export, clean test environment, installed dependencies read-only, disposable Git/SQLite. No live configuration or data.

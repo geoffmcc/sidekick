@@ -30,20 +30,21 @@ test.after(() => {
 });
 
 let sequence = 0;
-function create(evidence = [{ type: "test", label: "fixture assertion", status: "passed", observed_at: new Date().toISOString() }]) {
-  return store.saveHandoff({ project: "continuity", content: `Decision: preserve verified work (fixture ${++sequence}).`, packet: {
+function create(evidence = [{ type: "test", label: "fixture assertion", status: "passed", observed_at: new Date().toISOString() }], { project = "continuity", working_directory = repo } = {}) {
+  const fixtureGit = (...args) => execFileSync("git", ["-C", working_directory, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  return store.saveHandoff({ project, content: `Decision: preserve verified work (fixture ${++sequence}).`, packet: {
     objective: "Continue the fixture task", status: "active", next_step: "Finish the remaining assertion",
     completed_steps: ["Initialized fixture"], decisions: ["Retain existing storage"],
     acceptance_criteria: ["Independent receiver sees persisted state"], evidence,
-    provenance: { working_directory: repo, commit_sha: git("rev-parse", "HEAD"), branch: git("branch", "--show-current") },
+    provenance: { working_directory, commit_sha: fixtureGit("rev-parse", "HEAD"), branch: fixtureGit("branch", "--show-current") },
   } });
 }
 
-function ready(evidence) {
-  const h = create(evidence);
-  store.captureHandoffCheckpoint(h.id, { working_directory: repo });
+function ready(evidence, options) {
+  const h = create(evidence, options);
+  store.captureHandoffCheckpoint(h.id, { working_directory: options?.working_directory || repo });
   store.transitionHandoff(h.id, "ready");
-  store.refreshHandoffEvidence(h.id, { working_directory: repo });
+  store.refreshHandoffEvidence(h.id, { working_directory: options?.working_directory || repo });
   return h;
 }
 
@@ -124,6 +125,56 @@ test("a fresh receiver recovers persisted objectives and decisions without conve
   assert.equal(result.projection.start_here.objective, "Continue the fixture task");
   assert.deepEqual(result.projection.start_here.decisions, ["Retain existing storage"]);
   assert.equal(result.projection.start_here.next_step, "Finish the remaining assertion");
+});
+
+test("an independent receiver discovers by project, reconciles, and verifies a safe continuation", () => {
+  const receiverProject = "continuity-independent-receiver";
+  const receiverRepo = path.join(root, "receiver-repo");
+  fs.mkdirSync(receiverRepo);
+  const receiverGit = (...args) => execFileSync("git", ["-C", receiverRepo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  receiverGit("init");
+  fs.writeFileSync(path.join(receiverRepo, "tracked.txt"), "initial\n");
+  receiverGit("add", "tracked.txt");
+  execFileSync("git", ["-C", receiverRepo, "-c", "commit.gpgsign=false", "-c", "core.hooksPath=", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "receiver fixture"], { stdio: "ignore" });
+  const h = ready(undefined, { project: receiverProject, working_directory: receiverRepo });
+  const workFile = path.join(receiverRepo, "tracked.txt");
+  const script = `
+    const s = require('./src/db');
+    const { sidekick_handoff } = require('./src/tools/families/memory-handoff');
+    const parse = async args => {
+      const result = await sidekick_handoff(args);
+      if (result.isError) throw new Error(result.content?.[0]?.text || 'handoff operation failed');
+      return JSON.parse(result.content[0].text);
+    };
+    (async () => {
+      try {
+        // The receiver starts with only the canonical project identity. It
+        // does not receive the source process's handoff ID or conversation.
+        const listed = await parse({ action: 'list', project: ${JSON.stringify(receiverProject)} });
+        const discovered = listed.handoffs.find(item => item.project === ${JSON.stringify(receiverProject)} && item.lifecycle_state === 'ready');
+        if (!discovered) throw new Error('no ready handoff found for project');
+        const start = await parse({ action: 'start_here', id: discovered.id, project: ${JSON.stringify(receiverProject)}, working_directory: ${JSON.stringify(receiverRepo)} });
+        if (start.projection.readiness.status !== 'ready') throw new Error('checkpoint needs reconciliation before continuation');
+        if (start.projection.start_here.objective !== 'Continue the fixture task') throw new Error('objective did not recover');
+        if (!start.projection.start_here.next_step) throw new Error('next action did not recover');
+        // This deterministic harness owns the fixture action. It never treats
+        // retrieved handoff text as executable instructions.
+        require('node:fs').writeFileSync(${JSON.stringify(workFile)}, 'receiver-completed\\n');
+        const refreshed = await parse({ action: 'checkpoint', id: discovered.id, project: ${JSON.stringify(receiverProject)}, working_directory: ${JSON.stringify(receiverRepo)} });
+        const readiness = await parse({ action: 'readiness', id: discovered.id, project: ${JSON.stringify(receiverProject)}, working_directory: ${JSON.stringify(receiverRepo)} });
+        process.stdout.write(JSON.stringify({ id: discovered.id, objective: start.projection.start_here.objective, decisions: start.projection.start_here.decisions, next_step: start.projection.start_here.next_step, readiness: readiness.readiness.status, readiness_reasons: readiness.readiness.reasons, checkpoint_hash: refreshed.handoff.checkpoint_hash, completed_fixture_action: require('node:fs').readFileSync(${JSON.stringify(workFile)}, 'utf8') }));
+      } finally { s.closeDatabase(); }
+    })().catch(error => { process.stderr.write(String(error.stack || error)); process.exitCode = 1; });
+  `;
+  const output = execFileSync(process.execPath, ["-e", script], { cwd: path.resolve(__dirname, ".."), encoding: "utf8", env: process.env });
+  const result = JSON.parse(output);
+  assert.equal(result.id, h.id);
+  assert.equal(result.objective, "Continue the fixture task");
+  assert.deepEqual(result.decisions, ["Retain existing storage"]);
+  assert.equal(result.next_step, "Finish the remaining assertion");
+  assert.equal(result.completed_fixture_action, "receiver-completed\n");
+  assert.ok(result.checkpoint_hash, "receiver must persist its reconciled checkpoint");
+  assert.equal(result.readiness, "ready", `receiver must verify repository state after its continuation: ${JSON.stringify(result.readiness_reasons)}`);
 });
 
 test("changing staged contents with the same status is detected", () => {

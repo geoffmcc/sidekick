@@ -24,6 +24,16 @@ Completed:
   documentation and test-ownership gates pass.
 - Frozen bounded baseline: 163 pass, 18 fail, one cancelled, 70 not run.
   This is not a complete passing baseline.
+- Added a project-identity-only fresh receiver scenario to
+  `test/handoff-reliability.test.js`: a new process discovers the ready record,
+  reads the supported receiver projection, modifies a fixed tracked fixture,
+  captures a new checkpoint and verifies readiness. All 13 tests in that file
+  pass under `node --test`. This is an API-level deterministic fixture, not an
+  actual autonomous Agent Bridge or model-quality evaluation.
+- Signed commit `57f482e057c9eb7e13b7e92c91a7feb5269946ce` was verified and pushed
+  to `origin/improvement/platform-continuity-concurrency` per the user's
+  instruction. The receiver-test change is not committed; it must be reviewed,
+  staged and signed before push.
 
 Inspect Git log/status for local commit IDs and subsequent edits. No dependency,
 schema or version change. Rollback is code-only but restores the demonstrated
@@ -33,8 +43,9 @@ Remaining, in priority order:
 
 1. Triage SK-018 baseline failures in isolated fixtures; finish supported-platform
    required tiers. Full test:all/coverage/mutation and release rehearsal remain.
-2. Complete an actual unfinished repository task through a fresh receiver using
-   supported interfaces; add attributable execution receipts (SK-007/SK-009).
+2. Complete an actual unfinished repository task through a fresh Agent Bridge
+   receiver using supported interfaces; add attributable execution receipts
+   (SK-007/SK-009).
 3. Complete the cross-interface scope/authorization matrix (SK-008), reproduce
    resume-pointer contention (SK-010) and wider handoff atomicity (SK-019).
 4. Deepen memory quality, scheduler/DST/retries, worker failure, pack rollback,

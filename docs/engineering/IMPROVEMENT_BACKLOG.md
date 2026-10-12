@@ -18,8 +18,11 @@ baseline: 15 fail, two controls pass. No confirmed P0.
 | SK-019 / wider store atomicity / design weakness P2 | Source review: packet create/update, extraction, restore/archive and metadata-only touches have different transaction boundaries. No general atomicity guarantee established. | Reproduce each boundary before extending the transaction pattern. Preserve deduplication/history semantics; no blanket refactor. | Open; source concern, not a newly confirmed defect. |
 
 SK-007 through SK-012 remain open. SK-009 now includes deterministic competing
-writers and checkpoint/begin-resume process-exit coverage, but lacks actual
-unfinished-task completion by an independent agent and the full A-G matrix.
+writers, checkpoint/begin-resume process-exit coverage, and a fresh-process API
+contract test that discovers a checkpoint from project identity, continues a
+fixed safe repository fixture, and recaptures/verifies the changed state. It
+still lacks actual unfinished-task completion by an independent Agent Bridge
+agent and the full A-G matrix.
 SK-013 has new bounded aggregate evidence; full required-tier success and general
 Windows termination behavior remain unverified. Historical records below
 describe the preceding v2.2.1 milestone.

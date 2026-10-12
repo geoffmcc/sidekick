@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "recorded_at": "2026-10-12T19:19:41.050Z",
+  "recorded_at": "2026-10-12T19:31:44.000Z",
   "baseline_revision": "d4c908cda76b4031bdab05458cb40afb4984954b",
   "reference_release": "v2.2.1",
   "branch": "improvement/platform-continuity-concurrency",
@@ -12,7 +12,8 @@
   },
   "source_sha256": {
     "src/db/handoff-store.js": "4d917a8a73cff02d559cf762c77952ba793a559b6d599b7eb252a7dd1c6a757f",
-    "test/handoff-concurrency.test.js": "5df7301edabea7e816b56c7a41c4ef1b17c8ebcb2767c3fd9094a2e6ec2e2bf1"
+    "test/handoff-concurrency.test.js": "5df7301edabea7e816b56c7a41c4ef1b17c8ebcb2767c3fd9094a2e6ec2e2bf1",
+    "test/handoff-reliability.test.js": "4fd681cdd70407c2e814e58eac6d0432c27f8d4a940a71b0b98a8ff440accc28"
   },
   "dependencies": [
     {
@@ -1386,7 +1387,7 @@
         "suite": "test/handoff-reliability.test.js",
         "status": "passed",
         "code": 0,
-        "duration_ms": 11132
+        "duration_ms": 11067
       },
       {
         "suite": "test/handoff-versioning.test.js",
