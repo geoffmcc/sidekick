@@ -132,6 +132,43 @@ test("session updates and linked handoff versions roll back together", async () 
   assert.equal(updated.packet.next_step, "Changed next step");
 });
 
+test("resuming a partial task session does not leave its linked handoff completed", async () => {
+  const session = store.saveTaskSession({ id: "session_partial_resume", goal: "Continue partial work", project: "continuity", state: "completed", outcome: "partial", acceptance_state: "blocked", ended_at: new Date().toISOString(), next_step: "Resolve the remaining blocker", working_directory: repo });
+  const handoff = store.saveHandoff({ id: "handoff_session_partial_resume", project: session.project, task_id: session.id, content: "Partial work requires continuation", packet: {
+    objective: session.goal, summary: "Partial work requires continuation", status: "completed", next_step: session.next_step,
+    completed_steps: ["Completed the initial investigation"], decisions: [], acceptance_criteria: ["Finish the remaining work"],
+    evidence: [{ type: "test", label: "fixture", status: "passed", observed_at: new Date().toISOString() }],
+    provenance: { working_directory: repo, commit_sha: git("rev-parse", "HEAD"), branch: git("branch", "--show-current") },
+  } });
+  store.transitionHandoff(handoff.id, "completed");
+  store.getDb().exec("CREATE TEMP TRIGGER reject_resumed_checkpoint BEFORE INSERT ON memory_handoff_events WHEN NEW.event_type = 'checkpoint_captured' BEGIN SELECT RAISE(ABORT, 'injected resumed checkpoint failure'); END");
+  try {
+    const interrupted = await sidekick_session({ action: "resume", id: session.id });
+    assert.equal(interrupted.isError, true, "checkpoint failure must not be reported as a successful resume");
+    assert.equal(store.getTaskSession(session.id).state, "completed", "session must remain completed until its resumed checkpoint is verified");
+  } finally { store.getDb().exec("DROP TRIGGER reject_resumed_checkpoint"); }
+  const pending = store.getHandoffByTaskId(session.id);
+  assert.equal(pending.lifecycle_state, "draft", "an interrupted checkpoint remains visibly non-authoritative");
+  const result = await sidekick_session({ action: "resume", id: session.id });
+  assert.equal(result.isError, undefined);
+  const resumed = store.getTaskSession(session.id);
+  assert.equal(resumed.state, "active");
+  const linked = store.getHandoffByTaskId(session.id);
+  assert.ok(["active", "ready"].includes(linked.lifecycle_state), "an active session must not point only to a terminal handoff");
+  assert.equal(linked.id, pending.id, "retry must complete the same resumable checkpoint rather than creating a duplicate");
+  assert.equal(store.getDb().prepare("SELECT COUNT(*) AS count FROM memory_handoffs WHERE task_id = ?").get(session.id).count, 2, "the completed source and one resumed checkpoint are retained");
+
+  const completed = await sidekick_session({ action: "end", id: session.id, outcome: "partial", acceptance_state: "blocked", final_summary: "A remaining blocker prevents completion." });
+  assert.equal(completed.isError, undefined);
+  const secondResume = await sidekick_session({ action: "resume", id: session.id });
+  assert.equal(secondResume.isError, undefined);
+  const secondHandoff = store.getHandoffByTaskId(session.id);
+  assert.ok(["active", "ready"].includes(secondHandoff.lifecycle_state));
+  assert.notEqual(secondHandoff.id, linked.id, "a later partial-resume cycle creates a new append-only checkpoint");
+  assert.equal(secondHandoff.previous_id, linked.id);
+  assert.equal(store.getDb().prepare("SELECT COUNT(*) AS count FROM memory_handoffs WHERE task_id = ?").get(session.id).count, 3);
+});
+
 test("legacy link repair during handoff lookup is atomic", () => {
   const db = store.getDb();
   const handoff = store.saveHandoff({

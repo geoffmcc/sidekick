@@ -182,3 +182,17 @@ establish broader extraction or metadata-only atomicity; SK-019 remains open.
   and must be reconciled through the existing checkpoint readiness path.
 - No schema, API, or dependency change. The regression checks that both records
   retain their prior version when the handoff write fails.
+
+## Partial session resume continuity (2026-10-12)
+
+- A completed partial session was reopened as active while its linked handoff
+  remained terminal, so project discovery could not find resumable state.
+- Keep completed handoffs immutable. Create an append-only child handoff with
+  `previous_id` and provenance to the completed record, checkpoint the current
+  workspace, refresh evidence, transition the new record to active, then reopen
+  the task session. Derive the child ID from the completed session snapshot so
+  interrupted retries find and finish the same draft. Subsequent completion
+  and resume cycles create a new child instead of rewriting history.
+- No schema, API, or dependency change. A failed checkpoint leaves the session
+  completed and the child visibly draft; retry is safe and does not duplicate
+  the child record.

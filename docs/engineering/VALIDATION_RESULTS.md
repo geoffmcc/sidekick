@@ -290,3 +290,20 @@ final document. After the fix, `node test/run-all.js test/handoff-reliability.te
   handoff case also verifies the successful update path increments the handoff
   version and persists the new next step. Syntax, docs, architecture,
   test-architecture and diff checks pass. The full required tiers were not run.
+
+## Partial session resume continuity: 2026-10-12
+
+- Before the fix, the focused resume test failed: the session became active
+  while its linked handoff remained completed.
+- After the fix,
+  `node --test --test-name-pattern='resuming a partial task session'
+  test/handoff-reliability.test.js` exited 0. It injects checkpoint-event
+  failure, checks the session remains completed and the draft is non-authoritative,
+  retries without duplicating the child checkpoint, and tests a second partial
+  completion/resume creates another linked checkpoint.
+- The grouped
+  `node test/run-all.js test/handoff-reliability.test.js test/tools.test.js
+  test/identity-resource-authority.test.js --concurrency=1 --json` run exited 0:
+  three suites passed with no failures, skips, cancellations, or cleanup errors.
+  Syntax, docs, architecture, test-architecture, and diff checks passed. Full
+  required tiers were not run.

@@ -1,11 +1,12 @@
 # Implementation status
 
-## Current checkpoint: atomic session and linked handoff updates
+## Current checkpoint: resumable handoff after partial session completion
 
 Updated 2026-10-12. Reference: v2.2.1 at b89247b. Current milestone began on clean
 main at `d4c908cda76b4031bdab05458cb40afb4984954b` (`v2.2.1-1-gd4c908c`).
-Current branch: `improvement/session-handoff-atomicity`, stacked on signed and
-pushed `improvement/task-session-audit-atomicity`,
+Current branch: `improvement/session-resume-handoff-continuity`, stacked on
+signed and pushed `improvement/session-handoff-atomicity`,
+`improvement/task-session-audit-atomicity`,
 `improvement/handoff-evidence-audit-atomicity`,
 `improvement/handoff-metadata-atomicity`,
 `improvement/handoff-extraction-snapshot`, `improvement/handoff-archive-audit`,
@@ -119,6 +120,11 @@ Completed:
   while the handoff remained old. The session row and handoff version now share
   an immediate transaction; Git checkpoint and evidence reads run afterward,
   outside the SQLite writer lock. The regression failed before and passes after.
+- Confirmed SK-031: partial-session resume previously reopened the task row but
+  left its only linked handoff terminal. Resume now preserves the completed
+  handoff, creates a deterministic linked checkpoint, captures/revalidates the
+  current workspace, and only then reopens the session. Interrupted checkpoint
+  retries reuse the draft; later partial cycles create a new linked checkpoint.
 - Latest handoff reliability run: 29 cases pass, with syntax and diff checks.
   The four-suite group (handoff reliability, versioning, memory intelligence,
   tools) passed on this evidence branch. A direct

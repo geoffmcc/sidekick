@@ -1,5 +1,6 @@
 "use strict";
 
+const crypto = require("crypto");
 const { z } = require("zod");
 const dbStore = require("../../db");
 const platformKernel = require("../../platform/kernel");
@@ -313,12 +314,82 @@ async function sidekick_session({ action, id, goal, project, source, working_dir
     if (!session) return { content: [{ type: "text", text: "Task session not found: " + id }], isError: true };
     if (!canManageSession(session, authIdentity)) return { content: [{ type: "text", text: "Task session not found: " + id }], isError: true };
     if (action === "resume" && session.state === "completed" && (session.outcome === "partial" || ["partial", "blocked"].includes(String(session.acceptance_state || "").toLowerCase()))) {
-      dbStore.getDb().prepare("UPDATE memory_task_sessions SET state = 'active', ended_at = NULL, updated_at = ? WHERE id = ?").run(new Date().toISOString(), id);
-      session.state = "active";
-      session.ended_at = null;
-      session.reopened_from = "completed";
+      const prior = dbStore.getHandoffByTaskId(id);
+      if (prior) {
+        const isResumeCheckpoint = prior.source === "session_resume"
+          && ["draft", "active", "ready"].includes(prior.lifecycle_state)
+          && prior.packet?.provenance?.previous_handoff_id;
+        const parent = isResumeCheckpoint ? dbStore.getHandoff(prior.packet.provenance.previous_handoff_id) : prior;
+        if (!parent) return { content: [{ type: "text", text: "Cannot resume task session: the previous handoff referenced by its checkpoint is unavailable" }], isError: true };
+        const resumedId = isResumeCheckpoint
+          ? prior.id
+          : `handoff_${crypto.createHash("sha256").update(`${id}|resume|${session.updated_at}|${parent.id}|${parent.version}`).digest("hex").slice(0, 20)}`;
+        const sourcePacket = isResumeCheckpoint ? prior.packet : parent.packet || {};
+        const resumedPacket = {
+          ...sourcePacket,
+          objective: session.goal,
+          summary: "Partial task resumed. Reconcile the current project state before continuing.",
+          status: "active",
+          next_step: session.next_step || sourcePacket.next_step || "Reconcile the current project state before continuing",
+          completed_steps: session.completed_steps || sourcePacket.completed_steps || [],
+          blockers: session.blockers || sourcePacket.blockers || [],
+          provenance: {
+            ...(sourcePacket.provenance || {}),
+            task_id: id,
+            handoff_id: resumedId,
+            previous_handoff_id: parent.id,
+            previous_handoff_version: parent.version,
+            working_directory: session.working_directory || sourcePacket.provenance?.working_directory || null,
+            repository: session.repository || sourcePacket.provenance?.repository || null,
+            branch: session.branch || sourcePacket.provenance?.branch || null,
+            environment: session.environment || sourcePacket.provenance?.environment || null,
+          },
+          relationships: isResumeCheckpoint
+            ? (Array.isArray(sourcePacket.relationships) ? sourcePacket.relationships : [])
+            : [
+              ...(Array.isArray(sourcePacket.relationships) ? sourcePacket.relationships : []),
+              { type: "resumes", handoff_id: parent.id, version: parent.version },
+            ],
+        };
+        const resumeCheckpointId = resumedId;
+        try {
+          let resumedHandoff = dbStore.getDb().transaction(() => dbStore.saveHandoff({
+            id: resumedId,
+            previous_id: parent.id,
+            project: session.project || parent.project,
+            title: `Resumed session: ${session.goal}`.slice(0, 500),
+            source: "session_resume",
+            task_id: id,
+            content: resumedPacket.summary,
+            packet: resumedPacket,
+            extraction_state: "pending",
+            owner_principal_id: session.owner_principal_id || parent.owner_principal_id || ownerPrincipalId,
+            created_by_principal_id: session.created_by_principal_id || actorPrincipalId,
+          })).immediate();
+          if (resumedHandoff.lifecycle_state === "draft") {
+            dbStore.captureHandoffCheckpoint(resumedHandoff.id, { working_directory: session.working_directory || process.cwd(), actor: actorPrincipalId || ownerPrincipalId || "session", source: "session", metadata: { session_id: id, boundary: "session.resume" } });
+            dbStore.refreshHandoffEvidence(resumedHandoff.id, { working_directory: session.working_directory || process.cwd(), actor: actorPrincipalId || ownerPrincipalId || "session" });
+            resumedHandoff = dbStore.transitionHandoff(resumedHandoff.id, "active", { expectedVersion: resumedHandoff.version, actor: actorPrincipalId || ownerPrincipalId || "session", source: "session", reason: "partial session resumed" }).handoff;
+          }
+          const reopened = dbStore.getDb().transaction(() => dbStore.saveTaskSession({
+            ...session,
+            state: "active",
+            ended_at: null,
+            owner_principal_id: session.owner_principal_id || ownerPrincipalId,
+            created_by_principal_id: session.created_by_principal_id || actorPrincipalId,
+          })).immediate();
+          Object.assign(session, reopened, { reopened_from: "completed", resumed_handoff_id: resumedHandoff.id });
+        } catch (error) {
+          return { content: [{ type: "text", text: `session resume checkpoint failed (${resumeCheckpointId} remains discoverable by task id): ${String(error && error.message ? error.message : error)}` }], isError: true };
+        }
+      } else {
+        dbStore.getDb().transaction(() => dbStore.saveTaskSession({ ...session, state: "active", ended_at: null })).immediate();
+        session.state = "active";
+        session.ended_at = null;
+        session.reopened_from = "completed";
+      }
     }
-    return jsonText({ ok: true, session, memory_brief: buildScopedMemoryBrief(session.goal, session.project, { limit: 12 }) });
+    return jsonText({ ok: true, session, handoff_id: session.resumed_handoff_id || null, memory_brief: buildScopedMemoryBrief(session.goal, session.project, { limit: 12 }) });
   }
   if (action === "list") return jsonText({ ok: true, sessions: dbStore.listTaskSessions({ project, state: source, limit: limit || 50 }) });
   return { content: [{ type: "text", text: "Invalid action. Use begin, update, checkpoint, end, abandon, resume, status, list" }], isError: true };
