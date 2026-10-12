@@ -90,6 +90,30 @@ test("handoff creation and version updates roll back when journal persistence fa
   assert.equal(store.listHandoffEvents(created.id).filter(event => event.event_type === "created").length, 1);
 });
 
+test("legacy link repair during handoff lookup is atomic", () => {
+  const db = store.getDb();
+  const handoff = store.saveHandoff({
+    project: "continuity",
+    content: "Legacy record whose derived links need repair",
+    packet: {
+      objective: "Check lookup link repair",
+      evidence: [{ type: "test", label: "legacy evidence" }],
+      artifacts: [{ type: "fixture", ref: "artifact-1" }],
+    },
+  });
+  db.prepare("DELETE FROM memory_handoff_links WHERE handoff_id = ? AND version = ?").run(handoff.id, handoff.version);
+  db.exec("CREATE TEMP TRIGGER reject_artifact_link BEFORE INSERT ON memory_handoff_links WHEN NEW.link_type = 'artifact' BEGIN SELECT RAISE(ABORT, 'injected derived-link failure'); END");
+  try {
+    assert.throws(() => store.getHandoff(handoff.id), /injected derived-link failure/);
+    assert.equal(db.prepare("SELECT COUNT(*) AS count FROM memory_handoff_links WHERE handoff_id = ? AND version = ?").get(handoff.id, handoff.version).count, 0,
+      "failed repair must not persist only the earlier evidence link");
+  } finally { db.exec("DROP TRIGGER reject_artifact_link"); }
+
+  store.getHandoff(handoff.id);
+  const repaired = store.getHandoff(handoff.id);
+  assert.deepEqual(repaired.links.map(link => link.type).sort(), ["artifact", "evidence"]);
+});
+
 test("purging handoff history rolls back deletion when its audit write fails", () => {
   const db = store.getDb();
   const first = create();

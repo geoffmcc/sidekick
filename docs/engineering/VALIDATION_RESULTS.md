@@ -1,5 +1,23 @@
 # Validation results
 
+## Atomic legacy handoff-link repair: 2026-10-12
+
+Windows checkout accessed through WSL, Node v24.18.0, installed dependencies;
+temporary SQLite trigger and disposable database fixture.
+
+| Command | Actual result |
+| --- | --- |
+| `node --test test/handoff-reliability.test.js` | Exit 0; 24 passed, 0 failed/skipped; 7.281 seconds. Includes injected derived-link failure, rollback, and successful retry. |
+| `node test/run-all.js test/handoff-reliability.test.js test/handoff-versioning.test.js test/memory-intelligence.test.js test/tools.test.js --concurrency=1 --json` | Exit 0; four suites passed, 0 failed/skipped/cancelled; 75.693 seconds. |
+| `node --check src/db/handoff-store.js` and `node --check test/handoff-reliability.test.js` | PASS. |
+| `git diff --check` | PASS. |
+
+The first post-fix run exposed that the first projection is built before its
+legacy links are materialized, so the retry assertion now performs a second
+lookup. The earlier command exited nonzero; it is retained as a failed
+intermediate run, not counted as final validation. No full test tiers or release
+checks were run for this scoped change.
+
 ## Handoff lifecycle audit atomicity: 2026-10-12
 
 Windows checkout accessed through WSL, Node v24.18.0, installed dependencies;

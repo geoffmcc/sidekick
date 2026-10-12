@@ -1,5 +1,15 @@
 # Decision log
 
+## Atomic legacy handoff-link repair (2026-10-12)
+
+`getHandoff()` materializes missing `memory_handoff_links` from stored packets
+for compatibility with older records. Keep that behavior and schema, but make
+the derived inserts transactional. Removing repair from reads would alter
+legacy projections; unguarded inserts could persist only a prefix after a later
+insert fails. A regression injects an artifact-link failure after evidence
+insertion and confirms rollback followed by successful repair. This does not
+establish broader extraction or metadata-only atomicity; SK-019 remains open.
+
 ## Continuity concurrency milestone (2026-10-12)
 
 - Preserve clean d4c908c, including all post-v2.2.1 fixes; branch locally as

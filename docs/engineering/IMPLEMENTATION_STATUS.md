@@ -1,6 +1,6 @@
 # Implementation status
 
-## Current checkpoint: handoff lifecycle audit atomicity
+## Current checkpoint: atomic legacy handoff-link repair
 
 Updated 2026-10-12. Reference: v2.2.1 at b89247b. Current milestone began on clean
 main at `d4c908cda76b4031bdab05458cb40afb4984954b` (`v2.2.1-1-gd4c908c`).
@@ -75,12 +75,19 @@ Completed:
 - Confirmed SK-024: archive/unarchive row updates and append-only restore
   versions committed before their audit writes. They now share one immediate
   transaction with a required, verified audit row. Three injected failures
-  reproduced the old partial state and pass after the fix. Changes are
+  reproduced the old partial state and pass after the fix. Signed commit
+  `75ab8af` was verified and pushed to
+  `origin/improvement/handoff-archive-audit`.
+- Confirmed SK-025: `getHandoff()` lazily materializes links for legacy packets.
+  An injected artifact-link insert failure left the earlier evidence link
+  persisted while the lookup threw. Link materialization now runs in one
+  transaction; a regression verifies rollback and complete retry. Changes are
   uncommitted on the current branch.
-- Current scoped run: handoff reliability (23 cases) and three supported
-  runner suites pass; syntax, documentation, architecture, test-ownership and
-  diff checks pass. The atomicity
-  milestone's grouped run passed five of six suites; handoff-versioning failed
+- Current scoped run: handoff reliability (24 cases) and four supported runner
+  suites (handoff versioning, memory intelligence, tools, handoff reliability)
+  pass; syntax, documentation, architecture, test-ownership and diff checks
+  pass. The atomicity milestone's earlier grouped run passed five of six suites;
+  handoff-versioning failed
   at the checkpoint `repository.head` assertion, reproduced directly. A
   separate grouped `security-boundaries.test.js` run had seven assertions
   pass but failed during its existing Windows database cleanup hook with EBUSY;
@@ -98,7 +105,8 @@ Remaining, in priority order:
    receiver using supported interfaces; add attributable execution receipts
    (SK-007/SK-009).
 3. Complete the cross-interface scope/authorization matrix (SK-008) and examine
-   remaining wider handoff atomicity (SK-019), including non-list actions.
+   remaining wider handoff atomicity (SK-019), including extraction and
+   metadata-only paths.
 4. Deepen memory quality, scheduler/DST/retries, worker failure, pack rollback,
    operational recovery and current dependency advisory audits.
 

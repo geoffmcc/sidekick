@@ -750,7 +750,10 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
     if (!hasTable("memory_handoffs")) return null;
     const row = db.prepare("SELECT * FROM memory_handoffs WHERE id = ?").get(id);
     const created = normalizeHandoffRow(row);
-    persistHandoffLinks(created);
+    // Older records may not have had their packet links materialized yet. Keep
+    // that compatibility repair atomic: a failed insert must not leave only a
+    // prefix of the derived links behind on an otherwise read-only lookup.
+    if (created) db.transaction(() => persistHandoffLinks(created))();
     return created;
   }
 
