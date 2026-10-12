@@ -1,10 +1,12 @@
 # Implementation status
 
-## Current checkpoint: continuity concurrency
+## Current checkpoint: resume-pointer atomicity
 
 Updated 2026-10-12. Reference: v2.2.1 at b89247b. Current milestone began on clean
 main at `d4c908cda76b4031bdab05458cb40afb4984954b` (`v2.2.1-1-gd4c908c`).
-Branch: `improvement/platform-continuity-concurrency`.
+Current branch: `improvement/resume-pointer-atomicity`, stacked on
+`improvement/platform-continuity-concurrency`. The handoff branch is pushed;
+the current branch is not yet pushed.
 
 Completed:
 
@@ -30,14 +32,19 @@ Completed:
   captures a new checkpoint and verifies readiness. All 13 tests in that file
   pass under `node --test`. This is an API-level deterministic fixture, not an
   actual autonomous Agent Bridge or model-quality evaluation.
-- Signed commit `57f482e057c9eb7e13b7e92c91a7feb5269946ce` was verified and pushed
-  to `origin/improvement/platform-continuity-concurrency` per the user's
-  instruction. The receiver-test change is not committed; it must be reviewed,
-  staged and signed before push.
+- Signed commits `57f482e057c9eb7e13b7e92c91a7feb5269946ce` (handoff mutation
+  fix) and `cdd29ae3fb598f23c571e88cc4e595b37692ecfb` (independent receiver API
+  fixture) were verified and pushed to
+  `origin/improvement/platform-continuity-concurrency`.
+- Reproduced SK-010: two child processes synchronized after reading the same
+  resume document, then set different project pointers; the former code lost
+  one. Resume writes and completion synchronization now read/merge/upsert under
+  a short SQLite immediate transaction. Handoff/resume, tools, and project
+  identity suites pass on this branch.
 
-Inspect Git log/status for local commit IDs and subsequent edits. No dependency,
-schema or version change. Rollback is code-only but restores the demonstrated
-weaker concurrency/lifecycle behavior. No deployment, push or release.
+No dependency, schema or version change on this branch. Rollback is code-only
+but restores the demonstrated lost-update behavior. No deployment or release;
+the prior branch pushes were explicitly authorized.
 
 Remaining, in priority order:
 
@@ -46,8 +53,8 @@ Remaining, in priority order:
 2. Complete an actual unfinished repository task through a fresh Agent Bridge
    receiver using supported interfaces; add attributable execution receipts
    (SK-007/SK-009).
-3. Complete the cross-interface scope/authorization matrix (SK-008), reproduce
-   resume-pointer contention (SK-010) and wider handoff atomicity (SK-019).
+3. Complete the cross-interface scope/authorization matrix (SK-008) and examine
+   wider handoff atomicity (SK-019).
 4. Deepen memory quality, scheduler/DST/retries, worker failure, pack rollback,
    operational recovery and current dependency advisory audits.
 

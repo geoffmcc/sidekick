@@ -43,3 +43,18 @@
 - Final code review performed locally; no delegated agents or live Sidekick session writes.
 - A leftover fixture directory from the aborted broad run was ignored only in the disposable validation repository's .git/info/exclude. The actual repository ignore rules were unchanged. One intermediate handoff-versioning run failed closed due to that untracked fixture; it passed after isolating the unrelated artifact.
 - Original repository commits used its existing Git configuration. Only disposable fixture commits override signing; no credential or signing-key access was requested.
+
+## Resume-pointer atomicity milestone (2026-10-12)
+
+- Split resume JSON document concurrency from the handoff mutation PR; use a
+  stacked `improvement/resume-pointer-atomicity` branch because it is a separate
+  read/modify/write path and should be reviewed independently.
+- Keep `json_documents('resume')` as the source of truth. Take SQLite's immediate
+  writer lock before reading the latest document, then merge one project's
+  update and upsert within the same transaction. No new table, migration, or
+  dependency.
+- Apply the same guarded mutation to clearing a project pointer and synchronizing
+  completed linked handoffs, preventing those mutations from writing stale whole-
+  document snapshots. Writers serialize under the existing SQLite busy timeout.
+- Reproduce with two subprocesses paused after the same initial read. Before the
+  fix, one project's pointer is lost; after the fix, both entries remain.

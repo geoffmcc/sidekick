@@ -1465,5 +1465,33 @@
     "No production configuration or data validated.",
     "No dependency download/advisory check.",
     "No full model-driven A-G continuation evaluation, power-loss or exactly-once external-effects proof."
-  ]
+  ],
+  "resume_pointer_follow_up": {
+    "recorded_at": "2026-10-12T19:42:47.000Z",
+    "branch": "improvement/resume-pointer-atomicity",
+    "source_sha256": {
+      "src/tools/families/resume.js": "325284b91164fb834ef12aac2b6f51a5269720410464739a74ebb09daf3e1b7e",
+      "test/handoff-reliability.test.js": "7699e111a27a8d8239d0690c4cddacba6b172c629e10a1866d45a0aa970abf02"
+    },
+    "reproduction_before_fix": {
+      "command": "node --test --test-name-pattern=\"concurrent resume updates\" test/handoff-reliability.test.js",
+      "status": "failed_as_expected",
+      "result": "Both writers succeeded; resume_race_beta was absent from the final document."
+    },
+    "after_fix": {
+      "command": "node test/run-all.js test/handoff-reliability.test.js test/tools.test.js test/project-identity.test.js --concurrency=1 --json",
+      "status": "passed",
+      "exit_code": 0,
+      "suites_passed": 3,
+      "suites_failed": 0,
+      "suites_skipped": 0,
+      "handoff_reliability_cases_passed": 14
+    },
+    "additional_gates": {
+      "node --check src/tools/families/resume.js": "passed",
+      "node scripts/check-docs.js": "passed",
+      "node scripts/check-test-architecture.js": "passed; 295 suites",
+      "git diff --check": "passed"
+    }
+  }
 }

@@ -5,7 +5,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { execFileSync } = require("node:child_process");
+const { execFileSync, spawn } = require("node:child_process");
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-continuity-"));
 process.env.SIDEKICK_DATA_DIR = path.join(root, "data");
@@ -227,4 +227,65 @@ test("legacy dirty checkpoint is readable but requires recapture", () => {
     store.captureHandoffCheckpoint(h.id, { working_directory: repo });
     assert.equal(store.getHandoffReadiness(h.id).status, "ready");
   } finally { fs.writeFileSync(file, "initial\n"); }
+});
+
+test("concurrent resume updates for different projects do not overwrite each other", async () => {
+  const barrier = path.join(root, "resume-race");
+  fs.mkdirSync(barrier);
+  const script = `
+    const fs = require('node:fs');
+    const s = require('./src/db');
+    const original = s.loadDocument;
+    let paused = false;
+    s.loadDocument = (name, fallback) => {
+      const doc = original(name, fallback);
+      if (name === 'resume' && !paused) {
+        paused = true;
+        fs.writeFileSync(process.argv[1], 'ready');
+        const wait = new Int32Array(new SharedArrayBuffer(4));
+        const until = Date.now() + 15000;
+        while (!fs.existsSync(process.argv[2]) && Date.now() < until) Atomics.wait(wait, 0, 0, 10);
+        if (!fs.existsSync(process.argv[2])) throw new Error('resume race barrier timed out');
+      }
+      return doc;
+    };
+    const { sidekick_resume } = require('./src/tools/families/resume');
+    sidekick_resume({ action: 'set', project: process.argv[3], summary: 'independent concurrent fixture', next_step: 'verify retained pointer' })
+      .then(result => { if (result.isError) throw new Error(result.content?.[0]?.text || 'resume set failed'); process.stdout.write('saved'); })
+      .catch(error => { process.stderr.write(String(error.stack || error)); process.exitCode = 1; })
+      .finally(() => s.closeDatabase());
+  `;
+  const projects = ["resume_race_alpha", "resume_race_beta"];
+  const children = projects.map((project, index) => {
+    const readyFile = path.join(barrier, `${index}.ready`);
+    const releaseFile = path.join(barrier, `${index}.release`);
+    const child = spawn(process.execPath, ["-e", script, readyFile, releaseFile, project], {
+      cwd: path.resolve(__dirname, ".."),
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8").on("data", chunk => { stdout += chunk; });
+    child.stderr.setEncoding("utf8").on("data", chunk => { stderr += chunk; });
+    const closed = new Promise((resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", code => code === 0 ? resolve(stdout) : reject(new Error(`resume writer ${project} exited ${code}: ${stderr}`)));
+    });
+    return { readyFile, releaseFile, closed };
+  });
+
+  const deadline = Date.now() + 15000;
+  while (children.some(child => !fs.existsSync(child.readyFile)) && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  for (const child of children) fs.writeFileSync(child.releaseFile, "go");
+  const outcomes = await Promise.allSettled(children.map(child => child.closed));
+  assert.ok(children.every(child => fs.existsSync(child.readyFile)), "both processes must observe the same pre-write document");
+  assert.ok(outcomes.every(outcome => outcome.status === "fulfilled"), outcomes.filter(outcome => outcome.status === "rejected").map(outcome => String(outcome.reason)).join("\n"));
+  const outputs = outcomes.map(outcome => outcome.value);
+  assert.deepEqual(outputs, ["saved", "saved"]);
+  const items = store.loadDocument("resume", { items: {} }).items;
+  assert.ok(items.resume_race_alpha, "first project resume pointer must survive the competing update");
+  assert.ok(items.resume_race_beta, "second project resume pointer must survive the competing update");
 });

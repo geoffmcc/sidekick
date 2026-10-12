@@ -30,6 +30,12 @@ Initial static gates passed: architecture (462 files), test architecture (293 su
 
 New regression suite test/handoff-reliability.test.js exercises real disposable Git and SQLite state. Before fixes: ten of twelve final regression cases fail; receiver recovery and invalid-evidence controls pass. Cases cover event persistence failure, evidence aging, future timestamps, project mismatch, foreign completion, tracked same-status edits, untracked same-status edits.
 
+The suite now has 14 cases. A synchronized pair of separate Node processes
+reproduces lost resume pointers in the former whole-document load/modify/upsert
+path. With the atomic merge, both distinct project entries persist. The final
+scoped run also passed `tools.test.js` and `project-identity.test.js`; see
+`VALIDATION_RESULTS.md` for the exact command and environment.
+
 Contracts and target measurements: zero checkpoint rows committed on injected journal failure; stale/future evidence never enables preflight; project mismatch always blocks; same-status content changes never silently pass readiness; new receiver process recovers objective/decisions/next action. These are acceptance targets, not production observations. Repeat with the committed test suite.
 
 SQLite WAL synchronous=NORMAL remains unchanged: logical atomicity and process rollback tests do not demonstrate power-loss durability. No claim of exactly-once external effects. More work is required for OS termination at write boundaries, simultaneous processes, full task continuation, migration rollback and long-context evidence retrieval.

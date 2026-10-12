@@ -30,23 +30,38 @@ function saveResumeDocument(doc) {
   });
 }
 
-function syncCompletedLinkedHandoffs(doc) {
+function updateResumeDocument(mutator) {
+  const transaction = dbStore.getDb().transaction(() => {
+    const doc = loadResumeDocument();
+    const result = mutator(doc);
+    if (result?.save !== false) saveResumeDocument(doc);
+    return result?.value;
+  });
+  // Take the SQLite writer lock before reading so cross-process updates merge
+  // against the latest document instead of replacing a stale snapshot.
+  return transaction.immediate();
+}
+
+function syncCompletedLinkedHandoffs(observedDoc) {
+  const mayHaveCompletedLink = Object.values(observedDoc?.items || {}).some(item => item?.handoff_id && !["cleared", "done", "complete"].includes(item.status));
+  if (!mayHaveCompletedLink) return false;
   const now = new Date().toISOString();
-  let changed = false;
-  for (const [project, item] of Object.entries(doc.items || {})) {
-    if (!item || !item.handoff_id || ["cleared", "done", "complete"].includes(item.status)) continue;
-    const handoff = dbStore.getHandoff(item.handoff_id);
-    if (!handoff || handoff.project !== item.project || handoff.lifecycle_state !== "completed") continue;
-    doc.items[project] = {
-      ...item,
-      status: "complete",
-      completed_at: handoff.completed_at || now,
-      updated_at: now,
-    };
-    changed = true;
-  }
-  if (changed) saveResumeDocument(doc);
-  return changed;
+  return updateResumeDocument(doc => {
+    let changed = false;
+    for (const [project, item] of Object.entries(doc.items || {})) {
+      if (!item || !item.handoff_id || ["cleared", "done", "complete"].includes(item.status)) continue;
+      const handoff = dbStore.getHandoff(item.handoff_id);
+      if (!handoff || handoff.project !== item.project || handoff.lifecycle_state !== "completed") continue;
+      doc.items[project] = {
+        ...item,
+        status: "complete",
+        completed_at: handoff.completed_at || now,
+        updated_at: now,
+      };
+      changed = true;
+    }
+    return { save: changed, value: doc };
+  });
 }
 
 function activeResumeItems(doc, includeCleared = false) {
@@ -93,8 +108,9 @@ async function sidekick_resume({ action, project, summary, next_step, status, br
   if (handoff_key !== undefined) return { content: [{ type: "text", text: "handoff keys are no longer supported; link the structured handoff by id" }], isError: true };
   const selectedAction = action || "check";
   const selectedFormat = format || "text";
+  const observedDoc = loadResumeDocument();
+  syncCompletedLinkedHandoffs(observedDoc);
   const doc = loadResumeDocument();
-  syncCompletedLinkedHandoffs(doc);
 
   if (selectedAction === "list") {
     const items = activeResumeItems(doc, include_cleared === true).map(validateResumeItem)
@@ -131,8 +147,9 @@ async function sidekick_resume({ action, project, summary, next_step, status, br
       return { content: [{ type: "text", text: "summary or next_step required for action=set" }], isError: true };
     }
     const now = new Date().toISOString();
+    let item;
     const existing = doc.items[project] || {};
-    const item = {
+    item = {
       id: existing.id || generateId("resume"),
       project,
       status: status || "active",
@@ -162,23 +179,41 @@ async function sidekick_resume({ action, project, summary, next_step, status, br
         item.completed_at = handoff.completed_at || now;
       }
     }
-    doc.items[project] = item;
-    saveResumeDocument(doc);
+    item = updateResumeDocument(current => {
+      const latest = current.items[project] || {};
+      const merged = {
+        ...item,
+        id: latest.id || item.id,
+        created_at: latest.created_at || item.created_at,
+        summary: summary !== undefined ? item.summary : latest.summary || null,
+        next_step: next_step !== undefined ? item.next_step : latest.next_step || null,
+        branch: branch !== undefined ? item.branch : latest.branch || null,
+        url: url !== undefined ? item.url : latest.url || null,
+        handoff_id: handoff_id !== undefined ? item.handoff_id : latest.handoff_id || null,
+        notes: notes !== undefined ? item.notes : latest.notes || null,
+        plan_name: plan_name !== undefined ? item.plan_name : latest.plan_name || null,
+        current_phase: current_phase !== undefined ? item.current_phase : latest.current_phase || null,
+      };
+      current.items[project] = merged;
+      return { value: merged };
+    });
     const text = selectedFormat === "json" ? JSON.stringify(item, null, 2) : `Resume set for project: ${project} (${item.id})`;
     return { content: [{ type: "text", text }] };
   }
 
   if (selectedAction === "clear") {
-    const item = doc.items[project];
+    const now = new Date().toISOString();
+    const item = updateResumeDocument(current => {
+      const latest = current.items[project];
+      if (!latest) return { save: false, value: null };
+      const cleared = { ...latest, status: "cleared", cleared_at: now, updated_at: now };
+      if (notes !== undefined) cleared.notes = redactSensitive(notes);
+      current.items[project] = cleared;
+      return { value: cleared };
+    });
     if (!item) {
       return { content: [{ type: "text", text: `No resume item found for project: ${project}` }], isError: true };
     }
-    const now = new Date().toISOString();
-    item.status = "cleared";
-    item.cleared_at = now;
-    item.updated_at = now;
-    if (notes !== undefined) item.notes = redactSensitive(notes);
-    saveResumeDocument(doc);
     const text = selectedFormat === "json" ? JSON.stringify(item, null, 2) : `Resume cleared for project: ${project}`;
     return { content: [{ type: "text", text }] };
   }

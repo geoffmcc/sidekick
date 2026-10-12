@@ -105,3 +105,9 @@ Broad command attempted: node test/run-all.js --tier=unit --tier=contract --tier
 Intermediate failures: dispatcher cleanup EPERM (fixed by closing its owned DB; final rerun passes); handoff-versioning blocked on unrelated untracked fixture from aborted run (fixture isolated only in disposable checkout; final rerun passes). No assertions were weakened.
 
 No operational .env/database was read, no external model called, no dependencies installed, no production migration run. Reproducibility caveat: installed dependency packages were reused via NODE_PATH, not a new npm ci installation. All direct versions matched the lockfile.
+
+## Resume-pointer atomicity: 2026-10-12
+
+On Windows/Node v24.18.0, the synchronized two-process regression failed before
+the fix: both writers reported success but `resume_race_beta` was absent from the
+final document. After the fix, `node test/run-all.js test/handoff-reliability.test.js test/tools.test.js test/project-identity.test.js --concurrency=1 --json` exited 0: three suites passed, no failures/skips. The handoff suite reports 14 passing cases, including the race; tools and project identity suites passed. No full platform suite was rerun for this scoped change.
