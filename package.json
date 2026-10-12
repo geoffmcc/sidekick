@@ -1,6 +1,6 @@
 {
   "name": "sidekick",
-  "version": "2.2.1",
+  "version": "2.2.2",
   "description": "Sidekick — Autonomous Agent Platform",
   "main": "src/index.js",
   "bin": {
