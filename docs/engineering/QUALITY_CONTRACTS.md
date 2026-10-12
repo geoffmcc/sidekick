@@ -1,5 +1,25 @@
 # Quality contracts
 
+## Enforced concurrency acceptance contract (2026-10-12)
+
+For checkpoint, transition, claim, renew, begin-resume and release:
+
+- Observe current packet/lifecycle/checkpoint/claim/scope and journal tip.
+- Keep slow repository observation outside the SQLite writer transaction.
+- Compare the observation again under the writer lock; reject a changed record
+  without overwriting it or automatically retrying.
+- Commit the row change and exactly one audit event together. Event rejection
+  or interruption before commit leaves the prior state and journal intact.
+- Preserve packet-version semantics, legacy records and outer transactions.
+- Recheck lease expiry at begin-resume commit; release obeys terminal-state rules.
+- Treat returned readiness as continuity information; recalculate current
+  authorization before any governed execution.
+
+`test/handoff-concurrency.test.js` supplies deterministic acceptance checks using
+real Git, SQLite, a competing process, injected journal failures and abrupt
+fixture-process exit. It is picked up by the existing platforms integration
+manifest. No numerical production reliability target is inferred from test counts.
+
 2026-10-12; baseline b89247b6b80a3e120c9b755592cf416d047108b3 (v2.2.1).
 
 Draft platform contracts grounded in existing interfaces; only the targeted subset is validated this milestone.

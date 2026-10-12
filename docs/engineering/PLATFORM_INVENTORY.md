@@ -1,5 +1,28 @@
 # Platform inventory
 
+## Current reconciliation (2026-10-12)
+
+The next milestone started on clean `main` at
+`d4c908cda76b4031bdab05458cb40afb4984954b` (`v2.2.1-1-gd4c908c`).
+PR #641 incorporated the preceding audit and continuity fixes. Earlier individual
+commit IDs below and in companion records describe that pre-squash work.
+Current branch: `improvement/platform-continuity-concurrency`.
+
+This milestone changes only the existing handoff store, adds one automatically
+discovered integration suite, and updates engineering/contract documentation.
+No descriptors, tools, dependencies, migrations, services, or configuration
+defaults were added. Source tracing reconfirmed dispatcher wrappers in
+`src/tools/dispatcher.js`, Agent and Dashboard callers, session finalization's
+outer transaction in `memory-session.js`, and the Agent adapter's separation of
+continuity metadata from authoritative task/operation records. The broader
+inventory below remains a structural snapshot, not exhaustive behavioral proof.
+
+The connected repository profiler and documentation audit could not access the
+Windows checkout; they did not queue repository execution. A read-only resume
+check found no pending item. Related knowledge was returned by documentation
+audit. No live session write, operational configuration inspection, or deployment
+was performed; local engineering files hold this milestone's continuity state.
+
 2026-10-12; baseline b89247b6b80a3e120c9b755592cf416d047108b3 (v2.2.1).
 
 This is a repository snapshot, not a live deployment inventory. No production services, private runtime knowledge, credentials, or operational databases were accessed. The local .env was deliberately not read. Runtime deployment configuration and active/generated tools are unknown.

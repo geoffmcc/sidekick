@@ -1,5 +1,28 @@
 # Decision log
 
+## Continuity concurrency milestone (2026-10-12)
+
+- Preserve clean d4c908c, including all post-v2.2.1 fixes; branch locally as
+  `improvement/platform-continuity-concurrency`.
+- Reuse the append-only handoff journal as the mutation revision. Packet
+  `expected_version` continues to mean packet version. No migration or second
+  checkpoint store is needed to reject overlapping captures.
+- Compare observed state and commit row/event in one short SQLite transaction.
+  Return a conflict for reload/reconciliation; never silently replay a mutation.
+  Keep Git reads outside the lock and explicitly retain the filesystem-race limit.
+- Enforce the existing transition matrix on claim release. Terminal handoffs
+  cannot be reopened using retained claim tokens; this intentional tightening is
+  the only change to accepted lifecycle behavior beyond rejecting races/failures.
+- Use independently frozen tracked-source copies, clean child environment,
+  installed dependencies through NODE_PATH, and disposable Git/SQLite fixtures.
+  Do not mutate a running validation snapshot. No dependency downloads.
+- Record required-tier failures and cancellation as failures. Keep remediation of
+  unrelated Windows test cleanup/behavior failures separate from continuity code.
+- Connected metadata checks were read-only; no live session/handoff was written.
+  Repository profiling was unavailable for this path. Local records remain the
+  campaign checkpoint. The earlier no-live-tool decision below describes only
+  the preceding milestone.
+
 2026-10-12; baseline b89247b6b80a3e120c9b755592cf416d047108b3 (v2.2.1).
 
 - Preserve baseline and latest security fixes; no dependency changes.

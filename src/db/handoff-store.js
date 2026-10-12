@@ -35,13 +35,35 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
       const event = { handoff_id: handoffId, event_seq: Number(previous?.event_seq || 0) + 1, version: Number(version), event_type: eventType, actor: String(actor || "system"), source: String(source || "handoff"), payload: canonicalize(payload), previous_hash: previous?.event_hash || null };
       const eventHash = continuityHash(event);
       const id = stableId("he", `${handoffId}|${eventHash}`);
-      db.prepare("INSERT OR IGNORE INTO memory_handoff_events (id, handoff_id, event_seq, version, event_type, actor, source, payload_json, previous_hash, event_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(id, handoffId, event.event_seq, Number(version), eventType, event.actor, event.source, JSON.stringify(event.payload), event.previous_hash, eventHash, nowIso());
+      const inserted = db.prepare("INSERT INTO memory_handoff_events (id, handoff_id, event_seq, version, event_type, actor, source, payload_json, previous_hash, event_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(id, handoffId, event.event_seq, Number(version), eventType, event.actor, event.source, JSON.stringify(event.payload), event.previous_hash, eventHash, nowIso());
+      if (inserted.changes !== 1) throw new Error("Handoff journal event was not persisted");
       if (!inTransaction) db.exec("COMMIT");
       return { id, ...event, event_hash: eventHash };
     } catch (error) {
       if (!inTransaction) { try { db.exec("ROLLBACK"); } catch {} }
       throw error;
     }
+  }
+
+  // Packet versions do not advance for checkpoints, claims or lifecycle changes.
+  // Observe the existing journal tip as well as row state before external reads,
+  // then compare under the SQLite writer lock. No Git I/O occurs under this lock.
+  function handoffMutationState(id) {
+    const journalTip = hasTable("memory_handoff_events")
+      ? "(SELECT event_hash FROM memory_handoff_events WHERE handoff_id = memory_handoffs.id ORDER BY event_seq DESC LIMIT 1)"
+      : "NULL";
+    const row = db.prepare(`SELECT version, lifecycle_state, checkpoint_hash,
+      claim_owner, claim_token, claim_expires_at, archived_at, project,
+      owner_principal_id, created_by_principal_id, ${journalTip} AS journal_tip
+      FROM memory_handoffs WHERE id = ?`).get(id);
+    return JSON.stringify(row || null);
+  }
+
+  function commitHandoffMutation(id, observed, mutate) {
+    return db.transaction(() => {
+      if (handoffMutationState(id) !== observed) throw new Error(`Handoff "${id}" changed concurrently during continuity operation`);
+      return mutate();
+    }).immediate();
   }
 
   function gitCheckpoint(workingDirectory) {
@@ -319,18 +341,22 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
 
   function renewHandoffClaim(id, { claim_token, leaseSeconds = 900, actor = "system", source = "handoff" } = {}) {
     if (!claim_token) throw new Error("handoff claim renewal requires claim_token");
+    const observed = handoffMutationState(id);
     const current = getHandoff(id);
     if (!current || !current.claim) throw new Error("handoff has no active claim");
     const tokenHash = continuityHash({ domain: "claim", token: claim_token });
     const expires = new Date(Date.now() + Math.max(30, Math.min(Number(leaseSeconds) || 900, 86400)) * 1000).toISOString();
-    const result = db.prepare("UPDATE memory_handoffs SET claim_expires_at = ?, updated_at = ? WHERE id = ? AND claim_token = ? AND lifecycle_state = 'claimed' AND claim_expires_at > ?").run(expires, nowIso(), id, tokenHash, nowIso());
-    if (!result.changes) throw new Error("handoff claim is invalid or expired");
-    appendHandoffEvent(id, current.version, "claim_renewed", { expires_at: expires }, { actor, source });
-    return { handoff: getHandoff(id), expires_at: expires };
+    return commitHandoffMutation(id, observed, () => {
+      const result = db.prepare("UPDATE memory_handoffs SET claim_expires_at = ?, updated_at = ? WHERE id = ? AND claim_token = ? AND lifecycle_state = 'claimed' AND claim_expires_at > ?").run(expires, nowIso(), id, tokenHash, new Date(Date.now()).toISOString());
+      if (!result.changes) throw new Error("handoff claim is invalid or expired");
+      appendHandoffEvent(id, current.version, "claim_renewed", { expires_at: expires }, { actor, source });
+      return { handoff: getHandoff(id), expires_at: expires };
+    });
   }
 
   function beginHandoffResume(id, { claim_token, working_directory, recipient = null, actor = "system", source = "handoff" } = {}) {
     if (!claim_token) throw new Error("handoff resume requires claim_token");
+    const observed = handoffMutationState(id);
     const current = getHandoff(id);
     const tokenHash = continuityHash({ domain: "claim", token: claim_token });
     if (!current || !current.claim || current.lifecycle_state !== "claimed") throw new Error("handoff is not actively claimed");
@@ -338,10 +364,12 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
     if (!claimRow || claimRow.claim_token !== tokenHash || new Date(claimRow.claim_expires_at).getTime() <= Date.now()) throw new Error("handoff claim is invalid or expired");
     const preflight = getHandoffResumePreflight(id, { working_directory, recipient, simulate: true });
     if (!preflight.safe_to_resume) throw new Error(`handoff resume preflight blocked: ${preflight.reasons.join("; ")}`);
-    const result = db.prepare("UPDATE memory_handoffs SET lifecycle_state = 'verifying', updated_at = ? WHERE id = ? AND claim_token = ? AND lifecycle_state = 'claimed'").run(nowIso(), id, tokenHash);
-    if (!result.changes) throw new Error("handoff changed before resume began");
-    appendHandoffEvent(id, current.version, "resume_started", { recipient }, { actor, source });
-    return { handoff: getHandoff(id), preflight };
+    return commitHandoffMutation(id, observed, () => {
+      const result = db.prepare("UPDATE memory_handoffs SET lifecycle_state = 'verifying', updated_at = ? WHERE id = ? AND claim_token = ? AND lifecycle_state = 'claimed' AND claim_expires_at > ?").run(nowIso(), id, tokenHash, new Date(Date.now()).toISOString());
+      if (!result.changes) throw new Error("handoff changed before resume began or claim expired");
+      appendHandoffEvent(id, current.version, "resume_started", { recipient }, { actor, source });
+      return { handoff: getHandoff(id), preflight };
+    });
   }
 
   function verifyHandoffProvenance(packet, { requireResume = true } = {}) {
@@ -720,17 +748,18 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
   }
 
   function captureHandoffCheckpoint(id, { working_directory, expectedVersion, actor = "system", source = "handoff", metadata = null } = {}) {
+    const observed = handoffMutationState(id);
     const handoff = getHandoff(id);
     if (!handoff) throw new Error(`Handoff not found: ${id}`);
     if (expectedVersion !== undefined && Number(expectedVersion) !== Number(handoff.version)) throw new Error(`Handoff "${id}" changed concurrently: expected version ${expectedVersion}, found ${handoff.version}`);
     const checkpoint = { schema_version: 1, captured_at: nowIso(), freshness_seconds: 900, ...gitCheckpoint(working_directory || handoff.packet?.provenance?.working_directory), source_state: handoff.packet?.provenance?.commit_sha || handoff.packet?.provenance?.source_commit || null };
     const hash = continuityHash(checkpoint);
-    db.transaction(() => {
+    return commitHandoffMutation(id, observed, () => {
       const result = db.prepare("UPDATE memory_handoffs SET checkpoint_json = ?, checkpoint_hash = ?, updated_at = ? WHERE id = ? AND version = ?").run(JSON.stringify(checkpoint), hash, nowIso(), id, handoff.version);
       if (!result.changes) throw new Error(`Handoff "${id}" changed concurrently during checkpoint capture`);
       appendHandoffEvent(id, handoff.version, "checkpoint_captured", { checkpoint_hash: hash, repository: checkpoint.repository || null, ...(metadata && typeof metadata === "object" ? { metadata: parseJson(JSON.stringify(metadata), {}) } : {}) }, { actor, source });
-    })();
-    return getHandoff(id);
+      return getHandoff(id);
+    });
   }
 
   function getHandoffReadiness(id, { working_directory, recipient = null } = {}) {
@@ -758,6 +787,7 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
 
   function transitionHandoff(id, target, { expectedVersion, actor = "system", source = "handoff", reason } = {}) {
     if (!HANDOFF_LIFECYCLE.has(target)) throw new Error(`Unknown handoff lifecycle state: ${target}`);
+    const observed = handoffMutationState(id);
     const current = getHandoff(id);
     if (!current) throw new Error(`Handoff not found: ${id}`);
     if (expectedVersion !== undefined && Number(expectedVersion) !== Number(current.version)) throw new Error(`Handoff "${id}" changed concurrently: expected version ${expectedVersion}, found ${current.version}`);
@@ -774,14 +804,17 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
     }
     const ts = nowIso();
     const fields = { lifecycle_state: target, sealed_at: target === "ready" ? ts : current.sealed_at, revoked_at: target === "revoked" ? ts : current.revoked_at, completed_at: target === "completed" ? ts : current.completed_at };
-    const result = db.prepare("UPDATE memory_handoffs SET lifecycle_state = ?, sealed_at = ?, revoked_at = ?, completed_at = ?, updated_at = ? WHERE id = ? AND version = ?").run(fields.lifecycle_state, fields.sealed_at || null, fields.revoked_at || null, fields.completed_at || null, ts, id, current.version);
-    if (!result.changes) throw new Error(`Handoff "${id}" changed concurrently during transition`);
-    appendHandoffEvent(id, current.version, "lifecycle_changed", { from: current.lifecycle_state, to: target, reason: String(reason || "") .slice(0, 300) }, { actor, source });
-    return { handoff: getHandoff(id), no_op: false };
+    return commitHandoffMutation(id, observed, () => {
+      const result = db.prepare("UPDATE memory_handoffs SET lifecycle_state = ?, sealed_at = ?, revoked_at = ?, completed_at = ?, updated_at = ? WHERE id = ? AND version = ?").run(fields.lifecycle_state, fields.sealed_at || null, fields.revoked_at || null, fields.completed_at || null, ts, id, current.version);
+      if (!result.changes) throw new Error(`Handoff "${id}" changed concurrently during transition`);
+      appendHandoffEvent(id, current.version, "lifecycle_changed", { from: current.lifecycle_state, to: target, reason: String(reason || "") .slice(0, 300) }, { actor, source });
+      return { handoff: getHandoff(id), no_op: false };
+    });
   }
 
   function claimHandoff(id, { owner, leaseSeconds = 900, expectedVersion, actor = owner, source = "handoff" } = {}) {
     if (!owner) throw new Error("handoff claim requires owner");
+    const observed = handoffMutationState(id);
     const current = getHandoff(id);
     if (!current) throw new Error(`Handoff not found: ${id}`);
     if (expectedVersion !== undefined && Number(expectedVersion) !== Number(current.version)) throw new Error(`Handoff "${id}" changed concurrently: expected version ${expectedVersion}, found ${current.version}`);
@@ -793,25 +826,32 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
     if (readiness.status !== "ready") throw new Error(`Handoff "${id}" is not ready to claim: ${readiness.reasons.join("; ") || readiness.status}`);
     const token = crypto.randomBytes(24).toString("hex");
     const tokenHash = continuityHash({ domain: "claim", token });
-    const expires = new Date(now + Math.max(30, Math.min(Number(leaseSeconds) || 900, 86400)) * 1000).toISOString();
-    const result = db.prepare("UPDATE memory_handoffs SET lifecycle_state = 'claimed', claim_owner = ?, claim_token = ?, claim_expires_at = ?, updated_at = ? WHERE id = ? AND version = ? AND (claim_expires_at IS NULL OR claim_expires_at <= ? OR claim_owner = ?)").run(owner, tokenHash, expires, nowIso(), id, current.version, new Date(now).toISOString(), owner);
-    if (!result.changes) throw new Error(`Handoff "${id}" changed concurrently during claim`);
-    appendHandoffEvent(id, current.version, "claimed", { owner, expires_at: expires }, { actor, source });
-    return { handoff: getHandoff(id), claim_token: token, expires_at: expires };
+    return commitHandoffMutation(id, observed, () => {
+      const commitTime = Date.now();
+      const expires = new Date(commitTime + Math.max(30, Math.min(Number(leaseSeconds) || 900, 86400)) * 1000).toISOString();
+      const result = db.prepare("UPDATE memory_handoffs SET lifecycle_state = 'claimed', claim_owner = ?, claim_token = ?, claim_expires_at = ?, updated_at = ? WHERE id = ? AND version = ? AND (claim_expires_at IS NULL OR claim_expires_at <= ? OR claim_owner = ?)").run(owner, tokenHash, expires, nowIso(), id, current.version, new Date(commitTime).toISOString(), owner);
+      if (!result.changes) throw new Error(`Handoff "${id}" changed concurrently during claim`);
+      appendHandoffEvent(id, current.version, "claimed", { owner, expires_at: expires }, { actor, source });
+      return { handoff: getHandoff(id), claim_token: token, expires_at: expires };
+    });
   }
 
   function releaseHandoff(id, { claim_token, actor = "system", source = "handoff", reason } = {}) {
     if (!claim_token) throw new Error("handoff release requires claim_token");
+    const observed = handoffMutationState(id);
     const current = getHandoff(id);
     if (!current) throw new Error(`Handoff not found: ${id}`);
+    if (!TRANSITIONS[current.lifecycle_state]?.has("released")) throw new Error(`Handoff cannot release a claim in state ${current.lifecycle_state}`);
     const claimRow = db.prepare("SELECT claim_token FROM memory_handoffs WHERE id = ?").get(id);
     const tokenHash = continuityHash({ domain: "claim", token: claim_token });
     if (!claimRow || claimRow.claim_token !== tokenHash) throw new Error("handoff claim token is invalid");
     if (!current.claim?.active) throw new Error("handoff claim is expired");
-    const result = db.prepare("UPDATE memory_handoffs SET lifecycle_state = 'released', claim_owner = NULL, claim_token = NULL, claim_expires_at = NULL, updated_at = ? WHERE id = ? AND claim_token = ?").run(nowIso(), id, tokenHash);
-    if (!result.changes) throw new Error(`Handoff "${id}" changed concurrently during release`);
-    appendHandoffEvent(id, current.version, "released", { reason: String(reason || "").slice(0, 300) }, { actor, source });
-    return getHandoff(id);
+    return commitHandoffMutation(id, observed, () => {
+      const result = db.prepare("UPDATE memory_handoffs SET lifecycle_state = 'released', claim_owner = NULL, claim_token = NULL, claim_expires_at = NULL, updated_at = ? WHERE id = ? AND claim_token = ? AND claim_expires_at > ?").run(nowIso(), id, tokenHash, new Date(Date.now()).toISOString());
+      if (!result.changes) throw new Error(`Handoff "${id}" changed concurrently during release or claim expired`);
+      appendHandoffEvent(id, current.version, "released", { reason: String(reason || "").slice(0, 300) }, { actor, source });
+      return getHandoff(id);
+    });
   }
 
   function listHandoffs({ project, includeArchived = false, includeCompleted = false, limit = 50 } = {}) {

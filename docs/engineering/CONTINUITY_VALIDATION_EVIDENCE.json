@@ -1,0 +1,1468 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-10-12T19:19:41.050Z",
+  "baseline_revision": "d4c908cda76b4031bdab05458cb40afb4984954b",
+  "reference_release": "v2.2.1",
+  "branch": "improvement/platform-continuity-concurrency",
+  "environment": {
+    "platform": "win32",
+    "node": "v24.18.0",
+    "npm": "11.16.0",
+    "isolation": "Frozen tracked-source exports; clean child environment; installed dependencies via NODE_PATH; disposable Git and SQLite"
+  },
+  "source_sha256": {
+    "src/db/handoff-store.js": "4d917a8a73cff02d559cf762c77952ba793a559b6d599b7eb252a7dd1c6a757f",
+    "test/handoff-concurrency.test.js": "5df7301edabea7e816b56c7a41c4ef1b17c8ebcb2767c3fd9094a2e6ec2e2bf1"
+  },
+  "dependencies": [
+    {
+      "name": "@modelcontextprotocol/server",
+      "locked": "2.0.0",
+      "installed": "2.0.0"
+    },
+    {
+      "name": "@modelcontextprotocol/server-legacy",
+      "locked": "2.0.0",
+      "installed": "2.0.0"
+    },
+    {
+      "name": "ajv",
+      "locked": "8.20.0",
+      "installed": "8.20.0"
+    },
+    {
+      "name": "better-sqlite3",
+      "locked": "13.0.3",
+      "installed": "13.0.3"
+    },
+    {
+      "name": "cors",
+      "locked": "2.8.6",
+      "installed": "2.8.6"
+    },
+    {
+      "name": "express",
+      "locked": "5.2.1",
+      "installed": "5.2.1"
+    },
+    {
+      "name": "fast-xml-parser",
+      "locked": "5.11.0",
+      "installed": "5.11.0"
+    },
+    {
+      "name": "handlebars",
+      "locked": "4.7.10",
+      "installed": "4.7.10"
+    },
+    {
+      "name": "ignore",
+      "locked": "7.0.6",
+      "installed": "7.0.6"
+    },
+    {
+      "name": "ini",
+      "locked": "7.0.0",
+      "installed": "7.0.0"
+    },
+    {
+      "name": "ioredis",
+      "locked": "6.0.0",
+      "installed": "6.0.0"
+    },
+    {
+      "name": "pg",
+      "locked": "8.23.0",
+      "installed": "8.23.0"
+    },
+    {
+      "name": "playwright-core",
+      "locked": "1.62.1",
+      "installed": "1.62.1"
+    },
+    {
+      "name": "tree-sitter",
+      "locked": "0.25.1",
+      "installed": "0.25.1"
+    },
+    {
+      "name": "tree-sitter-go",
+      "locked": "0.25.0",
+      "installed": "0.25.0"
+    },
+    {
+      "name": "tree-sitter-java",
+      "locked": "0.23.5",
+      "installed": "0.23.5"
+    },
+    {
+      "name": "tree-sitter-javascript",
+      "locked": "0.25.0",
+      "installed": "0.25.0"
+    },
+    {
+      "name": "tree-sitter-perl",
+      "locked": "1.2.1",
+      "installed": "1.2.1"
+    },
+    {
+      "name": "tree-sitter-ruby",
+      "locked": "0.23.1",
+      "installed": "0.23.1"
+    },
+    {
+      "name": "tree-sitter-rust",
+      "locked": "0.24.0",
+      "installed": "0.24.0"
+    },
+    {
+      "name": "tree-sitter-typescript",
+      "locked": "0.23.2",
+      "installed": "0.23.2"
+    },
+    {
+      "name": "yaml",
+      "locked": "2.9.0",
+      "installed": "2.9.0"
+    },
+    {
+      "name": "zod",
+      "locked": "4.4.3",
+      "installed": "4.4.3"
+    },
+    {
+      "name": "c8",
+      "locked": "10.1.3",
+      "installed": "10.1.3"
+    },
+    {
+      "name": "fast-check",
+      "locked": "4.9.0",
+      "installed": "4.9.0"
+    }
+  ],
+  "baseline": {
+    "command": "node test/run-all.js --tier=unit --tier=contract --tier=integration --tier=security --concurrency=4 --overall-timeout-ms=180000 --json",
+    "exit_code": 1,
+    "passed": 163,
+    "runner_failed_including_cancelled": 19,
+    "failed_suites": 18,
+    "cancelled": [
+      "test/developer-pack.test.js"
+    ],
+    "not_run": [
+      "test/browser-egress.test.js",
+      "test/browser-subsystem.test.js",
+      "test/certification-isolation.test.js",
+      "test/evolve.test.js",
+      "test/execution-claims.test.js",
+      "test/execution-control.test.js",
+      "test/execution-node-protocol.test.js",
+      "test/execution-node.test.js",
+      "test/git-clone.test.js",
+      "test/git-deploy.test.js",
+      "test/handoff-reliability.test.js",
+      "test/handoff-versioning.test.js",
+      "test/insight-report.test.js",
+      "test/integration.test.js",
+      "test/invariants-doctor.test.js",
+      "test/jellyfin-pack.test.js",
+      "test/local-stdio.test.js",
+      "test/mcp-annotations.test.cjs",
+      "test/mcp-session.test.js",
+      "test/mcp-v2-runtime.test.cjs",
+      "test/memory-deferred.test.js",
+      "test/memory-intelligence.test.js",
+      "test/memory-lifecycle.test.js",
+      "test/memory-maintenance.test.js",
+      "test/memory-sync.test.js",
+      "test/metrics-collector.test.js",
+      "test/metrics-surface.test.js",
+      "test/modules-builtin.test.js",
+      "test/modules-discovery.test.js",
+      "test/modules-entry-rebind.test.js",
+      "test/modules-installation.test.js",
+      "test/modules-loader.test.js",
+      "test/modules-manifest.test.js",
+      "test/modules-observability.test.js",
+      "test/modules-packaging.test.js",
+      "test/modules-permissions.test.js",
+      "test/modules-platform.test.js",
+      "test/modules-repository.test.js",
+      "test/modules-third-party-lifecycle.test.js",
+      "test/network-firewall-pack.test.js",
+      "test/pack-catalog-e2e.test.js",
+      "test/pack-contract.test.js",
+      "test/pack-inventory.test.js",
+      "test/pack-manifest-consistency.test.js",
+      "test/pack-manifest-lifecycle.test.js",
+      "test/pack-maturity.test.js",
+      "test/pack-proving-evidence.test.js",
+      "test/pack-services.test.js",
+      "test/packs/registry-contract.test.js",
+      "test/phase-packs-16-20.test.js",
+      "test/predict-contract.test.js",
+      "test/predict-lifecycle.test.js",
+      "test/predict.test.js",
+      "test/production-compatibility-packs-11-15.test.js",
+      "test/production-compatibility-packs.test.js",
+      "test/project-context-isolation.test.js",
+      "test/project-identity.test.js",
+      "test/project-registry-tool.test.js",
+      "test/proxmox-pack.test.js",
+      "test/queue-recover.test.js",
+      "test/release-manifest.test.js",
+      "test/scheduler-platform.test.js",
+      "test/scheduling-cancel.test.js",
+      "test/target-pack-buildout.test.js",
+      "test/workflow-definitions.test.js",
+      "test/workflow-effects.test.js",
+      "test/workflow-runner.test.js",
+      "test/workspace-identity-wiring.test.js",
+      "test/workspace-model.test.js",
+      "test/workspace-tool.test.js"
+    ],
+    "wall_duration_ms": 180232,
+    "suites": [
+      {
+        "suite": "test/agent-adaptive-durability.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 101
+      },
+      {
+        "suite": "test/agent-authority-approval.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 6077
+      },
+      {
+        "suite": "test/agent-bridge-followup.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 54220
+      },
+      {
+        "suite": "test/agent-bridge-prompt.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 7057
+      },
+      {
+        "suite": "test/agent-cancel.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 9613
+      },
+      {
+        "suite": "test/agent-capability-broker.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 131
+      },
+      {
+        "suite": "test/agent-capability-repair.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 95
+      },
+      {
+        "suite": "test/agent-completion-gate.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 97
+      },
+      {
+        "suite": "test/agent-continuation.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 90
+      },
+      {
+        "suite": "test/agent-durable-operations.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 252
+      },
+      {
+        "suite": "test/agent-durable-recovery-matrix.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 266
+      },
+      {
+        "suite": "test/agent-followup-ui.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 94
+      },
+      {
+        "suite": "test/agent-goal-contract.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 88
+      },
+      {
+        "suite": "test/agent-handoff-continuity.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 84
+      },
+      {
+        "suite": "test/agent-handoff-tool.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 950
+      },
+      {
+        "suite": "test/agent-health-startup.test.js",
+        "status": "failed",
+        "code": 1,
+        "duration_ms": 647
+      },
+      {
+        "suite": "test/agent-history.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 139
+      },
+      {
+        "suite": "test/agent-loop.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 101
+      },
+      {
+        "suite": "test/agent-protocol.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 93
+      },
+      {
+        "suite": "test/agent-receipt-recovery.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 260
+      },
+      {
+        "suite": "test/agent-recovery-scan.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 91
+      },
+      {
+        "suite": "test/agent-rollback-principal.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 254
+      },
+      {
+        "suite": "test/agent-task-branch.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 630
+      },
+      {
+        "suite": "test/agent-task-model.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 96
+      },
+      {
+        "suite": "test/agent-task-store.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 275
+      },
+      {
+        "suite": "test/agent-verification.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 88
+      },
+      {
+        "suite": "test/agent-workflow-smoke.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 355
+      },
+      {
+        "suite": "test/agent-workspace-transactions.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 261
+      },
+      {
+        "suite": "test/agent/lifecycle-model.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 94
+      },
+      {
+        "suite": "test/approval-continuation.test.cjs",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 1189
+      },
+      {
+        "suite": "test/approval.test.js",
+        "status": "failed",
+        "code": 1,
+        "duration_ms": 868
+      },
+      {
+        "suite": "test/architecture-boundaries.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 223
+      },
+      {
+        "suite": "test/automatic-memory.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 296
+      },
+      {
+        "suite": "test/backup-release.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 214
+      },
+      {
+        "suite": "test/bash-tool.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 515
+      },
+      {
+        "suite": "test/blackbox-lifecycle.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 1442
+      },
+      {
+        "suite": "test/blackbox-storage-security.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 92
+      },
+      {
+        "suite": "test/blackbox.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 614
+      },
+      {
+        "suite": "test/brain-concurrency.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 132
+      },
+      {
+        "suite": "test/brain-dashboard-ui.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 91
+      },
+      {
+        "suite": "test/brain-integration.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 13227
+      },
+      {
+        "suite": "test/brain-memory-curator.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 94
+      },
+      {
+        "suite": "test/brain-profile-behavior.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 101
+      },
+      {
+        "suite": "test/brain-v3-foundations.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 167
+      },
+      {
+        "suite": "test/brain.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 120
+      },
+      {
+        "suite": "test/browser-automation-pack.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 807
+      },
+      {
+        "suite": "test/campaign-packs-6-10.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 141
+      },
+      {
+        "suite": "test/capability-catalog.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 882
+      },
+      {
+        "suite": "test/capability-packs.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 25791
+      },
+      {
+        "suite": "test/capability-rbac.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 190
+      },
+      {
+        "suite": "test/certification-lifecycle.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 4389
+      },
+      {
+        "suite": "test/certification.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 393
+      },
+      {
+        "suite": "test/ci-status.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 512
+      },
+      {
+        "suite": "test/command-execution.test.js",
+        "status": "failed",
+        "code": 1,
+        "duration_ms": 151
+      },
+      {
+        "suite": "test/compute-artifact-custody.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 409
+      },
+      {
+        "suite": "test/compute-audit-fixes.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 272
+      },
+      {
+        "suite": "test/compute-cancellation.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 486
+      },
+      {
+        "suite": "test/compute-dashboard-ui.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 93
+      },
+      {
+        "suite": "test/compute-direct-runner.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 381
+      },
+      {
+        "suite": "test/compute-jobs-mcp-contract.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 730
+      },
+      {
+        "suite": "test/compute-migration-parity.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 280
+      },
+      {
+        "suite": "test/compute-model-dedup.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 181
+      },
+      {
+        "suite": "test/compute-placement.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 667
+      },
+      {
+        "suite": "test/compute-protocol.test.js",
+        "status": "failed",
+        "code": 1,
+        "duration_ms": 34112
+      },
+      {
+        "suite": "test/compute-provider-bootstrap.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 152
+      },
+      {
+        "suite": "test/compute-recovery.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 402
+      },
+      {
+        "suite": "test/compute-reenrollment.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 149
+      },
+      {
+        "suite": "test/compute-registry-tools.test.js",
+        "status": "failed",
+        "code": 1,
+        "duration_ms": 478
+      },
+      {
+        "suite": "test/compute-source-handoff.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 149
+      },
+      {
+        "suite": "test/compute-telemetry.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 91
+      },
+      {
+        "suite": "test/compute-worker-cli.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 238
+      },
+      {
+        "suite": "test/compute-worker-config.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 118
+      },
+      {
+        "suite": "test/compute-worker-credential.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 235
+      },
+      {
+        "suite": "test/compute-worker-disconnect.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 120
+      },
+      {
+        "suite": "test/compute-worker-e2e.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 1574
+      },
+      {
+        "suite": "test/compute-worker-enroll-guard.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 882
+      },
+      {
+        "suite": "test/compute-worker-lifecycle.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 187
+      },
+      {
+        "suite": "test/compute-worker-ollama-chat.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 836
+      },
+      {
+        "suite": "test/compute-worker-package.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 447
+      },
+      {
+        "suite": "test/compute-worker-reconnect.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 107
+      },
+      {
+        "suite": "test/compute-worker-resilience.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 4817
+      },
+      {
+        "suite": "test/compute-worker-rotate.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 165
+      },
+      {
+        "suite": "test/compute-worker-service.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 705
+      },
+      {
+        "suite": "test/compute.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 303
+      },
+      {
+        "suite": "test/config-registry.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 87
+      },
+      {
+        "suite": "test/connector-authority.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 300
+      },
+      {
+        "suite": "test/container-operations-pack.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 121
+      },
+      {
+        "suite": "test/context-engine.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 305
+      },
+      {
+        "suite": "test/core/fault-injection.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 97
+      },
+      {
+        "suite": "test/cron-safety.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 87
+      },
+      {
+        "suite": "test/cross-pack-workflow-fixtures.test.js",
+        "status": "failed",
+        "code": 1,
+        "duration_ms": 123793
+      },
+      {
+        "suite": "test/dashboard-api.test.js",
+        "status": "failed",
+        "code": 1,
+        "duration_ms": 2396
+      },
+      {
+        "suite": "test/dashboard-browser.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 1110
+      },
+      {
+        "suite": "test/dashboard-capability-action.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 95
+      },
+      {
+        "suite": "test/dashboard-controls-contract.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 92
+      },
+      {
+        "suite": "test/dashboard-doctor.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 950
+      },
+      {
+        "suite": "test/dashboard-error-boundary.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 95
+      },
+      {
+        "suite": "test/dashboard-honesty.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 965
+      },
+      {
+        "suite": "test/dashboard-network-info.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 98
+      },
+      {
+        "suite": "test/dashboard-performance.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 89
+      },
+      {
+        "suite": "test/dashboard-redesign-contract.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 91
+      },
+      {
+        "suite": "test/dashboard-research-source-routes.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 87
+      },
+      {
+        "suite": "test/dashboard-shell.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 88
+      },
+      {
+        "suite": "test/dashboard-workspace-a11y.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 93
+      },
+      {
+        "suite": "test/deploy-scripts.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 89
+      },
+      {
+        "suite": "test/developer-pack.test.js",
+        "status": "cancelled",
+        "code": 1,
+        "duration_ms": 3621
+      },
+      {
+        "suite": "test/dispatcher.test.cjs",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 622
+      },
+      {
+        "suite": "test/evidence-projector.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 112
+      },
+      {
+        "suite": "test/health.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 495
+      },
+      {
+        "suite": "test/identity-approval-governance.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 417
+      },
+      {
+        "suite": "test/identity-authentication.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 357
+      },
+      {
+        "suite": "test/identity-authorization.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 354
+      },
+      {
+        "suite": "test/identity-deployment.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 83
+      },
+      {
+        "suite": "test/identity-foundation.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 571
+      },
+      {
+        "suite": "test/identity-governance.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 672
+      },
+      {
+        "suite": "test/identity-resource-authority.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 249
+      },
+      {
+        "suite": "test/inference-convergence.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 87
+      },
+      {
+        "suite": "test/network-failure-guidance.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 163
+      },
+      {
+        "suite": "test/openvino-executor.test.js",
+        "status": "failed",
+        "code": 1,
+        "duration_ms": 837
+      },
+      {
+        "suite": "test/openvino-helper-contract.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 91
+      },
+      {
+        "suite": "test/openvino-startup-readiness.test.js",
+        "status": "failed",
+        "code": 1,
+        "duration_ms": 29551
+      },
+      {
+        "suite": "test/outbound-url-security.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 130
+      },
+      {
+        "suite": "test/path-policy.test.cjs",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 473
+      },
+      {
+        "suite": "test/per-action-risk.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 447
+      },
+      {
+        "suite": "test/platform-errors.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 87
+      },
+      {
+        "suite": "test/platform-event-consumption.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 358
+      },
+      {
+        "suite": "test/platform-kernel.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 421
+      },
+      {
+        "suite": "test/provider-outbound-security.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 109
+      },
+      {
+        "suite": "test/security-final.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 166
+      },
+      {
+        "suite": "test/security-handlebars-template.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 524
+      },
+      {
+        "suite": "test/security-hardening.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 173
+      },
+      {
+        "suite": "test/security-phase-01-threat-model.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 85
+      },
+      {
+        "suite": "test/security-phase-02-dispatch-boundary.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 423
+      },
+      {
+        "suite": "test/security-phase-03-auth-authorization.test.js",
+        "status": "failed",
+        "code": 1,
+        "duration_ms": 337
+      },
+      {
+        "suite": "test/security-phase-04-secure-defaults.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 86
+      },
+      {
+        "suite": "test/security-phase-05-subprocess-shell.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 159
+      },
+      {
+        "suite": "test/security-phase-06-filesystem-data.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 128
+      },
+      {
+        "suite": "test/security-phase-07-secrets-redaction.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 209
+      },
+      {
+        "suite": "test/security-phase-08-http-network.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 83
+      },
+      {
+        "suite": "test/security-phase-09-dashboard-web.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 1594
+      },
+      {
+        "suite": "test/security-phase-10-packs-modules.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 96
+      },
+      {
+        "suite": "test/security-phase-11-pack-specific.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 146
+      },
+      {
+        "suite": "test/security-phase-12-browser-automation.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 123
+      },
+      {
+        "suite": "test/security-phase-13-security-research.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 95
+      },
+      {
+        "suite": "test/security-phase-14-compute.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 85
+      },
+      {
+        "suite": "test/security-phase-15-agent-autonomous.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 86
+      },
+      {
+        "suite": "test/security-phase-16-memory-data.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 111
+      },
+      {
+        "suite": "test/security-phase-17-supply-chain.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 92
+      },
+      {
+        "suite": "test/security-phase-18-deployment-system.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 91
+      },
+      {
+        "suite": "test/security-phase-19-ci-hardening.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 84
+      },
+      {
+        "suite": "test/security-research-adapter.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 90
+      },
+      {
+        "suite": "test/security-research-evidence-vault.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 86
+      },
+      {
+        "suite": "test/security-research-lab-policy.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 87
+      },
+      {
+        "suite": "test/security-research-pack.test.js",
+        "status": "failed",
+        "code": 1,
+        "duration_ms": 3325
+      },
+      {
+        "suite": "test/security-research-source.test.js",
+        "status": "failed",
+        "code": 1,
+        "duration_ms": 638
+      },
+      {
+        "suite": "test/security-research-unit.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 109
+      },
+      {
+        "suite": "test/security-scan.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 464
+      },
+      {
+        "suite": "test/security.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 368
+      },
+      {
+        "suite": "test/security/property-boundaries.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 255
+      },
+      {
+        "suite": "test/security/security-boundaries.test.js",
+        "status": "failed",
+        "code": 1,
+        "duration_ms": 630
+      },
+      {
+        "suite": "test/sensitive-result-boundary.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 85
+      },
+      {
+        "suite": "test/static-code-quality.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 188
+      },
+      {
+        "suite": "test/static-source-scan.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 98
+      },
+      {
+        "suite": "test/storage-isolation-security.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 183
+      },
+      {
+        "suite": "test/structured-tools-security.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 375
+      },
+      {
+        "suite": "test/subprocess-security.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 134
+      },
+      {
+        "suite": "test/timestamp-format.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 278
+      },
+      {
+        "suite": "test/tool-family-b5-extractions.test.cjs",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 424
+      },
+      {
+        "suite": "test/tool-family-b6-extractions.test.cjs",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 445
+      },
+      {
+        "suite": "test/tool-family-data-utilities.test.cjs",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 680
+      },
+      {
+        "suite": "test/tool-family-database-inspection.test.cjs",
+        "status": "failed",
+        "code": 1,
+        "duration_ms": 447
+      },
+      {
+        "suite": "test/tool-family-filesystem.test.cjs",
+        "status": "failed",
+        "code": 1,
+        "duration_ms": 654
+      },
+      {
+        "suite": "test/tool-family-hashing.test.cjs",
+        "status": "failed",
+        "code": 1,
+        "duration_ms": 473
+      },
+      {
+        "suite": "test/tool-family-memory-core.test.cjs",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 518
+      },
+      {
+        "suite": "test/tool-family-monitoring.test.cjs",
+        "status": "failed",
+        "code": 1,
+        "duration_ms": 410
+      },
+      {
+        "suite": "test/tool-family-storage.test.cjs",
+        "status": "failed",
+        "code": 1,
+        "duration_ms": 609
+      },
+      {
+        "suite": "test/tool-log-correlation.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 406
+      },
+      {
+        "suite": "test/tool-log-redaction.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 566
+      },
+      {
+        "suite": "test/tool-registry-contract.test.cjs",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 363
+      },
+      {
+        "suite": "test/tool-result-structure.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 91
+      },
+      {
+        "suite": "test/tool-summary-cards.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 88
+      },
+      {
+        "suite": "test/tools.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 691
+      }
+    ]
+  },
+  "regression_before": {
+    "command": "node --test test/handoff-concurrency.test.js",
+    "code_revision": "d4c908cda76b4031bdab05458cb40afb4984954b",
+    "passed": 2,
+    "failed": 15,
+    "skipped": 0,
+    "duration_ms": 16111.5936
+  },
+  "regression_after": {
+    "command": "node test/run-all.js test/agent-durable-operations.test.js test/agent-durable-recovery-matrix.test.js test/agent-handoff-continuity.test.js test/agent-handoff-tool.test.js test/agent-recovery-scan.test.js test/brain-concurrency.test.js test/dispatcher.test.cjs test/handoff-concurrency.test.js test/handoff-reliability.test.js test/handoff-versioning.test.js test/memory-intelligence.test.js test/migration-self-containment.test.js test/project-context-isolation.test.js test/project-identity.test.js test/security-handlebars-template.test.js test/security-phase-16-memory-data.test.js test/tool-registry-contract.test.cjs --concurrency=1 --json",
+    "exit_code": 0,
+    "passed": 17,
+    "failed": 0,
+    "skipped": 0,
+    "wall_duration_ms": 42622,
+    "suites": [
+      {
+        "suite": "test/agent-durable-operations.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 274
+      },
+      {
+        "suite": "test/agent-durable-recovery-matrix.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 262
+      },
+      {
+        "suite": "test/agent-handoff-continuity.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 86
+      },
+      {
+        "suite": "test/agent-handoff-tool.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 918
+      },
+      {
+        "suite": "test/agent-recovery-scan.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 86
+      },
+      {
+        "suite": "test/brain-concurrency.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 131
+      },
+      {
+        "suite": "test/dispatcher.test.cjs",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 569
+      },
+      {
+        "suite": "test/handoff-concurrency.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 17523
+      },
+      {
+        "suite": "test/handoff-reliability.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 11132
+      },
+      {
+        "suite": "test/handoff-versioning.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 5107
+      },
+      {
+        "suite": "test/memory-intelligence.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 4193
+      },
+      {
+        "suite": "test/migration-self-containment.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 497
+      },
+      {
+        "suite": "test/project-context-isolation.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 478
+      },
+      {
+        "suite": "test/project-identity.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 424
+      },
+      {
+        "suite": "test/security-handlebars-template.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 491
+      },
+      {
+        "suite": "test/security-phase-16-memory-data.test.js",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 87
+      },
+      {
+        "suite": "test/tool-registry-contract.test.cjs",
+        "status": "passed",
+        "code": 0,
+        "duration_ms": 361
+      }
+    ],
+    "new_suite_cases": {
+      "passed": 17,
+      "failed": 0,
+      "skipped": 0
+    }
+  },
+  "static_gates": [
+    {
+      "command": "node scripts/check-architecture.js",
+      "status": "passed",
+      "files": 462
+    },
+    {
+      "command": "node scripts/check-test-architecture.js",
+      "status": "passed",
+      "suites": 295
+    },
+    {
+      "command": "node scripts/check-docs.js",
+      "status": "passed"
+    }
+  ],
+  "limitations": [
+    "Bounded baseline is incomplete and failed.",
+    "No production configuration or data validated.",
+    "No dependency download/advisory check.",
+    "No full model-driven A-G continuation evaluation, power-loss or exactly-once external-effects proof."
+  ]
+}

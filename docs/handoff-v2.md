@@ -128,6 +128,22 @@ logical transaction atomicity, not a guarantee of power-loss durability or an
 atomic filesystem snapshot. Concurrent filesystem writes during the multiple
 Git observations still require coordinated writers and further reconciliation.
 
+Checkpoint capture, lifecycle transitions, claim acquisition/renewal/release,
+and `begin_resume` compare the observed packet version, lifecycle, checkpoint,
+claim, ownership scope, and journal tip inside a short SQLite writer transaction.
+They commit their row update and journal event together, or roll both back. Git
+observations happen before that transaction, so they do not hold the writer lock.
+A competing continuity mutation invalidates the observation even if the packet
+version is unchanged or the lifecycle changes away and back. The caller must
+reload and reconcile after a conflict; the operation is not automatically retried.
+`expected_version` retains its packet-version meaning; no new public revision
+parameter or storage schema is required.
+
+`begin_resume` rechecks lease expiry when committing after preflight. Releasing a
+claim follows the lifecycle transition matrix and cannot reopen a terminal
+handoff. Claim acquisition starts its lease at commit time. These are continuity
+coordination checks, not execution authorization or exclusive filesystem locks.
+
 ## Receiver continuity
 
 Handoff v3 also exposes receiver-oriented, read-only projections:

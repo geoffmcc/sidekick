@@ -1,5 +1,29 @@
 # Improvement backlog
 
+## Current milestone: confirmed findings and disposition
+
+Baseline `d4c908c`; 2026-10-12. All reproductions below use
+`node test/run-all.js test/handoff-concurrency.test.js` in disposable Git/SQLite
+fixtures. Each named case is in that test file. Final suite: 17 pass; unchanged
+baseline: 15 fail, two controls pass. No confirmed P0.
+
+| ID / subsystem / severity | Reproduction and root cause | Remedy, dependencies and compatibility/security risk | Verification |
+| --- | --- | --- | --- |
+| SK-006 / capture and claims / confirmed P1, stale writer replaces newer state | Concurrent checkpoint, revocation-during-readiness and intervening-lifecycle tests. `captureHandoffCheckpoint` guards packet version only; captures/lifecycle changes do not increment it. `claimHandoff` lacks a current lifecycle guard after repository observation. | Compare row state plus existing journal tip under SQLite writer lock. No migration/dependency. Conflicts require reload/reconciliation. This closes overlapping writes, not arbitrary filesystem races or exclusive ownership. | Fixed; real second-process races fail before and pass after. |
+| SK-014 / lifecycle and lease audit / confirmed P1, partial durable mutation reported as failure | Five rejected-journal-insert tests plus process exit before `resume_started`. `transitionHandoff`, `claimHandoff`, `renewHandoffClaim`, `beginHandoffResume`, `releaseHandoff` update row before separately committed event. | Commit row and event together, preserving outer caller transactions. No schema change; failed calls leave prior state. Requires working SQLite journal. | Fixed; rollback, safe retry, abrupt process exit, and outer-transaction controls pass. |
+| SK-015 / terminal lifecycle / confirmed P1, closed continuity becomes resumable | Three retained-claim-token tests. `releaseHandoff` checks token/expiry but bypasses the transition matrix. | Enforce release transition legality. Revoked/completed/superseded records remain terminal. Intentional compatibility tightening; no new permission or approval. No external exploitability claim. | Fixed for all three terminal states. |
+| SK-016 / receiver preflight / confirmed P1, resume based on invalidated observation | Packet-change and lease-expiry-during-preflight tests. `beginHandoffResume` does not compare packet revision or check expiry again after slow checks. | Guard observed state and current expiry inside commit. Token/schema preserved. Long-running preflight may correctly require renewal/reconciliation. | Fixed; competing packet writer and controlled clock boundary pass. |
+| SK-017 / audit persistence / confirmed P2 defensive failure handling | Silently-ignored-journal-write test. `appendHandoffEvent` ignores insert result; an injected SQLite trigger suppresses insertion without an error. | Use ordinary INSERT and require one inserted row; caller transaction rolls back on suppression. Normal event shape unchanged. Fault injection, not an externally reachable SQL exploit. | Fixed; suppressed event prevents checkpoint commit. |
+| SK-018 / validation / confirmed P2 baseline failures | Frozen required-tier command with 180-second bound: 163 pass, 18 fail, one cancelled, 70 not run. Cleanup errors, shell/helper startup issues, compute timeout and research assertions precede these changes. | Triage isolated fixtures; close owned resources where demonstrated; verify behavioral failures on supported platforms. Do not weaken assertions or relabel failures. | Open; aggregate and suite identities in CONTINUITY_VALIDATION_EVIDENCE.json. |
+| SK-019 / wider store atomicity / design weakness P2 | Source review: packet create/update, extraction, restore/archive and metadata-only touches have different transaction boundaries. No general atomicity guarantee established. | Reproduce each boundary before extending the transaction pattern. Preserve deduplication/history semantics; no blanket refactor. | Open; source concern, not a newly confirmed defect. |
+
+SK-007 through SK-012 remain open. SK-009 now includes deterministic competing
+writers and checkpoint/begin-resume process-exit coverage, but lacks actual
+unfinished-task completion by an independent agent and the full A-G matrix.
+SK-013 has new bounded aggregate evidence; full required-tier success and general
+Windows termination behavior remain unverified. Historical records below
+describe the preceding v2.2.1 milestone.
+
 2026-10-12; baseline b89247b6b80a3e120c9b755592cf416d047108b3 (v2.2.1).
 
 Priorities describe engineering impact, not CVSS. No P0 is confirmed. Each record distinguishes demonstrated behavior from a concern.

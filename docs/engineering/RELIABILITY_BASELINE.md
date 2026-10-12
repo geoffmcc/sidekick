@@ -1,5 +1,27 @@
 # Reliability baseline
 
+## Current measurement (2026-10-12, d4c908c)
+
+A frozen Windows/Node 24.18.0 snapshot completed a bounded required-tier run:
+163 suites passed, 18 failed, one was cancelled, and 70 were not run. The runner
+reports `failed: 19` because cancellation is included. It returned in 180.232
+seconds with exit 1. This supersedes the prior absence of a returned aggregate,
+but does not establish a passing or complete baseline. The longer historical
+Windows timeout concern is not proven resolved by this one bounded run.
+
+The final new 17-case concurrency/interruption suite produces 15 failures and
+two passing controls against unchanged d4c908c. With the fix, all 17 pass, and
+all 17 selected relevant suites pass (42.622 seconds total, serial runner).
+Architecture, test ownership (295 suites), and documentation checks pass.
+These are fixture/test durations, not runtime performance measurements.
+
+Verified properties: no partial row/event commit after injected event failure;
+no partial checkpoint/resume commit after abrupt fixture-process exit; stale
+observations cannot overwrite intervening checkpoint, lifecycle or packet
+changes; expiry is checked at resume commit; terminal records stay terminal.
+Process-exit tests do not establish power-loss durability, external side-effect
+exactly-once semantics, or complete independent-agent task execution.
+
 2026-10-12; baseline b89247b6b80a3e120c9b755592cf416d047108b3 (v2.2.1).
 
 Measured locally on Windows, Node v24.18.0; no production reliability percentages or latency SLOs are asserted.

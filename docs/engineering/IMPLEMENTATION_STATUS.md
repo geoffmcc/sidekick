@@ -1,5 +1,60 @@
 # Implementation status
 
+## Current checkpoint: continuity concurrency
+
+Updated 2026-10-12. Reference: v2.2.1 at b89247b. Current milestone began on clean
+main at `d4c908cda76b4031bdab05458cb40afb4984954b` (`v2.2.1-1-gd4c908c`).
+Branch: `improvement/platform-continuity-concurrency`.
+
+Completed:
+
+- Reconciled prior engineering/source state with PR #641. It incorporated the
+  preceding audit and SK-001 through SK-005 fixes; old commit IDs below are
+  pre-squash history.
+- Confirmed and fixed SK-006 and SK-014 through SK-017. Existing journal state
+  guards concurrent continuity mutations; checkpoint/lifecycle/lease row and
+  event changes commit together; resume checks lease expiry at commit; release
+  cannot reopen terminal handoffs.
+- Added 17 deterministic integration cases including competing processes,
+  abrupt process exit, journal failures, expiry and outer transactions.
+  Unchanged d4c908c: 15 fail, two pass. Fixed code: all 17 pass.
+- Final relevant group: 17 suites pass, none fail/skip, 42.622 seconds. Includes
+  prior handoff tests, Agent recovery, memory/project isolation, dispatcher,
+  migration self-containment and v2.2.1 template protections. Architecture,
+  documentation and test-ownership gates pass.
+- Frozen bounded baseline: 163 pass, 18 fail, one cancelled, 70 not run.
+  This is not a complete passing baseline.
+
+Inspect Git log/status for local commit IDs and subsequent edits. No dependency,
+schema or version change. Rollback is code-only but restores the demonstrated
+weaker concurrency/lifecycle behavior. No deployment, push or release.
+
+Remaining, in priority order:
+
+1. Triage SK-018 baseline failures in isolated fixtures; finish supported-platform
+   required tiers. Full test:all/coverage/mutation and release rehearsal remain.
+2. Complete an actual unfinished repository task through a fresh receiver using
+   supported interfaces; add attributable execution receipts (SK-007/SK-009).
+3. Complete the cross-interface scope/authorization matrix (SK-008), reproduce
+   resume-pointer contention (SK-010) and wider handoff atomicity (SK-019).
+4. Deepen memory quality, scheduler/DST/retries, worker failure, pack rollback,
+   operational recovery and current dependency advisory audits.
+
+Limits: the broad inventory is structural; phases 1-6 remain incomplete. Git
+reads are not an atomic filesystem snapshot; leases are not exclusive workspace
+locks. Fixture tests do not evaluate model quality, prove exactly-once external
+effects, or power-loss durability (SQLite synchronous=NORMAL is unchanged).
+
+The unavailable sandbox required approved local shell escalation. Tests used
+frozen tracked-source copies, clean environments, installed dependencies and
+disposable data. Connected metadata checks were read-only; the server could
+not access this checkout. No live session records were written. Ignored `.cache`
+snapshots/logs retain raw evidence. Some baseline suites left their own fixtures
+after Windows cleanup failures; no user-data cleanup was attempted. Nothing is
+scheduled to continue after this turn.
+
+## Historical checkpoint incorporated by PR #641
+
 Updated 2026-10-12. Baseline: b89247b6b80a3e120c9b755592cf416d047108b3 (v2.2.1), clean main at start.
 Branch: improvement/platform-continuity-audit.
 
