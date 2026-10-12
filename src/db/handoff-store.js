@@ -463,23 +463,31 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
 
     const packetChanged = existing && packetValue !== null && packetJson !== (existing.packet_json || "{}");
     if (existing && existing.content_hash === hash && !packetChanged) {
-      db.prepare(`
-        UPDATE memory_handoffs SET
-          updated_at = ?,
-          project = COALESCE(?, project),
-          title = COALESCE(?, title),
-          source = COALESCE(?, source),
-          task_id = COALESCE(?, task_id),
-          schema_version = MAX(schema_version, 3),
-          extraction_state = COALESCE(?, extraction_state),
-          extraction_version = COALESCE(?, extraction_version),
-          owner_principal_id = COALESCE(?, owner_principal_id),
-          created_by_principal_id = COALESCE(?, created_by_principal_id)
-        WHERE id = ?
-      `).run(ts, project || null, title || null, source || null, task_id || null, extraction_state || null, extraction_version || null, owner_principal_id || null, created_by_principal_id || null, existing.id);
-      const touched = getHandoff(existing.id);
-      persistHandoffLinks(touched);
-      return touched;
+      return db.transaction(() => {
+        // Metadata-only writes still need compare-and-swap: the handoff may
+        // have advanced after the initial read, and a failed compatibility
+        // link repair must roll the metadata write back with it.
+        const outcome = db.prepare(`
+          UPDATE memory_handoffs SET
+            updated_at = ?,
+            project = COALESCE(?, project),
+            title = COALESCE(?, title),
+            source = COALESCE(?, source),
+            task_id = COALESCE(?, task_id),
+            schema_version = MAX(schema_version, 3),
+            extraction_state = COALESCE(?, extraction_state),
+            extraction_version = COALESCE(?, extraction_version),
+            owner_principal_id = COALESCE(?, owner_principal_id),
+            created_by_principal_id = COALESCE(?, created_by_principal_id)
+          WHERE id = ? AND version = ? AND content_hash = ?
+        `).run(ts, project || null, title || null, source || null, task_id || null, extraction_state || null, extraction_version || null, owner_principal_id || null, created_by_principal_id || null, existing.id, existing.version, existing.content_hash);
+        if (outcome.changes !== 1) {
+          throw new Error(`Handoff "${existing.id}" changed concurrently during metadata save (version ${existing.version} is no longer current)`);
+        }
+        const touched = getHandoff(existing.id);
+        persistHandoffLinks(touched);
+        return touched;
+      })();
     }
 
     if (existing) {

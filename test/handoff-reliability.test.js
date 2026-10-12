@@ -115,6 +115,77 @@ test("legacy link repair during handoff lookup is atomic", () => {
   assert.deepEqual(repaired.links.map(link => link.type).sort(), ["artifact", "evidence"]);
 });
 
+test("metadata-only handoff save rolls back when legacy link repair fails", () => {
+  const original = create();
+  const db = store.getDb();
+  db.prepare("DELETE FROM memory_handoff_links WHERE handoff_id = ? AND version = ?").run(original.id, original.version);
+  db.exec("CREATE TEMP TRIGGER reject_metadata_link BEFORE INSERT ON memory_handoff_links WHEN NEW.handoff_id IS NOT NULL BEGIN SELECT RAISE(ABORT, 'injected metadata link repair failure'); END");
+  try {
+    assert.throws(() => store.saveHandoff({
+      id: original.id,
+      title: "Title that must roll back",
+      content: original.content,
+      expectedVersion: original.version,
+    }), /injected metadata link repair failure/);
+    const row = db.prepare("SELECT title, version FROM memory_handoffs WHERE id = ?").get(original.id);
+    assert.equal(row.title, original.title, "failed metadata save must preserve the original title");
+    assert.equal(row.version, original.version, "metadata-only save must not create a version");
+    assert.equal(db.prepare("SELECT COUNT(*) AS count FROM memory_handoff_links WHERE handoff_id = ? AND version = ?").get(original.id, original.version).count, 0);
+  } finally { db.exec("DROP TRIGGER reject_metadata_link"); }
+
+  const retried = store.saveHandoff({ id: original.id, title: "Metadata retry succeeded", content: original.content, expectedVersion: original.version });
+  assert.equal(retried.title, "Metadata retry succeeded");
+  assert.equal(retried.version, original.version);
+  store.getHandoff(original.id);
+  assert.equal(store.getHandoff(original.id).links.filter(link => link.type === "evidence").length, 1);
+});
+
+test("metadata-only handoff save rejects a concurrent version advance", () => {
+  const original = create();
+  const db = store.getDb();
+  const originalPrepare = db.prepare;
+  const prepare = db.prepare.bind(db);
+  let advanced = false;
+  db.prepare = function (sql) {
+    const statement = prepare(sql);
+    if (advanced || !String(sql).startsWith("SELECT * FROM memory_handoffs WHERE id = ?")) return statement;
+    return new Proxy(statement, {
+      get(target, property) {
+        if (property === "get") return (...args) => {
+          const row = target.get(...args);
+          if (!advanced && row?.id === original.id) {
+            advanced = true;
+            store.saveHandoff({
+              id: original.id,
+              project: original.project,
+              content: "Decision: another writer advanced this handoff.",
+              packet: { ...original.packet, next_step: "Reconcile the concurrent update" },
+              expectedVersion: original.version,
+            });
+          }
+          return row;
+        };
+        const value = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+  };
+  try {
+    assert.throws(() => store.saveHandoff({
+      id: original.id,
+      title: "Stale metadata title",
+      content: original.content,
+      expectedVersion: original.version,
+    }), /changed concurrently during metadata save/);
+  } finally { db.prepare = originalPrepare; }
+
+  assert.equal(advanced, true);
+  const current = store.getHandoff(original.id);
+  assert.equal(current.version, original.version + 1);
+  assert.equal(current.title, original.title, "the stale metadata write must not apply to the newer version");
+  assert.equal(current.content, "Decision: another writer advanced this handoff.");
+});
+
 test("stale handoff snapshots cannot extract memories or mark a newer version processed", () => {
   const stale = create();
   const latest = store.saveHandoff({

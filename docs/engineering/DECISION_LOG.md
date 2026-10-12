@@ -1,5 +1,15 @@
 # Decision log
 
+## Atomic metadata-only handoff saves (2026-10-12)
+
+Keep metadata-only saves at the existing packet version, but execute the row
+touch and lazy legacy-link repair in one transaction. Compare the update against
+the row version and content hash observed by the caller so an intervening
+content writer cannot receive stale metadata. A failed repair rolls back the
+metadata change; stale writers reload and retry. No schema or dependency
+change. This is scoped to the metadata-only path; remaining store operations
+still require boundary-by-boundary review (SK-019).
+
 ## Version-safe handoff memory extraction (2026-10-12)
 
 Treat extraction as a derived transaction against a specific handoff revision.

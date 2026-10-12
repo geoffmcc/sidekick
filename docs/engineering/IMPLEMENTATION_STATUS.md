@@ -1,11 +1,11 @@
 # Implementation status
 
-## Current checkpoint: version-safe handoff memory extraction
+## Current checkpoint: metadata-only handoff save atomicity
 
 Updated 2026-10-12. Reference: v2.2.1 at b89247b. Current milestone began on clean
 main at `d4c908cda76b4031bdab05458cb40afb4984954b` (`v2.2.1-1-gd4c908c`).
-Current branch: `improvement/handoff-extraction-snapshot`, stacked on signed
-and pushed `improvement/handoff-archive-audit`,
+Current branch: `improvement/handoff-metadata-atomicity`, stacked on signed and
+pushed `improvement/handoff-extraction-snapshot`, `improvement/handoff-archive-audit`,
 `improvement/handoff-purge-audit`, `improvement/resume-project-scope`,
 `improvement/handoff-save-atomicity`, `improvement/handoff-project-scope`,
 `improvement/resume-pointer-atomicity`, and
@@ -91,10 +91,17 @@ Completed:
   failure. Extraction now reloads/checks version, hash and project under an
   immediate transaction, and writes memories plus processed state atomically.
   The new regressions fail before the fix and pass after; changes are
-  uncommitted on `improvement/handoff-extraction-snapshot`.
-- Current scoped run: handoff reliability (26 cases) passes. Syntax and diff
-  checks pass; the four-suite integration group (handoff reliability, versioning,
-  memory intelligence, tools) passed with no failures. A direct
+  signed commit `fd0179b` was verified and pushed to
+  `origin/improvement/handoff-extraction-snapshot`.
+- Confirmed SK-027: a metadata-only `saveHandoff` changed the title and then
+  threw when lazy legacy-link repair failed; the branch also applied stale
+  metadata after an intervening version advance. The metadata write and repair
+  now share a transaction, and the update compares the observed version/hash.
+  Failure injection and a controlled intervening writer test pass; changes are
+  uncommitted on `improvement/handoff-metadata-atomicity`.
+- Latest handoff reliability run: 28 cases pass, with syntax and diff checks.
+  The four-suite group (handoff reliability, versioning, memory intelligence,
+  tools) also passed on this branch. A direct
   `handoff-versioning.test.js` run now passes, so the earlier checkpoint-head
   failure is not currently reproducible. The separate Windows
   `security-boundaries.test.js` cleanup EBUSY remains an observed failure.
@@ -111,8 +118,8 @@ Remaining, in priority order:
    receiver using supported interfaces; add attributable execution receipts
    (SK-007/SK-009).
 3. Complete the cross-interface scope/authorization matrix (SK-008) and examine
-   remaining wider handoff atomicity (SK-019), especially metadata-only paths;
-   extraction is now covered by SK-026.
+   remaining wider handoff atomicity (SK-019); extraction and metadata-only
+   saves are covered by SK-026 and SK-027.
 4. Deepen memory quality, scheduler/DST/retries, worker failure, pack rollback,
    operational recovery and current dependency advisory audits.
 
