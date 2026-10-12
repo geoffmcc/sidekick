@@ -14,6 +14,7 @@ process.env.SIDEKICK_EMBEDDINGS = "0";
 const store = require("../src/db");
 const identity = require("../src/core/identity");
 const { sidekick_resume } = require("../src/tools/families/resume");
+const { sidekick_session } = require("../src/tools/families/memory-session");
 const { extractHandoffMemories } = require("../src/tools/families/memory-handoff");
 const { callMcpTool } = require("../src/tools/dispatcher");
 store.runPendingMigrations();
@@ -106,6 +107,29 @@ test("task session state and its audit record roll back together", () => {
   const saved = store.saveTaskSession({ id: "audit_atomic_session", goal: "Preserve session state", state: "active" });
   assert.equal(saved.id, "audit_atomic_session");
   assert.equal(store.getDb().prepare("SELECT COUNT(*) AS count FROM memory_audit_events WHERE event_type = 'task_session_saved' AND target_id = ?").get(saved.id).count, 1);
+});
+
+test("session updates and linked handoff versions roll back together", async () => {
+  const session = store.saveTaskSession({ id: "session_handoff_atomic", goal: "Keep session and handoff aligned", project: "continuity", working_directory: repo, current_plan: "Original plan", next_step: "Original next step" });
+  const handoff = store.saveHandoff({ id: "handoff_session_handoff_atomic", project: session.project, task_id: session.id, content: "Original continuation", packet: {
+    objective: session.goal, summary: "Original continuation", status: "active", next_step: session.next_step,
+    completed_steps: [], decisions: [], acceptance_criteria: ["Session and handoff remain aligned"],
+    evidence: [{ type: "test", label: "fixture", status: "passed", observed_at: new Date().toISOString() }],
+    provenance: { working_directory: repo, commit_sha: git("rev-parse", "HEAD"), branch: git("branch", "--show-current") },
+  } });
+  const before = store.getTaskSession(session.id);
+  store.getDb().exec("CREATE TEMP TRIGGER reject_session_handoff_update BEFORE INSERT ON memory_handoff_events WHEN NEW.handoff_id = 'handoff_session_handoff_atomic' AND NEW.event_type = 'updated' BEGIN SELECT RAISE(ABORT, 'injected linked handoff failure'); END");
+  try {
+    await assert.rejects(sidekick_session({ action: "update", id: session.id, current_plan: "Changed plan", next_step: "Changed next step" }), /injected linked handoff failure/);
+    assert.deepEqual(store.getTaskSession(session.id), before, "a failed linked handoff update must roll back the task session update");
+    assert.equal(store.getHandoff(handoff.id).version, handoff.version, "a failed update must preserve the prior handoff version");
+  } finally { store.getDb().exec("DROP TRIGGER reject_session_handoff_update"); }
+  const result = await sidekick_session({ action: "update", id: session.id, current_plan: "Changed plan", next_step: "Changed next step" });
+  assert.equal(result.isError, undefined);
+  assert.equal(store.getTaskSession(session.id).current_plan, "Changed plan");
+  const updated = store.getHandoff(handoff.id);
+  assert.equal(updated.version, handoff.version + 1);
+  assert.equal(updated.packet.next_step, "Changed next step");
 });
 
 test("legacy link repair during handoff lookup is atomic", () => {

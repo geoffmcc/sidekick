@@ -230,12 +230,21 @@ async function sidekick_session({ action, id, goal, project, source, working_dir
     if (!existing) return { content: [{ type: "text", text: "Task session not found: " + id }], isError: true };
     if (!canManageSession(existing, authIdentity)) return { content: [{ type: "text", text: "Task session not found: " + id }], isError: true };
     const linkedHandoff = dbStore.getHandoffByTaskId(existing.id);
-    const session = dbStore.saveTaskSession({ ...existing, current_plan, completed_steps: completed_steps || existing.completed_steps, current_hypothesis, blockers: blockers || existing.blockers, next_step, artifacts: artifacts || existing.artifacts, state: "active", owner_principal_id: existing.owner_principal_id || ownerPrincipalId, created_by_principal_id: existing.created_by_principal_id || actorPrincipalId });
-    if (linkedHandoff) {
-      const packet = buildContinuationPacket(session, { handoff: linkedHandoff, state: "active", current_plan, completed_steps, blockers, next_step, artifacts, risks, relationships, do_not_repeat, decisions, evidence, reports, verified_facts, unresolved_issues, resolved_issues, failed_approaches, follow_ups });
-      const updated = dbStore.saveHandoff({ id: linkedHandoff.id, project: linkedHandoff.project, title: linkedHandoff.title, source: linkedHandoff.source, task_id: existing.id, content: packet.summary || linkedHandoff.content, packet, extraction_state: "pending", expectedVersion: linkedHandoff.version, owner_principal_id: linkedHandoff.owner_principal_id || ownerPrincipalId, created_by_principal_id: linkedHandoff.created_by_principal_id || actorPrincipalId });
-      dbStore.captureHandoffCheckpoint(updated.id, { working_directory: session.working_directory || process.cwd(), actor: actorPrincipalId || ownerPrincipalId || "session", source: "session", metadata: { session_id: session.id, boundary: action } });
-      dbStore.refreshHandoffEvidence(updated.id, { working_directory: session.working_directory || process.cwd(), actor: actorPrincipalId || ownerPrincipalId || "session" });
+    let updatedHandoff = null;
+    // The session snapshot and linked handoff version are one continuity write.
+    // Keep workspace observation out of this transaction because Git inspection
+    // can be slow and must not hold the SQLite writer lock.
+    const session = dbStore.getDb().transaction(() => {
+      const savedSession = dbStore.saveTaskSession({ ...existing, current_plan, completed_steps: completed_steps || existing.completed_steps, current_hypothesis, blockers: blockers || existing.blockers, next_step, artifacts: artifacts || existing.artifacts, state: "active", owner_principal_id: existing.owner_principal_id || ownerPrincipalId, created_by_principal_id: existing.created_by_principal_id || actorPrincipalId });
+      if (linkedHandoff) {
+        const packet = buildContinuationPacket(savedSession, { handoff: linkedHandoff, state: "active", current_plan, completed_steps, blockers, next_step, artifacts, risks, relationships, do_not_repeat, decisions, evidence, reports, verified_facts, unresolved_issues, resolved_issues, failed_approaches, follow_ups });
+        updatedHandoff = dbStore.saveHandoff({ id: linkedHandoff.id, project: linkedHandoff.project, title: linkedHandoff.title, source: linkedHandoff.source, task_id: existing.id, content: packet.summary || linkedHandoff.content, packet, extraction_state: "pending", expectedVersion: linkedHandoff.version, owner_principal_id: linkedHandoff.owner_principal_id || ownerPrincipalId, created_by_principal_id: linkedHandoff.created_by_principal_id || actorPrincipalId });
+      }
+      return savedSession;
+    }).immediate();
+    if (updatedHandoff) {
+      dbStore.captureHandoffCheckpoint(updatedHandoff.id, { working_directory: session.working_directory || process.cwd(), actor: actorPrincipalId || ownerPrincipalId || "session", source: "session", metadata: { session_id: session.id, boundary: action } });
+      dbStore.refreshHandoffEvidence(updatedHandoff.id, { working_directory: session.working_directory || process.cwd(), actor: actorPrincipalId || ownerPrincipalId || "session" });
     }
     recordPlatformMemoryEvent(action === "checkpoint" ? "memory.session_checkpointed" : "memory.session_updated", { session_id: session.id, project: session.project, action, completed_steps: Array.isArray(session.completed_steps) ? session.completed_steps.length : 0 }, { subjectType: "memory_task_session", subjectId: session.id, project: session.project, taskId: session.id });
     return jsonText({ ok: true, session, checkpoint: action === "checkpoint" });

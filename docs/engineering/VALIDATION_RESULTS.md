@@ -276,3 +276,17 @@ final document. After the fix, `node test/run-all.js test/handoff-reliability.te
   test/identity-resource-authority.test.js --concurrency=1 --json` exited 0:
   three suites passed, no failure, skip, cancellation, or cleanup error. The
   full required tiers were not rerun.
+
+## Session and linked handoff transaction: 2026-10-12
+
+- Before the fix, `node --test --test-name-pattern='session updates and linked
+  handoff versions' test/handoff-reliability.test.js` failed as expected: a
+  trigger rejected the linked handoff journal entry while the task session had
+  already advanced its plan and next step.
+- After the fix, that focused case passed. The full handoff suite and the
+  `node test/run-all.js test/handoff-reliability.test.js test/tools.test.js
+  test/identity-resource-authority.test.js --concurrency=1 --json` run exited 0:
+  three suites passed, no failure, skip, cancellation or cleanup error. The
+  handoff case also verifies the successful update path increments the handoff
+  version and persists the new next step. Syntax, docs, architecture,
+  test-architecture and diff checks pass. The full required tiers were not run.

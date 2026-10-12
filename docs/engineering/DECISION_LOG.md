@@ -171,3 +171,14 @@ establish broader extraction or metadata-only atomicity; SK-019 remains open.
   the existing session and audit stores; no schema, API, or dependency change.
 - The regression must demonstrate rollback of the session row and a successful
   retry with exactly one audit entry.
+
+## Session and linked handoff transaction (2026-10-12)
+
+- Failure injection against the canonical session update showed the session row
+  advanced even though the linked handoff update and its journal event failed.
+- Commit those two SQLite records as one immediate transaction. Keep Git
+  checkpoint and evidence observations after commit; their filesystem reads
+  must not hold the SQLite writer lock. A failed observation remains visible
+  and must be reconciled through the existing checkpoint readiness path.
+- No schema, API, or dependency change. The regression checks that both records
+  retain their prior version when the handoff write fails.
