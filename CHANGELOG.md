@@ -4,6 +4,20 @@ All notable changes to Sidekick.
 
 ## Unreleased
 
+## [2.2.1] - 2026-10-12
+
+### Security
+
+- Upgraded the bundled `handlebars` dependency to 4.7.10, remediating
+  GHSA-8r5x-fm3f-whwj (AST type confusion), GHSA-p8wg-vrv2-v86f (proto-access
+  Function reachability), and GHSA-xw65-4hp5-5hc7 (precompile inline
+  embedding).
+- Hardened the `sidekick_template` rendering boundary: templates must be
+  strings, render options are fixed to safe values, data is normalized to
+  plain JSON, and template/data/output sizes are bounded. The public tool
+  contract is unchanged.
+- Bumped the transitive `proxy-addr` dependency to 2.0.8 (GHSA-jqcg-44mw-7w3h).
+
 ## [2.2.0] - 2026-10-04
 
 ### Platform boundaries and Dashboard observability
