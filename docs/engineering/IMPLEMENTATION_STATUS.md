@@ -1,11 +1,12 @@
 # Implementation status
 
-## Current checkpoint: metadata-only handoff save atomicity
+## Current checkpoint: atomic evidence refresh journaling
 
 Updated 2026-10-12. Reference: v2.2.1 at b89247b. Current milestone began on clean
 main at `d4c908cda76b4031bdab05458cb40afb4984954b` (`v2.2.1-1-gd4c908c`).
-Current branch: `improvement/handoff-metadata-atomicity`, stacked on signed and
-pushed `improvement/handoff-extraction-snapshot`, `improvement/handoff-archive-audit`,
+Current branch: `improvement/handoff-evidence-audit-atomicity`, stacked on
+signed and pushed `improvement/handoff-metadata-atomicity`,
+`improvement/handoff-extraction-snapshot`, `improvement/handoff-archive-audit`,
 `improvement/handoff-purge-audit`, `improvement/resume-project-scope`,
 `improvement/handoff-save-atomicity`, `improvement/handoff-project-scope`,
 `improvement/resume-pointer-atomicity`, and
@@ -98,10 +99,17 @@ Completed:
   metadata after an intervening version advance. The metadata write and repair
   now share a transaction, and the update compares the observed version/hash.
   Failure injection and a controlled intervening writer test pass; changes are
-  uncommitted on `improvement/handoff-metadata-atomicity`.
-- Latest handoff reliability run: 28 cases pass, with syntax and diff checks.
+  signed commit `1e56140` was verified and pushed to
+  `origin/improvement/handoff-metadata-atomicity`.
+- Confirmed SK-028: evidence-state rows committed before the corresponding
+  `evidence_refreshed` journal event. An injected event-write failure returned
+  an error after persisted freshness changed. State and event now commit in one
+  immediate transaction after rechecking the handoff version/hash. The rollback
+  and retry regression passes; changes are uncommitted on
+  `improvement/handoff-evidence-audit-atomicity`.
+- Latest handoff reliability run: 29 cases pass, with syntax and diff checks.
   The four-suite group (handoff reliability, versioning, memory intelligence,
-  tools) also passed on this branch. A direct
+  tools) passed on this evidence branch. A direct
   `handoff-versioning.test.js` run now passes, so the earlier checkpoint-head
   failure is not currently reproducible. The separate Windows
   `security-boundaries.test.js` cleanup EBUSY remains an observed failure.
@@ -118,8 +126,8 @@ Remaining, in priority order:
    receiver using supported interfaces; add attributable execution receipts
    (SK-007/SK-009).
 3. Complete the cross-interface scope/authorization matrix (SK-008) and examine
-   remaining wider handoff atomicity (SK-019); extraction and metadata-only
-   saves are covered by SK-026 and SK-027.
+   remaining wider handoff atomicity (SK-019); extraction, metadata-only saves,
+   and evidence refresh are covered by SK-026 through SK-028.
 4. Deepen memory quality, scheduler/DST/retries, worker failure, pack rollback,
    operational recovery and current dependency advisory audits.
 

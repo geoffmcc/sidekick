@@ -186,6 +186,21 @@ test("metadata-only handoff save rejects a concurrent version advance", () => {
   assert.equal(current.content, "Decision: another writer advanced this handoff.");
 });
 
+test("evidence refresh state rolls back when its journal event fails", () => {
+  const handoff = create();
+  const db = store.getDb();
+  db.exec("CREATE TEMP TRIGGER reject_evidence_refresh BEFORE INSERT ON memory_handoff_events WHEN NEW.event_type = 'evidence_refreshed' BEGIN SELECT RAISE(ABORT, 'injected evidence journal failure'); END");
+  try {
+    assert.throws(() => store.refreshHandoffEvidence(handoff.id, { working_directory: repo }), /injected evidence journal failure/);
+    assert.deepEqual(store.getHandoffEvidenceState(handoff.id), [], "a failed refresh must not leave new authoritative evidence state");
+    assert.equal(store.listHandoffEvents(handoff.id).filter(event => event.event_type === "evidence_refreshed").length, 0);
+  } finally { db.exec("DROP TRIGGER reject_evidence_refresh"); }
+
+  assert.equal(store.refreshHandoffEvidence(handoff.id, { working_directory: repo }).status, "refreshed");
+  assert.equal(store.getHandoffEvidenceState(handoff.id).length, 1);
+  assert.equal(store.listHandoffEvents(handoff.id).filter(event => event.event_type === "evidence_refreshed").length, 1);
+});
+
 test("stale handoff snapshots cannot extract memories or mark a newer version processed", () => {
   const stale = create();
   const latest = store.saveHandoff({

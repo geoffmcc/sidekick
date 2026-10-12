@@ -1,5 +1,15 @@
 # Decision log
 
+## Atomic handoff evidence refresh (2026-10-12)
+
+Evidence freshness is persisted state with a matching tamper-evident journal
+entry. Compute repository/artifact observations before locking, then re-read the
+handoff under an immediate SQLite transaction and reject a changed version or
+content hash. Replace that version's evidence rows and append `evidence_refreshed`
+in the same transaction. This avoids long Git operations under the writer lock
+and prevents failed journal writes from leaving apparently successful freshness
+state. No schema or dependency change.
+
 ## Atomic metadata-only handoff saves (2026-10-12)
 
 Keep metadata-only saves at the existing packet version, but execute the row

@@ -1,5 +1,21 @@
 # Validation results
 
+## Atomic handoff evidence refresh: 2026-10-12
+
+Windows checkout accessed through WSL, Node v24.18.0, installed dependencies;
+temporary SQLite trigger and disposable handoff database.
+
+| Command | Actual result |
+| --- | --- |
+| `node --test test/handoff-reliability.test.js` | Exit 0; 29 passed, 0 failed/skipped; 7.099 seconds. Includes injected `evidence_refreshed` journal failure, rollback, and audited retry. |
+| `node test/run-all.js test/handoff-reliability.test.js test/handoff-versioning.test.js test/memory-intelligence.test.js test/tools.test.js --concurrency=1 --json` | Exit 0; four suites passed, 0 failed/skipped/cancelled; 75.227 seconds. |
+| `node --check src/db/handoff-store.js` and `node --check test/handoff-reliability.test.js` | PASS. |
+| `git diff --check` | PASS. |
+
+The new failure-injection case failed before the fix because evidence rows
+persisted after the journal insert was rejected. Full tiers and release
+validation were not run.
+
 ## Atomic metadata-only handoff saves: 2026-10-12
 
 Windows checkout accessed through WSL, Node v24.18.0, installed dependencies;

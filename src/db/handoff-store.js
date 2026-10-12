@@ -269,13 +269,16 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
       }
       return { evidence_key: evidenceKey(item, index), evidence_index: index, state, reason, source_hash: sourceHash, observed_at: stamp, checked_at: new Date(now).toISOString() };
     });
-    const tx = db.transaction(() => {
+    return db.transaction(() => {
+      const current = getHandoff(id);
+      if (!current || Number(current.version) !== Number(handoff.version) || current.content_hash !== handoff.content_hash) {
+        throw new Error(`Handoff "${id}" changed during evidence refresh; reload and retry`);
+      }
       db.prepare("DELETE FROM memory_handoff_evidence_state WHERE handoff_id = ? AND version = ?").run(id, handoff.version);
       for (const state of states) db.prepare("INSERT INTO memory_handoff_evidence_state (handoff_id, version, evidence_key, evidence_index, state, reason, source_hash, observed_at, checked_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(id, handoff.version, state.evidence_key, state.evidence_index, state.state, state.reason, state.source_hash, state.observed_at, state.checked_at);
-    });
-    tx();
-    appendHandoffEvent(id, handoff.version, "evidence_refreshed", { actor, counts: states.reduce((out, item) => { out[item.state] = (out[item.state] || 0) + 1; return out; }, {}) }, { actor, source: "handoff" });
-    return { status: "refreshed", handoff_id: id, version: handoff.version, states };
+      appendHandoffEvent(id, handoff.version, "evidence_refreshed", { actor, counts: states.reduce((out, item) => { out[item.state] = (out[item.state] || 0) + 1; return out; }, {}) }, { actor, source: "handoff" });
+      return { status: "refreshed", handoff_id: id, version: handoff.version, states };
+    }).immediate();
   }
 
   function getHandoffReceiverProjection(id, { working_directory, recipient = null } = {}) {
