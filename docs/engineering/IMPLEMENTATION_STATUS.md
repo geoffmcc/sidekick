@@ -1,12 +1,12 @@
 # Implementation status
 
-## Current checkpoint: resume-pointer atomicity
+## Current checkpoint: handoff project isolation
 
 Updated 2026-10-12. Reference: v2.2.1 at b89247b. Current milestone began on clean
 main at `d4c908cda76b4031bdab05458cb40afb4984954b` (`v2.2.1-1-gd4c908c`).
-Current branch: `improvement/resume-pointer-atomicity`, stacked on
-`improvement/platform-continuity-concurrency`. The handoff branch is pushed;
-the current branch is not yet pushed.
+Current branch: `improvement/handoff-project-scope`, stacked on signed and
+pushed `improvement/resume-pointer-atomicity`, itself stacked on
+`improvement/platform-continuity-concurrency`.
 
 Completed:
 
@@ -41,10 +41,19 @@ Completed:
   one. Resume writes and completion synchronization now read/merge/upsert under
   a short SQLite immediate transaction. Handoff/resume, tools, and project
   identity suites pass on this branch.
+- Confirmed and fixed SK-020 through canonical MCP dispatch: a valid operator
+  bound to one project could list its own handoff from another project when
+  omitting the optional `project` argument. The handler now defaults to the
+  trusted bound project and rejects explicit scope mismatches. The regression
+  failed before and passed after.
+- Current scoped run: handoff reliability (15 cases), broad tools and dispatcher
+  suites pass. A grouped `security-boundaries.test.js` run had seven assertions
+  pass but failed during its existing Windows database cleanup hook with EBUSY;
+  it is recorded as failed, not passed.
 
-No dependency, schema or version change on this branch. Rollback is code-only
-but restores the demonstrated lost-update behavior. No deployment or release;
-the prior branch pushes were explicitly authorized.
+No dependency, schema or version change on the current scope branch. Rollback
+is code-only but restores the demonstrated cross-project list behavior. No
+deployment or release; prior branch pushes were explicitly authorized.
 
 Remaining, in priority order:
 
@@ -54,7 +63,7 @@ Remaining, in priority order:
    receiver using supported interfaces; add attributable execution receipts
    (SK-007/SK-009).
 3. Complete the cross-interface scope/authorization matrix (SK-008) and examine
-   wider handoff atomicity (SK-019).
+   wider handoff atomicity (SK-019), including non-list handoff actions.
 4. Deepen memory quality, scheduler/DST/retries, worker failure, pack rollback,
    operational recovery and current dependency advisory audits.
 

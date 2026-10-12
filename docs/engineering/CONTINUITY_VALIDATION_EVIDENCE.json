@@ -1493,5 +1493,32 @@
       "node scripts/check-test-architecture.js": "passed; 295 suites",
       "git diff --check": "passed"
     }
+  },
+  "handoff_project_scope_follow_up": {
+    "recorded_at": "2026-10-12T19:50:37.000Z",
+    "branch": "improvement/handoff-project-scope",
+    "source_sha256": {
+      "src/tools/families/memory-handoff.js": "5f5bbc3a1987d8d55809cbe6fea5eed0c1a73b045dea0b37c5f9ede3728dad30",
+      "test/handoff-reliability.test.js": "99fcdf6b1a05c13193583d5a3c806c1f5dfab1c59d7bdbc526d103d9b816602b"
+    },
+    "reproduction_before_fix": {
+      "command": "node --test --test-name-pattern=\"handoff list stays\" test/handoff-reliability.test.js",
+      "status": "failed_as_expected",
+      "result": "Valid operator received an owned handoff outside the trusted bound project."
+    },
+    "after_fix": {
+      "command": "node test/run-all.js test/handoff-reliability.test.js test/tools.test.js test/dispatcher.test.cjs --concurrency=1 --json",
+      "status": "passed",
+      "exit_code": 0,
+      "suites_passed": 3,
+      "suites_failed": 0,
+      "suites_skipped": 0,
+      "handoff_reliability_cases_passed": 15
+    },
+    "known_failure": {
+      "suite": "test/security/security-boundaries.test.js",
+      "status": "failed",
+      "reason": "Existing Windows cleanup hook failed with EBUSY unlinking its open SQLite database after seven assertions passed."
+    }
   }
 }

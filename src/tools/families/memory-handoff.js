@@ -76,6 +76,15 @@ async function sidekick_handoff({ action, id, key, project, title, content, sour
   if (key !== undefined) return { content: [{ type: "text", text: "handoff key storage is no longer supported; create or address a structured handoff by id" }], isError: true };
   const authIdentity = toolContext.getExecutionContext().authIdentity || null;
   const boundProject = toolContext.getExecutionContext().project || null;
+  if (boundProject) {
+    if (project && canonicalizeProjectName(project) !== canonicalizeProjectName(boundProject)) {
+      return { content: [{ type: "text", text: "project does not match the trusted execution project scope" }], isError: true };
+    }
+    // Read/list paths must honor the dispatcher-bound project even when the
+    // caller omits the optional argument. Otherwise the owner filter alone
+    // can expose that principal's handoffs from other projects.
+    if (!project) project = boundProject;
+  }
   const ownerPrincipalId = authIdentity?.acting_for_principal_id || authIdentity?.principal_id || null;
   const actorPrincipalId = authIdentity?.principal_id || null;
   const execution = toolContext.getExecutionContext();

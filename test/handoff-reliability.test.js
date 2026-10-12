@@ -12,7 +12,9 @@ process.env.SIDEKICK_DATA_DIR = path.join(root, "data");
 process.env.SIDEKICK_DB_FILE = path.join(root, "data", "sidekick.db");
 process.env.SIDEKICK_EMBEDDINGS = "0";
 const store = require("../src/db");
+const identity = require("../src/core/identity");
 const { sidekick_resume } = require("../src/tools/families/resume");
+const { callMcpTool } = require("../src/tools/dispatcher");
 store.runPendingMigrations();
 const repo = path.join(root, "repo");
 fs.mkdirSync(repo);
@@ -288,4 +290,31 @@ test("concurrent resume updates for different projects do not overwrite each oth
   const items = store.loadDocument("resume", { items: {} }).items;
   assert.ok(items.resume_race_alpha, "first project resume pointer must survive the competing update");
   assert.ok(items.resume_race_beta, "second project resume pointer must survive the competing update");
+});
+
+test("handoff list stays within trusted project scope across MCP dispatch", async () => {
+  const principal = identity.createPrincipal({ type: "service", displayName: "Handoff scope fixture" });
+  identity.assignRole(principal.principal_id, "operator");
+  for (const project of ["continuity", "other_project"]) {
+    store.saveHandoff({
+      project,
+      content: `Scoped handoff for ${project}`,
+      owner_principal_id: principal.principal_id,
+      created_by_principal_id: principal.principal_id,
+    });
+  }
+  const bound = await callMcpTool("handoff", { action: "list" }, {
+    project: "continuity",
+    authIdentity: { principal_id: principal.principal_id },
+  });
+  assert.notEqual(bound.isError, true, bound.content?.[0]?.text);
+  const visible = JSON.parse(bound.content[0].text).handoffs;
+  assert.ok(visible.length > 0);
+  assert.ok(visible.every(item => item.project === "continuity"), "a bound project must scope list results even when args omit project");
+
+  const override = await callMcpTool("handoff", { action: "list", project: "other_project" }, {
+    project: "continuity",
+    authIdentity: { principal_id: principal.principal_id },
+  });
+  assert.equal(override.isError, true, "explicit project arguments cannot broaden a trusted execution scope");
 });

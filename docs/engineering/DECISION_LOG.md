@@ -58,3 +58,18 @@
   document snapshots. Writers serialize under the existing SQLite busy timeout.
 - Reproduce with two subprocesses paused after the same initial read. Before the
   fix, one project's pointer is lost; after the fix, both entries remain.
+
+## Handoff project-scope milestone (2026-10-12)
+
+- Treat the trusted dispatcher-bound project as an invariant for every handoff
+  action. If an optional `project` argument is absent, inherit the bound value;
+  reject an explicit value that differs after canonicalization.
+- Fix the list path at the handler boundary so list, ID-scoped reads, and
+  mutations use one resolved project scope. Preserve the canonical MCP tool and
+  schema; no compatibility alias or parallel policy path was added.
+- Reproduce through `callMcpTool` with a valid operator principal that owns
+  synthetic handoffs in two projects. The prior code listed both when bound to
+  one project and given no project argument. No production data or identities
+  were accessed.
+- Keep this scope fix on its own stacked branch because it is a separate
+  security boundary from handoff mutation atomicity and resume-document writes.

@@ -106,6 +106,19 @@ Intermediate failures: dispatcher cleanup EPERM (fixed by closing its owned DB; 
 
 No operational .env/database was read, no external model called, no dependencies installed, no production migration run. Reproducibility caveat: installed dependency packages were reused via NODE_PATH, not a new npm ci installation. All direct versions matched the lockfile.
 
+## Handoff trusted-project scope: 2026-10-12
+
+The canonical MCP scope regression failed before the fix with a valid operator
+principal: a request bound to `continuity` and omitting `project` included an
+owned `other_project` handoff. The fixed test passes. `node test/run-all.js
+test/handoff-reliability.test.js test/tools.test.js test/dispatcher.test.cjs
+--concurrency=1 --json` exited 0: three suites passed, no skips; the
+handoff-reliability suite reports 15 cases passing. A separate attempted run
+including `test/security/security-boundaries.test.js` exited 1: seven test
+assertions passed, then its cleanup hook failed to unlink its open SQLite DB on
+Windows (`EBUSY`). That suite result is a failure; it is unrelated to the scope
+assertion and remains unresolved here.
+
 ## Resume-pointer atomicity: 2026-10-12
 
 On Windows/Node v24.18.0, the synchronized two-process regression failed before

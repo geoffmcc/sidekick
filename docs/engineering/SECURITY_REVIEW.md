@@ -34,6 +34,17 @@ Stale/future evidence (SK-002) and undetected workspace changes (SK-004) can mis
 
 Remaining review: identity/ownership matrix across MCP, Dashboard, Agent and resume; handoff path authorization and Git helper execution; symlink/SSRF redirects; pack code privilege boundaries; retrieval injection; redaction by sensitive key; claim token exposure; CI/dependency advisories. No dependency changes or new external services are introduced in this milestone.
 
+Confirmed P1 project-scope leak (SK-020): through canonical MCP dispatch, a
+valid operator bound to one project could list its own handoff from another
+project when omitting the optional `project` argument. The source trusted the
+bound project only for the missing-scope check, then queried an unfiltered list
+and relied on principal ownership filtering. A focused two-project fixture
+reproduced the behavior; the handler now inherits the bound project and rejects
+explicit mismatches. No live data was involved. The fix is validated on
+`improvement/handoff-project-scope` but is not yet signed/pushed. The broader
+MCP/Agent/Dashboard/resume authorization matrix remains open; do not infer that
+all interfaces now have equivalent scoping.
+
 
 ## Fix and validation status
 

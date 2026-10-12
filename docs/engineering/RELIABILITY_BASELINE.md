@@ -30,6 +30,11 @@ Initial static gates passed: architecture (462 files), test architecture (293 su
 
 New regression suite test/handoff-reliability.test.js exercises real disposable Git and SQLite state. Before fixes: ten of twelve final regression cases fail; receiver recovery and invalid-evidence controls pass. Cases cover event persistence failure, evidence aging, future timestamps, project mismatch, foreign completion, tracked same-status edits, untracked same-status edits.
 
+It now has 15 cases, including a canonical-dispatch scope regression: a bound
+project must constrain list results even when the caller omits the optional
+project argument, and explicit attempts to override that scope fail. The test
+uses two projects and a persisted operator principal in an isolated fixture.
+
 The suite now has 14 cases. A synchronized pair of separate Node processes
 reproduces lost resume pointers in the former whole-document load/modify/upsert
 path. With the atomic merge, both distinct project entries persist. The final
