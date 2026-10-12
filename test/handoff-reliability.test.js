@@ -110,7 +110,7 @@ test("purging handoff history rolls back deletion when its audit write fails", (
 
   db.exec("CREATE TEMP TRIGGER ignore_purge_audit BEFORE INSERT ON memory_audit_events WHEN NEW.event_type = 'handoff_version_purged' BEGIN SELECT RAISE(IGNORE); END");
   try {
-    assert.throws(() => store.purgeHandoffVersion(first.id, first.version, { reason: "isolated atomicity fixture", source: "test" }), /audit event was not persisted/);
+    assert.throws(() => store.purgeHandoffVersion(first.id, first.version, { reason: "isolated atomicity fixture", source: "test" }), /audit event .* was not persisted/i);
     assert.deepEqual(store.getHandoffVersion(first.id, first.version), original, "a silently ignored audit insert must also preserve history");
   } finally { db.exec("DROP TRIGGER ignore_purge_audit"); }
 
@@ -118,6 +118,55 @@ test("purging handoff history rolls back deletion when its audit write fails", (
   assert.equal(result.purged, true);
   assert.equal(store.getHandoffVersion(first.id, first.version), null);
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM memory_audit_events WHERE event_type = 'handoff_version_purged' AND target_id = ?").get(first.id).count, 1);
+});
+
+test("archive rolls back its state change when audit persistence fails", () => {
+  const db = store.getDb();
+  const h = create();
+  db.exec("CREATE TEMP TRIGGER reject_handoff_archive BEFORE INSERT ON memory_audit_events WHEN NEW.event_type = 'handoff_archived' BEGIN SELECT RAISE(ABORT, 'injected archive audit failure'); END");
+  try {
+    assert.throws(() => store.archiveHandoff(h.id, "isolated archive audit fixture"), /injected archive audit failure/);
+    assert.equal(store.getHandoff(h.id).archived_at, null, "failed archive must leave the handoff visible");
+  } finally { db.exec("DROP TRIGGER reject_handoff_archive"); }
+  assert.equal(store.archiveHandoff(h.id, "isolated archive audit fixture"), true);
+  assert.ok(store.getHandoff(h.id).archived_at);
+});
+
+test("unarchive rolls back its state change when audit persistence fails", () => {
+  const db = store.getDb();
+  const h = create();
+  assert.equal(store.archiveHandoff(h.id, "isolated unarchive audit fixture"), true);
+  const archivedAt = store.getHandoff(h.id).archived_at;
+  db.exec("CREATE TEMP TRIGGER reject_handoff_unarchive BEFORE INSERT ON memory_audit_events WHEN NEW.event_type = 'handoff_unarchived' BEGIN SELECT RAISE(ABORT, 'injected unarchive audit failure'); END");
+  try {
+    assert.throws(() => store.unarchiveHandoff(h.id), /injected unarchive audit failure/);
+    assert.equal(store.getHandoff(h.id).archived_at, archivedAt, "failed unarchive must preserve the archived state");
+  } finally { db.exec("DROP TRIGGER reject_handoff_unarchive"); }
+  assert.equal(store.unarchiveHandoff(h.id), true);
+  assert.equal(store.getHandoff(h.id).archived_at, null);
+});
+
+test("restoring a handoff version rolls back if its restore audit fails", () => {
+  const db = store.getDb();
+  const h = create();
+  store.saveHandoff({
+    id: h.id,
+    project: h.project,
+    content: "Current version before restore audit fixture",
+    packet: { ...h.packet, next_step: "Restore should remain pending" },
+    expectedVersion: h.version,
+  });
+  const before = store.getHandoff(h.id);
+  const historyBefore = store.listHandoffVersions(h.id);
+  db.exec("CREATE TEMP TRIGGER reject_handoff_restore BEFORE INSERT ON memory_audit_events WHEN NEW.event_type = 'handoff_restored' BEGIN SELECT RAISE(ABORT, 'injected restore audit failure'); END");
+  try {
+    assert.throws(() => store.restoreHandoffVersion(h.id, h.version, { source: "test" }), /injected restore audit failure/);
+    assert.deepEqual(store.getHandoff(h.id), before, "failed restore must not advance current content or version");
+    assert.deepEqual(store.listHandoffVersions(h.id), historyBefore, "failed restore must not append an unrecorded version");
+  } finally { db.exec("DROP TRIGGER reject_handoff_restore"); }
+  const restored = store.restoreHandoffVersion(h.id, h.version, { source: "test" });
+  assert.equal(restored.handoff.version, before.version + 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM memory_audit_events WHERE event_type = 'handoff_restored' AND target_id = ?").get(h.id).count, 1);
 });
 
 test("persisted fresh evidence expires before a receiver resumes", () => {

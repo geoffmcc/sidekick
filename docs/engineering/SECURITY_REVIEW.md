@@ -61,6 +61,12 @@ silently ignored insert could go undetected. The purge now verifies the audit
 row and commits it with deletion in one SQLite transaction. Trigger-based
 regressions cover both cases; no production data was involved.
 
+Confirmed P2 lifecycle-audit integrity gap (SK-024): archive, unarchive, and
+restore could change durable state before their audit writes. SQLite trigger
+fixtures reproduced all three; the operations now commit the state change and
+verified audit row together. These are local integrity failure cases, not
+evidence of an external attacker or production exploit.
+
 
 ## Fix and validation status
 

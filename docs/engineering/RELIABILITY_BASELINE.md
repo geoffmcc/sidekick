@@ -1,5 +1,15 @@
 # Reliability baseline
 
+## Handoff lifecycle audit atomicity: 2026-10-12
+
+Injected audit failures reproduced partial archive, unarchive, and restore
+operations. Archive/unarchive changed visibility before their audit write;
+restore appended a latest version before its separate restore audit. All three
+operations now commit their changes and verified audit row in one immediate
+transaction. The 23-case handoff reliability suite and three supported runner
+suites pass. This checks logical rollback under SQLite write failures, not
+power-loss durability.
+
 ## Handoff purge audit: 2026-10-12
 
 Injected aborting and silently ignored audit writes reproduced a destructive

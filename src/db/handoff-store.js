@@ -45,6 +45,20 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
     }
   }
 
+  function appendRequiredMemoryAudit(eventType, targetType, targetId, details, actor) {
+    if (!hasTable("memory_audit_events")) throw new Error("memory_audit_events table is not available; refusing unaudited handoff mutation");
+    const auditId = auditMemoryEvent(eventType, targetType, targetId, details, actor);
+    const audit = Number.isFinite(Number(auditId))
+      ? db.prepare("SELECT event_type, target_type, target_id, details_json FROM memory_audit_events WHERE id = ?").get(Number(auditId))
+      : null;
+    if (!audit || audit.event_type !== eventType || audit.target_type !== targetType
+      || audit.target_id !== targetId
+      || JSON.stringify(canonicalize(parseJson(audit.details_json, {}))) !== JSON.stringify(canonicalize(details))) {
+      throw new Error(`Handoff audit event "${eventType}" was not persisted`);
+    }
+    return auditId;
+  }
+
   // Packet versions do not advance for checkpoints, claims or lifecycle changes.
   // Observe the existing journal tip as well as row state before external reads,
   // then compare under the SQLite writer lock. No Git I/O occurs under this lock.
@@ -638,33 +652,38 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
    * recorded version, so even a mistaken restore is recoverable.
    */
   function restoreHandoffVersion(handoffId, version, { source } = {}) {
-    const current = getHandoff(handoffId);
-    if (!current) throw new Error(`Handoff not found: ${handoffId}`);
-    const target = getHandoffVersion(current.id, version);
-    if (!target) throw new Error(`Handoff "${current.id}" has no version ${version}`);
-    // Restoring the current version — or any version whose content already
-    // equals the current content — changes nothing; report that honestly
-    // instead of minting a phantom version transition in the audit trail.
-    if (Number(version) === Number(current.version) || (target.content_hash === current.content_hash && JSON.stringify(target.packet || {}) === JSON.stringify(current.packet || {}))) {
-      return { handoff: current, restored_from: Number(version), no_op: true };
-    }
-    const saved = saveHandoff({
-      id: current.id,
-      content: target.content,
-      packet: target.packet,
-      source: source || "restore",
-      extraction_state: "pending",
-    });
-    auditMemoryEvent("handoff_restored", "handoff", current.id, { restored_from: Number(version), new_version: saved.version }, source || "restore");
-    return { handoff: saved, restored_from: Number(version), no_op: false };
+    return db.transaction(() => {
+      const current = getHandoff(handoffId);
+      if (!current) throw new Error(`Handoff not found: ${handoffId}`);
+      const target = getHandoffVersion(current.id, version);
+      if (!target) throw new Error(`Handoff "${current.id}" has no version ${version}`);
+      // Restoring the current version — or any version whose content already
+      // equals the current content — changes nothing; report that honestly
+      // instead of minting a phantom version transition in the audit trail.
+      if (Number(version) === Number(current.version) || (target.content_hash === current.content_hash && JSON.stringify(target.packet || {}) === JSON.stringify(current.packet || {}))) {
+        return { handoff: current, restored_from: Number(version), no_op: true };
+      }
+      const saved = saveHandoff({
+        id: current.id,
+        content: target.content,
+        packet: target.packet,
+        source: source || "restore",
+        extraction_state: "pending",
+      });
+      appendRequiredMemoryAudit("handoff_restored", "handoff", current.id, { restored_from: Number(version), new_version: saved.version }, source || "restore");
+      return { handoff: saved, restored_from: Number(version), no_op: false };
+    }).immediate();
   }
 
   function unarchiveHandoff(id) {
-    const handoff = getHandoff(id);
-    if (!handoff) return false;
-    db.prepare("UPDATE memory_handoffs SET archived_at = NULL, updated_at = ? WHERE id = ?").run(nowIso(), handoff.id);
-    auditMemoryEvent("handoff_unarchived", "handoff", handoff.id, {}, "system");
-    return true;
+    if (!hasTable("memory_handoffs")) return false;
+    return db.transaction(() => {
+      const handoff = db.prepare("SELECT id FROM memory_handoffs WHERE id = ?").get(id);
+      if (!handoff) return false;
+      db.prepare("UPDATE memory_handoffs SET archived_at = NULL, updated_at = ? WHERE id = ?").run(nowIso(), handoff.id);
+      appendRequiredMemoryAudit("handoff_unarchived", "handoff", handoff.id, {}, "system");
+      return true;
+    }).immediate();
   }
 
   /**
@@ -675,7 +694,6 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
    */
   function purgeHandoffVersion(handoffId, version, { reason, source } = {}) {
     if (!hasTable("memory_handoff_versions")) throw new Error("memory_handoff_versions table is not available; run migrations");
-    if (!hasTable("memory_audit_events")) throw new Error("memory_audit_events table is not available; refusing unaudited handoff version purge");
     const purgedVersion = Number(version);
     return db.transaction(() => {
       const current = db.prepare("SELECT version FROM memory_handoffs WHERE id = ?").get(handoffId);
@@ -689,14 +707,7 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
       const deleted = db.prepare("DELETE FROM memory_handoff_versions WHERE handoff_id = ? AND version = ?").run(handoffId, purgedVersion);
       if (deleted.changes !== 1) throw new Error(`Handoff "${handoffId}" version ${version} changed concurrently during purge`);
       const details = { version: purgedVersion, content_hash: row.content_hash, reason: String(reason || "unspecified").slice(0, 300) };
-      const auditId = auditMemoryEvent("handoff_version_purged", "handoff", handoffId, details, source || "system");
-      const audit = Number.isFinite(Number(auditId))
-        ? db.prepare("SELECT event_type, target_type, target_id, details_json FROM memory_audit_events WHERE id = ?").get(Number(auditId))
-        : null;
-      if (!audit || audit.event_type !== "handoff_version_purged" || audit.target_type !== "handoff"
-        || audit.target_id !== handoffId || JSON.stringify(parseJson(audit.details_json, {})) !== JSON.stringify(details)) {
-        throw new Error("Handoff version purge audit event was not persisted");
-      }
+      appendRequiredMemoryAudit("handoff_version_purged", "handoff", handoffId, details, source || "system");
       return { purged: true, handoff_id: handoffId, version: purgedVersion, content_hash: row.content_hash };
     }).immediate();
   }
@@ -896,10 +907,14 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
 
   function archiveHandoff(id, reason = "archived") {
     if (!hasTable("memory_handoffs")) return false;
-    const ts = nowIso();
-    const result = db.prepare("UPDATE memory_handoffs SET archived_at = ?, updated_at = ? WHERE id = ?").run(ts, ts, id);
-    if (result.changes > 0) auditMemoryEvent("handoff_archived", "handoff", id, { reason }, "user");
-    return result.changes > 0;
+    return db.transaction(() => {
+      const handoff = db.prepare("SELECT id FROM memory_handoffs WHERE id = ?").get(id);
+      if (!handoff) return false;
+      const ts = nowIso();
+      db.prepare("UPDATE memory_handoffs SET archived_at = ?, updated_at = ? WHERE id = ?").run(ts, ts, handoff.id);
+      appendRequiredMemoryAudit("handoff_archived", "handoff", handoff.id, { reason }, "user");
+      return true;
+    }).immediate();
   }
 
   function saveTaskSession(session) {

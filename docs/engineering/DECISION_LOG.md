@@ -110,3 +110,13 @@
   dependency; normal successful purge output and audit shape remain unchanged.
 - A temporary SQLite trigger reproduced audit-write failure. Verify the version
   and links remain, then drop the trigger and verify a single audited retry.
+
+## Handoff lifecycle audit atomicity (2026-10-12)
+
+- Keep archive, unarchive, and restore state changes in the same SQLite
+  transaction as their required audit record. Restore may nest the existing
+  saveHandoff transaction; the outer transaction owns commit/rollback.
+- Verify the audit row after insert so both thrown and silently suppressed
+  writes cannot appear successful. No schema, API, or dependency change.
+- Trigger-injected audit failures must preserve archived state or current/history
+  versions; removing the trigger must allow one audited retry.

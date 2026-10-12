@@ -1,5 +1,20 @@
 # Validation results
 
+## Handoff lifecycle audit atomicity: 2026-10-12
+
+Windows checkout accessed through WSL, Node v24.18.0, installed dependencies;
+temporary SQLite triggers and disposable handoff fixtures.
+
+| Command | Actual result |
+| --- | --- |
+| `node --test test/handoff-reliability.test.js` | Exit 0; 23 passed, 0 failed/skipped; 7.201 seconds. Archive, unarchive, and restore audit-failure regressions all pass. |
+| `node test/run-all.js test/handoff-reliability.test.js test/memory-maintenance.test.js test/tools.test.js --concurrency=1 --json` | Exit 0; three suites passed, 0 failed/skipped; 16.598 seconds. |
+| `node --check src/db/handoff-store.js` | PASS. |
+
+Before the implementation, the three new cases failed after audit triggers
+threw: archive/unarchive state changed and restore appended a version. No full
+test tiers or release validation were run for this scoped change.
+
 ## Handoff purge audit: 2026-10-12
 
 Windows checkout accessed through WSL, Node v24.18.0, installed dependencies;

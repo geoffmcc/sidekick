@@ -1,12 +1,13 @@
 # Implementation status
 
-## Current checkpoint: handoff purge audit
+## Current checkpoint: handoff lifecycle audit atomicity
 
 Updated 2026-10-12. Reference: v2.2.1 at b89247b. Current milestone began on clean
 main at `d4c908cda76b4031bdab05458cb40afb4984954b` (`v2.2.1-1-gd4c908c`).
-Current branch: `improvement/handoff-purge-audit`, stacked on signed and
-pushed `improvement/resume-project-scope`, `improvement/handoff-save-atomicity`,
-`improvement/handoff-project-scope`, `improvement/resume-pointer-atomicity`, and
+Current branch: `improvement/handoff-archive-audit`, stacked on signed and
+pushed `improvement/handoff-purge-audit`, `improvement/resume-project-scope`,
+`improvement/handoff-save-atomicity`, `improvement/handoff-project-scope`,
+`improvement/resume-pointer-atomicity`, and
 `improvement/platform-continuity-concurrency`.
 
 Completed:
@@ -69,16 +70,24 @@ Completed:
   an audit. Purge now rereads and deletes history/links
   and verifies the audit row inside one immediate transaction. Abort and ignored
   insert tests preserve the historical version; retry records one audit.
-  The fix is uncommitted on the current branch.
-- Current scoped run: handoff reliability (20 cases) passes. The atomicity
+  Signed commit `4b3b8a2` was pushed to
+  `origin/improvement/handoff-purge-audit`.
+- Confirmed SK-024: archive/unarchive row updates and append-only restore
+  versions committed before their audit writes. They now share one immediate
+  transaction with a required, verified audit row. Three injected failures
+  reproduced the old partial state and pass after the fix. Changes are
+  uncommitted on the current branch.
+- Current scoped run: handoff reliability (23 cases) and three supported
+  runner suites pass; syntax, documentation, architecture, test-ownership and
+  diff checks pass. The atomicity
   milestone's grouped run passed five of six suites; handoff-versioning failed
   at the checkpoint `repository.head` assertion, reproduced directly. A
   separate grouped `security-boundaries.test.js` run had seven assertions
   pass but failed during its existing Windows database cleanup hook with EBUSY;
   it is recorded as failed, not passed.
 
-No dependency, schema or version change on this atomicity branch. Rollback is
-code-only but restores the demonstrated partial-save behavior. No deployment or
+No dependency, schema or version change on this lifecycle-audit branch. Rollback
+is code-only but restores the demonstrated partial-audit behavior. No deployment or
 release; prior branch pushes were explicitly authorized.
 
 Remaining, in priority order:
