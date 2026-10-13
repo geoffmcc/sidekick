@@ -3,12 +3,46 @@
 const repository = require("./repository");
 const loader = require("./loader");
 
+// Three separate processes (index, dashboard, agent) run the same scheduled
+// sweep against the same modules, so a steady-state module used to append an
+// identical successful `module.health.check` row roughly three times per
+// interval — about 120k rows/day across 28 modules. A successful check whose
+// immediately preceding ledger entry for the same module is already a recent
+// success adds no audit value, so it is coalesced. Failures (ok === false) and
+// lifecycle transitions are never coalesced: failures are always recorded, and
+// transitions are a different event type. Set the window to 0 to disable
+// coalescing (record every check).
+const HEALTH_EVENT_COALESCE_MS = (() => {
+  const raw = Number(process.env.SIDEKICK_MODULE_HEALTH_COALESCE_MS);
+  return Number.isFinite(raw) && raw >= 0 ? raw : 60000;
+})();
+
 function errorText(error, fallback = "Module health check failed") {
   return String(error && error.message ? error.message : error || fallback).replace(/\s+/g, " ").slice(0, 300);
 }
 
+/**
+ * True when appending a successful check for `name` would duplicate the most
+ * recent ledger entry for that module. Failures are never redundant, and a
+ * disabled window (0) records every check.
+ */
+function isRedundantHealthyCheck(name, result) {
+  if (!result || result.ok !== true || HEALTH_EVENT_COALESCE_MS === 0) return false;
+  try {
+    const latest = repository.listHealthHistory(name, 1)[0];
+    if (!latest || latest.ok !== true) return false;
+    const at = Date.parse(latest.timestamp);
+    return Number.isFinite(at) && (Date.now() - at) < HEALTH_EVENT_COALESCE_MS;
+  } catch {
+    // Observability must never break a health check; on any read failure fall
+    // back to appending the event.
+    return false;
+  }
+}
+
 function appendHealthEvent(name, result, module) {
   try {
+    if (isRedundantHealthyCheck(name, result)) return;
     require("../platform/kernel").appendEvent({
       event_type: "module.health.check",
       source: "modules",
@@ -92,4 +126,4 @@ function recoverModuleHealth(name, entry) {
   return checkModuleHealth(name, entry);
 }
 
-module.exports = { checkModuleHealth, recoverModuleHealth };
+module.exports = { checkModuleHealth, recoverModuleHealth, appendHealthEvent, isRedundantHealthyCheck };

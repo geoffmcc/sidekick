@@ -1,0 +1,17 @@
+-- 080: Index module health-check ledger lookups by (event_type, subject_id).
+--
+-- listHealthHistory (src/modules/repository.js) filters
+-- platform_execution_events by event_type = 'module.health.check' and
+-- subject_id = ? and orders by rowid DESC. The only usable index before this
+-- migration was idx_platform_events_type(event_type, timestamp DESC), which
+-- matched event_type alone: on a multi-million-row health ledger every lookup
+-- scanned all matching events and sorted them in a temp B-tree. The dashboard
+-- summary issues one such lookup per module, synchronously, on every request.
+--
+-- An ordinary index on (event_type, subject_id) implicitly carries the rowid as
+-- its final column, so SQLite can satisfy `ORDER BY rowid DESC` with a reverse
+-- index scan instead of a temp sort — no ordering contract changes.
+--
+-- Keep this DDL byte-identical to idx_platform_events_type_subject in
+-- src/platform/kernel-schema.js (enforced by test/kernel-migration-parity.test.js).
+CREATE INDEX IF NOT EXISTS idx_platform_events_type_subject ON platform_execution_events(event_type, subject_id);

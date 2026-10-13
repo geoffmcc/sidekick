@@ -164,21 +164,21 @@ function cachedJson(url, opts) {
   var ttl     = opts.ttl     || 30000;   // fresh window (ms)
   var maxAge  = opts.maxAge  || 300000;  // stale-while-revalidate window (ms)
 
-  // If this URL is already being fetched, reuse the in-flight promise.
-  if (pageDataInFlight[url]) return pageDataInFlight[url];
-
   var entry = pageDataCache[url];
-  if (!entry) return cachedJsonFetch(url, opts);
-
-  var age = Date.now() - entry.at;
+  var age = entry ? Date.now() - entry.at : Infinity;
 
   // Fresh: return cached, no server hit.
-  if (age < ttl) return Promise.resolve(entry.data);
+  if (entry && age < ttl) return Promise.resolve(entry.data);
 
-  // Stale but within maxAge: serve stale + start background revalidate
-  // (once per stale window; a fresh entry is inserted when the background
-  // fetch resolves so that the next call within maxAge is also fast).
-  if (age < maxAge) {
+  // Stale but within maxAge: serve the stale value immediately and start a
+  // single background revalidate (once per stale window; a fresh entry is
+  // inserted when the background fetch resolves so the next call is fast).
+  //
+  // This runs BEFORE the in-flight check on purpose: a caller that already has
+  // usable stale data must never be made to wait on a refresh that is already
+  // running. Previously the in-flight promise was returned first, so a slow
+  // refresh blocked every later caller even though a stale entry existed.
+  if (entry && age < maxAge) {
     if (!entry.revalidating) {
       entry.revalidating = true;
       cachedJsonFetch(url, opts).then(function () {
@@ -192,7 +192,9 @@ function cachedJson(url, opts) {
     return Promise.resolve(entry.data);
   }
 
-  // Expired: refetch synchronously.
+  // No entry, or expired past maxAge: share one in-flight fetch so concurrent
+  // callers issue a single request.
+  if (pageDataInFlight[url]) return pageDataInFlight[url];
   return cachedJsonFetch(url, opts);
 }
 
@@ -991,28 +993,88 @@ function loadDashboardSummary(){
   }).catch(e => apiError('/api/stats', e, 0));
 }
 
+// Mission Control keeps the last known value of each endpoint and renders each
+// panel as its own request resolves. A single slow or failing endpoint only
+// affects the panels that depend on it — it can no longer blank every other
+// panel, and a refresh never resets the view back to placeholders.
+var missionState = {
+  summary: null, system: null, services: null, stats: null,
+  systemResolved: false, systemError: false, servicesResolved: false,
+  pending: 0, generation: 0
+};
+
+function renderMissionPanels(){
+  if (missionState.summary || missionState.servicesResolved) {
+    renderMissionReadiness(missionState.summary, missionState.services);
+  }
+  if (missionState.servicesResolved) renderMissionServices(missionState.services);
+  if (missionState.system) renderMissionSystem(missionState.system, missionState.summary);
+  if (missionState.stats) renderMissionStats(missionState.stats);
+  // Hold the attention panel until the system request has settled (success OR
+  // failure) so a still-loading system API is never reported as unreachable.
+  if (missionState.systemResolved || missionState.summary) {
+    renderMissionAttention(missionState.summary, missionState.services, missionState.system, missionState.stats, missionState.systemError);
+  }
+}
+
 function loadMissionControl(){
   const statsRange = getToolStatsRange(getToolStatsWindow());
   const statsQuery = `?since=${encodeURIComponent(statsRange.since)}&until=${encodeURIComponent(statsRange.until)}`;
-  const requests = [
-    cachedJson('/api/dashboard-summary', { ttl: 30000 }),
-    cachedJson('/api/system', { ttl: 15000 }),
-    cachedJson('/api/services', { ttl: 15000 }),
-    cachedJson('/api/stats' + statsQuery, { ttl: 30000 }),
-    cachedJson('/api/logs?limit=10', { ttl: 15000 })
-  ];
+  // Bump the generation so a late response from a superseded load cannot
+  // overwrite data from a newer one; the last one to settle refreshes the
+  // timestamp.
+  const generation = ++missionState.generation;
+  missionState.pending = 5;
 
-  Promise.all(requests).then(([summary, system, services, stats, logs]) => {
-    const now = new Date();
-    $('lastUpdate').textContent = 'updated ' + now.toLocaleTimeString();
+  const current = function(){ return generation === missionState.generation; };
+  const settle = function(){
+    if (!current()) return;
+    if (--missionState.pending <= 0) {
+      $('lastUpdate').textContent = 'updated ' + new Date().toLocaleTimeString();
+    }
+  };
+  const load = function(url, opts, apply, onError){
+    cachedJson(url, opts).then(function(data){
+      if (!current()) return;
+      apply(data);
+    }).catch(function(e){
+      try { if (onError) onError(e); }
+      catch (renderError) { console.error('Mission error handler failed for ' + url, renderError); }
+      apiError(url, e, 0);
+    }).then(settle);
+  };
+
+  load('/api/dashboard-summary', { ttl: 30000 }, function(summary){
+    missionState.summary = summary; renderMissionPanels();
+  });
+  load('/api/system', { ttl: 15000 }, function(system){
+    missionState.system = system;
+    missionState.systemResolved = true;
+    missionState.systemError = !!(system && system.error);
+    renderMissionPanels();
+  }, function(){
+    missionState.systemResolved = true;
+    missionState.systemError = true;
+    renderMissionPanels();
+  });
+  load('/api/services', { ttl: 15000 }, function(services){
+    missionState.services = services;
+    missionState.servicesResolved = true;
     renderServiceStatus(services && services.services);
-    renderMissionReadiness(summary, services);
-    renderMissionServices(services);
-    renderMissionSystem(system, summary);
-    renderMissionStats(stats);
+    renderMissionPanels();
+  }, function(){
+    missionState.servicesResolved = true;
+    renderServiceStatus(null);
+    renderMissionServices(null);
+  });
+  load('/api/stats' + statsQuery, { ttl: 30000 }, function(stats){
+    missionState.stats = stats; renderMissionPanels();
+  });
+  load('/api/logs?limit=10', { ttl: 15000 }, function(logs){
     renderMissionActivity(logs);
-    renderMissionAttention(summary, services, system, stats);
-  }).catch(e => { renderServiceStatus(null); apiError('/api/mission-control', e, 0); });
+  }, function(){
+    renderMissionActivity(null);
+  });
 }
 
 function renderMissionReadiness(summary, services){
@@ -1090,7 +1152,7 @@ function renderMissionActivity(data){
   }).join('') : '<div class="empty">No recent activity</div>';
 }
 
-function renderMissionAttention(summary, services, system, stats){
+function renderMissionAttention(summary, services, system, stats, systemError){
   const items = [];
   const serviceEntries = Object.entries((services && services.services) || {});
   for (const [name, status] of serviceEntries) {
@@ -1110,7 +1172,7 @@ function renderMissionAttention(summary, services, system, stats){
   for (const err of recentErrors.slice(0, 2)) {
     items.push({ level: 'danger', title: err.tool || 'Recent error', detail: err.summary || 'Tool call failed.' });
   }
-  if (!system || system.error) items.push({ level: 'danger', title: 'System API unreachable', detail: 'The dashboard could not read system status.' });
+  if (systemError || (system && system.error)) items.push({ level: 'danger', title: 'System API unreachable', detail: 'The dashboard could not read system status.' });
 
   $('missionAttention').innerHTML = items.length ? items.slice(0, 5).map(item =>
     '<div class="mission-attention ' + item.level + '"><div><strong>' + esc(item.title) + '</strong><p>' + esc(item.detail) + '</p></div></div>'

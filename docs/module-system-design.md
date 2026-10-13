@@ -168,12 +168,20 @@ The `module` management surface exposes the persisted health payload and last-ch
 The dashboard summary includes the same read-only module health rows, aggregate counts, and active-process mismatch/error count so operators can see lifecycle health without triggering module code.
 
 Each completed check also appends a `module.health.check` event to the kernel
-ledger. Module reports and dashboard rows expose a bounded recent history from
-that ledger, allowing operators to distinguish current state from recent check
-outcomes without unbounded response growth.
-Exceptions and malformed or asynchronous health results are normalized into a
-failed check, persisted, and transitioned to `error` so the acceptance path is
-observable and recoverable rather than silently disappearing.
+ledger. Because the index, dashboard, and agent processes each run the same
+scheduled sweep, a successful check whose most recent ledger entry for that
+module is already a recent success is coalesced rather than appended, so a
+steady-state module does not emit duplicate healthy rows (failures and
+lifecycle transitions are always recorded; the window is configurable through
+`SIDEKICK_MODULE_HEALTH_COALESCE_MS`, and `0` disables coalescing). Module
+reports and dashboard rows expose a bounded recent history from that ledger,
+allowing operators to distinguish current state from recent check
+outcomes without unbounded response growth. The history lookup is served by the
+`idx_platform_events_type_subject` index (migration 080) so it does not scan
+the full ledger. Exceptions and malformed or asynchronous health results are
+normalized into a failed check, persisted, and transitioned to `error` so the
+acceptance path is observable and recoverable rather than silently
+disappearing.
 
 The `module` management surface also exposes `action: "check"` for builtin entries with a health contract. It executes the bounded check through the health boundary and returns the persisted lifecycle result; `action: "health"` remains read-only.
 
