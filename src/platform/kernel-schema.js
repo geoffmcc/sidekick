@@ -551,6 +551,7 @@ const KERNEL_SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS idx_platform_events_execution ON platform_execution_events(execution_id, timestamp);
   CREATE INDEX IF NOT EXISTS idx_platform_events_correlation ON platform_execution_events(correlation_id, timestamp);
   CREATE INDEX IF NOT EXISTS idx_platform_events_type ON platform_execution_events(event_type, timestamp DESC);
+  CREATE INDEX IF NOT EXISTS idx_platform_events_type_subject ON platform_execution_events(event_type, subject_id);
   CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_events_dedupe ON platform_execution_events(dedupe_key) WHERE dedupe_key IS NOT NULL;
   CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_event_subscriptions_name ON platform_event_subscriptions(name);
   CREATE INDEX IF NOT EXISTS idx_platform_event_subscriptions_type_state ON platform_event_subscriptions(event_type, state);

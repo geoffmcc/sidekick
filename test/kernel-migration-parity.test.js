@@ -191,9 +191,10 @@ console.log('Running Platform Kernel Migration Parity Tests...\n');
     // Capability Packs v1 (migration 036) adds platform_capability_packs,
     // platform_capability_pack_components and platform_workflow_definitions
     // (31 -> 34 tables) with 11 more explicit indexes (66 -> 77), including
-    // the identity owner/actor indexes added by migration 048.
+    // the identity owner/actor indexes added by migration 048. Migration 080
+    // adds idx_platform_events_type_subject for module health history (90 -> 91).
     const expectedTables = 40;
-    const expectedIndexes = 90;
+    const expectedIndexes = 91;
     const migratedTables = migratedSchema.filter(o => o.type === 'table').length;
     const migratedIndexes = migratedSchema.filter(o => o.type === 'index' && o.sql).length;
     const migratedAutoindexes = migratedSchema.filter(o => o.type === 'index' && !o.sql).length;
@@ -249,6 +250,7 @@ console.log('Running Platform Kernel Migration Parity Tests...\n');
     assert.ok(KERNEL_SCHEMA_SQL.includes('CREATE TABLE IF NOT EXISTS platform_backups'));
     assert.ok(KERNEL_SCHEMA_SQL.includes('idx_platform_executions_parent'));
     assert.ok(KERNEL_SCHEMA_SQL.includes('idx_platform_events_correlation'));
+    assert.ok(KERNEL_SCHEMA_SQL.includes('idx_platform_events_type_subject'));
     assert.ok(KERNEL_SCHEMA_SQL.includes('FOREIGN KEY(parent_execution_id) REFERENCES platform_executions(execution_id)'));
     assert.ok(KERNEL_SCHEMA_SQL.includes('CREATE TABLE IF NOT EXISTS platform_projects'));
     assert.ok(KERNEL_SCHEMA_SQL.includes('CREATE TABLE IF NOT EXISTS platform_project_sources'));
