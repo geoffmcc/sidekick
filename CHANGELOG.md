@@ -4,6 +4,21 @@ All notable changes to Sidekick.
 
 ## Unreleased
 
+## [2.2.3] - 2026-10-13
+
+### Performance
+
+- Eliminated the Dashboard initial-load stall by adding the
+  `idx_platform_events_type_subject` index (migration `080`), so module
+  health-history lookups use a covering index seek instead of a full scan of
+  `platform_execution_events`.
+- Bounded health-ledger growth by coalescing repeated successful checks within
+  `SIDEKICK_MODULE_HEALTH_COALESCE_MS` (default `60000`; `0` disables). Failed
+  checks and lifecycle transitions are always recorded; no audit history is
+  deleted.
+- Mission Control panels now render progressively from a stale-first cache
+  instead of blocking on a full refresh.
+
 ## [2.2.1] - 2026-10-12
 
 ### Security
