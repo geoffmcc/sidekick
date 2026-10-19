@@ -1,7 +1,7 @@
 {
   "name": "database-administration-tools",
   "displayName": "Database Administration Tools",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Database readiness and safe parameterized inspection composed from Sidekick database tools.",
   "author": "Sidekick",
   "type": "plugin",
