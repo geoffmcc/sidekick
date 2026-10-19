@@ -1,9 +1,9 @@
 {
   "schema": "sidekick.compatibility-pack-inventory.v1",
   "source": "bundled pack manifests and repository files",
-  "source_commit": "b35690708d2bc2c1fe60e56b27f8d1277bd502e4",
-  "source_commit_date": "2026-10-13T10:38:44-04:00",
-  "source_fingerprint": "sha256:3064fbe8e05e7582a52391e6d8964d54438357a92c7576af247376925909522f",
+  "source_commit": "fc89a389380814a684bc26bd5ac4bf6ff2da192a",
+  "source_commit_date": "2026-10-19T10:40:01-04:00",
+  "source_fingerprint": "sha256:27b528107abdf7c8df7f8d71b4384b1ff603e784af2d0434dbe860dd9a0c6465",
   "pack_count": 27,
   "packs": [
     {
@@ -6044,8 +6044,8 @@
     },
     {
       "name": "jellyfin",
-      "version": "1.5.2",
-      "purpose": "Governed Jellyfin media inventory, server discovery, user views, playback diagnosis, library, log and maintenance intelligence over administrator-named profiles.",
+      "version": "1.7.0",
+      "purpose": "Governed Jellyfin media inventory, user-visible library discovery, watch suggestions, playback diagnosis, and maintenance over administrator-named profiles.",
       "manifest": "packs/jellyfin/sidekick.pack.json",
       "tools": [
         "jellyfin",
@@ -6086,6 +6086,16 @@
         {
           "path": "workflows/catalog-browse.json",
           "file": "packs/jellyfin/workflows/catalog-browse.json",
+          "present": true
+        },
+        {
+          "path": "workflows/catalog-search.json",
+          "file": "packs/jellyfin/workflows/catalog-search.json",
+          "present": true
+        },
+        {
+          "path": "workflows/library-catalog.json",
+          "file": "packs/jellyfin/workflows/library-catalog.json",
           "present": true
         },
         {
@@ -6166,6 +6176,11 @@
         {
           "path": "workflows/session-overview.json",
           "file": "packs/jellyfin/workflows/session-overview.json",
+          "present": true
+        },
+        {
+          "path": "workflows/media-suggestions.json",
+          "file": "packs/jellyfin/workflows/media-suggestions.json",
           "present": true
         }
       ],
@@ -6497,7 +6512,7 @@
       "network_scopes": [],
       "provider_requirements": null,
       "workflow_contract": {
-        "total": 23,
+        "total": 26,
         "missing_result": [],
         "missing_tags": [],
         "missing_step_error_policy": []
@@ -6645,6 +6660,7 @@
         ],
         "jobs": [
           "catalog browse",
+          "catalog search",
           "content health",
           "health",
           "incident",
@@ -6653,9 +6669,11 @@
           "jellyfin_playback",
           "library analytics",
           "library audit",
+          "library catalog",
           "live tv status",
           "maintenance preflight",
           "media info",
+          "media suggestions",
           "metadata completeness",
           "new arrivals",
           "play next",
@@ -6686,14 +6704,17 @@
               "packs/jellyfin/modules/jellyfin-tools/entry.js",
               "packs/jellyfin/modules/jellyfin-tools/manifest.json",
               "packs/jellyfin/workflows/catalog-browse.json",
+              "packs/jellyfin/workflows/catalog-search.json",
               "packs/jellyfin/workflows/content-health.json",
               "packs/jellyfin/workflows/health.json",
               "packs/jellyfin/workflows/incident.json",
               "packs/jellyfin/workflows/library-analytics.json",
               "packs/jellyfin/workflows/library-audit.json",
+              "packs/jellyfin/workflows/library-catalog.json",
               "packs/jellyfin/workflows/live-tv-status.json",
               "packs/jellyfin/workflows/maintenance-preflight.json",
               "packs/jellyfin/workflows/media-info.json",
+              "packs/jellyfin/workflows/media-suggestions.json",
               "packs/jellyfin/workflows/metadata-completeness.json",
               "packs/jellyfin/workflows/new-arrivals.json",
               "packs/jellyfin/workflows/play-next.json",
@@ -6721,14 +6742,18 @@
               "packs/jellyfin/knowledge/analytics.md",
               "packs/jellyfin/knowledge/catalog.md",
               "packs/jellyfin/knowledge/live-tv.md",
+              "packs/jellyfin/knowledge/playback.md",
               "packs/jellyfin/knowledge/usage-reference.md",
               "packs/jellyfin/knowledge/user-media.md",
               "packs/jellyfin/modules/jellyfin-tools/entry.js",
               "packs/jellyfin/modules/jellyfin-tools/manifest.json",
               "packs/jellyfin/workflows/catalog-browse.json",
+              "packs/jellyfin/workflows/catalog-search.json",
               "packs/jellyfin/workflows/health.json",
               "packs/jellyfin/workflows/incident.json",
               "packs/jellyfin/workflows/library-audit.json",
+              "packs/jellyfin/workflows/library-catalog.json",
+              "packs/jellyfin/workflows/media-suggestions.json",
               "packs/jellyfin/workflows/new-arrivals.json",
               "packs/jellyfin/workflows/play-next.json",
               "packs/jellyfin/workflows/play-now.json",
@@ -6752,6 +6777,7 @@
             "evidence": [
               "packs/jellyfin/knowledge/catalog.md",
               "packs/jellyfin/knowledge/live-tv.md",
+              "packs/jellyfin/knowledge/maintenance.md",
               "packs/jellyfin/knowledge/operating.md",
               "packs/jellyfin/knowledge/server-audit.md",
               "packs/jellyfin/knowledge/usage-reference.md",
@@ -6811,7 +6837,6 @@
               "packs/jellyfin/knowledge/live-tv.md",
               "packs/jellyfin/knowledge/maintenance.md",
               "packs/jellyfin/knowledge/operating.md",
-              "packs/jellyfin/knowledge/playback.md",
               "packs/jellyfin/knowledge/usage-reference.md",
               "packs/jellyfin/modules/jellyfin-tools/entry.js",
               "test/brain.test.js",
@@ -6888,14 +6913,17 @@
             "implemented": true,
             "evidence": [
               "packs/jellyfin/workflows/catalog-browse.json",
+              "packs/jellyfin/workflows/catalog-search.json",
               "packs/jellyfin/workflows/content-health.json",
               "packs/jellyfin/workflows/health.json",
               "packs/jellyfin/workflows/incident.json",
               "packs/jellyfin/workflows/library-analytics.json",
               "packs/jellyfin/workflows/library-audit.json",
+              "packs/jellyfin/workflows/library-catalog.json",
               "packs/jellyfin/workflows/live-tv-status.json",
               "packs/jellyfin/workflows/maintenance-preflight.json",
               "packs/jellyfin/workflows/media-info.json",
+              "packs/jellyfin/workflows/media-suggestions.json",
               "packs/jellyfin/workflows/metadata-completeness.json",
               "packs/jellyfin/workflows/new-arrivals.json",
               "packs/jellyfin/workflows/play-next.json",
@@ -6947,6 +6975,7 @@
               "packs/jellyfin/modules/jellyfin-tools/entry.js",
               "packs/jellyfin/modules/jellyfin-tools/manifest.json",
               "packs/jellyfin/sidekick.pack.json",
+              "packs/jellyfin/workflows/library-catalog.json",
               "packs/jellyfin/workflows/maintenance-preflight.json",
               "packs/jellyfin/workflows/user-media-overview.json",
               "test/agent-protocol.test.js",
@@ -7021,14 +7050,17 @@
             "packs/jellyfin/modules/jellyfin-tools/entry.js",
             "packs/jellyfin/modules/jellyfin-tools/manifest.json",
             "packs/jellyfin/workflows/catalog-browse.json",
+            "packs/jellyfin/workflows/catalog-search.json",
             "packs/jellyfin/workflows/content-health.json",
             "packs/jellyfin/workflows/health.json",
             "packs/jellyfin/workflows/incident.json",
             "packs/jellyfin/workflows/library-analytics.json",
             "packs/jellyfin/workflows/library-audit.json",
+            "packs/jellyfin/workflows/library-catalog.json",
             "packs/jellyfin/workflows/live-tv-status.json",
             "packs/jellyfin/workflows/maintenance-preflight.json",
             "packs/jellyfin/workflows/media-info.json",
+            "packs/jellyfin/workflows/media-suggestions.json",
             "packs/jellyfin/workflows/metadata-completeness.json",
             "packs/jellyfin/workflows/new-arrivals.json",
             "packs/jellyfin/workflows/play-next.json",

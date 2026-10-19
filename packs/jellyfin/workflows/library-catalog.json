@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "name": "jellyfin/library-catalog",
+  "version": "1.1.0",
+  "title": "Browse Jellyfin Library",
+  "description": "List a bounded page from a library visible to the selected Jellyfin user. Resolve library_id at runtime with list_libraries; names and visibility are server- and user-specific.",
+  "mode": "read_only",
+  "inputs": {
+    "profile": {
+      "type": "string",
+      "required": false,
+      "default": ""
+    },
+    "library_id": {
+      "type": "string",
+      "required": true,
+      "description": "Exact id returned by list_libraries for this selected user"
+    },
+    "query": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Optional title or text filter"
+    },
+    "include_item_types": {
+      "type": "string",
+      "required": false,
+      "default": "Movie,Series,Season,Episode,Audio,MusicAlbum,MusicArtist,MusicVideo"
+    },
+    "limit": {
+      "type": "number",
+      "required": false,
+      "default": 50
+    },
+    "start_index": {
+      "type": "number",
+      "required": false,
+      "default": 0
+    },
+    "username": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Optional Jellyfin user; omit when the acting user resolves unambiguously"
+    }
+  },
+  "steps": [
+    {
+      "name": "library_media",
+      "title": "Browse selected visible library",
+      "tool": "jellyfin",
+      "args": {
+        "action": "list_media",
+        "profile": "${inputs.profile}",
+        "library_id": "${inputs.library_id}",
+        "query": "${inputs.query}",
+        "include_item_types": "${inputs.include_item_types}",
+        "limit": "${inputs.limit}",
+        "start_index": "${inputs.start_index}",
+        "username": "${inputs.username}",
+        "user_scoped": true
+      },
+      "expect": "json",
+      "on_error": "fail"
+    }
+  ],
+  "result": {
+    "library_media": "${steps.library_media.json}"
+  },
+  "tags": [
+    "jellyfin",
+    "library",
+    "catalog",
+    "read-only"
+  ]
+}

@@ -62,10 +62,37 @@ function session(raw) {
         minutes: Math.round((positionTicks / 10000000 / 60) * 100) / 100,
       }
     : { ticks: null, seconds: null, minutes: null };
+  const remainingTicks = runtime.ticks !== null && playbackPosition.ticks !== null
+    ? Math.max(0, runtime.ticks - playbackPosition.ticks)
+    : null;
+  const durationLabel = (ticks) => {
+    if (!Number.isFinite(ticks) || ticks < 0) return null;
+    const totalSeconds = Math.floor(ticks / 10000000);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    return hours > 0
+      ? `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`
+      : `${minutes}:${String(seconds).padStart(2, "0")}`;
+  };
+  const progressPercent = runtime.ticks > 0 && playbackPosition.ticks !== null
+    ? Math.round(Math.min(100, (playbackPosition.ticks / runtime.ticks) * 100) * 10) / 10
+    : null;
+  const hasActivePlayback = Boolean(item.Id || item.Name);
+  const activityStatus = !hasActivePlayback
+    ? "connected"
+    : raw?.PlayState?.IsPaused === true
+      ? "paused"
+      : raw?.PlayState?.IsPaused === false
+        ? "playing"
+        : "playback_state_unknown";
 
   return {
     id: raw?.Id || null,
+    has_active_playback: hasActivePlayback,
+    activity_status: activityStatus,
     user: raw?.UserName || null,
+    user_name: raw?.UserName || null,
     user_id: raw?.UserId || null,
     device: {
       name: raw?.DeviceName || null,
@@ -76,6 +103,12 @@ function session(raw) {
     media: {
       id: item.Id || null,
       name: item.Name || null,
+      type: item.Type || null,
+      series_name: item.SeriesName || null,
+      season_number: item.ParentIndexNumber ?? null,
+      episode_number: item.IndexNumber ?? null,
+      production_year: item.ProductionYear ?? null,
+      overview: item.Overview || null,
       container: item.Container || null,
       video_codec: video?.Codec || null,
       audio_codec: audio?.Codec || null,
@@ -85,6 +118,19 @@ function session(raw) {
     is_paused: raw?.PlayState?.IsPaused ?? null,
     can_seek: raw?.PlayState?.CanSeek ?? null,
     playback_position: playbackPosition,
+    playback_elapsed: {
+      ...playbackPosition,
+      formatted: durationLabel(playbackPosition.ticks),
+    },
+    time_remaining: remainingTicks === null
+      ? { ticks: null, seconds: null, minutes: null, formatted: null }
+      : {
+          ticks: remainingTicks,
+          seconds: Math.round((remainingTicks / 10000000) * 100) / 100,
+          minutes: Math.round((remainingTicks / 10000000 / 60) * 100) / 100,
+          formatted: durationLabel(remainingTicks),
+        },
+    progress_percent: progressPercent,
     transcoding: transcoding
       ? {
           video_codec: transcoding.VideoCodec || null,

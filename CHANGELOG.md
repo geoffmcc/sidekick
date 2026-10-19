@@ -18,6 +18,30 @@ All notable changes to Sidekick.
 - Migrated the Proxmox unit and integration suites to Node's built-in
   `node:test` runner.
 
+### Jellyfin compatibility pack
+
+- Maintenance planning now includes bounded storage-preflight evidence and
+  marks stale-scan recommendations as requiring storage verification whenever
+  the configured evidence is unsafe or unavailable.
+- Unverified scheduled-task and library-scan requests now include explicit
+  inspection steps before a caller retries an operation.
+- Catalog search now discovers current library IDs per request and searches
+  across standard and custom-named libraries for movie, TV and music item types;
+  results identify and interleave library matches, include useful item context,
+  and support year/genre filters. Added generic agent routing guidance plus
+  read-only `jellyfin/catalog-search` and `jellyfin/library-catalog` workflows.
+- Jellyfin catalog discovery now follows the resolved user's visible views;
+  library browsing can enforce that view, watch suggestions rank unplayed items
+  from recent genre history, empty filtered searches retry without optional
+  filters, and search/browse pages expose continuation offsets. User scoping
+  with a shared administrator API key is documented as application-level only.
+- Session overview now makes "who is watching?" easy to answer with the
+  username, title and episode context, elapsed and remaining playback time,
+  progress, device/client and available pause/transcode state. It groups
+  simultaneous sessions per user and separates connected-only devices.
+- Updated the pack guide to identify the bundled version and validated API
+  shapes, and migrated the Jellyfin suites to the built-in `node:test` runner.
+
 ## [2.2.3] - 2026-10-13
 
 ### Performance

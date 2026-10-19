@@ -1,6 +1,6 @@
 # Jellyfin Capability Pack
 
-Status: in development (v1.5.2, next bundled first-party release)
+Status: bundled first-party pack (current pack and module version 1.7.0)
 Depends on: Capability Packs v1
 
 The Jellyfin pack lets Sidekick securely inspect, diagnose and maintain
@@ -9,10 +9,10 @@ capability pack under `packs/jellyfin/`, installed and governed exactly like
 the Developer and Proxmox packs: same manifest, managed store, lifecycle,
 policy, approval, audit and health model.
 
-The single required dependency is **access to the Jellyfin API** of a
-currently supported stable server (10.9/10.10 — every endpoint the pack calls
-was verified against the official published OpenAPI for both lines). Proxmox,
-host status and outbound release lookup are optional compositions through the
+The single required dependency is **access to the Jellyfin API**. The current
+implementation was validated against Jellyfin 10.9 and 10.10 API shapes; this
+does not claim which server releases are currently supported. Proxmox, host
+status and outbound release lookup are optional compositions through the
 module's declared, deny-by-default dispatch permissions; none is required to
 use the read surface.
 
@@ -20,7 +20,7 @@ use the read surface.
 
 ## What it does now vs. later
 
-**Working in v1.1:**
+**Current working capabilities:**
 
 - Administrator-configured named **profiles**, each one Jellyfin server.
   API-key authentication, credential stored in Sidekick's secret store and
@@ -40,11 +40,30 @@ use the read surface.
   `duplicate_candidates` samples that label themselves as samples.
 - **Complete catalog browsing**: `list_media` with `all: true` includes every
   Jellyfin item type across every library, including music and collections.
+  `search_media` and `jellyfin/catalog-search` discover the selected user's
+  current visible libraries on each call and search by their actual IDs,
+  including custom library names; the default type set covers movies, shows, seasons, episodes,
+  audio, music albums/artists and music videos. Results identify each matching
+  library. Results are capped and interleaved across libraries so one large
+  library cannot crowd every other library out. Empty genre/year searches retry
+  once without those optional filters, and paginated results expose `next_start`.
+  `list_libraries` reports the selected user's visible names and IDs, while
+  `library-catalog` enforces that view when browsing.
+  `media-suggestions` ranks unplayed items using recent watch genres and recency,
+  excludes played or partially watched items, and reports continue-watching
+  separately. This is a deterministic convenience ranking, not Jellyfin's
+  recommendation engine.
   `recently_added` lists server-wide additions; `continue_watching` and
   `next_up` use explicit user-scoped Jellyfin views without changing watch
   state.
 - **Deterministic playback diagnosis** from active-session `TranscodingInfo`,
   naming the chosen session and refusing to guess between several.
+- **Who is watching**: `session-overview` and `list_sessions` report username,
+  title plus series/episode context, elapsed and remaining time when runtime
+  and position are available, percent complete, pause/seek state, device/client,
+  and transcoding details. Playback sessions are grouped per user, while
+  connected-only devices are reported separately. Remaining time is a
+  point-in-time duration estimate; unavailable runtime or position stays unknown.
 - **Bounded log intelligence**: `logs_summary` and `incident_diagnose`
   retrieve only the tail (≤64 KiB) of a server-listed log file (`Range`
   request first, honest refusal when a huge file cannot be tailed), parse
@@ -75,6 +94,7 @@ use the read surface.
   `jellyfin/media-info`, `jellyfin/library-audit`,
   `jellyfin/content-health`, `jellyfin/live-tv-status`,
   `jellyfin/server-audit`, `jellyfin/catalog-browse`,
+  `jellyfin/catalog-search`, `jellyfin/library-catalog`,
   `jellyfin/user-media-overview`, `jellyfin/library-analytics`,
   `jellyfin/metadata-completeness`, alongside the health, playback, maintenance
   preflight, upgrade readiness and incident workflows.
@@ -243,6 +263,10 @@ Per-action honesty notes:
 - `maintenance_plan` bases recommendations on `LastExecutionResult.Status`
   (Completed/Failed/Cancelled/Aborted) and stale execution dates —
   `TaskInfo.State` is only Idle/Running/Cancelling and never reports failure.
+  It also includes storage preflight evidence: stale scans are marked
+  `storage_preflight_required` unless storage is verified safe. When a task or
+  scan request is accepted without an observed transition, the result tells
+  the caller which read action to inspect before retrying.
 - `recent_media` uses `GET /Items?SortBy=DateCreated&SortOrder=Descending&
   Recursive=true`, which works server-wide with an admin API key; no user
   context is required or resolved.
@@ -252,8 +276,16 @@ Per-action honesty notes:
 - `continue_watching` uses `/Users/{id}/Items/Resume` and `next_up` uses
   `/Shows/NextUp` with a resolved user (see auto-resolution below). Neither
   endpoint writes watch state.
+- User-visible library discovery and `/Users/{id}/Items` reads follow the
+  selected Jellyfin user's views and watch state. With one shared administrator
+  API key, this is application-level scoping: Jellyfin still treats the API key
+  as server-privileged. It is not credential isolation between users; use
+  separate server profiles and credentials when users need an authorization
+  boundary.
 - The user-scoped actions (`continue_watching`, `next_up`, `user_media_state`,
-  `user_unwatched`, `user_status`) accept an optional `user_id`/`username`.
+  `user_unwatched`, `media_suggestions`, `user_status`, `list_libraries`,
+  `search_media`, and scoped `list_media`) accept an optional
+  `user_id`/`username` where applicable.
   When both are omitted the acting user is auto-resolved deterministically:
   the single distinct user with an active session, else the profile-configured
   `default_username`, else the single enabled user; otherwise the action fails
@@ -293,8 +325,10 @@ Per-action honesty notes:
   instead of silently picking one of several.
 - `list_sessions` includes the active item's runtime under
   `media.runtime` (`ticks`, `seconds`, and `minutes`) when Jellyfin provides
-  `RunTimeTicks`, so remaining playback time can be calculated from the live
-  position without a second item lookup.
+  `RunTimeTicks`. It also returns `playback_elapsed`, `time_remaining`, and
+  `progress_percent` when enough session evidence exists. Remaining time is
+  runtime minus the current position, clamped at zero; it is not a wall-clock
+  finish estimate, especially when playback is paused.
 - An authentication failure surfaces as `authentication_failed` everywhere —
   it is never converted into "capability unavailable".
 
@@ -411,6 +445,10 @@ HTTPS client. No shell permission exists.
 | `jellyfin/live-tv-status` | read-only | Live TV services, channels, guide, recordings and timers. |
 | `jellyfin/server-audit` | read-only | Sanitized server configuration and operational summary. |
 | `jellyfin/catalog-browse` | read-only | Collections and playlist inventory. |
+| `jellyfin/session-overview` | read-only | Who is watching what, with elapsed and remaining time and session/device details. |
+| `jellyfin/catalog-search` | read-only | Search runtime-discovered user-visible libraries with filter refinement and pagination. |
+| `jellyfin/library-catalog` | read-only | Browse a bounded page from a library selected by its discovered ID. |
+| `jellyfin/media-suggestions` | read-only | Rank user-scoped unplayed picks from recent genre history and recency. |
 | `jellyfin/user-media-overview` | read-only | Explicitly user-scoped unplayed media and watch state. |
 
 ---

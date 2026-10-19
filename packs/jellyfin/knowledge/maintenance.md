@@ -5,3 +5,13 @@ Configured library paths are not proof that storage is available. `storage_prefl
 State-affecting library maintenance fails closed on anything but verified-safe storage. `scan_library` additionally requires the profile's write opt-in, validates `library_id` against `/Library/VirtualFolders` `ItemId`, hard-denies libraries listed in `protected_resources` (a full scan is denied if ANY library is protected), supports `dry_run` (the same validation and real preflight, reporting whether execution would be allowed), and only performs a full scan when `all_libraries=true` is passed explicitly.
 
 Scheduled task outcomes come from `LastExecutionResult.Status` (Completed/Failed/Cancelled/Aborted) — `TaskInfo.State` is only Idle/Running/Cancelling and never says "failed". `run_task`/`cancel_task` verify postconditions with a short bounded poll and report `{state_before, state_after, transition_observed}`; `verified` means the transition (or a newer execution result) was observed, otherwise the outcome is only `request_accepted`. Mutations are never retried automatically.
+
+# Maintenance planning and recovery
+
+`maintenance_plan` includes storage preflight evidence beside task findings.
+When a library scan appears stale, its recommendation is `consider_scan` only
+when that evidence is verified safe; otherwise it is classified as
+`storage_preflight_required` with the observed state. The recommendation itself
+never starts a scan. If a task command or scan is accepted but no transition is
+observed, inspect `task_status` or `library_status` before retrying; the result
+includes recovery guidance and does not label the operation verified.
