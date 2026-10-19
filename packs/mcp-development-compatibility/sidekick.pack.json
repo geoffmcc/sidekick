@@ -1,5 +1,5 @@
 {
-  "schema_version": 1, "pack_api": 1, "name": "mcp-development-compatibility", "display_name": "MCP Development & Compatibility", "version": "1.0.0",
+  "schema_version": 1, "pack_api": 1, "name": "mcp-development-compatibility", "display_name": "MCP Development & Compatibility", "version": "1.0.1",
   "description": "Static MCP compatibility checks grounded in repository semantics and the live governed tool catalog.", "publisher": "Sidekick", "compatibility": { "sidekick": ">=1.0.0" },
   "modules": [{ "name": "mcp-development-tools", "path": "modules/mcp-development-tools", "entry_point": "entry.js", "config_from_pack": true }],
   "workflows": [{ "path": "workflows/mcp-compatibility.json" }, { "path": "workflows/catalog-audit.json" }],
