@@ -28,6 +28,7 @@ One tool, many read actions. Every action selects an administrator-configured
 | `list_profiles` | configured profiles and their validity (no secrets) |
 | `detect_providers` | optional local automation detected on the Sidekick host |
 | `maintenance_preflight` (`node`) | API-only deterministic node safety facts; never updates or reboots |
+| `maintenance_plan` (`node`) | bounded read-only guest evacuation proposal with online peer candidates; does not prove capacity or move guests |
 | `migration_plan` (`vmid`, `target_node`) | resolved same-cluster migration plan without changing state |
 
 ### `proxmox_guest` (risk: high, change)

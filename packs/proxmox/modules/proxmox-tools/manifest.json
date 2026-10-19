@@ -1,8 +1,8 @@
 {
   "name": "proxmox-tools",
   "displayName": "Proxmox Tools",
-  "version": "1.6.0",
-  "description": "Secure Proxmox VE inspection, deterministic maintenance preflight, same-cluster migration, controlled guest operations, governed provisioning, and provenance-gated retirement over administrator-configured profiles with pinned-CA TLS.",
+  "version": "1.7.0",
+  "description": "Secure Proxmox VE inspection, bounded node evacuation planning, same-cluster migration, controlled guest operations, governed provisioning, and provenance-gated retirement over administrator-configured profiles with pinned-CA TLS.",
   "author": "Sidekick",
   "type": "plugin",
   "entryPoint": "entry.js",
@@ -15,7 +15,8 @@
     "proxmox-ansible",
     "proxmox-migration",
     "proxmox-guarded-retirement",
-    "proxmox-maintenance-preflight"
+    "proxmox-maintenance-preflight",
+    "proxmox-maintenance-planning"
   ],
   "configSchema": {
     "type": "object",

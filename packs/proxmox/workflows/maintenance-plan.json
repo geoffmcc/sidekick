@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "name": "proxmox/maintenance-plan",
+  "version": "1.0.0",
+  "title": "Proxmox Node Maintenance Plan",
+  "description": "Build a bounded, read-only guest evacuation proposal for an operator review before node maintenance.",
+  "mode": "read_only",
+  "inputs": {
+    "profile": { "type": "string", "required": false, "default": "" },
+    "node": { "type": "string", "required": true }
+  },
+  "steps": [
+    {
+      "name": "plan",
+      "title": "Node evacuation proposal",
+      "tool": "proxmox",
+      "args": { "action": "maintenance_plan", "profile": "${inputs.profile}", "node": "${inputs.node}" },
+      "expect": "json",
+      "on_error": "fail"
+    }
+  ],
+  "result": { "maintenance_plan": "${steps.plan.json}" },
+  "tags": ["proxmox", "maintenance", "migration", "read-only"]
+}

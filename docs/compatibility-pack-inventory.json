@@ -1,9 +1,9 @@
 {
   "schema": "sidekick.compatibility-pack-inventory.v1",
   "source": "bundled pack manifests and repository files",
-  "source_commit": "a3ed18a8d9e9e6a05842d8531a21494c10f1c3f8",
-  "source_commit_date": "2026-10-13T09:26:50-04:00",
-  "source_fingerprint": "sha256:3157d9f431c71cb6276637b54c827a9160a6ca474a4fc94c80da554712ebb55e",
+  "source_commit": "b35690708d2bc2c1fe60e56b27f8d1277bd502e4",
+  "source_commit_date": "2026-10-13T10:38:44-04:00",
+  "source_fingerprint": "sha256:3064fbe8e05e7582a52391e6d8964d54438357a92c7576af247376925909522f",
   "pack_count": 27,
   "packs": [
     {
@@ -10861,8 +10861,8 @@
     },
     {
       "name": "proxmox",
-      "version": "1.6.0",
-      "purpose": "Lets Sidekick securely discover and operate Proxmox VE infrastructure through administrator-configured named profiles, pinned-CA TLS, normalized state, deterministic maintenance preflight, same-cluster guest migration, governed provisioning/lifecycle, optional Ansible, and critically guarded retirement of proven disposable resources.",
+      "version": "1.7.0",
+      "purpose": "Lets Sidekick securely discover and operate Proxmox VE infrastructure through administrator-configured named profiles, pinned-CA TLS, normalized state, bounded node evacuation planning, same-cluster guest migration, governed provisioning/lifecycle, optional Ansible, and critically guarded retirement of proven disposable resources.",
       "manifest": "packs/proxmox/sidekick.pack.json",
       "tools": [
         "ansible_run",
@@ -10941,6 +10941,11 @@
         {
           "path": "workflows/storage-health.json",
           "file": "packs/proxmox/workflows/storage-health.json",
+          "present": true
+        },
+        {
+          "path": "workflows/maintenance-plan.json",
+          "file": "packs/proxmox/workflows/maintenance-plan.json",
           "present": true
         },
         {
@@ -11084,6 +11089,19 @@
             "read-only"
           ],
           "file": "packs/proxmox/knowledge/proxmox-storage-backup-readiness.md",
+          "present": true
+        },
+        {
+          "path": "knowledge/proxmox-maintenance-planning.md",
+          "title": "Proxmox pack: maintenance and evacuation planning limits",
+          "category": "operations",
+          "tags": [
+            "proxmox",
+            "maintenance",
+            "migration",
+            "read-only"
+          ],
+          "file": "packs/proxmox/knowledge/proxmox-maintenance-planning.md",
           "present": true
         },
         {
@@ -11238,7 +11256,7 @@
       "network_scopes": [],
       "provider_requirements": null,
       "workflow_contract": {
-        "total": 15,
+        "total": 16,
         "missing_result": [],
         "missing_tags": [],
         "missing_step_error_policy": []
@@ -11421,6 +11439,7 @@
           "guest health",
           "guest inventory",
           "guest readiness",
+          "maintenance plan",
           "provision guest",
           "proxmox",
           "proxmox_guest",
@@ -11454,6 +11473,7 @@
               "packs/proxmox/workflows/guest-health.json",
               "packs/proxmox/workflows/guest-inventory.json",
               "packs/proxmox/workflows/guest-readiness.json",
+              "packs/proxmox/workflows/maintenance-plan.json",
               "packs/proxmox/workflows/provision-guest.json",
               "packs/proxmox/workflows/storage-backend-audit.json",
               "packs/proxmox/workflows/storage-capacity.json",
@@ -11504,6 +11524,7 @@
               "packs/proxmox/knowledge/proxmox-config-audit.md",
               "packs/proxmox/knowledge/proxmox-guest-readiness.md",
               "packs/proxmox/knowledge/proxmox-least-privilege.md",
+              "packs/proxmox/knowledge/proxmox-maintenance-planning.md",
               "packs/proxmox/knowledge/proxmox-operating.md",
               "packs/proxmox/knowledge/proxmox-provisioning.md",
               "packs/proxmox/knowledge/proxmox-readonly.md",
@@ -11545,6 +11566,7 @@
             "evidence": [
               "packs/proxmox/knowledge/proxmox-guest-readiness.md",
               "packs/proxmox/knowledge/proxmox-least-privilege.md",
+              "packs/proxmox/knowledge/proxmox-maintenance-planning.md",
               "packs/proxmox/knowledge/proxmox-operating.md",
               "packs/proxmox/knowledge/proxmox-provisioning.md",
               "packs/proxmox/knowledge/proxmox-readonly.md",
@@ -11555,6 +11577,7 @@
               "packs/proxmox/modules/proxmox-tools/manifest.json",
               "packs/proxmox/workflows/backup-verification-audit.json",
               "packs/proxmox/workflows/guest-readiness.json",
+              "packs/proxmox/workflows/maintenance-plan.json",
               "packs/proxmox/workflows/upgrade-readiness.json",
               "test/agent-bridge-prompt.test.js",
               "test/brain.test.js",
@@ -11571,6 +11594,7 @@
             "evidence": [
               "packs/proxmox/knowledge/proxmox-guest-readiness.md",
               "packs/proxmox/knowledge/proxmox-least-privilege.md",
+              "packs/proxmox/knowledge/proxmox-maintenance-planning.md",
               "packs/proxmox/knowledge/proxmox-operating.md",
               "packs/proxmox/knowledge/proxmox-provisioning.md",
               "packs/proxmox/knowledge/proxmox-readonly.md",
@@ -11582,6 +11606,7 @@
               "packs/proxmox/modules/proxmox-tools/manifest.json",
               "packs/proxmox/workflows/environment-recon.json",
               "packs/proxmox/workflows/guest-health.json",
+              "packs/proxmox/workflows/maintenance-plan.json",
               "packs/proxmox/workflows/provision-guest.json",
               "test/brain.test.js",
               "test/jellyfin-pack.test.js",
@@ -11600,6 +11625,7 @@
               "packs/proxmox/knowledge/proxmox-config-audit.md",
               "packs/proxmox/knowledge/proxmox-guest-readiness.md",
               "packs/proxmox/knowledge/proxmox-least-privilege.md",
+              "packs/proxmox/knowledge/proxmox-maintenance-planning.md",
               "packs/proxmox/knowledge/proxmox-operating.md",
               "packs/proxmox/knowledge/proxmox-provisioning.md",
               "packs/proxmox/knowledge/proxmox-readonly.md",
@@ -11636,6 +11662,7 @@
             "evidence": [
               "packs/proxmox/knowledge/proxmox-guest-readiness.md",
               "packs/proxmox/knowledge/proxmox-least-privilege.md",
+              "packs/proxmox/knowledge/proxmox-maintenance-planning.md",
               "packs/proxmox/knowledge/proxmox-operating.md",
               "packs/proxmox/knowledge/proxmox-provisioning.md",
               "packs/proxmox/knowledge/proxmox-readonly.md",
@@ -11663,6 +11690,7 @@
               "packs/proxmox/knowledge/proxmox-config-audit.md",
               "packs/proxmox/knowledge/proxmox-guest-readiness.md",
               "packs/proxmox/knowledge/proxmox-least-privilege.md",
+              "packs/proxmox/knowledge/proxmox-maintenance-planning.md",
               "packs/proxmox/knowledge/proxmox-operating.md",
               "packs/proxmox/knowledge/proxmox-provisioning.md",
               "packs/proxmox/knowledge/proxmox-readonly.md",
@@ -11704,6 +11732,7 @@
               "packs/proxmox/workflows/guest-health.json",
               "packs/proxmox/workflows/guest-inventory.json",
               "packs/proxmox/workflows/guest-readiness.json",
+              "packs/proxmox/workflows/maintenance-plan.json",
               "packs/proxmox/workflows/provision-guest.json",
               "packs/proxmox/workflows/storage-backend-audit.json",
               "packs/proxmox/workflows/storage-capacity.json",
@@ -11719,6 +11748,7 @@
               "packs/proxmox/knowledge/proxmox-config-audit.md",
               "packs/proxmox/knowledge/proxmox-guest-readiness.md",
               "packs/proxmox/knowledge/proxmox-least-privilege.md",
+              "packs/proxmox/knowledge/proxmox-maintenance-planning.md",
               "packs/proxmox/knowledge/proxmox-operating.md",
               "packs/proxmox/knowledge/proxmox-provisioning.md",
               "packs/proxmox/knowledge/proxmox-readonly.md",
@@ -11739,6 +11769,7 @@
               "packs/proxmox/workflows/guest-health.json",
               "packs/proxmox/workflows/guest-inventory.json",
               "packs/proxmox/workflows/guest-readiness.json",
+              "packs/proxmox/workflows/maintenance-plan.json",
               "packs/proxmox/workflows/provision-guest.json",
               "packs/proxmox/workflows/storage-backend-audit.json",
               "packs/proxmox/workflows/storage-capacity.json",
@@ -11762,6 +11793,7 @@
             "evidence": [
               "packs/proxmox/knowledge/proxmox-config-audit.md",
               "packs/proxmox/knowledge/proxmox-least-privilege.md",
+              "packs/proxmox/knowledge/proxmox-maintenance-planning.md",
               "packs/proxmox/knowledge/proxmox-operating.md",
               "packs/proxmox/knowledge/proxmox-provisioning.md",
               "packs/proxmox/knowledge/proxmox-safety.md",
@@ -11803,6 +11835,7 @@
               "packs/proxmox/knowledge/proxmox-config-audit.md",
               "packs/proxmox/knowledge/proxmox-guest-readiness.md",
               "packs/proxmox/knowledge/proxmox-least-privilege.md",
+              "packs/proxmox/knowledge/proxmox-maintenance-planning.md",
               "packs/proxmox/knowledge/proxmox-operating.md",
               "packs/proxmox/knowledge/proxmox-provisioning.md",
               "packs/proxmox/knowledge/proxmox-readonly.md",
@@ -11843,6 +11876,7 @@
             "packs/proxmox/knowledge/proxmox-config-audit.md",
             "packs/proxmox/knowledge/proxmox-guest-readiness.md",
             "packs/proxmox/knowledge/proxmox-least-privilege.md",
+            "packs/proxmox/knowledge/proxmox-maintenance-planning.md",
             "packs/proxmox/knowledge/proxmox-operating.md",
             "packs/proxmox/knowledge/proxmox-provisioning.md",
             "packs/proxmox/knowledge/proxmox-readonly.md",
@@ -11862,6 +11896,7 @@
             "packs/proxmox/workflows/guest-health.json",
             "packs/proxmox/workflows/guest-inventory.json",
             "packs/proxmox/workflows/guest-readiness.json",
+            "packs/proxmox/workflows/maintenance-plan.json",
             "packs/proxmox/workflows/provision-guest.json",
             "packs/proxmox/workflows/storage-backend-audit.json",
             "packs/proxmox/workflows/storage-capacity.json",

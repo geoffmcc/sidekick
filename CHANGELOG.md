@@ -4,6 +4,20 @@ All notable changes to Sidekick.
 
 ## Unreleased
 
+### Proxmox compatibility pack
+
+- Added a bounded, read-only node evacuation proposal through
+  `maintenance_plan` and `proxmox/maintenance-plan`; every suggested guest move
+  is assessed by the migration planner, and no move is performed.
+- Added explicit recovery details for ambiguous create/clone task timeouts and
+  failed clone provenance stamping so operators can inspect the guest and UPID
+  before retrying.
+- Updated the pack guide, operating reference, and workflow documentation to
+  reflect current capabilities and the declared critical-risk `bash`
+  permission used only by optional Ansible execution.
+- Migrated the Proxmox unit and integration suites to Node's built-in
+  `node:test` runner.
+
 ## [2.2.3] - 2026-10-13
 
 ### Performance

@@ -104,7 +104,7 @@ useful for focused work but are not part of the primary reading path above:
 | `developer-pack.md` | Developer / Software Engineering pack tools and workflows. |
 | `jellyfin-pack.md` | Jellyfin integration and maintenance workflows. |
 | `network-firewall-operations-pack.md` | Governed network and firewall operations pack. |
-| `proxmox-pack.md` | Proxmox VE profiles, guest operations, provisioning, and retirement. |
+| `proxmox-pack.md` | Proxmox VE profiles, guest operations, provisioning/recovery, backups, and read-only maintenance planning. |
 | `security-research-pack.md` | Security Research pack scope, evidence, workspace, and report boundaries. |
 | `third-party-capability-packs.md` | Authoring and review guidance for compatible third-party packs. |
 | `transcription.md` | Current transcription support and its Compute boundary. |

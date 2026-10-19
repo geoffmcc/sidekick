@@ -9,6 +9,7 @@
 // input could hit is asserted here.
 
 const assert = require("assert");
+const { test: nodeTest } = require("node:test");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -29,16 +30,7 @@ const retirement = require(path.join(LIB, "retirement.js"));
 const operations = require(path.join(LIB, "operations.js"));
 const proxmoxEntry = require(path.join(LIB, "..", "entry.js"));
 
-let failures = 0;
-function test(label, fn) {
-  try {
-    fn();
-    console.log(`Passed: ${label}`);
-  } catch (error) {
-    failures++;
-    console.error(`FAILED: ${label}\n  ${error && error.stack ? error.stack : error}`);
-  }
-}
+const test = nodeTest;
 
 // --- endpoint validation (SSRF surface) ------------------------------------
 
@@ -451,26 +443,13 @@ test("U.33: guarded retirement fails closed for disabled, unmanaged, protected a
 });
 
 
-async function asyncTest(label, fn) {
-  try {
-    await fn();
-    console.log(`Passed: ${label}`);
-  } catch (error) {
-    failures++;
-    console.error(`FAILED: ${label}\n  ${error && error.stack ? error.stack : error}`);
-  }
-}
-
-(async () => {
-  console.log("Running Proxmox pack unit/security tests...\n");
-
+test("U.34: ansible.run retains the approval workspace, maps facade denials, and derives success from stats", async () => {
   // ansible.run through a STUBBED governed-bash dispatch: proves the dispatch
   // contract (approval parking retains the generated workspace the queued
   // command references; a facade denial maps to permission_denied; success is
   // derived from parsed JSON stats, never from "the command ran") without
   // needing a real ansible or a real shell. A PATH shim satisfies the
   // availability detection only.
-  await asyncTest("U.34: ansible.run retains the approval workspace, maps facade denials, and derives success from stats", async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sk-ansible-unit-"));
     const bin = path.join(tmp, "bin");
     const pb = path.join(tmp, "playbooks");
@@ -514,11 +493,4 @@ async function asyncTest(label, fn) {
       process.env.PATH = prevPath;
       fs.rmSync(tmp, { recursive: true, force: true });
     }
-  });
-
-  if (failures > 0) {
-    console.error(`\n${failures} test(s) failed.`);
-    process.exit(1);
-  }
-  console.log("\nAll Proxmox pack unit/security tests passed.");
-})();
+});

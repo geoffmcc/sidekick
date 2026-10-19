@@ -36,6 +36,14 @@ Operations that return a Proxmox task (create/clone/snapshot) are monitored to
 a terminal state; `configure` is synchronous and is verified by reading the
 config back. Mutations are never retried after an ambiguous failure.
 
+If create/clone polling times out, the result is `reconciliation_required` and
+includes the VMID, node, UPID, uncertainty about whether the resource exists,
+and specific inspection steps. A timed-out clone may not have had provenance
+stamped yet. Inspect the task and guest before retrying; if provenance is
+missing, reconcile the resource manually before considering retirement. A
+completed clone whose provenance write fails returns the same recovery
+metadata and names the orphaned VMID.
+
 ## Provenance: ownership is proved, never assumed
 
 Everything the pack creates is stamped with two independent markers:

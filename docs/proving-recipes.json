@@ -1291,7 +1291,7 @@
       "id": "pack-proving.proxmox",
       "version": 1,
       "pack": "proxmox",
-      "supported_versions": "=1.6.0",
+      "supported_versions": "=1.7.0",
       "preconditions": [
         "pack package hash is inspectable",
         "pack configuration validates",
