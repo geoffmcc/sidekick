@@ -4,6 +4,15 @@ All notable changes to Sidekick.
 
 ## Unreleased
 
+## [2.2.6] - 2026-10-19
+
+### MCP
+
+- Fixed MCP startup with refined Zod tool schemas by using `safeExtend` when
+  adding the correlation ID field, preserving each schema's validation checks.
+
+## [2.2.5] - 2026-10-19
+
 ### Proxmox compatibility pack
 
 - Added a bounded, read-only node evacuation proposal through
