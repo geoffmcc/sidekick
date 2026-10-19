@@ -21,7 +21,7 @@ process.env.SIDEKICK_ENVIRONMENT = "test";
 // Set a fake Groq key so the module-load ollama warmup path is skipped.
 process.env.GROQ_API_KEY = "test-fake-key";
 
-const PORT = 4142;
+let port;
 
 delete require.cache[require.resolve("../src/agent")];
 const agent = require("../src/agent");
@@ -45,7 +45,7 @@ function request(method, urlPath, body, extraHeaders = {}) {
   return new Promise((resolve, reject) => {
     const data = body != null ? JSON.stringify(body) : null;
     const req = http.request({
-      hostname: "127.0.0.1", port: PORT, path: urlPath, method,
+      hostname: "127.0.0.1", port, path: urlPath, method,
       headers: { "Content-Type": "application/json", ...(data ? { "Content-Length": Buffer.byteLength(data) } : {}), ...extraHeaders },
     }, (res) => {
       let out = "";
@@ -113,8 +113,9 @@ async function runRootTask(goal) {
 
 let server;
 (async () => {
-  server = agent.app.listen(PORT, "127.0.0.1");
+  server = agent.app.listen(0, "127.0.0.1");
   await new Promise((r) => server.once("listening", r));
+  port = server.address().port;
 
   // 1) Existing POST /api/agent/run behavior remains compatible.
   await ok("1) POST /api/agent/run still creates a task (backward compatible)", async () => {
@@ -406,7 +407,7 @@ let server;
     const childTaskId = res.data.taskId;
     const events = await new Promise((resolve, reject) => {
       const chunks = [];
-      const req = http.request({ hostname: "127.0.0.1", port: PORT, path: "/api/agent/stream/" + childTaskId, method: "GET" }, (r) => {
+      const req = http.request({ hostname: "127.0.0.1", port, path: "/api/agent/stream/" + childTaskId, method: "GET" }, (r) => {
         r.on("data", (c) => chunks.push(c.toString()));
         r.on("end", () => resolve(chunks.join("")));
       });
