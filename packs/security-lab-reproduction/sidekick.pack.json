@@ -1,5 +1,5 @@
 {
-  "schema_version": 1, "pack_api": 1, "name": "security-lab-reproduction", "display_name": "Security Lab & Reproduction", "version": "1.0.0",
+  "schema_version": 1, "pack_api": 1, "name": "security-lab-reproduction", "display_name": "Security Lab & Reproduction", "version": "1.0.1",
   "description": "Fail-closed authorization preflight for reproducible security labs; no public discovery or arbitrary execution.", "publisher": "Sidekick", "compatibility": { "sidekick": ">=1.0.0" },
   "modules": [{ "name": "security-lab-tools", "path": "modules/security-lab-tools", "entry_point": "entry.js", "config_from_pack": true }],
   "workflows": [{ "path": "workflows/lab-preflight.json" }],
