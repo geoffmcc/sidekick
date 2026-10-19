@@ -8,7 +8,7 @@
       "id": "pack-proving.api-engineering",
       "version": 1,
       "pack": "api-engineering",
-      "supported_versions": "=1.0.0",
+      "supported_versions": "=1.0.1",
       "preconditions": [
         "pack package hash is inspectable",
         "pack configuration validates",
@@ -75,7 +75,7 @@
       "id": "pack-proving.assumptions-unknowns",
       "version": 1,
       "pack": "assumptions-unknowns",
-      "supported_versions": "=1.0.0",
+      "supported_versions": "=1.0.1",
       "preconditions": [
         "pack package hash is inspectable",
         "pack configuration validates",
@@ -137,7 +137,7 @@
       "id": "pack-proving.backup-restore-dr",
       "version": 1,
       "pack": "backup-restore-dr",
-      "supported_versions": "=1.0.0",
+      "supported_versions": "=1.0.1",
       "preconditions": [
         "pack package hash is inspectable",
         "pack configuration validates",
@@ -281,7 +281,7 @@
       "id": "pack-proving.change-impact",
       "version": 1,
       "pack": "change-impact",
-      "supported_versions": "=1.0.0",
+      "supported_versions": "=1.0.1",
       "preconditions": [
         "pack package hash is inspectable",
         "pack configuration validates",
@@ -343,7 +343,7 @@
       "id": "pack-proving.ci-cd-release-engineering",
       "version": 1,
       "pack": "ci-cd-release-engineering",
-      "supported_versions": "=1.0.0",
+      "supported_versions": "=1.0.1",
       "preconditions": [
         "pack package hash is inspectable",
         "pack configuration validates",
@@ -410,7 +410,7 @@
       "id": "pack-proving.container-operations",
       "version": 1,
       "pack": "container-operations",
-      "supported_versions": "=1.0.1",
+      "supported_versions": "=1.0.2",
       "preconditions": [
         "pack package hash is inspectable",
         "pack configuration validates",
@@ -482,7 +482,7 @@
       "id": "pack-proving.database-administration",
       "version": 1,
       "pack": "database-administration",
-      "supported_versions": "=1.0.0",
+      "supported_versions": "=1.0.1",
       "preconditions": [
         "pack package hash is inspectable",
         "pack configuration validates",
@@ -621,7 +621,7 @@
       "id": "pack-proving.documentation-knowledge",
       "version": 1,
       "pack": "documentation-knowledge",
-      "supported_versions": "=1.0.0",
+      "supported_versions": "=1.0.1",
       "preconditions": [
         "pack package hash is inspectable",
         "pack configuration validates",
@@ -683,7 +683,7 @@
       "id": "pack-proving.infrastructure-as-code",
       "version": 1,
       "pack": "infrastructure-as-code",
-      "supported_versions": "=1.0.0",
+      "supported_versions": "=1.0.1",
       "preconditions": [
         "pack package hash is inspectable",
         "pack configuration validates",
@@ -817,7 +817,7 @@
       "id": "pack-proving.linux-systems-administration",
       "version": 1,
       "pack": "linux-systems-administration",
-      "supported_versions": "=1.0.0",
+      "supported_versions": "=1.0.1",
       "preconditions": [
         "pack package hash is inspectable",
         "pack configuration validates",
@@ -889,7 +889,7 @@
       "id": "pack-proving.local-ai-model-operations",
       "version": 1,
       "pack": "local-ai-model-operations",
-      "supported_versions": "=1.0.0",
+      "supported_versions": "=1.0.1",
       "preconditions": [
         "pack package hash is inspectable",
         "pack configuration validates",
@@ -951,7 +951,7 @@
       "id": "pack-proving.mcp-development-compatibility",
       "version": 1,
       "pack": "mcp-development-compatibility",
-      "supported_versions": "=1.0.0",
+      "supported_versions": "=1.0.1",
       "preconditions": [
         "pack package hash is inspectable",
         "pack configuration validates",
@@ -1013,7 +1013,7 @@
       "id": "pack-proving.network-firewall",
       "version": 1,
       "pack": "network-firewall",
-      "supported_versions": "=1.0.0",
+      "supported_versions": "=1.1.0",
       "preconditions": [
         "pack package hash is inspectable",
         "pack configuration validates",
@@ -1090,7 +1090,7 @@
       "id": "pack-proving.network-services",
       "version": 1,
       "pack": "network-services",
-      "supported_versions": "=1.0.0",
+      "supported_versions": "=1.0.1",
       "preconditions": [
         "pack package hash is inspectable",
         "pack configuration validates",
@@ -1162,7 +1162,7 @@
       "id": "pack-proving.observability-incident-response",
       "version": 1,
       "pack": "observability-incident-response",
-      "supported_versions": "=1.0.0",
+      "supported_versions": "=1.0.1",
       "preconditions": [
         "pack package hash is inspectable",
         "pack configuration validates",
@@ -1234,7 +1234,7 @@
       "id": "pack-proving.operational-readiness",
       "version": 1,
       "pack": "operational-readiness",
-      "supported_versions": "=1.0.0",
+      "supported_versions": "=1.0.1",
       "preconditions": [
         "pack package hash is inspectable",
         "pack configuration validates",
@@ -1373,7 +1373,7 @@
       "id": "pack-proving.reproducibility",
       "version": 1,
       "pack": "reproducibility",
-      "supported_versions": "=1.0.0",
+      "supported_versions": "=1.0.1",
       "preconditions": [
         "pack package hash is inspectable",
         "pack configuration validates",
@@ -1435,7 +1435,7 @@
       "id": "pack-proving.security-lab-reproduction",
       "version": 1,
       "pack": "security-lab-reproduction",
-      "supported_versions": "=1.0.0",
+      "supported_versions": "=1.0.1",
       "preconditions": [
         "pack package hash is inspectable",
         "pack configuration validates",
@@ -1589,7 +1589,7 @@
       "id": "pack-proving.skeptical-verifier",
       "version": 1,
       "pack": "skeptical-verifier",
-      "supported_versions": "=1.0.0",
+      "supported_versions": "=1.0.1",
       "preconditions": [
         "pack package hash is inspectable",
         "pack configuration validates",
@@ -1651,7 +1651,7 @@
       "id": "pack-proving.software-supply-chain",
       "version": 1,
       "pack": "software-supply-chain",
-      "supported_versions": "=1.0.0",
+      "supported_versions": "=1.0.1",
       "preconditions": [
         "pack package hash is inspectable",
         "pack configuration validates",
@@ -1713,7 +1713,7 @@
       "id": "pack-proving.storage-filesystems",
       "version": 1,
       "pack": "storage-filesystems",
-      "supported_versions": "=1.0.0",
+      "supported_versions": "=1.0.1",
       "preconditions": [
         "pack package hash is inspectable",
         "pack configuration validates",
@@ -1785,7 +1785,7 @@
       "id": "pack-proving.testing-quality-engineering",
       "version": 1,
       "pack": "testing-quality-engineering",
-      "supported_versions": "=1.0.0",
+      "supported_versions": "=1.0.1",
       "preconditions": [
         "pack package hash is inspectable",
         "pack configuration validates",
