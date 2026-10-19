@@ -11,7 +11,7 @@ const correlationInput = z.string().regex(CORRELATION_ID_PATTERN, "correlation_i
   .describe("Client-neutral correlation identifier propagated across related work");
 
 function withCorrelationSchema(schema, argumentDescriptions = {}) {
-  if (!schema || typeof schema.extend !== "function") return schema;
+  if (!schema || typeof schema.safeExtend !== "function") return schema;
   const described = {};
   const shape = schema.shape && typeof schema.shape === "object" ? schema.shape : {};
   for (const [name, field] of Object.entries(shape)) {
@@ -21,7 +21,7 @@ function withCorrelationSchema(schema, argumentDescriptions = {}) {
     if (!detail || detail === hint && /^(?:string|number|boolean|array|object|any)$/i.test(hint)) continue;
     described[name] = field.describe(detail.slice(0, 240));
   }
-  return schema.extend({ ...described, correlation_id: correlationInput });
+  return schema.safeExtend({ ...described, correlation_id: correlationInput });
 }
 
 function buildProcedureSchema(parameters) {
