@@ -3,7 +3,7 @@
   "pack_api": 1,
   "name": "ci-cd-release-engineering",
   "display_name": "CI/CD & Release Engineering",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Evidence-based CI diagnosis and release readiness without publishing or pushing.",
   "publisher": "Sidekick",
   "compatibility": { "sidekick": ">=1.0.0" },
