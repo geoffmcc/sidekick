@@ -1,7 +1,7 @@
 {
   "name": "infrastructure-as-code-tools",
   "displayName": "Infrastructure as Code Tools",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Plan-only infrastructure validation composed from governed Compose inspection and parsing.",
   "author": "Sidekick",
   "type": "plugin",

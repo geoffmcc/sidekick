@@ -3,7 +3,7 @@
   "pack_api": 1,
   "name": "infrastructure-as-code",
   "display_name": "Infrastructure as Code",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Provider-authoritative infrastructure inspection and plan-only validation.",
   "publisher": "Sidekick",
   "compatibility": { "sidekick": ">=1.0.0" },
