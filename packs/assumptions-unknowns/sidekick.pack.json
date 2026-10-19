@@ -3,7 +3,7 @@
   "pack_api": 1,
   "name": "assumptions-unknowns",
   "display_name": "Assumptions & Unknowns",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Surfaces explicit assumptions, unresolved questions and evidence gaps from existing context, memory, handoff and repository evidence without creating a competing memory store.",
   "publisher": "Sidekick",
   "compatibility": { "sidekick": ">=1.0.0" },
