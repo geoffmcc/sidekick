@@ -94,7 +94,10 @@ function main() {
   if (requestedDomain) args.push(`--domain=${requestedDomain}`);
   fs.rmSync(reportsDir, { recursive: true, force: true });
   fs.mkdirSync(reportsDir, { recursive: true });
-  const result = spawnSync(c8, args, { cwd: root, encoding: "utf8", timeout: 45 * 60 * 1000, env: { ...process.env, NODE_ENV: "test" } });
+  // Keep the suite runner's heartbeat and per-suite progress visible while
+  // coverage is running. Capturing c8 with spawnSync makes a multi-minute run
+  // look idle and hides all progress until the process exits.
+  const result = spawnSync(c8, args, { cwd: root, stdio: "inherit", timeout: 45 * 60 * 1000, env: { ...process.env, NODE_ENV: "test" } });
   let summary = null;
   try { summary = JSON.parse(fs.readFileSync(path.join(reportsDir, "coverage-summary.json"), "utf8")); } catch {}
   let baseline = null;
@@ -105,7 +108,7 @@ function main() {
   fs.writeFileSync(path.join(root, "artifacts", "coverage-summary.json"), `${JSON.stringify(report, null, 2)}\n`);
   if (evaluated.coverage) console.log(`Coverage policy v${policy.version}: lines ${evaluated.coverage.lines}%, branches ${evaluated.coverage.branches}%, functions ${evaluated.coverage.functions}%`);
   else console.error("Coverage report was unavailable");
-  if (result.status !== 0 && result.stderr) process.stderr.write(result.stderr.slice(-4000));
+  if (result.error) console.error(`Coverage runner could not start: ${result.error.message}`);
   if (!report.passed) process.exitCode = 1;
 }
 

@@ -42,7 +42,9 @@ function request(port, method, requestPath, body, options = {}) {
   return new Promise((resolve, reject) => {
     const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
     if (options.auth !== false) headers.Authorization = basicAuth();
-    const req = http.request({ hostname: "127.0.0.1", port, path: requestPath, method, headers }, response => {
+    // E2E requests can be separated by long browser waits; use fresh sockets
+    // so a closed idle keep-alive connection cannot poison a later poll.
+    const req = http.request({ hostname: "127.0.0.1", port, path: requestPath, method, headers, agent: false }, response => {
       let text = "";
       response.setEncoding("utf8");
       response.on("data", chunk => { text += chunk; });
