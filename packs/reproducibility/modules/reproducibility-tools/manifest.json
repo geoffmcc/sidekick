@@ -1,7 +1,7 @@
 {
   "name": "reproducibility-tools",
   "displayName": "Reproducibility Tools",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Bounded secret-safe reproducibility bundle creation through research evidence custody.",
   "author": "Sidekick",
   "type": "plugin",
