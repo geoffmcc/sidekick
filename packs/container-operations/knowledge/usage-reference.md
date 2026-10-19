@@ -11,3 +11,11 @@ are confined to configured project roots and allowlisted binaries; this pack
 does not accept arbitrary CLI arguments or shell commands. Empty inventories,
 missing engines, unavailable registries, and provider errors remain unknown or
 failed. Inspect health and logs after any approved lifecycle operation.
+
+For `inspect`, `stats`, and `logs`, provide a container name or ID returned by
+`list`; lifecycle calls require a target except `pull`, which requires an image
+reference. Missing action-specific values fail before contacting the engine.
+Use `profile` only with an exact configured profile name, or omit it for the
+configured default. Direct `recreate` additionally requires
+`confirm_recreate: true` after reviewing the exact target; it removes the old
+container and has no rollback, so prefer `controlled-update`.

@@ -33,8 +33,8 @@ test("CO.1a: fresh installs provide a read-only local Docker Compose default", (
 });
 
 test("CO.1b: the bundled pack version advances when its runtime module changes", () => {
-  assert.equal(packManifest.version, "1.0.1");
-  assert.equal(require("../packs/container-operations/modules/container-operations-tools/manifest.json").version, "1.0.1");
+  assert.equal(packManifest.version, "1.0.2");
+  assert.equal(require("../packs/container-operations/modules/container-operations-tools/manifest.json").version, "1.0.2");
 });
 
 test("CO.1c: Compose declares bounded Grafana origins", () => {
