@@ -10,10 +10,18 @@ const { CORRELATION_ID_PATTERN } = require("../tools/context");
 const correlationInput = z.string().regex(CORRELATION_ID_PATTERN, "correlation_id must be 1-128 safe identifier characters").optional()
   .describe("Client-neutral correlation identifier propagated across related work");
 
-function withCorrelationSchema(schema) {
-  return schema && typeof schema.extend === "function"
-    ? schema.extend({ correlation_id: correlationInput })
-    : schema;
+function withCorrelationSchema(schema, argumentDescriptions = {}) {
+  if (!schema || typeof schema.extend !== "function") return schema;
+  const described = {};
+  const shape = schema.shape && typeof schema.shape === "object" ? schema.shape : {};
+  for (const [name, field] of Object.entries(shape)) {
+    const hint = typeof argumentDescriptions?.[name] === "string" ? argumentDescriptions[name].trim() : "";
+    if (!hint || field?.description) continue;
+    const detail = hint.replace(/^(?:string|number|boolean|array|object|any)\s*/i, "").replace(/^\((.*)\)$/, "$1").trim();
+    if (!detail || detail === hint && /^(?:string|number|boolean|array|object|any)$/i.test(hint)) continue;
+    described[name] = field.describe(detail.slice(0, 240));
+  }
+  return schema.extend({ ...described, correlation_id: correlationInput });
 }
 
 function buildProcedureSchema(parameters) {
@@ -85,7 +93,7 @@ function createMcpServer(authIdentityProvider = () => null, options = {}) {
     const mcpName = stripSidekickPrefix(descriptor.name);
     server.registerTool(mcpName, {
       description: descriptor.description,
-      inputSchema: withCorrelationSchema(descriptor.schema),
+      inputSchema: withCorrelationSchema(descriptor.schema, descriptor.argumentDescriptions || descriptor.args),
       annotations: descriptor.annotations,
     }, async (args, extra) => {
       extra = extra || {};
