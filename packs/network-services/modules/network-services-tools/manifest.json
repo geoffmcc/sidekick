@@ -1,7 +1,7 @@
 {
   "name": "network-services-tools",
   "displayName": "Network Services Tools",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Governed network, DHCP, VPN, and Nginx service adapters.",
   "author": "Sidekick",
   "type": "plugin",

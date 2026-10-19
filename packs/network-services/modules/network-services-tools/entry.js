@@ -7,7 +7,8 @@ const identifier = value => typeof value === "string" && IDENTIFIER.test(value);
 const host = value => typeof value === "string" && value.length <= 253 && /^[A-Za-z0-9][A-Za-z0-9.:-]*[A-Za-z0-9]$/.test(value);
 const protocol = value => ["tcp", "udp", "icmp", "icmpv6", "sctp"].includes(String(value || "").toLowerCase());
 function failure(code, error) { return { content: [{ type: "text", text: JSON.stringify({ ok: false, code, error }) }], isError: true, code }; }
-async function read(services, tool, args) { try { const value = await services.dispatch(tool, args); return value?.isError ? { state: "unavailable", code: value.code || "provider_error", error: "provider returned an error" } : value; } catch (error) { return { state: "unavailable", code: error.code || "provider_unavailable", error: String(error.message || error).slice(0, 300) }; } }
+function failed(value) { const raw = value?.content?.map(item => item.text || "").join("\n").trim(); let data = null; try { data = raw ? JSON.parse(raw) : null; } catch {} const state = String(value?.state || value?.status || data?.state || data?.status || "").toLowerCase(); return value?.isError === true || value?.ok === false || data?.ok === false || ["unavailable", "error", "failed"].includes(state); }
+async function read(services, tool, args) { try { const value = await services.dispatch(tool, args); return failed(value) ? { ok: false, state: "unavailable", code: value.code || "provider_error", error: "provider returned an error or unavailable result" } : value; } catch (error) { return { ok: false, state: "unavailable", code: error.code || "provider_unavailable", error: String(error.message || error).slice(0, 300) }; } }
 
 function buildDescriptors(services) {
   const nginxActions = ["status", "list_sites", "test_config", "reload", "add_site", "remove_site"];
@@ -15,7 +16,7 @@ function buildDescriptors(services) {
     {
       name: "network_service_audit", description: "Collect bounded network, DHCP, VPN, and Nginx service evidence through configured providers.",
       schema: z.object({ profile: z.string().regex(IDENTIFIER).or(z.literal("")).optional() }).strict(), args: { profile: "string" }, risk: "low", category: "Network Services",
-      handler: async args => { const profile = args.profile || services.config?.default_profile; return { content: [{ type: "text", text: JSON.stringify({ network: await read(services, "network", { action: "summary", profile }), dhcp: await read(services, "dhcp", { action: "status", profile }), vpn: await read(services, "vpn", { action: "status", profile }), nginx: await read(services, "nginx", { action: "status" }) }, null, 2) }] }; },
+      handler: async args => { const profile = args.profile || services.config?.default_profile; const evidence = { network: await read(services, "network", { action: "summary", profile }), dhcp: await read(services, "dhcp", { action: "status", profile }), vpn: await read(services, "vpn", { action: "status", profile }), nginx: await read(services, "nginx", { action: "status" }) }; const failures = Object.entries(evidence).filter(([, value]) => failed(value)).map(([name]) => name); const state = failures.length === Object.keys(evidence).length ? "unavailable" : failures.length ? "partial" : "observed"; return { content: [{ type: "text", text: JSON.stringify({ ok: failures.length === 0, state, profile: profile || null, evidence, unavailable_sources: failures, unavailable_is_not_healthy: true }, null, 2) }] }; },
     },
     {
       name: "network_connectivity_review", description: "Run deterministic provider connectivity analysis; unknown effective policy remains unknown.",
@@ -35,7 +36,7 @@ function buildDescriptors(services) {
         const groups = { interfaces: ["network", "interfaces"], networks: ["network", "networks"], routes: ["network", "routes"], gateways: ["network", "gateways"], clients: ["network", "clients"], leases: ["dhcp", "leases"], pools: ["dhcp", "pools"], reservations: ["dhcp", "reservations"], vpn_interfaces: ["vpn", "interfaces"], vpn_peers: ["vpn", "peers"], nginx_sites: ["nginx", "list_sites"] };
         const [tool, action] = groups[args.area];
         const value = await read(services, tool, { action, profile: args.profile || services.config?.default_profile });
-        return { content: [{ type: "text", text: JSON.stringify({ ok: value?.state !== "unavailable", area: args.area, provider: tool, data: value, evidence: [{ source: tool, action }], unavailable_is_not_healthy: true }, null, 2) }] };
+        return { content: [{ type: "text", text: JSON.stringify({ ok: !failed(value), state: failed(value) ? "unavailable" : "observed", area: args.area, provider: tool, data: value, evidence: [{ source: tool, action }], unavailable_is_not_healthy: true }, null, 2) }] };
       },
     },
   ];
