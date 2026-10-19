@@ -1,7 +1,7 @@
 {
   "name": "linux-systems-tools",
   "displayName": "Linux Systems Tools",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Governed Linux host and systemd service adapters.",
   "author": "Sidekick",
   "type": "plugin",

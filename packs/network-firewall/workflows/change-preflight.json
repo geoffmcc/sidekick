@@ -1,12 +1,12 @@
 {
   "name": "network-firewall/change-preflight",
-  "version": "1.0.0",
-  "title": "Network/firewall change preflight",
+  "version": "1.1.0",
+  "title": "Network/firewall read-only change plan",
   "mode": "read_only",
   "owner": "network-firewall",
-  "description": "Produce a deterministic bounded plan and lockout assessment before any network/firewall mutation.",
-  "inputs": { "profile": { "type": "string", "required": true }, "change_type": { "type": "string", "required": true }, "id": { "type": "string", "required": false, "default": "" }, "management_path": { "type": "string", "required": true } },
-  "steps": [ { "name": "preflight", "title": "Change safety preflight", "tool": "network_change", "args": { "action": "preflight", "profile": "${inputs.profile}", "change_type": "${inputs.change_type}", "id": "${inputs.id}", "management_path": "${inputs.management_path}" }, "expect": "json", "on_error": "fail" } ],
-  "result": { "preflight": "${steps.preflight.json}" },
-  "tags": ["network", "firewall", "change", "preflight", "read-only"]
+  "description": "Produce a deterministic bounded change plan. Caller-supplied management-path claims are not accepted as evidence and apply remains blocked.",
+  "inputs": { "profile": { "type": "string", "required": true }, "change_type": { "type": "string", "required": true }, "id": { "type": "string", "required": false, "default": "" } },
+  "steps": [ { "name": "plan", "title": "Create read-only change plan", "tool": "network_change", "args": { "action": "preflight", "profile": "${inputs.profile}", "change_type": "${inputs.change_type}", "id": "${inputs.id}" }, "expect": "json", "on_error": "fail" } ],
+  "result": { "plan": "${steps.plan.json}", "warning": "Plan output is not proof of safety or authorization to apply a change." },
+  "tags": ["network", "firewall", "change", "plan-only", "read-only"]
 }

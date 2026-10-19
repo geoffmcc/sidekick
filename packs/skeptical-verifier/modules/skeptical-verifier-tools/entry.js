@@ -4,7 +4,7 @@ const { z } = requireFromSidekick("zod");
 const out = value => ({ content: [{ type: "text", text: JSON.stringify(value, null, 2) }] });
 const fail = message => ({ ...out({ ok: false, state: "unavailable", error: message, code: "verification_failed" }), isError: true });
 function decode(value) { try { return JSON.parse(value?.content?.map(item => item.text || "").join("") || ""); } catch { return value; } }
-function usable(value) { return value !== null && value !== undefined && !value.isError; }
+function usable(value) { const raw = value?.content?.map(item => item.text || "").join("\n").trim(); let data = null; try { data = raw ? JSON.parse(raw) : null; } catch {} const state = String(value?.state || value?.status || data?.state || data?.status || "").toLowerCase(); return value !== null && value !== undefined && value.isError !== true && value.ok !== false && data?.ok !== false && !["unavailable", "error", "failed", "blocked"].includes(state); }
 async function verify(services, args) {
   const checks = {
     profile: await services.dispatch("dev_repo_profile", { path: args.path, include_git: true, include_semantic: false, max_files: args.max_files || 500 }),
@@ -19,7 +19,8 @@ async function verify(services, args) {
 async function compare(services, args) {
   try {
     const comparison = await services.dispatch("research_compare", { baseline: args.baseline, candidate: args.candidate, baseline_evidence: args.baseline_evidence, candidate_evidence: args.candidate_evidence, mode: args.mode || "auto" });
-    return out({ ok: !comparison?.isError, state: comparison?.isError ? "unavailable" : "available", verdict: comparison?.isError ? "unavailable" : "compared", independent: true, comparison: decode(comparison), interpretation_required: true, no_equivalence_claim: true });
+    const available = usable(comparison);
+    return out({ ok: available, state: available ? "observed" : "unavailable", verdict: available ? "compared" : "unavailable", independent: true, comparison: decode(comparison), interpretation_required: true, no_equivalence_claim: true });
   } catch (error) { return fail(error.message || "comparison unavailable"); }
 }
 const entry = { buildDescriptors(services) { return [

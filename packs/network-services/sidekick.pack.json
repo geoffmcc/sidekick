@@ -3,7 +3,7 @@
   "pack_api": 1,
   "name": "network-services",
   "display_name": "Network Services",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Bounded network, DHCP, VPN, and Nginx service inspection with provider-governed changes.",
   "publisher": "Sidekick",
   "compatibility": { "sidekick": ">=1.0.0" },

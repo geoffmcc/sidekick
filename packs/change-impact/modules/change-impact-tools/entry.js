@@ -3,12 +3,16 @@ const { requireFromSidekick } = require("./lib/deps");
 const { z } = requireFromSidekick("zod");
 const result = value => ({ content: [{ type: "text", text: JSON.stringify(value, null, 2) }] });
 const failure = (error, code = "invalid_input") => ({ content: [{ type: "text", text: JSON.stringify({ ok: false, error, code }, null, 2) }], isError: true });
+function failed(value) { const raw = value?.content?.map(item => item.text || "").join("\n").trim(); let data = null; try { data = raw ? JSON.parse(raw) : null; } catch {} const state = String(value?.state || value?.status || data?.state || data?.status || "").toLowerCase(); return value?.isError === true || value?.ok === false || data?.ok === false || ["unavailable", "error", "failed"].includes(state); }
 async function analyze(services, args) {
   const summary = await services.dispatch("dev_change_summary", { path: args.path, base: args.base, staged: args.staged, max_diff_chars: args.max_diff_chars });
   const maxFiles = Math.max(1, Math.min(2000, Number(services.config?.max_files) || 500));
   const semantic = await services.dispatch("semantic_repo", { path: args.path, action: "query", query: args.query || "changed callers callees dependencies", level: 2, limit: Math.min(args.limit || 40, maxFiles), max_chars: args.max_chars || 12000 });
-  const ok = !summary?.isError && !semantic?.isError;
-  return { ...result({ ok, status: ok ? "succeeded" : "unavailable", tool: "change_impact", read_only: true, bounded: { max_files: maxFiles }, evidence: { change_summary: summary, semantic_index: semantic }, limitations: ["Blast radius is repository-derived; runtime topology and unreferenced consumers require separate evidence."], deterministic: true }), isError: !ok };
+  const sources = { change_summary: summary, semantic_index: semantic };
+  const failedSources = Object.entries(sources).filter(([, value]) => failed(value)).map(([name]) => name);
+  const ok = failedSources.length === 0;
+  const status = failedSources.length === Object.keys(sources).length ? "unavailable" : failedSources.length ? "partial" : "observed";
+  return { ...result({ ok, status, unavailable_sources: failedSources, tool: "change_impact", read_only: true, bounded: { max_files: maxFiles }, evidence: sources, limitations: ["Blast radius is repository-derived; runtime topology and unreferenced consumers require separate evidence."], deterministic: true }), isError: !ok };
 }
 async function gate(services, args) {
   const packet = await analyze(services, args);

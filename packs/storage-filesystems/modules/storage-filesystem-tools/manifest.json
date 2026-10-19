@@ -1,7 +1,7 @@
 {
   "name": "storage-filesystem-tools",
   "displayName": "Storage and Filesystem Tools",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Governed host, Proxmox, and container storage inspection adapters.",
   "author": "Sidekick",
   "type": "plugin",

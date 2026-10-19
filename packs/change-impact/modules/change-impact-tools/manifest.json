@@ -1,7 +1,7 @@
 {
   "name": "change-impact-tools",
   "displayName": "Change Impact Tools",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Read-only diff classification and semantic caller/callee blast-radius analysis.",
   "author": "Sidekick",
   "type": "plugin",

@@ -7,6 +7,7 @@
 const normalize = require("./normalize");
 const validate = require("./validate");
 const { ProxmoxError } = require("./errors");
+const migration = require("./migration");
 
 function nodeName(value) {
   const n = validate.validateNodeName(value);
@@ -47,4 +48,50 @@ async function preflight(client, nodeValue) {
   };
 }
 
-module.exports = { preflight };
+// Build a read-only evacuation proposal for a node maintenance window. Each
+// guest is assessed against online peers using the same per-guest migration
+// resolver used by the explicit migration planner. This does not claim target
+// capacity, shared-storage compatibility beyond the API facts, or application
+// readiness, and never executes a migration.
+async function plan(client, nodeValue) {
+  const base = await preflight(client, nodeValue);
+  const rows = await client.get(["nodes"]);
+  const allTargets = (Array.isArray(rows) ? rows : [])
+    .filter(row => normalize.str(row.node || row.name) !== base.node)
+    .filter(row => normalize.str(row.status) === "online" || normalize.bool(row.online) === true)
+    .map(row => normalize.str(row.node || row.name)).filter(Boolean).sort();
+  const targets = allTargets.slice(0, 4);
+  const guests = [];
+  const assessedGuests = base.guests.list.slice(0, 25);
+  for (const guest of assessedGuests) {
+    const assessments = [];
+    for (const target of targets) {
+      try {
+        const candidate = await migration.plan(client, guest.vmid, target);
+        assessments.push({ target_node: target, feasible_by_api_facts: candidate.known_blockers.length === 0, mode: candidate.mode, storage: candidate.storage, blockers: candidate.known_blockers });
+      } catch (error) {
+        assessments.push({ target_node: target, feasible_by_api_facts: false, blockers: [String(error.message || error).slice(0, 240)] });
+      }
+    }
+    guests.push({ vmid: guest.vmid, type: guest.type, name: guest.name, status: guest.status, ha_managed: guest.ha_managed, candidates: assessments });
+  }
+  const withoutTarget = guests.filter(guest => !guest.candidates.some(candidate => candidate.feasible_by_api_facts)).map(guest => guest.vmid);
+  const blockers = [...base.blockers];
+  if (targets.length === 0 && guests.length) blockers.push("no online peer node is available as a migration candidate");
+  if (withoutTarget.length) blockers.push(`${withoutTarget.length} guest(s) have no candidate target based on the available API facts`);
+  const omittedGuests = Math.max(0, base.guests.total - guests.length);
+  if (omittedGuests || allTargets.length > targets.length) blockers.push("candidate assessment was capped; review the omitted guests or peer nodes before planning maintenance");
+  return {
+    ...base,
+    guests: { total: base.guests.total, assessed: guests.length, omitted: omittedGuests, running: base.guests.running, list: guests },
+    candidate_target_nodes: targets,
+    omitted_candidate_target_nodes: Math.max(0, allTargets.length - targets.length),
+    guests_without_candidate: withoutTarget,
+    decision: blockers.length ? "blocked_or_review" : "plan_ready_for_operator_review",
+    blockers,
+    bounded: true,
+    note: "Read-only evacuation proposal only. Candidate targets do not prove free capacity, workload health, backup recoverability, or application readiness. Review each migration_plan and use separately governed migration calls; no guest is moved here.",
+  };
+}
+
+module.exports = { preflight, plan };

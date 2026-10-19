@@ -1,7 +1,7 @@
 {
   "name": "documentation-knowledge-tools",
   "displayName": "Documentation and Knowledge Tools",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Repository-grounded documentation and knowledge audits.",
   "author": "Sidekick",
   "type": "plugin",

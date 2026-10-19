@@ -1,5 +1,5 @@
 {
-  "schema_version": 1, "pack_api": 1, "name": "software-supply-chain", "display_name": "Software Supply Chain", "version": "1.0.0",
+  "schema_version": 1, "pack_api": 1, "name": "software-supply-chain", "display_name": "Software Supply Chain", "version": "1.0.1",
   "description": "Read-only, reproducible software supply-chain checks over manifests, hashes, Git state and semantic boundaries.", "publisher": "Sidekick", "compatibility": { "sidekick": ">=1.0.0" },
   "modules": [{ "name": "software-supply-chain-tools", "path": "modules/software-supply-chain-tools", "entry_point": "entry.js", "config_from_pack": true }],
   "workflows": [{ "path": "workflows/supply-chain-audit.json" }, { "path": "workflows/provenance-audit.json" }],

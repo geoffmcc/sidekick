@@ -2,6 +2,7 @@
 const assert = require("assert"),
   fs = require("fs"),
   path = require("path");
+const { test: nodeTest } = require("node:test");
 const root = path.join(__dirname, ".."),
   pack = path.join(root, "packs", "jellyfin");
 const profiles = require(
@@ -15,15 +16,9 @@ const storageLib = require(
 );
 const logsLib = require(path.join(pack, "modules/jellyfin-tools/lib/logs"));
 const dlna = require(path.join(pack, "modules/jellyfin-tools/lib/dlna"));
-let failures = 0;
+let activeSuite = null;
 function test(name, fn) {
-  try {
-    fn();
-    console.log(`Passed: ${name}`);
-  } catch (e) {
-    failures++;
-    console.error(`FAILED: ${name}\n${e.stack}`);
-  }
+  return activeSuite ? activeSuite.test(name, fn) : nodeTest(name, fn);
 }
 test("all Jellyfin JSON assets parse", () => {
   for (const f of fs
@@ -31,7 +26,7 @@ test("all Jellyfin JSON assets parse", () => {
     .filter((x) => x.endsWith(".json")))
     JSON.parse(fs.readFileSync(path.join(pack, f), "utf8"));
 });
-test("pack and module versions agree at 1.5.2", () => {
+test("pack and module versions agree and facade permissions are complete", () => {
   const packManifest = JSON.parse(
     fs.readFileSync(path.join(pack, "sidekick.pack.json"), "utf8"),
   );
@@ -41,8 +36,8 @@ test("pack and module versions agree at 1.5.2", () => {
       "utf8",
     ),
   );
-  assert.strictEqual(packManifest.version, "1.5.2");
-  assert.strictEqual(moduleManifest.version, "1.5.2");
+  assert.strictEqual(packManifest.version, "1.7.0");
+  assert.strictEqual(moduleManifest.version, packManifest.version);
   // Every services.dispatch target used by the module must be declared.
   const declared = moduleManifest.permissions.map((x) => x.tool).sort();
   assert.deepStrictEqual(declared, ["proxmox", "status", "web_fetch"]);
@@ -179,14 +174,70 @@ test("direct play and missing evidence degrade honestly", () => {
 });
 test("session normalization exposes the current item's runtime", () => {
   const s = normalize.session({
-    NowPlayingItem: { RunTimeTicks: 45 * 60 * 10000000 },
-    PlayState: { PositionTicks: 10 * 10000000 },
+    UserName: "viewer",
+    NowPlayingItem: {
+      Id: "item-1",
+      Name: "Synthetic",
+      Type: "Episode",
+      SeriesName: "Example Show",
+      ParentIndexNumber: 2,
+      IndexNumber: 4,
+      RunTimeTicks: 45 * 60 * 10000000,
+    },
+    PlayState: { PositionTicks: 10 * 60 * 10000000, IsPaused: false },
   });
   assert.deepStrictEqual(s.media.runtime, {
     ticks: 45 * 60 * 10000000,
     seconds: 2700,
     minutes: 45,
   });
+  assert.strictEqual(s.user_name, "viewer");
+  assert.strictEqual(s.media.series_name, "Example Show");
+  assert.strictEqual(s.media.season_number, 2);
+  assert.strictEqual(s.media.episode_number, 4);
+  assert.strictEqual(s.activity_status, "playing");
+  assert.strictEqual(s.playback_elapsed.formatted, "10:00");
+  assert.strictEqual(s.time_remaining.formatted, "35:00");
+  assert.strictEqual(s.progress_percent, 22.2);
+});
+test("session time fields remain unknown when runtime or position is missing", () => {
+  const noRuntime = normalize.session({
+    NowPlayingItem: { Name: "No runtime" },
+    PlayState: { PositionTicks: 60 * 10000000, IsPaused: false },
+  });
+  assert.strictEqual(noRuntime.playback_elapsed.seconds, 60);
+  assert.strictEqual(noRuntime.time_remaining.seconds, null);
+  assert.strictEqual(noRuntime.progress_percent, null);
+
+  const noPosition = normalize.session({
+    NowPlayingItem: { Name: "No position", RunTimeTicks: 120 * 10000000 },
+    PlayState: { IsPaused: false },
+  });
+  assert.strictEqual(noPosition.playback_elapsed.seconds, null);
+  assert.strictEqual(noPosition.time_remaining.seconds, null);
+  assert.strictEqual(noPosition.progress_percent, null);
+});
+test("paused sessions retain duration remaining without implying playback", () => {
+  const s = normalize.session({
+    NowPlayingItem: { Name: "Paused", RunTimeTicks: 90 * 60 * 10000000 },
+    PlayState: { PositionTicks: 30 * 60 * 10000000, IsPaused: true },
+  });
+  assert.strictEqual(s.activity_status, "paused");
+  assert.strictEqual(s.time_remaining.formatted, "1:00:00");
+});
+test("remaining time clamps at zero when Jellyfin position exceeds runtime", () => {
+  const s = normalize.session({
+    NowPlayingItem: { Name: "Position past end", RunTimeTicks: 60 * 10000000 },
+    PlayState: { PositionTicks: 75 * 10000000, IsPaused: false },
+  });
+  assert.strictEqual(s.time_remaining.seconds, 0);
+  assert.strictEqual(s.time_remaining.formatted, "0:00");
+  assert.strictEqual(s.progress_percent, 100);
+});
+test("sessions without a current item are connected, not watching", () => {
+  const s = normalize.session({ UserName: "viewer", DeviceName: "TV" });
+  assert.strictEqual(s.has_active_playback, false);
+  assert.strictEqual(s.activity_status, "connected");
 });
 test("capabilities are optional and normalized", () => {
   const c = normalize.capabilities({
@@ -349,6 +400,12 @@ function baseFixtures() {
       },
       { Name: "Empty", ItemId: "lib2", Locations: [] },
     ],
+    "/UserViews": {
+      Items: [
+        { Name: "Movies", Id: "lib1", CollectionType: "movies" },
+        { Name: "Empty", Id: "lib2", CollectionType: "tvshows" },
+      ],
+    },
     "/Items/Counts": { MovieCount: 10, ItemCount: 42 },
     "/ScheduledTasks": [
       {
@@ -595,17 +652,10 @@ async function call(descriptor, args) {
   return { out, parsed: JSON.parse(out.content[0].text) };
 }
 
-const asyncFailures = [];
-async function asyncTest(name, fn) {
-  try {
-    await fn();
-    console.log(`Passed: ${name}`);
-  } catch (e) {
-    asyncFailures.push(name);
-    console.error(`FAILED: ${name}\n${e.stack}`);
-  }
-}
-(async () => {
+nodeTest("Jellyfin pack async contract", async (t) => {
+  activeSuite = t;
+  t.after(() => { activeSuite = null; });
+  async function asyncTest(name, fn) { return t.test(name, fn); }
   await asyncTest(
     "handlers receive the module services facade (profiles resolve from config)",
     async () => {
@@ -614,6 +664,38 @@ async function asyncTest(name, fn) {
       assert.strictEqual(parsed.profiles[0].name, "home");
     },
   );
+  await asyncTest("list_sessions separates connected devices and groups playback by user", async () => {
+    setFixtures(baseFixtures());
+    fixtures["/Sessions"] = [
+      {
+        Id: "session-tv",
+        UserId: "u1",
+        UserName: "admin",
+        DeviceName: "Living Room TV",
+        NowPlayingItem: { Id: "movie-1", Name: "Film One", Type: "Movie", RunTimeTicks: 120 * 60 * 10000000 },
+        PlayState: { PositionTicks: 15 * 60 * 10000000, IsPaused: false },
+      },
+      {
+        Id: "session-tablet",
+        UserId: "u1",
+        UserName: "admin",
+        DeviceName: "Tablet",
+        NowPlayingItem: { Id: "episode-1", Name: "Episode One", Type: "Episode", RunTimeTicks: 30 * 60 * 10000000 },
+        PlayState: { PositionTicks: 5 * 60 * 10000000, IsPaused: true },
+      },
+      { Id: "session-phone", UserId: "u2", UserName: "kid", DeviceName: "Phone" },
+    ];
+    const { read } = tools(servicesFor());
+    const { parsed } = await call(read, { action: "list_sessions" });
+    assert.strictEqual(parsed.session_count, 3);
+    assert.strictEqual(parsed.active_playback_session_count, 2);
+    assert.strictEqual(parsed.connected_only_session_count, 1);
+    assert.strictEqual(parsed.watching.length, 1);
+    assert.strictEqual(parsed.watching[0].user_name, "admin");
+    assert.deepStrictEqual(parsed.watching[0].sessions.map((session) => session.device.name), ["Living Room TV", "Tablet"]);
+    assert.strictEqual(parsed.connected[0].user_name, "kid");
+    assert.strictEqual(parsed.connected[0].activity_status, "connected");
+  });
   await asyncTest(
     "unconfigured module lists zero profiles instead of throwing",
     async () => {
@@ -636,6 +718,7 @@ async function asyncTest(name, fn) {
         recently_added: {},
         continue_watching: { user_id: "u1" },
         next_up: { user_id: "u1" },
+        search_media: { query: "Example" },
         task_status: { task_id: "t1" },
         user_status: { user_id: "u1" },
         plugin_status: { plugin_id: "p1" },
@@ -864,6 +947,71 @@ async function asyncTest(name, fn) {
     },
   );
   await asyncTest(
+    "search_media discovers and searches standard and custom libraries for all common media types",
+    async () => {
+      setFixtures(baseFixtures());
+      fixtures["/UserViews"] = { Items: [
+        { Name: "Movies", Id: "lib-movies", CollectionType: "movies" },
+        { Name: "Anime", Id: "lib-anime", CollectionType: "tvshows" },
+        { Name: "Propaganda", Id: "lib-custom", CollectionType: "movies" },
+        { Name: "Music", Id: "lib-music", CollectionType: "music" },
+      ] };
+      const requests = [];
+      fixtures["/Users/u1/Items"] = (q) => {
+        requests.push(q);
+        const byLibrary = {
+          "lib-movies": [
+            { Id: "movie1", Name: "Example", Type: "Movie", ProductionYear: 2024, Overview: "A sample feature.", Genres: ["Drama"], CommunityRating: 8.2 },
+            { Id: "movie2", Name: "Example 2", Type: "Movie", ProductionYear: 2024 },
+          ],
+          "lib-anime": [
+            { Id: "episode1", Name: "Example", Type: "Episode", ProductionYear: 2024 },
+            { Id: "episode2", Name: "Example 2", Type: "Episode", ProductionYear: 2024 },
+          ],
+          "lib-custom": [{ Id: "custom1", Name: "Example", Type: "Movie", ProductionYear: 2024 }],
+          "lib-music": [{ Id: "song1", Name: "Example", Type: "Audio" }],
+        };
+        return { Items: byLibrary[q.ParentId] || [], TotalRecordCount: (byLibrary[q.ParentId] || []).length };
+      };
+      const { read } = tools(servicesFor());
+      let result = await call(read, { action: "search_media", query: "Example", genre: "Drama", years: "2024", limit: 6 });
+      assert.ok(!result.out.isError, result.out.content[0].text);
+      assert.deepStrictEqual(requests.map((q) => q.ParentId), ["lib-movies", "lib-anime", "lib-custom", "lib-music"]);
+      assert.strictEqual(requests[0].IncludeItemTypes, "Movie,Series,Season,Episode,Audio,MusicAlbum,MusicArtist,MusicVideo");
+      assert.strictEqual(requests[0].Genres, "Drama");
+      assert.strictEqual(requests[0].Years, "2024");
+      assert.ok(requests[0].Fields.includes("Overview"));
+      assert.strictEqual(result.parsed.library_scope, "all_user_visible_libraries");
+      assert.strictEqual(result.parsed.visibility_scope, "jellyfin_user_views");
+      assert.deepStrictEqual(result.parsed.libraries_searched.map((library) => library.name), ["Movies", "Anime", "Propaganda", "Music"]);
+      assert.deepStrictEqual(result.parsed.items.map((item) => item.type), ["Movie", "Episode", "Movie", "Audio", "Movie", "Episode"]);
+      assert.strictEqual(result.parsed.items[0].overview, "A sample feature.");
+      assert.deepStrictEqual(result.parsed.items[0].genres, ["Drama"]);
+      assert.strictEqual(result.parsed.items[0].community_rating, 8.2);
+      assert.deepStrictEqual(result.parsed.items[2].libraries.map((library) => library.name), ["Propaganda"]);
+      assert.deepStrictEqual(postLog, []);
+      assert.deepStrictEqual(delLog, []);
+
+      result = await call(read, { action: "search_media", query: "Example", library_id: "lib-custom" });
+      assert.ok(!result.out.isError, result.out.content[0].text);
+      assert.strictEqual(result.parsed.library_scope, "selected_library");
+      assert.deepStrictEqual(result.parsed.libraries_searched.map((library) => library.id), ["lib-custom"]);
+      assert.strictEqual(requests.at(-1).ParentId, "lib-custom");
+    },
+  );
+  await asyncTest("search_media validates query and an explicitly selected library", async () => {
+    setFixtures(baseFixtures());
+    const { read } = tools(servicesFor());
+    let result = await call(read, { action: "search_media" });
+    assert.ok(result.out.isError);
+    assert.strictEqual(result.parsed.code, "invalid_input");
+    result = await call(read, { action: "search_media", query: "Example", library_id: "missing" });
+    assert.ok(result.out.isError);
+    assert.strictEqual(result.parsed.code, "not_found");
+    assert.deepStrictEqual(postLog, []);
+    assert.deepStrictEqual(delLog, []);
+  });
+  await asyncTest(
     "library and server audits are bounded and redact configuration secrets",
     async () => {
       setFixtures(baseFixtures());
@@ -906,6 +1054,7 @@ async function asyncTest(name, fn) {
     "maintenance_plan recommends from LastExecutionResult, not State",
     async () => {
       setFixtures(baseFixtures());
+      fixtures["/ScheduledTasks"][0].LastExecutionResult.EndTimeUtc = new Date(NOW - 45 * 86400000).toISOString();
       fixtures["/ScheduledTasks"].push({
         Id: "t3",
         Name: "Running Task",
@@ -920,6 +1069,12 @@ async function asyncTest(name, fn) {
       assert.strictEqual(failed.length, 1);
       assert.strictEqual(failed[0].task_id, "t2");
       assert.strictEqual(failed[0].last_status, "Failed");
+      assert.strictEqual(parsed.storage_preflight.state, "not_verifiable");
+      const staleScan = parsed.recommendations.find((r) => r.kind === "stale_library_scan");
+      if (staleScan) {
+        assert.strictEqual(staleScan.classification, "storage_preflight_required");
+        assert.strictEqual(staleScan.storage_state, "not_verifiable");
+      }
       assert.strictEqual(parsed.currently_running.length, 1);
       assert.strictEqual(parsed.currently_running[0].task_id, "t3");
       // The old bug filtered on State === "Failed" (a value State never has).
@@ -1124,6 +1279,21 @@ async function asyncTest(name, fn) {
     assert.ok(parsed.outcome_semantics.includes("accepted"));
     assert.ok(taskCalls >= 2, "postcondition must actually poll");
   });
+  await asyncTest("scan_library without observed activity includes inspection guidance", async () => {
+    setFixtures(baseFixtures());
+    const { maint } = tools(servicesFor({
+      profileExtra: {
+        allow_writes: true,
+        verify_poll_interval_ms: 50,
+        storage_provider: { type: "proxmox", profile: "pve", node: "n1", storage: "tank" },
+      },
+      dispatch: okProxmoxDispatch,
+    }));
+    const { parsed } = await call(maint, { action: "scan_library", library_id: "lib1" });
+    assert.strictEqual(parsed.outcome, "accepted");
+    assert.strictEqual(parsed.recovery.required_before_retry, true);
+    assert.match(parsed.recovery.action, /library_status and task_status/);
+  });
   await asyncTest("run_task observes the Idle→Running transition and reports honestly", async () => {
     setFixtures(baseFixtures());
     const base = baseFixtures();
@@ -1154,6 +1324,8 @@ async function asyncTest(name, fn) {
     assert.strictEqual(parsed.outcome, "request_accepted");
     assert.strictEqual(parsed.postcondition.transition_observed, false);
     assert.strictEqual(parsed.postcondition.polls, 3);
+    assert.strictEqual(parsed.recovery.required_before_retry, true);
+    assert.match(parsed.recovery.action, /Inspect task_status/);
   });
   await asyncTest("cancel_task transitions and nothing_to_cancel stays honest", async () => {
     setFixtures(baseFixtures());
@@ -2013,7 +2185,4 @@ async function asyncTest(name, fn) {
       server.close();
     }
   });
-  if (failures || asyncFailures.length) {
-    process.exitCode = 1;
-  } else console.log("All Jellyfin pack tests passed.");
-})();
+});

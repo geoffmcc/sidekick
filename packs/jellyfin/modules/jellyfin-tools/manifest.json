@@ -1,7 +1,7 @@
 {
   "name": "jellyfin-tools",
   "displayName": "Jellyfin Tools",
-  "version": "1.5.2",
+  "version": "1.7.0",
   "description": "Secure, bounded Jellyfin media inventory, user views, inspection, diagnosis, log intelligence, evidence-based readiness checks and governed maintenance.",
   "sidekick": ">=1.0.0",
   "type": "plugin",
@@ -9,6 +9,7 @@
   "capabilities": [
     "jellyfin-discovery",
     "jellyfin-media-inventory",
+    "jellyfin-cross-library-search",
     "jellyfin-catalog-audit",
     "jellyfin-live-tv-inspection",
     "jellyfin-server-audit",
@@ -18,18 +19,51 @@
     "jellyfin-playback-diagnosis",
     "jellyfin-log-intelligence",
     "jellyfin-storage-preflight",
-    "jellyfin-maintenance"
+    "jellyfin-maintenance",
+    "jellyfin-media-suggestions"
   ],
-  "configSchema": { "type": "object" },
+  "configSchema": {
+    "type": "object"
+  },
   "permissions": [
-    { "tool": "proxmox", "risk": "low" },
-    { "tool": "status", "risk": "medium" },
-    { "tool": "web_fetch", "risk": "medium" }
+    {
+      "tool": "proxmox",
+      "risk": "low"
+    },
+    {
+      "tool": "status",
+      "risk": "medium"
+    },
+    {
+      "tool": "web_fetch",
+      "risk": "medium"
+    }
   ],
   "tools": {
-    "jellyfin": { "risk": "low", "category": "Media", "aliases": ["jf"] },
-    "jellyfin_maintenance": { "risk": "high", "category": "Media", "aliases": ["jf_maintenance"] },
-    "jellyfin_playback": { "risk": "high", "category": "Media", "aliases": ["jf_playback"] }
+    "jellyfin": {
+      "risk": "low",
+      "category": "Media",
+      "aliases": [
+        "jf"
+      ]
+    },
+    "jellyfin_maintenance": {
+      "risk": "high",
+      "category": "Media",
+      "aliases": [
+        "jf_maintenance"
+      ]
+    },
+    "jellyfin_playback": {
+      "risk": "high",
+      "category": "Media",
+      "aliases": [
+        "jf_playback"
+      ]
+    }
   },
-  "lifecycle": { "disable": "stop_new_work", "uninstall": "retain_data" }
+  "lifecycle": {
+    "disable": "stop_new_work",
+    "uninstall": "retain_data"
+  }
 }

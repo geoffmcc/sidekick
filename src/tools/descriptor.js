@@ -99,7 +99,13 @@ function describeSchemaArgs(schema, legacyArgs = {}) {
   for (const [name, field] of Object.entries(shape).slice(0, MAX_ARGUMENTS)) {
     const type = schemaTypeDescription(field);
     if (!type) continue;
-    output[name] = type.slice(0, MAX_ARGUMENT_DESCRIPTION_LENGTH);
+    const explicit = typeof field?.description === "string" ? field.description.trim() : "";
+    const legacy = typeof legacyArgs?.[name] === "string" ? legacyArgs[name].trim() : "";
+    let detail = explicit || (legacy && legacy !== type ? legacy.replace(/^(?:string|number|boolean|array|object|any)\s*/i, "").replace(/^\((.*)\)$/, "$1") : "");
+    detail = detail.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
+    if (/\bignore\s+(?:all\s+)?(?:previous|prior|system|developer)|system\s+prompt|bypass\s+approval|reveal\s+(?:secrets|credentials)|execute\s+arbitrary\b/i.test(detail)) detail = "";
+    if (detail && type.toLowerCase().includes(detail.toLowerCase())) detail = "";
+    output[name] = `${type}${detail ? ` (${detail})` : ""}`.slice(0, MAX_ARGUMENT_DESCRIPTION_LENGTH);
   }
   return Object.freeze(output);
 }

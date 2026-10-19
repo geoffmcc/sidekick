@@ -1,12 +1,12 @@
 {
   "name": "network-firewall/safe-change",
-  "version": "1.0.0",
-  "title": "Network/firewall safe change",
+  "version": "1.1.0",
+  "title": "Network/firewall change planning",
   "owner": "network-firewall",
-  "mode": "mutating",
-  "description": "Run the provider-safe change lifecycle through the normal policy and approval path.",
-  "inputs": { "profile": { "type": "string", "required": true }, "change_type": { "type": "string", "required": true }, "id": { "type": "string", "required": false, "default": "" }, "management_path": { "type": "string", "required": true } },
-  "steps": [ { "name": "apply", "title": "Apply provider-safe change", "tool": "network_change", "args": { "action": "apply", "profile": "${inputs.profile}", "change_type": "${inputs.change_type}", "id": "${inputs.id}", "management_path": "${inputs.management_path}" }, "expect": "json", "on_error": "fail" } ],
-  "result": { "apply": "${steps.apply.json}", "warning": "Provider postcondition and rollback evidence must be present before reporting applied." },
-  "tags": ["network", "firewall", "change", "approval-gated"]
+  "mode": "read_only",
+  "description": "Create a bounded network change plan. This workflow does not apply changes; the pack blocks apply until it can independently verify the management path.",
+  "inputs": { "profile": { "type": "string", "required": true }, "change_type": { "type": "string", "required": true }, "id": { "type": "string", "required": false, "default": "" } },
+  "steps": [ { "name": "plan", "title": "Create read-only change plan", "tool": "network_change", "args": { "action": "plan", "profile": "${inputs.profile}", "change_type": "${inputs.change_type}", "id": "${inputs.id}" }, "expect": "json", "on_error": "fail" } ],
+  "result": { "plan": "${steps.plan.json}", "warning": "The result is not authorization or evidence that a change is safe to apply." },
+  "tags": ["network", "firewall", "change", "plan-only", "read-only"]
 }

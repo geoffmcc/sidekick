@@ -1,7 +1,7 @@
 {
   "name": "api-engineering-tools",
   "displayName": "API Engineering Tools",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Contract and health checks composed from governed browser HTTP tools and named network scopes.",
   "author": "Sidekick",
   "type": "plugin",

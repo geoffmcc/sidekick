@@ -3,7 +3,7 @@
   "pack_api": 1,
   "name": "database-administration",
   "display_name": "Database Administration",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Bounded database health, schema, migration and parameterized read-only query workflows.",
   "publisher": "Sidekick",
   "compatibility": { "sidekick": ">=1.0.0" },

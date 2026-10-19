@@ -1,6 +1,6 @@
 # Proxmox VE Capability Pack
 
-Status: shipped (v1.0.0, bundled first-party pack)
+Status: shipped (bundled first-party pack; current pack manifest version 1.7.0)
 Depends on: Capability Packs v1
 
 The Proxmox pack lets Sidekick securely discover, understand, monitor and
@@ -65,8 +65,10 @@ required to use the pack.
 - **Optional Ansible execution** (`ansible_run`): detect / dry_run / run of
   allowlisted playbooks against a generated inventory through the governed
   shell, with per-host results parsed from Ansible's JSON output.
-- Three workflows: `proxmox/environment-recon`, `proxmox/guest-health`,
-  `proxmox/provision-guest` (the reproducible-environment mechanism).
+- Read-only operational workflows for environment recon, cluster compliance,
+  storage and backup audits, guest and cluster health, capacity, upgrade
+  readiness, guest inventory/readiness/configuration, and backup coverage and
+  history; plus `proxmox/maintenance-plan` and `proxmox/provision-guest`.
 
 **Architected / deferred (not exposed as working):**
 
@@ -79,8 +81,8 @@ required to use the pack.
   Proxmox-side (vzdump) backup configuration and task history only.
 - Execution through SSH, nodex or Terraform/OpenTofu — detection only.
 - Ceph operations beyond health/detection read.
-- Rolling cluster maintenance (quorum/HA-aware upgrades and reboots) as a
-  durable workflow.
+- Automated rolling cluster maintenance (quorum/HA-aware host upgrades and
+  reboots). The maintenance plan is a read-only evacuation proposal only.
 
 The pack never advertises a capability it does not perform. An optional
 integration that is absent reports `not_detected` / `not_installed`, not an
@@ -162,14 +164,41 @@ secret.
 | `proxmox_provision` (alias `pve_provision`) | **high** (mutating) | create_vm, create_lxc, clone, configure, snapshot_create, convert_template; `dry_run` for explain. |
 | `proxmox_migrate` (alias `pve_migrate`) | **high** (change) | governed same-cluster migration with resolved facts, UPID monitoring and target verification. |
 | `proxmox_retire` (alias `pve_retire`) | **critical** (destructive) | guarded deletion of a proven Sidekick-managed guest; disabled unless `allow_destroy: true`. |
-| `ansible_run` (alias `ansible_playbook`) | **high** | detect / dry_run / run of allowlisted playbooks (optional; dispatches the governed `bash` tool). |
+| `ansible_run` (alias `ansible_playbook`) | **high** | detect / dry_run / run of allowlisted playbooks (optional; run dispatches the governed `bash` tool). |
 
 Operations are split into **separate tools by risk class** because a module
 tool's risk is fixed per tool and cannot be lowered per action — reads stay
 `low`, mutations stay `high`, destruction stays `critical` — so approval policy
-sees each correctly. The pack declares one dispatch permission (`bash`, for
-Ansible only); everything else it does over HTTPS itself, resolving credentials
-through Sidekick's secret resolver in-process.
+sees each correctly. The pack declares the `bash` dispatch permission at
+**critical** risk because Ansible execution uses it. That permission remains
+part of the pack's declared authority when Ansible is unconfigured; the
+integration then reports unavailable. `ansible_run` is high risk, and every
+actual shell execution still goes through the normal dispatcher policy and
+approval path. All Proxmox API actions use HTTPS directly, resolving
+credentials through Sidekick's secret resolver in-process; they do not dispatch
+`bash`.
+
+### Maintenance planning
+
+`maintenance_preflight` reports current evidence for one node.
+`maintenance_plan` and the `proxmox/maintenance-plan` workflow add candidate
+online peer nodes and per-guest migration assessments, using the same resolver
+as `migration_plan`. The result assesses up to 25 guests and four peers; omitted
+guests or peers make the plan require operator review. It is
+a read-only proposal: API facts do not prove target capacity, workload health,
+application dependencies, or backup recoverability. Review each move and use
+separately governed `proxmox_migrate` calls. The pack does not automatically
+evacuate guests or perform host maintenance. See
+`packs/proxmox/knowledge/proxmox-maintenance-planning.md`.
+
+### Provisioning recovery
+
+If a create or clone task does not reach a terminal state, the tool returns
+`reconciliation_required` with the VMID, node, UPID, resource-existence
+uncertainty, and inspection steps. Do not retry until the task and guest state
+have been checked. A clone may lack Sidekick provenance if its task completed
+but the follow-up provenance write did not; manually reconcile it before any
+retirement attempt.
 
 Destruction is treated as a privileged capability, not an ordinary HTTP verb.
 The **only** delete path is `proxmox_retire`, and it fails closed at every
@@ -188,11 +217,12 @@ administration) remains unshipped. See
 `packs/proxmox/knowledge/proxmox-provisioning.md` for the provisioning,
 provenance, policy and destructive-operation model.
 
-`proxmox` read actions: `cluster_summary`, `capabilities`, `list_nodes`,
-`node_status`, `list_guests`, `guest_status`, `list_storage`, `storage_status`,
-`list_tasks`, `task_status`, `backup_status`, `version`, `list_profiles`,
-`detect_providers`. See `packs/proxmox/knowledge/proxmox-operating.md` for
-per-action arguments.
+The `proxmox` read tool also exposes guest inventory/readiness/configuration,
+cluster compliance and health, storage capacity/health/backend audits, backup
+coverage/history/verification, upgrade readiness, maintenance preflight and
+planning, and per-guest migration planning. Consult the live tool schema and
+`packs/proxmox/knowledge/usage-reference.md` for exact action names and
+arguments.
 
 ---
 
@@ -243,15 +273,15 @@ notes this.
 
 ## Optional capabilities
 
-| Capability | v1 behavior |
+| Capability | Current behavior |
 |---|---|
 | QEMU guest agent | Per-guest detection + hostname/OS/IP enrichment when reachable; degrades cleanly. |
-| Cloud-init | Detection of cloud-init drives/keys per guest. Provisioning deferred. |
+| Cloud-init | Detection of cloud-init drives/keys per guest; clone provisioning supports validated cloud-init user, SSH key, and IP configuration. Password injection is refused. |
 | Proxmox Backup Server | Detected as a storage backend; vzdump job/history read. Direct PBS API deferred. |
 | Ceph | Health/detection read (`detected` / `not_detected` / `permission_limited`). No Ceph ops. |
 | ZFS / storage types | Normalized detection of dir, LVM/LVM-thin, ZFS, NFS, CIFS, iSCSI, Ceph/RBD, PBS, etc. None required. |
 | SDN | `configured` / `not_configured` detection. |
-| Ansible / nodex / SSH / OpenTofu / Terraform | Presence detection on the Sidekick host only; execution deferred. |
+| Ansible / nodex / SSH / OpenTofu / Terraform | Ansible supports allowlisted playbook execution through governed `bash`; nodex, SSH, and OpenTofu/Terraform remain detection-only. |
 
 Optional providers require their software; installing anything on the Sidekick
 host is an operator action. Detection is execution-free (PATH scan) and needs no

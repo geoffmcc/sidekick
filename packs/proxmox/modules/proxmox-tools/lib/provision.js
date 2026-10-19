@@ -202,7 +202,7 @@ async function cloneGuest(client, profile, params, context) {
     ...(targetStorage ? { storage: targetStorage } : {}),
   };
   const upid = await client.post(["nodes", node, kind, sourceVmid, "clone"], cloneBody);
-  const cloneResult = await monitorCreate(client, node, upid, kind, newid, { skipExistsCheck: true });
+  const cloneResult = await monitorCreate(client, node, upid, kind, newid, { skipExistsCheck: true, provenanceMayBeMissing: true });
 
   // Stamp provenance onto the clone and apply the validated cloud-init config.
   // This is necessarily a SECOND request after the clone task (the clone API
@@ -218,7 +218,7 @@ async function cloneGuest(client, profile, params, context) {
     throw new ProxmoxError(
       "reconciliation_required",
       `The clone task completed (new VMID ${newid} on ${node}) but stamping provenance onto it failed, leaving the guest WITHOUT sidekick-managed tags — the pack cannot recognize or retire it. Reconcile VMID ${newid} manually (tag it or remove it). Underlying error: ${error && error.message ? error.message : error}`,
-      { orphaned_vmid: newid, node, cloned_from: sourceVmid, clone_outcome: cloneResult.outcome, clone_task: cloneResult.task || { upid } }
+      { operation: "clone", orphaned_vmid: newid, vmid: newid, node, type: kind, cloned_from: sourceVmid, clone_outcome: cloneResult.outcome, clone_task: cloneResult.task || { upid }, resource_may_exist: true, provenance_may_be_missing: true, recovery_actions: ["Inspect the guest config and confirm its current state.", "Apply or remove the clone manually after review.", "Do not retry the clone or attempt retirement until the orphan is reconciled."] }
     );
   }
 
@@ -327,11 +327,21 @@ async function findGuestKind(client, vmid) {
   return { kind: match.type === "lxc" ? "lxc" : "qemu", node: normalize.str(match.node) };
 }
 
-async function monitorCreate(client, node, upid, kind, vmid, { skipExistsCheck = false } = {}) {
+async function monitorCreate(client, node, upid, kind, vmid, { skipExistsCheck = false, provenanceMayBeMissing = false } = {}) {
   if (typeof upid !== "string" || !upid.startsWith("UPID:")) {
     throw new ProxmoxError("api_error", "Proxmox did not return a task id for the create operation.", { node, vmid });
   }
-  const terminal = await pollTask(client, node, upid, { timeoutMs: 300000, intervalMs: 1500 });
+  let terminal;
+  try {
+    terminal = await pollTask(client, node, upid, { timeoutMs: 300000, intervalMs: 1500 });
+  } catch (error) {
+    if (!(error instanceof ProxmoxError) || error.code !== "task_timeout") throw error;
+    throw new ProxmoxError(
+      "reconciliation_required",
+      `Creation task for VMID ${vmid} on ${node} did not reach a terminal state. The guest may still be creating or may already exist; inspect the task and guest before retrying.${provenanceMayBeMissing ? " Clone provenance may not have been stamped." : ""}`,
+      { operation: "create", vmid, node, type: kind, resource_may_exist: true, provenance_may_be_missing: provenanceMayBeMissing, upid, task_state: "unknown", recovery_actions: ["Inspect this UPID with task_status.", "Inspect VMID on the named node with guest_status.", "Do not retry creation until current state is confirmed.", ...(provenanceMayBeMissing ? ["If provenance is absent, reconcile manually before any retirement attempt."] : [])], cause_code: error.code }
+    );
+  }
   return {
     outcome: terminal.ok ? "created" : "task_failed",
     changed: Boolean(terminal.ok),

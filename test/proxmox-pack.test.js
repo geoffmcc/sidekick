@@ -14,6 +14,7 @@
 // the CA is not pinned. There is no insecure mode to test because there is none.
 
 const assert = require("assert");
+const { test: nodeTest } = require("node:test");
 const fs = require("fs");
 const path = require("path");
 const https = require("https");
@@ -33,16 +34,6 @@ process.env.SIDEKICK_SECRET_KEY = "proxmox-pack-test-secret-key";
 const TOKEN = "root@pam!ci=aaaabbbb-cccc-dddd-eeee-ffff00001111";
 const TOKEN_SECRET = TOKEN.split("=").pop();
 
-let failures = 0;
-async function test(label, fn) {
-  try {
-    await fn();
-    console.log(`Passed: ${label}`);
-  } catch (error) {
-    failures++;
-    console.error(`FAILED: ${label}\n  ${error && error.stack ? error.stack : error}`);
-  }
-}
 function json(result) {
   return JSON.parse(result.content[0].text);
 }
@@ -303,8 +294,9 @@ function storeToken() {
   saveSecrets(secrets);
 }
 
-(async () => {
-  console.log("Running Proxmox pack integration tests...\n");
+nodeTest("Proxmox pack integration", async t => {
+  t.after(() => { server.closeAllConnections?.(); server.close(); });
+  async function test(label, fn) { return t.test(label, fn); }
 
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   const port = server.address().port;
@@ -535,6 +527,16 @@ function storeToken() {
     assert.strictEqual(r.guests.running, 1);
   });
 
+  await test("PX3.1a: maintenance plan proposes bounded candidate migrations without moving guests", async () => {
+    const r = json(await callInternalTool("proxmox", { action: "maintenance_plan", profile: "main", node: "pve1" }));
+    assert.strictEqual(r.ok, true, JSON.stringify(r));
+    assert.strictEqual(r.decision, "plan_ready_for_operator_review");
+    assert.deepStrictEqual(r.candidate_target_nodes, ["pve2"]);
+    assert.ok(r.guests.list.every(guest => Array.isArray(guest.candidates)));
+    assert.match(r.note, /no guest is moved/i);
+    assert.strictEqual((await directRequest(port, "GET", "/cluster/resources")).find(row => row.vmid === 101).node, "pve1");
+  });
+
   await test("PX3.2: migration dry-run and execution use the real dispatcher and verify target placement", async () => {
     const dry = json(await callInternalTool("proxmox_migrate", { action: "migrate", profile: "main", vmid: 101, target_node: "pve2", dry_run: true }));
     assert.strictEqual(dry.ok, true, JSON.stringify(dry));
@@ -550,10 +552,15 @@ function storeToken() {
 
   await test("PXV.1: proxmox_provision and ansible_run register with high risk", async () => {
     const reg = require("../src/tools-legacy");
+    const manifest = require("../packs/proxmox/modules/proxmox-tools/manifest.json");
+    const pack = require("../packs/proxmox/sidekick.pack.json");
     assert.strictEqual(reg.getToolRisk("proxmox_provision"), "high");
     assert.strictEqual(reg.getToolRisk("ansible_run"), "high");
     assert.strictEqual(reg.getToolRisk("proxmox_migrate"), "high");
     assert.strictEqual(reg.getToolRisk("proxmox_retire"), "critical");
+    assert.deepStrictEqual(manifest.permissions, [{ tool: "bash", risk: "critical" }]);
+    assert.ok(pack.requires.optional_tools.includes("bash"), "Ansible's governed shell dependency is optional to the pack");
+    assert.ok(manifest.tools.ansible_run, "Ansible execution remains a separate high-risk tool");
   });
 
   await test("PXV.2: create_vm provisions a provenance-tagged guest through the tool", async () => {
@@ -713,6 +720,9 @@ function storeToken() {
     assert.ok(Number.isInteger(orphan) && orphan !== tmpl.vmid, "the orphaned vmid is named");
     assert.ok(String(clone.error).includes(String(orphan)), "the error message names the orphaned vmid");
     assert.strictEqual(clone.details.cloned_from, tmpl.vmid);
+    assert.strictEqual(clone.details.resource_may_exist, true);
+    assert.strictEqual(clone.details.provenance_may_be_missing, true);
+    assert.ok(clone.details.recovery_actions.length >= 3);
     // The guest really does exist on the provider WITHOUT provenance — that is
     // exactly why the failure must be loud.
     const status = json(await callInternalTool("proxmox", { action: "guest_status", profile: "main", vmid: orphan }));
@@ -835,11 +845,4 @@ function storeToken() {
     packLifecycle.configure("proxmox", { profiles: { main: { endpoint, token_ref: "secret:proxmox_test_token", ca_pem: certPem, allow_lifecycle: true, default: true } } });
   });
 
-  server.closeAllConnections?.();
-  server.close();
-  if (failures > 0) {
-    console.error(`\n${failures} test(s) failed.`);
-    process.exit(1);
-  }
-  console.log("\nAll Proxmox pack integration tests passed.");
-})().catch(e => { console.error("FATAL", e && e.stack ? e.stack : e); server.close(); process.exit(1); });
+});

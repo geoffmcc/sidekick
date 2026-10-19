@@ -1,7 +1,7 @@
 {
   "name": "skeptical-verifier-tools",
   "displayName": "Skeptical Verifier Tools",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Independent read-only repository and platform evidence verifier.",
   "author": "Sidekick",
   "type": "plugin",

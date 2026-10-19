@@ -7,6 +7,12 @@ Proxmox evidence to assess coverage and readiness; unavailable Proxmox data is
 unknown, not healthy. `db-diff` compares two snapshots mechanically and does
 not prove recoverability.
 
+The readiness tool returns a concise summary with uncovered guests, recent
+backup failures, verification findings, and an explicit `restoreability: unknown`
+value. Its `ok` field describes whether the evidence collection completed;
+inspect `status` and findings for attention or partial data. Missing evidence
+must not be reported as a clean backup state.
+
 Restore is critical and separate from this pack's read-only readiness checks.
 It must be explicitly approved, integrity-checked, followed by service and data
 verification, and never tested against the only production copy. Define RPO/RTO

@@ -3,7 +3,7 @@
   "pack_api": 1,
   "name": "testing-quality-engineering",
   "display_name": "Testing & Quality Engineering",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Bounded test planning, verification execution and deterministic quality evidence.",
   "publisher": "Sidekick",
   "compatibility": { "sidekick": ">=1.0.0" },

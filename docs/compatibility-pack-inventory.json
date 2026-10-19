@@ -1,14 +1,14 @@
 {
   "schema": "sidekick.compatibility-pack-inventory.v1",
   "source": "bundled pack manifests and repository files",
-  "source_commit": "a3ed18a8d9e9e6a05842d8531a21494c10f1c3f8",
-  "source_commit_date": "2026-10-13T09:26:50-04:00",
-  "source_fingerprint": "sha256:3157d9f431c71cb6276637b54c827a9160a6ca474a4fc94c80da554712ebb55e",
+  "source_commit": "b89ce784654239d4297ed9b320527144949e3863",
+  "source_commit_date": "2026-10-19T11:36:00-04:00",
+  "source_fingerprint": "sha256:56c53cee88619615c96a56874810abf99c0e3ffac172a206764cafd36d8e583d",
   "pack_count": 27,
   "packs": [
     {
       "name": "api-engineering",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "purpose": "Bounded API smoke and contract checks using named outbound network scopes.",
       "manifest": "packs/api-engineering/sidekick.pack.json",
       "tools": [
@@ -194,7 +194,7 @@
         "source_files": [
           "packs/api-engineering/modules/api-engineering-tools/entry.js"
         ],
-        "behavior": "not_observed_in_module_source"
+        "behavior": "explicit_unavailable_or_degraded_states"
       },
       "current_tests": [
         "test/campaign-packs-6-10.test.js",
@@ -509,7 +509,7 @@
     },
     {
       "name": "assumptions-unknowns",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "purpose": "Surfaces explicit assumptions, unresolved questions and evidence gaps from existing context, memory, handoff and repository evidence without creating a competing memory store.",
       "manifest": "packs/assumptions-unknowns/sidekick.pack.json",
       "tools": [
@@ -914,7 +914,7 @@
     },
     {
       "name": "backup-restore-dr",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "purpose": "Bounded database backup, restore, snapshot comparison, and Proxmox backup-readiness adapters.",
       "manifest": "packs/backup-restore-dr/sidekick.pack.json",
       "tools": [
@@ -1996,7 +1996,7 @@
     },
     {
       "name": "change-impact",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "purpose": "Evidence-backed change impact and blast-radius analysis using the Developer pack's diff and semantic repository primitives. This pack is read-only and does not infer runtime effects that are not evidenced by the repository.",
       "manifest": "packs/change-impact/sidekick.pack.json",
       "tools": [
@@ -2411,7 +2411,7 @@
     },
     {
       "name": "ci-cd-release-engineering",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "purpose": "Evidence-based CI diagnosis and release readiness without publishing or pushing.",
       "manifest": "packs/ci-cd-release-engineering/sidekick.pack.json",
       "tools": [
@@ -2636,7 +2636,7 @@
         "source_files": [
           "packs/ci-cd-release-engineering/modules/ci-cd-release-tools/entry.js"
         ],
-        "behavior": "not_observed_in_module_source"
+        "behavior": "explicit_unavailable_or_degraded_states"
       },
       "current_tests": [
         "test/campaign-packs-6-10.test.js",
@@ -2886,7 +2886,7 @@
     },
     {
       "name": "container-operations",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "purpose": "Governed Docker and Podman engine discovery, container health, logs, resources, images, networks, volumes, Compose inspection, update checks, and controlled lifecycle operations.",
       "manifest": "packs/container-operations/sidekick.pack.json",
       "tools": [
@@ -3730,7 +3730,7 @@
     },
     {
       "name": "database-administration",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "purpose": "Bounded database health, schema, migration and parameterized read-only query workflows.",
       "manifest": "packs/database-administration/sidekick.pack.json",
       "tools": [
@@ -3982,7 +3982,7 @@
         "source_files": [
           "packs/database-administration/modules/database-administration-tools/entry.js"
         ],
-        "behavior": "not_observed_in_module_source"
+        "behavior": "explicit_unavailable_or_degraded_states"
       },
       "current_tests": [
         "test/campaign-packs-6-10.test.js",
@@ -5199,7 +5199,7 @@
     },
     {
       "name": "documentation-knowledge",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "purpose": "Bounded documentation inventory and knowledge retrieval grounded in repository semantics.",
       "manifest": "packs/documentation-knowledge/sidekick.pack.json",
       "tools": [
@@ -5599,7 +5599,7 @@
     },
     {
       "name": "infrastructure-as-code",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "purpose": "Provider-authoritative infrastructure inspection and plan-only validation.",
       "manifest": "packs/infrastructure-as-code/sidekick.pack.json",
       "tools": [
@@ -6044,8 +6044,8 @@
     },
     {
       "name": "jellyfin",
-      "version": "1.5.2",
-      "purpose": "Governed Jellyfin media inventory, server discovery, user views, playback diagnosis, library, log and maintenance intelligence over administrator-named profiles.",
+      "version": "1.7.0",
+      "purpose": "Governed Jellyfin media inventory, user-visible library discovery, watch suggestions, playback diagnosis, and maintenance over administrator-named profiles.",
       "manifest": "packs/jellyfin/sidekick.pack.json",
       "tools": [
         "jellyfin",
@@ -6086,6 +6086,16 @@
         {
           "path": "workflows/catalog-browse.json",
           "file": "packs/jellyfin/workflows/catalog-browse.json",
+          "present": true
+        },
+        {
+          "path": "workflows/catalog-search.json",
+          "file": "packs/jellyfin/workflows/catalog-search.json",
+          "present": true
+        },
+        {
+          "path": "workflows/library-catalog.json",
+          "file": "packs/jellyfin/workflows/library-catalog.json",
           "present": true
         },
         {
@@ -6166,6 +6176,11 @@
         {
           "path": "workflows/session-overview.json",
           "file": "packs/jellyfin/workflows/session-overview.json",
+          "present": true
+        },
+        {
+          "path": "workflows/media-suggestions.json",
+          "file": "packs/jellyfin/workflows/media-suggestions.json",
           "present": true
         }
       ],
@@ -6497,7 +6512,7 @@
       "network_scopes": [],
       "provider_requirements": null,
       "workflow_contract": {
-        "total": 23,
+        "total": 26,
         "missing_result": [],
         "missing_tags": [],
         "missing_step_error_policy": []
@@ -6645,6 +6660,7 @@
         ],
         "jobs": [
           "catalog browse",
+          "catalog search",
           "content health",
           "health",
           "incident",
@@ -6653,9 +6669,11 @@
           "jellyfin_playback",
           "library analytics",
           "library audit",
+          "library catalog",
           "live tv status",
           "maintenance preflight",
           "media info",
+          "media suggestions",
           "metadata completeness",
           "new arrivals",
           "play next",
@@ -6686,14 +6704,17 @@
               "packs/jellyfin/modules/jellyfin-tools/entry.js",
               "packs/jellyfin/modules/jellyfin-tools/manifest.json",
               "packs/jellyfin/workflows/catalog-browse.json",
+              "packs/jellyfin/workflows/catalog-search.json",
               "packs/jellyfin/workflows/content-health.json",
               "packs/jellyfin/workflows/health.json",
               "packs/jellyfin/workflows/incident.json",
               "packs/jellyfin/workflows/library-analytics.json",
               "packs/jellyfin/workflows/library-audit.json",
+              "packs/jellyfin/workflows/library-catalog.json",
               "packs/jellyfin/workflows/live-tv-status.json",
               "packs/jellyfin/workflows/maintenance-preflight.json",
               "packs/jellyfin/workflows/media-info.json",
+              "packs/jellyfin/workflows/media-suggestions.json",
               "packs/jellyfin/workflows/metadata-completeness.json",
               "packs/jellyfin/workflows/new-arrivals.json",
               "packs/jellyfin/workflows/play-next.json",
@@ -6721,14 +6742,18 @@
               "packs/jellyfin/knowledge/analytics.md",
               "packs/jellyfin/knowledge/catalog.md",
               "packs/jellyfin/knowledge/live-tv.md",
+              "packs/jellyfin/knowledge/playback.md",
               "packs/jellyfin/knowledge/usage-reference.md",
               "packs/jellyfin/knowledge/user-media.md",
               "packs/jellyfin/modules/jellyfin-tools/entry.js",
               "packs/jellyfin/modules/jellyfin-tools/manifest.json",
               "packs/jellyfin/workflows/catalog-browse.json",
+              "packs/jellyfin/workflows/catalog-search.json",
               "packs/jellyfin/workflows/health.json",
               "packs/jellyfin/workflows/incident.json",
               "packs/jellyfin/workflows/library-audit.json",
+              "packs/jellyfin/workflows/library-catalog.json",
+              "packs/jellyfin/workflows/media-suggestions.json",
               "packs/jellyfin/workflows/new-arrivals.json",
               "packs/jellyfin/workflows/play-next.json",
               "packs/jellyfin/workflows/play-now.json",
@@ -6752,6 +6777,7 @@
             "evidence": [
               "packs/jellyfin/knowledge/catalog.md",
               "packs/jellyfin/knowledge/live-tv.md",
+              "packs/jellyfin/knowledge/maintenance.md",
               "packs/jellyfin/knowledge/operating.md",
               "packs/jellyfin/knowledge/server-audit.md",
               "packs/jellyfin/knowledge/usage-reference.md",
@@ -6811,7 +6837,6 @@
               "packs/jellyfin/knowledge/live-tv.md",
               "packs/jellyfin/knowledge/maintenance.md",
               "packs/jellyfin/knowledge/operating.md",
-              "packs/jellyfin/knowledge/playback.md",
               "packs/jellyfin/knowledge/usage-reference.md",
               "packs/jellyfin/modules/jellyfin-tools/entry.js",
               "test/brain.test.js",
@@ -6888,14 +6913,17 @@
             "implemented": true,
             "evidence": [
               "packs/jellyfin/workflows/catalog-browse.json",
+              "packs/jellyfin/workflows/catalog-search.json",
               "packs/jellyfin/workflows/content-health.json",
               "packs/jellyfin/workflows/health.json",
               "packs/jellyfin/workflows/incident.json",
               "packs/jellyfin/workflows/library-analytics.json",
               "packs/jellyfin/workflows/library-audit.json",
+              "packs/jellyfin/workflows/library-catalog.json",
               "packs/jellyfin/workflows/live-tv-status.json",
               "packs/jellyfin/workflows/maintenance-preflight.json",
               "packs/jellyfin/workflows/media-info.json",
+              "packs/jellyfin/workflows/media-suggestions.json",
               "packs/jellyfin/workflows/metadata-completeness.json",
               "packs/jellyfin/workflows/new-arrivals.json",
               "packs/jellyfin/workflows/play-next.json",
@@ -6947,6 +6975,7 @@
               "packs/jellyfin/modules/jellyfin-tools/entry.js",
               "packs/jellyfin/modules/jellyfin-tools/manifest.json",
               "packs/jellyfin/sidekick.pack.json",
+              "packs/jellyfin/workflows/library-catalog.json",
               "packs/jellyfin/workflows/maintenance-preflight.json",
               "packs/jellyfin/workflows/user-media-overview.json",
               "test/agent-protocol.test.js",
@@ -7021,14 +7050,17 @@
             "packs/jellyfin/modules/jellyfin-tools/entry.js",
             "packs/jellyfin/modules/jellyfin-tools/manifest.json",
             "packs/jellyfin/workflows/catalog-browse.json",
+            "packs/jellyfin/workflows/catalog-search.json",
             "packs/jellyfin/workflows/content-health.json",
             "packs/jellyfin/workflows/health.json",
             "packs/jellyfin/workflows/incident.json",
             "packs/jellyfin/workflows/library-analytics.json",
             "packs/jellyfin/workflows/library-audit.json",
+            "packs/jellyfin/workflows/library-catalog.json",
             "packs/jellyfin/workflows/live-tv-status.json",
             "packs/jellyfin/workflows/maintenance-preflight.json",
             "packs/jellyfin/workflows/media-info.json",
+            "packs/jellyfin/workflows/media-suggestions.json",
             "packs/jellyfin/workflows/metadata-completeness.json",
             "packs/jellyfin/workflows/new-arrivals.json",
             "packs/jellyfin/workflows/play-next.json",
@@ -7067,7 +7099,7 @@
     },
     {
       "name": "linux-systems-administration",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "purpose": "Bounded Linux host status, health, and systemd service operations through Sidekick's governed tools.",
       "manifest": "packs/linux-systems-administration/sidekick.pack.json",
       "tools": [
@@ -7560,7 +7592,7 @@
     },
     {
       "name": "local-ai-model-operations",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "purpose": "Truthful local inference readiness and model inventory without downloads or direct provider access.",
       "manifest": "packs/local-ai-model-operations/sidekick.pack.json",
       "tools": [
@@ -7952,6 +7984,7 @@
             "implemented": true,
             "evidence": [
               "packs/local-ai-model-operations/knowledge/usage-reference.md",
+              "packs/local-ai-model-operations/modules/local-ai-model-tools/entry.js",
               "packs/local-ai-model-operations/sidekick.pack.json",
               "test/target-pack-buildout.test.js"
             ]
@@ -8048,7 +8081,7 @@
     },
     {
       "name": "mcp-development-compatibility",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "purpose": "Static MCP compatibility checks grounded in repository semantics and the live governed tool catalog.",
       "manifest": "packs/mcp-development-compatibility/sidekick.pack.json",
       "tools": [
@@ -8469,8 +8502,8 @@
     },
     {
       "name": "network-firewall",
-      "version": "1.0.0",
-      "purpose": "Evidence-based network and firewall inspection, bounded diagnostics, capability negotiation, and governed safe changes for OpenWrt, OPNsense, pfSense, and UniFi Network.",
+      "version": "1.1.0",
+      "purpose": "Evidence-based network and firewall inspection, bounded diagnostics, capability negotiation, and read-only change planning for OpenWrt, OPNsense, pfSense, and UniFi Network.",
       "manifest": "packs/network-firewall/sidekick.pack.json",
       "tools": [
         "dhcp",
@@ -8837,7 +8870,6 @@
             "implemented": true,
             "evidence": [
               "packs/network-firewall/knowledge/network-firewall-operating.md",
-              "packs/network-firewall/knowledge/network-firewall-safety.md",
               "packs/network-firewall/knowledge/usage-reference.md",
               "packs/network-firewall/modules/network-firewall-tools/entry.js",
               "packs/network-firewall/modules/network-firewall-tools/manifest.json",
@@ -8978,6 +9010,7 @@
               "packs/network-firewall/knowledge/network-firewall-safety.md",
               "packs/network-firewall/knowledge/usage-reference.md",
               "packs/network-firewall/modules/network-firewall-tools/entry.js",
+              "packs/network-firewall/modules/network-firewall-tools/manifest.json",
               "packs/network-firewall/workflows/change-preflight.json",
               "packs/network-firewall/workflows/safe-change.json",
               "test/agent-bridge-followup.test.js",
@@ -9018,6 +9051,7 @@
               "packs/network-firewall/knowledge/network-firewall-safety.md",
               "packs/network-firewall/knowledge/usage-reference.md",
               "packs/network-firewall/modules/network-firewall-tools/entry.js",
+              "packs/network-firewall/workflows/change-preflight.json",
               "packs/network-firewall/workflows/safe-change.json",
               "test/agent-bridge-followup.test.js",
               "test/agent-cancel.test.js",
@@ -9066,6 +9100,7 @@
               "packs/network-firewall/knowledge/network-firewall-safety.md",
               "packs/network-firewall/knowledge/usage-reference.md",
               "packs/network-firewall/modules/network-firewall-tools/entry.js",
+              "packs/network-firewall/workflows/change-preflight.json",
               "packs/network-firewall/workflows/connectivity-diagnosis.json",
               "packs/network-firewall/workflows/environment-recon.json",
               "packs/network-firewall/workflows/health-assessment.json",
@@ -9123,9 +9158,7 @@
             "evidence": [
               "packs/network-firewall/knowledge/network-firewall-operating.md",
               "packs/network-firewall/knowledge/network-firewall-safety.md",
-              "packs/network-firewall/knowledge/usage-reference.md",
               "packs/network-firewall/modules/network-firewall-tools/entry.js",
-              "packs/network-firewall/workflows/safe-change.json",
               "test/agent-bridge-followup.test.js",
               "test/agent-cancel.test.js",
               "test/blackbox-lifecycle.test.js",
@@ -9212,6 +9245,7 @@
               "packs/network-firewall/knowledge/network-firewall-operating.md",
               "packs/network-firewall/modules/network-firewall-tools/entry.js",
               "packs/network-firewall/sidekick.pack.json",
+              "packs/network-firewall/workflows/safe-change.json",
               "test/agent-bridge-followup.test.js",
               "test/agent-bridge-prompt.test.js",
               "test/agent-capability-broker.test.js",
@@ -9446,7 +9480,7 @@
     },
     {
       "name": "network-services",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "purpose": "Bounded network, DHCP, VPN, and Nginx service inspection with provider-governed changes.",
       "manifest": "packs/network-services/sidekick.pack.json",
       "tools": [
@@ -9939,7 +9973,7 @@
     },
     {
       "name": "observability-incident-response",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "purpose": "Bounded health, incident evidence, logs, and metrics adapters using existing governed observability tools.",
       "manifest": "packs/observability-incident-response/sidekick.pack.json",
       "tools": [
@@ -10365,6 +10399,7 @@
             "implemented": true,
             "evidence": [
               "packs/observability-incident-response/knowledge/usage-reference.md",
+              "packs/observability-incident-response/modules/observability-incident-tools/entry.js",
               "packs/observability-incident-response/modules/observability-incident-tools/manifest.json",
               "packs/observability-incident-response/sidekick.pack.json",
               "test/production-compatibility-packs.test.js",
@@ -10447,7 +10482,7 @@
     },
     {
       "name": "operational-readiness",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "purpose": "Fail-closed operational readiness assessment combining repository profile, platform health, continuity handoff and explicitly supplied evidence through governed primitives.",
       "manifest": "packs/operational-readiness/sidekick.pack.json",
       "tools": [
@@ -10861,8 +10896,8 @@
     },
     {
       "name": "proxmox",
-      "version": "1.6.0",
-      "purpose": "Lets Sidekick securely discover and operate Proxmox VE infrastructure through administrator-configured named profiles, pinned-CA TLS, normalized state, deterministic maintenance preflight, same-cluster guest migration, governed provisioning/lifecycle, optional Ansible, and critically guarded retirement of proven disposable resources.",
+      "version": "1.7.0",
+      "purpose": "Lets Sidekick securely discover and operate Proxmox VE infrastructure through administrator-configured named profiles, pinned-CA TLS, normalized state, bounded node evacuation planning, same-cluster guest migration, governed provisioning/lifecycle, optional Ansible, and critically guarded retirement of proven disposable resources.",
       "manifest": "packs/proxmox/sidekick.pack.json",
       "tools": [
         "ansible_run",
@@ -10941,6 +10976,11 @@
         {
           "path": "workflows/storage-health.json",
           "file": "packs/proxmox/workflows/storage-health.json",
+          "present": true
+        },
+        {
+          "path": "workflows/maintenance-plan.json",
+          "file": "packs/proxmox/workflows/maintenance-plan.json",
           "present": true
         },
         {
@@ -11084,6 +11124,19 @@
             "read-only"
           ],
           "file": "packs/proxmox/knowledge/proxmox-storage-backup-readiness.md",
+          "present": true
+        },
+        {
+          "path": "knowledge/proxmox-maintenance-planning.md",
+          "title": "Proxmox pack: maintenance and evacuation planning limits",
+          "category": "operations",
+          "tags": [
+            "proxmox",
+            "maintenance",
+            "migration",
+            "read-only"
+          ],
+          "file": "packs/proxmox/knowledge/proxmox-maintenance-planning.md",
           "present": true
         },
         {
@@ -11238,7 +11291,7 @@
       "network_scopes": [],
       "provider_requirements": null,
       "workflow_contract": {
-        "total": 15,
+        "total": 16,
         "missing_result": [],
         "missing_tags": [],
         "missing_step_error_policy": []
@@ -11421,6 +11474,7 @@
           "guest health",
           "guest inventory",
           "guest readiness",
+          "maintenance plan",
           "provision guest",
           "proxmox",
           "proxmox_guest",
@@ -11454,6 +11508,7 @@
               "packs/proxmox/workflows/guest-health.json",
               "packs/proxmox/workflows/guest-inventory.json",
               "packs/proxmox/workflows/guest-readiness.json",
+              "packs/proxmox/workflows/maintenance-plan.json",
               "packs/proxmox/workflows/provision-guest.json",
               "packs/proxmox/workflows/storage-backend-audit.json",
               "packs/proxmox/workflows/storage-capacity.json",
@@ -11504,6 +11559,7 @@
               "packs/proxmox/knowledge/proxmox-config-audit.md",
               "packs/proxmox/knowledge/proxmox-guest-readiness.md",
               "packs/proxmox/knowledge/proxmox-least-privilege.md",
+              "packs/proxmox/knowledge/proxmox-maintenance-planning.md",
               "packs/proxmox/knowledge/proxmox-operating.md",
               "packs/proxmox/knowledge/proxmox-provisioning.md",
               "packs/proxmox/knowledge/proxmox-readonly.md",
@@ -11545,6 +11601,7 @@
             "evidence": [
               "packs/proxmox/knowledge/proxmox-guest-readiness.md",
               "packs/proxmox/knowledge/proxmox-least-privilege.md",
+              "packs/proxmox/knowledge/proxmox-maintenance-planning.md",
               "packs/proxmox/knowledge/proxmox-operating.md",
               "packs/proxmox/knowledge/proxmox-provisioning.md",
               "packs/proxmox/knowledge/proxmox-readonly.md",
@@ -11555,6 +11612,7 @@
               "packs/proxmox/modules/proxmox-tools/manifest.json",
               "packs/proxmox/workflows/backup-verification-audit.json",
               "packs/proxmox/workflows/guest-readiness.json",
+              "packs/proxmox/workflows/maintenance-plan.json",
               "packs/proxmox/workflows/upgrade-readiness.json",
               "test/agent-bridge-prompt.test.js",
               "test/brain.test.js",
@@ -11571,6 +11629,7 @@
             "evidence": [
               "packs/proxmox/knowledge/proxmox-guest-readiness.md",
               "packs/proxmox/knowledge/proxmox-least-privilege.md",
+              "packs/proxmox/knowledge/proxmox-maintenance-planning.md",
               "packs/proxmox/knowledge/proxmox-operating.md",
               "packs/proxmox/knowledge/proxmox-provisioning.md",
               "packs/proxmox/knowledge/proxmox-readonly.md",
@@ -11582,6 +11641,7 @@
               "packs/proxmox/modules/proxmox-tools/manifest.json",
               "packs/proxmox/workflows/environment-recon.json",
               "packs/proxmox/workflows/guest-health.json",
+              "packs/proxmox/workflows/maintenance-plan.json",
               "packs/proxmox/workflows/provision-guest.json",
               "test/brain.test.js",
               "test/jellyfin-pack.test.js",
@@ -11600,6 +11660,7 @@
               "packs/proxmox/knowledge/proxmox-config-audit.md",
               "packs/proxmox/knowledge/proxmox-guest-readiness.md",
               "packs/proxmox/knowledge/proxmox-least-privilege.md",
+              "packs/proxmox/knowledge/proxmox-maintenance-planning.md",
               "packs/proxmox/knowledge/proxmox-operating.md",
               "packs/proxmox/knowledge/proxmox-provisioning.md",
               "packs/proxmox/knowledge/proxmox-readonly.md",
@@ -11636,6 +11697,7 @@
             "evidence": [
               "packs/proxmox/knowledge/proxmox-guest-readiness.md",
               "packs/proxmox/knowledge/proxmox-least-privilege.md",
+              "packs/proxmox/knowledge/proxmox-maintenance-planning.md",
               "packs/proxmox/knowledge/proxmox-operating.md",
               "packs/proxmox/knowledge/proxmox-provisioning.md",
               "packs/proxmox/knowledge/proxmox-readonly.md",
@@ -11663,6 +11725,7 @@
               "packs/proxmox/knowledge/proxmox-config-audit.md",
               "packs/proxmox/knowledge/proxmox-guest-readiness.md",
               "packs/proxmox/knowledge/proxmox-least-privilege.md",
+              "packs/proxmox/knowledge/proxmox-maintenance-planning.md",
               "packs/proxmox/knowledge/proxmox-operating.md",
               "packs/proxmox/knowledge/proxmox-provisioning.md",
               "packs/proxmox/knowledge/proxmox-readonly.md",
@@ -11704,6 +11767,7 @@
               "packs/proxmox/workflows/guest-health.json",
               "packs/proxmox/workflows/guest-inventory.json",
               "packs/proxmox/workflows/guest-readiness.json",
+              "packs/proxmox/workflows/maintenance-plan.json",
               "packs/proxmox/workflows/provision-guest.json",
               "packs/proxmox/workflows/storage-backend-audit.json",
               "packs/proxmox/workflows/storage-capacity.json",
@@ -11719,6 +11783,7 @@
               "packs/proxmox/knowledge/proxmox-config-audit.md",
               "packs/proxmox/knowledge/proxmox-guest-readiness.md",
               "packs/proxmox/knowledge/proxmox-least-privilege.md",
+              "packs/proxmox/knowledge/proxmox-maintenance-planning.md",
               "packs/proxmox/knowledge/proxmox-operating.md",
               "packs/proxmox/knowledge/proxmox-provisioning.md",
               "packs/proxmox/knowledge/proxmox-readonly.md",
@@ -11739,6 +11804,7 @@
               "packs/proxmox/workflows/guest-health.json",
               "packs/proxmox/workflows/guest-inventory.json",
               "packs/proxmox/workflows/guest-readiness.json",
+              "packs/proxmox/workflows/maintenance-plan.json",
               "packs/proxmox/workflows/provision-guest.json",
               "packs/proxmox/workflows/storage-backend-audit.json",
               "packs/proxmox/workflows/storage-capacity.json",
@@ -11762,6 +11828,7 @@
             "evidence": [
               "packs/proxmox/knowledge/proxmox-config-audit.md",
               "packs/proxmox/knowledge/proxmox-least-privilege.md",
+              "packs/proxmox/knowledge/proxmox-maintenance-planning.md",
               "packs/proxmox/knowledge/proxmox-operating.md",
               "packs/proxmox/knowledge/proxmox-provisioning.md",
               "packs/proxmox/knowledge/proxmox-safety.md",
@@ -11803,6 +11870,7 @@
               "packs/proxmox/knowledge/proxmox-config-audit.md",
               "packs/proxmox/knowledge/proxmox-guest-readiness.md",
               "packs/proxmox/knowledge/proxmox-least-privilege.md",
+              "packs/proxmox/knowledge/proxmox-maintenance-planning.md",
               "packs/proxmox/knowledge/proxmox-operating.md",
               "packs/proxmox/knowledge/proxmox-provisioning.md",
               "packs/proxmox/knowledge/proxmox-readonly.md",
@@ -11843,6 +11911,7 @@
             "packs/proxmox/knowledge/proxmox-config-audit.md",
             "packs/proxmox/knowledge/proxmox-guest-readiness.md",
             "packs/proxmox/knowledge/proxmox-least-privilege.md",
+            "packs/proxmox/knowledge/proxmox-maintenance-planning.md",
             "packs/proxmox/knowledge/proxmox-operating.md",
             "packs/proxmox/knowledge/proxmox-provisioning.md",
             "packs/proxmox/knowledge/proxmox-readonly.md",
@@ -11862,6 +11931,7 @@
             "packs/proxmox/workflows/guest-health.json",
             "packs/proxmox/workflows/guest-inventory.json",
             "packs/proxmox/workflows/guest-readiness.json",
+            "packs/proxmox/workflows/maintenance-plan.json",
             "packs/proxmox/workflows/provision-guest.json",
             "packs/proxmox/workflows/storage-backend-audit.json",
             "packs/proxmox/workflows/storage-capacity.json",
@@ -11897,7 +11967,7 @@
     },
     {
       "name": "reproducibility",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "purpose": "Creates bounded, secret-safe reproducibility bundles from repository and platform evidence, using existing artifact custody and research evidence primitives.",
       "manifest": "packs/reproducibility/sidekick.pack.json",
       "tools": [
@@ -12337,7 +12407,7 @@
     },
     {
       "name": "security-lab-reproduction",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "purpose": "Fail-closed authorization preflight for reproducible security labs; no public discovery or arbitrary execution.",
       "manifest": "packs/security-lab-reproduction/sidekick.pack.json",
       "tools": [
@@ -13836,7 +13906,7 @@
     },
     {
       "name": "skeptical-verifier",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "purpose": "Independent, read-only verification that checks repository evidence, semantic integrity, health and optional snapshots without executing project commands or changing state.",
       "manifest": "packs/skeptical-verifier/sidekick.pack.json",
       "tools": [
@@ -14293,7 +14363,7 @@
     },
     {
       "name": "software-supply-chain",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "purpose": "Read-only, reproducible software supply-chain checks over manifests, hashes, Git state and semantic boundaries.",
       "manifest": "packs/software-supply-chain/sidekick.pack.json",
       "tools": [
@@ -14577,10 +14647,11 @@
             ]
           },
           "execution": {
-            "status": "not_observed",
-            "implemented": false,
+            "status": "observed",
+            "implemented": true,
             "evidence": [
-              "packs/software-supply-chain/knowledge/usage-reference.md"
+              "packs/software-supply-chain/knowledge/usage-reference.md",
+              "packs/software-supply-chain/modules/software-supply-chain-tools/entry.js"
             ]
           },
           "verification": {
@@ -14661,6 +14732,7 @@
           "covered": [
             "discovery",
             "analysis",
+            "execution",
             "verification",
             "health",
             "workflows",
@@ -14672,7 +14744,6 @@
             "inventory",
             "diagnosis",
             "planning",
-            "execution",
             "recovery",
             "fixtures",
             "certification"
@@ -14689,7 +14760,6 @@
         },
         "weaknesses": [
           "no observed diagnosis implementation evidence",
-          "no observed execution implementation evidence",
           "no observed fixtures implementation evidence",
           "no observed inventory implementation evidence",
           "no observed planning implementation evidence",
@@ -14702,17 +14772,13 @@
           "add attributable inventory coverage or evidence",
           "add attributable diagnosis coverage or evidence",
           "add attributable planning coverage or evidence",
-          "add attributable execution coverage or evidence",
-          "add attributable recovery coverage or evidence"
+          "add attributable recovery coverage or evidence",
+          "add attributable fixtures coverage or evidence"
         ],
         "deferred_items": [
           {
             "item": "certification",
             "reason": "Certification requires server-validated, current evidence; repository descriptors and tests cannot confer it."
-          },
-          {
-            "item": "fixtures",
-            "reason": "No implementation evidence was found in the discovered descriptor, workflow, source, or test files."
           }
         ],
         "evidence_status": "not_evaluated"
@@ -14721,7 +14787,7 @@
     },
     {
       "name": "storage-filesystems",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "purpose": "Bounded storage capacity, backend, volume, and host disk inspection through existing providers.",
       "manifest": "packs/storage-filesystems/sidekick.pack.json",
       "tools": [
@@ -15112,6 +15178,7 @@
             "evidence": [
               "packs/storage-filesystems/knowledge/operating.md",
               "packs/storage-filesystems/knowledge/usage-reference.md",
+              "packs/storage-filesystems/modules/storage-filesystem-tools/entry.js",
               "packs/storage-filesystems/modules/storage-filesystem-tools/manifest.json",
               "packs/storage-filesystems/sidekick.pack.json",
               "test/production-compatibility-packs.test.js",
@@ -15196,7 +15263,7 @@
     },
     {
       "name": "testing-quality-engineering",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "purpose": "Bounded test planning, verification execution and deterministic quality evidence.",
       "manifest": "packs/testing-quality-engineering/sidekick.pack.json",
       "tools": [

@@ -1,7 +1,7 @@
 {
   "name": "ci-cd-release-tools",
   "displayName": "CI/CD Release Tools",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Read-only CI and release readiness composition.",
   "author": "Sidekick",
   "type": "plugin",

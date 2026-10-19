@@ -3,7 +3,7 @@
   "pack_api": 1,
   "name": "linux-systems-administration",
   "display_name": "Linux Systems Administration",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Bounded Linux host status, health, and systemd service operations through Sidekick's governed tools.",
   "publisher": "Sidekick",
   "compatibility": { "sidekick": ">=1.0.0" },

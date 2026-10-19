@@ -5,7 +5,8 @@ values. When unsure, call `list_profiles` (or `list_users`) first — a nonexist
 profile fails with `profile_not_found` and an enumeration of available profiles.
 
 User-scoped raw actions (`continue_watching`, `next_up`, `user_media_state`,
-`user_unwatched`, `user_status`) accept an optional acting user and auto-resolve
+`user_unwatched`, `media_suggestions`, `user_status`, `list_libraries`,
+`search_media`, and scoped `list_media`) accept an optional acting user and auto-resolve
 it when `user_id`/`username` are omitted: (1) the single distinct user with an
 active session, (2) the profile-configured `default_username`, (3) the single
 enabled user. Otherwise they fail closed with a `list_users` hint. The result
@@ -13,16 +14,36 @@ reports `user_resolution` (`from`, `user_id`, `username`) for transparency. Raw
 actions are intended for single bounded checks; prefer the composed workflows
 below for whole answers.
 
-Use `catalog-browse`, `media-info`, and `user-media-overview` for read-only
-catalog and watch-state questions; `library-audit`, `content-health`,
+Use `catalog-search` to search movies, shows, episodes, and music across every
+library visible to the resolved Jellyfin user. `search_media` discovers current
+views for each request, searches custom-named libraries too, and includes the source
+library, year, genre, and available summary details with each result. Use
+`list_libraries` to inspect the selected user's current names and IDs; use
+`library-catalog` to browse a visible library after resolving its ID. If results
+are truncated, pass `next_start` to continue; if filtered results are empty,
+follow `refinement_suggestions`. Use `media-suggestions` for deterministic
+unplayed picks guided by recent watch genres and recency. If more than one
+plausible title matches, present the candidates and ask which one the user means
+before retrieving full details or starting playback. Never reuse library names
+or IDs from another server. Use `catalog-browse`, `media-info`, and
+`user-media-overview` for
+read-only catalog and watch-state questions; `library-audit`, `content-health`,
 `library-analytics`, and `metadata-completeness` for library quality; and
 `playback-diagnose` for session and transcoding evidence. `server-audit`,
 `health`, `live-tv-status`, `incident`, and `upgrade-readiness` provide separate
 operational views, not interchangeable health claims.
 
+For "who is watching Jellyfin?", use `session-overview`. Report one concise
+entry per user with media playing or paused, including title (and episode/series
+when available), elapsed time, time remaining, and each device. Treat sessions
+without a current item as connected-only, and report them separately if useful.
+Add paused or transcoding status when present. These are point-in-time session
+values; if runtime or position is unavailable, say the time estimate is
+unavailable.
+
 To start playback of a known item on a named active device session, run the
 governed `play-now` workflow with `device_name` (exact case-insensitive active
-session device name, e.g. "Geoffs TV") and `item_id`. It confirms active
+exact session device name returned by list_sessions) and `item_id`. It confirms active
 sessions and the user's resume list before issuing a single `play` command.
 Resolve the `item_id` from `continue_watching` (`user_id` or `username`
 optional) or another item listing; do not guess session or device ids. Playback

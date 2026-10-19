@@ -78,7 +78,8 @@ test("PCA.3: unavailable delegated providers remain visible", async () => {
   const unavailable = { config: { default_profile: "standard" }, dispatch: async (name) => { unavailableCalls.push(name); throw Object.assign(new Error("not configured"), { code: "not_configured" }); } };
   const network = require("../packs/network-services/modules/network-services-tools/entry").buildDescriptors(unavailable).find(item => item.name === "network_service_audit");
   const networkResult = JSON.parse((await network.handler({})).content[0].text);
-  assert.equal(networkResult.network.state, "unavailable");
+  assert.equal(networkResult.state, "unavailable");
+  assert.equal(networkResult.evidence.network.state, "unavailable");
   assert.deepEqual(unavailableCalls, ["network", "dhcp", "vpn", "nginx"]);
   const linux = require("../packs/linux-systems-administration/modules/linux-systems-tools/entry").buildDescriptors({ config: {}, dispatch: async () => ({}) }).find(item => item.name === "linux_service_operation");
   assert.equal((await linux.handler({ action: "status", service: "../../etc" })).code, "invalid_input");

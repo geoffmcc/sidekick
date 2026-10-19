@@ -1,7 +1,7 @@
 {
   "name": "backup-restore-tools",
   "displayName": "Backup and Restore Tools",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Governed backup, restore, comparison, and virtualization backup adapters.",
   "author": "Sidekick",
   "type": "plugin",

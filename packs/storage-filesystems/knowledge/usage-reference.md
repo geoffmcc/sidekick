@@ -10,3 +10,8 @@ Capacity, backend health, and volume attachment are different claims. Inspect
 free bytes, utilization, allocation, and error state independently before
 library, database, or container mutations. This pack does not mount, format,
 resize, repair, delete, or otherwise mutate filesystems or volumes.
+
+The capacity audit labels each source as observed or unavailable and reports a
+partial state when only one source responds. A missing or null percentage is
+unknown, never zero percent used; use the threshold tool's `state` and source
+evidence before describing capacity as healthy.

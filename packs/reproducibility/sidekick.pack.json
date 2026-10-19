@@ -3,7 +3,7 @@
   "pack_api": 1,
   "name": "reproducibility",
   "display_name": "Reproducibility",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Creates bounded, secret-safe reproducibility bundles from repository and platform evidence, using existing artifact custody and research evidence primitives.",
   "publisher": "Sidekick",
   "compatibility": { "sidekick": ">=1.0.0" },

@@ -12,3 +12,15 @@ and verify postconditions. Migration is same-cluster only. Retirement is not a
 general delete: it requires administrator enablement, positive Sidekick-managed
 provenance, no protection, and disposable-resource policy. Optional Ansible is
 limited to configured allowlisted playbooks and hosts.
+
+For a node maintenance window, run `proxmox/maintenance-plan` with a configured
+profile and node name. It assesses up to 25 guests against up to four online
+peer candidates through the normal migration planner. Omitted guests or peers
+require operator review. It does not move
+guests or prove target capacity, workload health, or backup recoverability;
+review each candidate and execute any approved move separately.
+
+If a create or clone task is ambiguous, the result is
+`reconciliation_required` and includes the resource identity, UPID, and
+recovery actions. Inspect the task and guest before retrying. An orphaned clone
+without provenance must be reconciled before retirement can be considered.

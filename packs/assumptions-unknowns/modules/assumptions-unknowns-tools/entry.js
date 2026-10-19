@@ -2,13 +2,14 @@
 const { requireFromSidekick } = require("./lib/deps");
 const { z } = requireFromSidekick("zod");
 const out = value => ({ content: [{ type: "text", text: JSON.stringify(value, null, 2) }] });
+function failed(value) { const raw = value?.content?.map(item => item.text || "").join("\n").trim(); let data = null; try { data = raw ? JSON.parse(raw) : null; } catch {} const state = String(value?.state || value?.status || data?.state || data?.status || "").toLowerCase(); return value?.isError === true || value?.ok === false || data?.ok === false || ["unavailable", "error", "failed"].includes(state); }
 async function inspect(services, args) {
   const context = await services.dispatch("context", { action: "assemble", project: args.project, query: args.query || args.project, limit: args.limit || 10 });
   const memory = await services.dispatch("memory", { action: "query", project: args.project, query: args.query || "assumption unknown decision blocker", limit: args.limit || 10 });
   const handoff = await services.dispatch("handoff", { action: "list", project: args.project, limit: args.limit || 10 });
   const sources = { context, memory, handoff };
-  const complete = Object.values(sources).every(value => !value?.isError);
-  return { ...out({ ok: complete, tool: "assumptions", read_only: true, project: args.project, sources, assumptions: args.assumptions || [], unknowns: args.unknowns || [], evidence: { sources: Object.keys(sources).filter(key => !sources[key]?.isError) }, evidence_gaps: ["Caller-supplied assumptions and unknowns are not persisted by this pack.", "Validate each gap against current repository or runtime evidence before acting."], storage: "canonical context/memory/handoff only; no competing store" }), isError: !complete };
+  const complete = Object.values(sources).every(value => !failed(value));
+  return { ...out({ ok: complete, state: complete ? "observed" : "partial", tool: "assumptions", read_only: true, project: args.project, sources, assumptions: args.assumptions || [], unknowns: args.unknowns || [], evidence: { sources: Object.keys(sources).filter(key => !failed(sources[key])) }, evidence_gaps: ["Caller-supplied assumptions and unknowns are not persisted by this pack.", "Validate each gap against current repository or runtime evidence before acting."], storage: "canonical context/memory/handoff only; no competing store" }), isError: !complete };
 }
 async function snapshot(services, args) {
   const calls = [
@@ -19,7 +20,7 @@ async function snapshot(services, args) {
   const evidence = {};
   const failures = [];
   for (const [name, payload] of calls) {
-    try { evidence[name] = await services.dispatch(name, payload); if (evidence[name]?.isError) failures.push(name); }
+    try { evidence[name] = await services.dispatch(name, payload); if (failed(evidence[name])) failures.push(name); }
     catch (error) { failures.push(name); evidence[name] = { ok: false, code: error.code || "dependency_failed", error: String(error.message || error).slice(0, 300) }; }
   }
   const supplied = [...(args.assumptions || []).map(value => ({ kind: "assumption", value })), ...(args.unknowns || []).map(value => ({ kind: "unknown", value }))];

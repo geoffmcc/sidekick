@@ -144,6 +144,18 @@ async function resolveActingUser(c, args, p, users) {
     { users: candidates },
   );
 }
+async function getUserLibraryViews(client, user) {
+  const response = await client.get("/UserViews", {
+    UserId: user.Id,
+    IncludeExternalContent: false,
+  });
+  const views = Array.isArray(response)
+    ? response
+    : Array.isArray(response?.Items)
+      ? response.Items
+      : [];
+  return views.filter((view) => view && view.Id).slice(0, 100);
+}
 async function optional(fn) {
   try {
     return await fn();
@@ -170,14 +182,14 @@ async function getAll(client, path, query, limit = 100) {
         ? data.items
         : [];
 }
-async function getPagedItems(client, query, { limit = 100, maxItems = 10000 } = {}) {
+async function getPagedItems(client, query, { limit = 100, maxItems = 10000, endpoint = "/Items" } = {}) {
   const cap = Math.min(10000, Math.max(1, maxItems));
   const pageSize = Math.min(100, cap, Math.max(1, limit));
   const items = [];
   let startIndex = Math.max(0, Number(query?.StartIndex) || 0);
   let totalRecordCount = null;
   do {
-    const data = await client.get("/Items", {
+    const data = await client.get(endpoint, {
       ...query,
       Limit: pageSize,
       StartIndex: startIndex,
@@ -595,7 +607,7 @@ async function fetchLatestStable(services) {
 // ---- read tool -------------------------------------------------------------
 
 async function read(services, args, runtime) {
-  const userFilterActions = new Set(["activity", "user_status", "user_access_audit", "user_media_state", "user_unwatched", "item_details", "continue_watching", "next_up"]);
+  const userFilterActions = new Set(["activity", "user_status", "user_access_audit", "user_media_state", "user_unwatched", "media_suggestions", "item_details", "continue_watching", "next_up", "list_libraries", "search_media", "list_media"]);
   if ((args.user_id || args.username) && !userFilterActions.has(args.action)) {
     throw new JellyfinError(
       "invalid_input",
@@ -654,25 +666,24 @@ async function read(services, args, runtime) {
       reachable: true,
       authenticated: true,
     };
-  if (
-    [
-      "list_libraries",
-      "library_status",
-      "library_health",
-    ].includes(args.action)
-  ) {
+  if (args.action === "list_libraries") {
+    const { user, resolution } = await resolveActingUser(c, args, p);
+    const views = await getUserLibraryViews(c, user);
+    return {
+      profile: p.name,
+      user: { id: user.Id, name: user.Name || null },
+      user_resolution: resolution,
+      visibility_scope: "jellyfin_user_views",
+      libraries: views.map((view) => ({
+        id: view.Id,
+        name: view.Name || null,
+        collection_type: view.CollectionType || null,
+      })),
+    };
+  }
+  if (["library_status", "library_health"].includes(args.action)) {
     libraries = await getAll(c, "/Library/VirtualFolders", null, 100);
     const views = libraries.map(libView);
-    if (args.action === "list_libraries")
-      return {
-        profile: p.name,
-        libraries: views.map((x) => ({
-          id: x.id,
-          name: x.name,
-          collection_type: x.collection_type,
-          paths: x.locations,
-        })),
-      };
     const counts = await optional(() => c.get("/Items/Counts"));
     const allTasks = (await optional(() => c.get("/ScheduledTasks"))) || [];
     const refreshTask = allTasks.find((t) => t.Key === "RefreshLibrary") || null;
@@ -936,6 +947,23 @@ async function read(services, args, runtime) {
     };
   }
   if (args.action === "list_media") {
+    const userScoped = args.user_scoped === true || Boolean(args.user_id || args.username);
+    let user = null;
+    let userResolution = null;
+    let selectedLibrary = null;
+    let endpoint = "/Items";
+    if (userScoped) {
+      if (!args.library_id)
+        throw new JellyfinError("invalid_input", "library_id is required for user-scoped list_media");
+      const resolved = await resolveActingUser(c, args, p);
+      user = resolved.user;
+      userResolution = resolved.resolution;
+      const views = await getUserLibraryViews(c, user);
+      selectedLibrary = views.find((view) => view.Id === args.library_id);
+      if (!selectedLibrary)
+        throw new JellyfinError("not_found", "library_id is not visible in the selected user's Jellyfin views");
+      endpoint = `/Users/${encodeURIComponent(user.Id)}/Items`;
+    }
     const fullLibrary = args.all === true;
     const filters = {
       Recursive: true,
@@ -956,9 +984,9 @@ async function read(services, args, runtime) {
     };
     const pageSize = bounded(args.limit, 100);
     const page = fullLibrary
-      ? await getPagedItems(c, filters, { limit: pageSize, maxItems: args.max_items || 10000 })
+      ? await getPagedItems(c, filters, { limit: pageSize, maxItems: args.max_items || 10000, endpoint })
       : (() => null)();
-    const data = fullLibrary ? null : await c.get("/Items", {
+    const data = fullLibrary ? null : await c.get(endpoint, {
       ...filters,
       Limit: pageSize,
       EnableTotalRecordCount: true,
@@ -966,40 +994,189 @@ async function read(services, args, runtime) {
     const items = fullLibrary ? page.items : (Array.isArray(data?.Items) ? data.Items : []);
     return {
       profile: p.name,
+      user: user ? { id: user.Id, name: user.Name || null } : undefined,
+      user_resolution: userResolution || undefined,
+      visibility_scope: user ? "jellyfin_user_views" : "server_catalog",
+      library: selectedLibrary ? {
+        id: selectedLibrary.Id,
+        name: selectedLibrary.Name || null,
+        collection_type: selectedLibrary.CollectionType || null,
+      } : undefined,
       items: items.map(mediaListView),
       sample_size: items.length,
       total_record_count: fullLibrary ? page.totalRecordCount : (data?.TotalRecordCount ?? null),
       filters_used: filters,
       full_library: fullLibrary,
       truncated: fullLibrary ? page.truncated : false,
+      next_start: fullLibrary
+        ? (page.truncated ? filters.StartIndex + items.length : null)
+        : (((data?.TotalRecordCount ?? 0) > filters.StartIndex + items.length) || (items.length === pageSize)
+          ? filters.StartIndex + items.length
+          : null),
       note: fullLibrary
         ? "Full-library enumeration is paged through Jellyfin and capped at max_items (default 10000)."
         : "Use all=true to enumerate every matching item, subject to max_items.",
     };
   }
   if (args.action === "search_media") {
-    const items = await getAll(
-      c,
-      "/Items",
-      {
-        SearchTerm: args.query || "",
+    const query = String(args.query || "").trim();
+    if (!query)
+      throw new JellyfinError("invalid_input", "query is required for search_media");
+    const { user, resolution } = await resolveActingUser(c, args, p);
+    const rawLibraries = await c.get("/UserViews", {
+      UserId: user.Id,
+      IncludeExternalContent: false,
+    });
+    const rawViewItems = Array.isArray(rawLibraries)
+      ? rawLibraries
+      : Array.isArray(rawLibraries?.Items)
+        ? rawLibraries.Items
+        : [];
+    const libraries = rawViewItems
+      .filter((library) => library && library.Id)
+      .slice(0, 100);
+    const selected = args.library_id
+      ? libraries.filter((library) => library.Id === args.library_id)
+      : libraries;
+    if (args.library_id && !selected.length)
+      throw new JellyfinError(
+        "not_found",
+        "library_id is not visible in the selected user's Jellyfin views",
+      );
+    // Resolve scope from Jellyfin on every request so custom-named libraries
+    // are searched alongside the standard Movies/TV/Music library types.
+    const includeItemTypes = args.include_item_types ||
+      "Movie,Series,Season,Episode,Audio,MusicAlbum,MusicArtist,MusicVideo";
+    const limit = bounded(args.limit, 25);
+    const start = Math.max(0, args.start || 0);
+    const endpoint = `/Users/${encodeURIComponent(user.Id)}/Items`;
+    const requestedFilters = {
+      genre: args.genre || args.genres || null,
+      years: args.years || null,
+    };
+    const perLibrary = [];
+    for (const library of selected) {
+      const data = await c.get(endpoint, {
+        ParentId: library.Id,
+        SearchTerm: query,
         Recursive: true,
-        IncludeItemTypes: args.include_item_types || undefined,
-        StartIndex: Math.max(0, args.start || 0),
-      },
-      Math.min(args.limit || 25, 100),
-    );
+        IncludeItemTypes: includeItemTypes,
+        Genres: args.genre || args.genres || undefined,
+        Years: args.years || undefined,
+        Fields: "Overview,Genres,ProviderIds,Path,CommunityRating,SeriesInfo,People",
+        StartIndex: start,
+        Limit: limit,
+        EnableTotalRecordCount: true,
+      });
+      const items = Array.isArray(data?.Items) ? data.Items : [];
+      perLibrary.push({
+        library,
+        items,
+        total_record_count: typeof data?.TotalRecordCount === "number" && Number.isFinite(data.TotalRecordCount)
+          ? data.TotalRecordCount
+          : null,
+      });
+    }
+    let filtersRelaxed = false;
+    if (perLibrary.every(({ items }) => items.length === 0) && (requestedFilters.genre || requestedFilters.years)) {
+      filtersRelaxed = true;
+      for (const entry of perLibrary) {
+        const data = await c.get(endpoint, {
+          ParentId: entry.library.Id,
+          SearchTerm: query,
+          Recursive: true,
+          IncludeItemTypes: includeItemTypes,
+          Fields: "Overview,Genres,ProviderIds,Path,CommunityRating,SeriesInfo,People",
+          StartIndex: start,
+          Limit: limit,
+          EnableTotalRecordCount: true,
+        });
+        entry.items = Array.isArray(data?.Items) ? data.Items : [];
+        entry.total_record_count = typeof data?.TotalRecordCount === "number" && Number.isFinite(data.TotalRecordCount)
+          ? data.TotalRecordCount
+          : null;
+      }
+    }
+    const matches = new Map();
+    // Interleave per-library results so a library with many hits cannot crowd
+    // all other discovered libraries out of the bounded combined response.
+    for (let index = 0; index < limit; index++) {
+      for (const { library, items } of perLibrary) {
+        const item = items[index];
+        if (!item?.Id) continue;
+        const libraryMatch = {
+          id: library.Id,
+          name: library.Name || null,
+          collection_type: library.CollectionType || null,
+        };
+        const prior = matches.get(item.Id);
+        if (prior) {
+          if (!prior.libraries.some((entry) => entry.id === library.Id))
+            prior.libraries.push(libraryMatch);
+        } else if (matches.size < limit) {
+          matches.set(item.Id, {
+            id: item.Id,
+            name: item.Name,
+            type: item.Type,
+            path: item.Path || null,
+            production_year: item.ProductionYear || null,
+            overview: item.Overview || null,
+            genres: Array.isArray(item.Genres) ? item.Genres.slice(0, 20) : [],
+            community_rating: item.CommunityRating ?? null,
+            series_id: item.SeriesId || null,
+            series_name: item.SeriesName || null,
+            season_number: item.ParentIndexNumber ?? null,
+            episode_or_track_number: item.IndexNumber ?? null,
+            album: item.Album || null,
+            artists: Array.isArray(item.Artists) ? item.Artists.slice(0, 10) : [],
+            media_sources: item.MediaSources?.length || 0,
+            libraries: [libraryMatch],
+          });
+        }
+      }
+    }
+    const items = [...matches.values()];
+    const libraryDiscoveryTruncated = rawViewItems.length > libraries.length;
+    const resultsTruncated = libraryDiscoveryTruncated || perLibrary.some(({ items: libraryItems, total_record_count }) =>
+        total_record_count !== null
+          ? start + libraryItems.length < total_record_count
+          : libraryItems.length === limit,
+      );
     return {
       profile: p.name,
-      items: items.map((x) => ({
-        id: x.Id,
-        name: x.Name,
-        type: x.Type,
-        path: x.Path || null,
-        production_year: x.ProductionYear || null,
-        media_sources: x.MediaSources?.length || 0,
+      user: { id: user.Id, name: user.Name || null },
+      user_resolution: resolution,
+      visibility_scope: "jellyfin_user_views",
+      query,
+      include_item_types: includeItemTypes,
+      library_scope: args.library_id ? "selected_library" : "all_user_visible_libraries",
+      discovered_library_count: rawViewItems.length,
+      library_discovery_truncated: libraryDiscoveryTruncated,
+      libraries_searched: perLibrary.map(({ library, items: libraryItems, total_record_count }) => ({
+        id: library.Id,
+        name: library.Name || null,
+        collection_type: library.CollectionType || null,
+        returned_count: libraryItems.length,
+        total_record_count,
+        truncated: total_record_count !== null
+          ? start + libraryItems.length < total_record_count
+          : libraryItems.length === limit,
       })),
+      items,
       bounded: true,
+      limit,
+      start,
+      truncated: resultsTruncated,
+      next_start: resultsTruncated ? start + limit : null,
+      filters_relaxed: filtersRelaxed,
+      requested_filters: requestedFilters,
+      refinement_suggestions: items.length ? [] : [
+        "Try a shorter title or an alternate/localized title.",
+        "If the title is uncertain, add a year, media type, series name, or another identifying detail.",
+      ],
+      search_note: filtersRelaxed
+        ? "No matches used the requested genre/year filters; these results retry the same title and type across the same visible libraries without those optional filters."
+        : undefined,
     };
   }
   if (args.action === "item_details") {
@@ -1115,6 +1292,47 @@ async function read(services, args, runtime) {
       note: "This is a user-scoped unplayed view, not a server-side recommendation ranking.",
     };
   }
+  if (args.action === "media_suggestions") {
+    const { user, resolution } = await resolveActingUser(c, args, p);
+    const userEndpoint = `/Users/${encodeURIComponent(user.Id)}/Items`;
+    const limit = bounded(args.limit, 10, 25);
+    const start = Math.max(0, args.start_index ?? args.start ?? 0);
+    const includeTypes = args.include_item_types || "Movie,Series,Episode";
+    const commonFields = "Overview,Genres,UserData,DateCreated,ProductionYear,SeriesInfo,ProviderIds";
+    const [unplayedData, historyData, continueData] = await Promise.all([
+      c.get(userEndpoint, { Recursive: true, Filters: "IsUnplayed", IncludeItemTypes: includeTypes, SortBy: "DateCreated", SortOrder: "Descending", Fields: commonFields, Limit: Math.min(100, limit * 4), StartIndex: start, EnableUserData: true, EnableTotalRecordCount: true }),
+      c.get(userEndpoint, { Recursive: true, Filters: "IsPlayed", IncludeItemTypes: includeTypes, SortBy: "DatePlayed", SortOrder: "Descending", Fields: "Genres,UserData", Limit: 50, StartIndex: 0, EnableUserData: true }),
+      c.get(`/Users/${encodeURIComponent(user.Id)}/Items/Resume`, { Limit: 10, Fields: "Overview,UserData,DateCreated,ProductionYear" }),
+    ]);
+    const history = Array.isArray(historyData?.Items) ? historyData.Items : [];
+    const genreCounts = new Map();
+    for (const item of history) for (const genre of Array.isArray(item.Genres) ? item.Genres : []) {
+      genreCounts.set(genre, (genreCounts.get(genre) || 0) + 1);
+    }
+    const preferredGenres = [...genreCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([genre]) => genre);
+    const playedGenres = new Set(preferredGenres.map((genre) => genre.toLocaleLowerCase()));
+    const candidates = (Array.isArray(unplayedData?.Items) ? unplayedData.Items : [])
+      .filter((item) => item?.UserData?.Played !== true && !(Number(item?.UserData?.PlayCount) > 0) && !(Number(item?.UserData?.PlaybackPositionTicks) > 0) && !(Number(item?.UserData?.PlayedPercentage) > 0))
+      .map((item) => ({ item, genre_match_count: (Array.isArray(item.Genres) ? item.Genres : []).filter((genre) => playedGenres.has(String(genre).toLocaleLowerCase())).length }))
+      .sort((a, b) => b.genre_match_count - a.genre_match_count || String(b.item.DateCreated || "").localeCompare(String(a.item.DateCreated || "")))
+      .slice(0, limit)
+      .map(({ item, genre_match_count }) => ({ id: item.Id, name: item.Name, type: item.Type, production_year: item.ProductionYear ?? null, overview: item.Overview || null, genres: Array.isArray(item.Genres) ? item.Genres.slice(0, 10) : [], date_added: item.DateCreated || null, genre_match_count }));
+    return {
+      profile: p.name,
+      user: { id: user.Id, name: user.Name || null },
+      user_resolution: resolution,
+      visibility_scope: "jellyfin_user_items",
+      suggestions: candidates,
+      continue_watching: (Array.isArray(continueData?.Items) ? continueData.Items : []).slice(0, 10).map((item) => ({ id: item.Id, name: item.Name, type: item.Type, series_name: item.SeriesName || null, production_year: item.ProductionYear ?? null })),
+      preferred_genres: preferredGenres,
+      recommendation_basis: history.length ? "recently_played_genres_then_newest_unplayed" : "newest_unplayed_no_genre_history",
+      total_unplayed_record_count: unplayedData?.TotalRecordCount ?? null,
+      start,
+      limit,
+      next_start: (unplayedData?.TotalRecordCount ?? 0) > start + Math.min(100, limit * 4) ? start + Math.min(100, limit * 4) : null,
+      note: "Suggestions use this user's Jellyfin watch state, rank matching recently played genres first, and exclude played or partially watched items. Ranking is deterministic and is not Jellyfin's recommendation engine.",
+    };
+  }
   if (args.action === "media_info") {
     if (!args.item_id)
       throw new JellyfinError("invalid_input", "item_id is required");
@@ -1172,8 +1390,32 @@ async function read(services, args, runtime) {
   ) {
     sessions = await c.get("/Sessions");
     const normalized = sessions.map(n.session);
-    if (args.action === "list_sessions")
-      return { profile: p.name, sessions: normalized.slice(0, 100) };
+    if (args.action === "list_sessions") {
+      const boundedSessions = normalized.slice(0, 100);
+      const watcherGroups = new Map();
+      for (const session of boundedSessions) {
+        if (!session.has_active_playback) continue;
+        const key = session.user_id || session.user_name?.toLocaleLowerCase() || `session:${session.id}`;
+        if (!watcherGroups.has(key)) {
+          watcherGroups.set(key, {
+            user_id: session.user_id,
+            user_name: session.user_name,
+            sessions: [],
+          });
+        }
+        watcherGroups.get(key).sessions.push(session);
+      }
+      const connected = boundedSessions.filter((session) => !session.has_active_playback);
+      return {
+        profile: p.name,
+        sessions: boundedSessions,
+        watching: [...watcherGroups.values()],
+        connected,
+        session_count: boundedSessions.length,
+        active_playback_session_count: boundedSessions.length - connected.length,
+        connected_only_session_count: connected.length,
+      };
+    }
     if (args.action === "playback_diagnose") {
       if (args.session_id) {
         const s = sessions.find((x) => x.Id === args.session_id);
@@ -1275,6 +1517,7 @@ async function read(services, args, runtime) {
     // State — State is only Idle/Running/Cancelling and never says "Failed".
     const recommendations = [];
     const running = [];
+    const storagePreflight = await storage.preflight({ services, client: c, profile: p });
     for (const t of tasks) {
       const exec = lastExec(t);
       if (t.State === "Running" || t.State === "Cancelling")
@@ -1313,7 +1556,9 @@ async function read(services, args, runtime) {
             name: t.Name,
             last_end: exec.end,
             age_days: Math.round(ageDays),
-            classification: "consider_scan",
+            classification: storagePreflight.safe_for_library_state_mutation ? "consider_scan" : "storage_preflight_required",
+            storage_state: storagePreflight.state,
+            blocked_reason: storagePreflight.safe_for_library_state_mutation ? null : "Do not scan until library storage is verified safe.",
           });
       }
     }
@@ -1321,6 +1566,13 @@ async function read(services, args, runtime) {
       profile: p.name,
       recommendations,
       currently_running: running,
+      storage_preflight: {
+        state: storagePreflight.state,
+        safe_for_library_state_mutation: storagePreflight.safe_for_library_state_mutation,
+        provider: storagePreflight.provider,
+        reason: storagePreflight.reason || null,
+        reasons: storagePreflight.reasons || [],
+      },
       tasks_seen: tasks.length,
       basis:
         "TaskInfo.State only reports Idle/Running/Cancelling; outcomes come from LastExecutionResult.Status (Completed/Failed/Cancelled/Aborted)",
@@ -2305,6 +2557,11 @@ async function maintenance(services, args, runtime) {
         transition_observed: polled.observed,
         polls: polled.polls,
       },
+      recovery: polled.observed ? null : {
+        required_before_retry: true,
+        action: "Inspect task_status and current ScheduledTasks state before issuing another task command.",
+        reason: "The request was accepted but the expected transition was not observed within the bounded poll.",
+      },
     };
   }
 
@@ -2423,6 +2680,11 @@ async function maintenance(services, args, runtime) {
       postcondition_evidence: evidence,
       storage_preflight: { state: pf.state },
       changes_made: outcome !== "accepted",
+      recovery: outcome === "accepted" ? {
+        required_before_retry: true,
+        action: "Inspect library_status and task_status before requesting another scan.",
+        reason: "Jellyfin accepted the refresh request, but no scan activity was observed during the bounded poll.",
+      } : null,
     };
   }
 
@@ -2451,6 +2713,7 @@ const readActions = [
   "list_playlists",
   "user_media_state",
   "user_unwatched",
+  "media_suggestions",
   "recent_media",
   "recently_added",
   "continue_watching",
@@ -2497,7 +2760,7 @@ const common = z.object({
   item_id: z.string().optional(),
   season_id: z.string().optional(),
   task_id: z.string().optional(),
-  library_id: z.string().optional(),
+  library_id: z.string().max(200).optional(),
   channel_id: z.string().optional(),
   min_start_date: z.string().optional(),
   max_end_date: z.string().optional(),
@@ -2521,6 +2784,7 @@ const common = z.object({
   min_premiere_date: z.string().max(40).optional(),
   max_premiere_date: z.string().max(40).optional(),
   all: z.boolean().optional(),
+  user_scoped: z.boolean().optional(),
   max_items: z.number().int().min(1).max(10000).optional(),
   fields: z.string().max(500).optional(),
 });
@@ -2531,7 +2795,7 @@ const entry = {
         name: "jellyfin",
         aliases: ["jf"],
         description:
-          "Bounded read-only Jellyfin operations and deterministic operational diagnosis. Prefer the governed jellyfin workflows (jellyfin/user-home, jellyfin/session-overview, jellyfin/new-arrivals, jellyfin/catalog-browse, jellyfin/media-info, jellyfin/playback-diagnose) for whole answers: they compose multiple actions safely. Use this raw action only for a single bounded check. Selects an administrator-configured named profile; never accepts a server endpoint. When unsure which profile or which Jellyfin user to target, run action list_profiles (or list_users) first rather than guessing: profile values are exact configured names and user_id/username must match a real Jellyfin user. User-scoped actions (continue_watching, next_up, user_media_state, user_unwatched, user_status) auto-resolve the acting user when user_id/username are omitted via active sessions, the profile default_username, or the single enabled user; the result reports how.",
+          "Bounded read-only Jellyfin operations and deterministic operational diagnosis. For questions like who is watching, what is playing, or how much time remains, use jellyfin/session-overview. Summarize grouped playback sessions per user, including username, title and episode context, elapsed/remaining time, progress, device/client, and paused/transcoding state. Treat sessions with no current media item as connected-only, not watching. For active media without a reported pause state, say playback state is unknown. Never infer time when runtime or position is unavailable. For media search, prefer jellyfin/catalog-search; it discovers the selected user's current library views and searches each by ID, including custom-named libraries. Never assume library names from another server. If a profile or acting user is ambiguous, discover choices and ask rather than guessing. When search returns several plausible titles, present type, year, library, and available detail fields and ask which one they mean before details or playback. Use jellyfin/library-catalog to browse a discovered user-visible library, jellyfin/media-suggestions for this user's unwatched picks, and jellyfin/media-info for a user-selected item. If search is empty, follow refinement_suggestions; when filters_relaxed is true, explain optional filters were relaxed. If truncated, repeat the same search with next_start. User-scoped actions auto-resolve the acting user when user_id/username are omitted via active sessions, profile default_username, or the single enabled user; the result reports how. A shared administrator API key remains server-privileged, so this user scoping is application-level and is not a credential isolation boundary.",
         schema: common,
         args: {
           action: "string",
@@ -2552,6 +2816,8 @@ const entry = {
           min_premiere_date: "string",
           max_premiere_date: "string",
           all: "boolean (enumerate all matching items through bounded pagination)",
+          user_scoped: "boolean (restrict list_media to the selected user's visible library; requires library_id)",
+          media_suggestions: "user-scoped unwatched suggestions ranked by recently played genres and recency",
           max_items: "number (full-library cap, default 10000)",
           recently_added: "server-wide recently added items",
           continue_watching: "user-scoped resume items; user_id or username optional (auto-resolved when omitted)",

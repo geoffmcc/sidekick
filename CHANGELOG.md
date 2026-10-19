@@ -4,6 +4,79 @@ All notable changes to Sidekick.
 
 ## Unreleased
 
+### Proxmox compatibility pack
+
+- Added a bounded, read-only node evacuation proposal through
+  `maintenance_plan` and `proxmox/maintenance-plan`; every suggested guest move
+  is assessed by the migration planner, and no move is performed.
+- Added explicit recovery details for ambiguous create/clone task timeouts and
+  failed clone provenance stamping so operators can inspect the guest and UPID
+  before retrying.
+- Updated the pack guide, operating reference, and workflow documentation to
+  reflect current capabilities and the declared critical-risk `bash`
+  permission used only by optional Ansible execution.
+- Migrated the Proxmox unit and integration suites to Node's built-in
+  `node:test` runner.
+
+### Jellyfin compatibility pack
+
+- Maintenance planning now includes bounded storage-preflight evidence and
+  marks stale-scan recommendations as requiring storage verification whenever
+  the configured evidence is unsafe or unavailable.
+- Unverified scheduled-task and library-scan requests now include explicit
+  inspection steps before a caller retries an operation.
+- Catalog search now discovers current library IDs per request and searches
+  across standard and custom-named libraries for movie, TV and music item types;
+  results identify and interleave library matches, include useful item context,
+  and support year/genre filters. Added generic agent routing guidance plus
+  read-only `jellyfin/catalog-search` and `jellyfin/library-catalog` workflows.
+- Jellyfin catalog discovery now follows the resolved user's visible views;
+  library browsing can enforce that view, watch suggestions rank unplayed items
+  from recent genre history, empty filtered searches retry without optional
+  filters, and search/browse pages expose continuation offsets. User scoping
+  with a shared administrator API key is documented as application-level only.
+- Session overview now makes "who is watching?" easy to answer with the
+  username, title and episode context, elapsed and remaining playback time,
+  progress, device/client and available pause/transcode state. It groups
+  simultaneous sessions per user and separates connected-only devices.
+- Updated the pack guide to identify the bundled version and validated API
+  shapes, and migrated the Jellyfin suites to the built-in `node:test` runner.
+
+### Additional compatibility pack tool improvements
+
+- Backup and DR readiness now surfaces uncovered guests, recent failures, and
+  verification findings in a concise summary while keeping restoreability
+  explicitly unknown.
+- Container tools now describe their inputs for MCP clients and reject missing
+  action-specific targets before contacting a Docker or Podman engine. Direct
+  container recreation requires an explicit confirmation flag, and the
+  controlled-update workflow supplies it only after its preflight and image
+  pull steps.
+- Storage audits no longer interpret null capacity as zero percent used and
+  report partial or unavailable source evidence explicitly.
+- Observability tools now preserve failed evidence states and explain their
+  inputs in MCP schemas, including the difference between evidence collection
+  and incident health.
+- Agent and MCP tool catalogs now retain authored argument guidance alongside
+  schema types instead of flattening every argument to a bare type.
+
+### Compatibility pack agent and result handling
+
+- Database, infrastructure-as-code, software supply-chain, API engineering,
+  model operations, MCP compatibility, assumptions, network services,
+  change-impact, testing quality, operational readiness, CI/release,
+  security-lab, skeptical verification, reproducibility, documentation, and
+  Linux tools now preserve structured dependency failures instead of treating
+  every non-transport-error response as success.
+- Network and Firewall is plan-only until it can verify Sidekick's management
+  path from trusted, session-bound evidence. Caller-supplied `safe` claims no
+  longer authorize mutation; both change workflows are read-only plans.
+- CI release readiness distinguishes collecting a plan from passing an
+  executed release gate. Supply-chain results distinguish incomplete SBOM
+  shape checks from dependency safety conclusions.
+- Added MCP field guidance for Linux service operations and relevant
+  repository, query, profile, and scope arguments.
+
 ## [2.2.3] - 2026-10-13
 
 ### Performance

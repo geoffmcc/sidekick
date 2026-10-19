@@ -39,7 +39,52 @@ function buildDescriptors(services) {
     {
       name: "backup_dr_readiness", description: "Inspect Proxmox backup coverage, history, and verification evidence without changing the environment.",
       schema: z.object({ profile: z.string().regex(identifier).or(z.literal("")).optional() }).strict(), args: { profile: "string" }, risk: "low", category: "Backup and DR",
-       handler: async args => { const read = async action => { try { return await services.dispatch("proxmox", { action, profile: args.profile }); } catch (error) { return { ok: false, status: "unavailable", state: "unavailable", code: error.code || "provider_unavailable", error: String(error.message || error).slice(0, 300) }; } }; const data = { coverage: await read("backup_coverage"), history: await read("backup_history"), verification: await read("backup_verification_audit") }; const unavailable = Object.entries(data).filter(([, value]) => value?.isError || value?.ok === false || value?.state === "unavailable").map(([key]) => key); return { content: [{ type: "text", text: JSON.stringify({ ok: unavailable.length === 0, status: unavailable.length === 3 ? "unavailable" : unavailable.length ? "partial" : "succeeded", coverage: data.coverage, history: data.history, verification: data.verification, warnings: unavailable.map(key => `${key} is unavailable`) }, null, 2) }] }; },
+       handler: async args => {
+        const read = async action => {
+          try {
+            return await services.dispatch("proxmox", { action, profile: args.profile });
+          } catch (error) {
+            return { ok: false, status: "unavailable", state: "unavailable", code: error.code || "provider_unavailable", error: String(error.message || error).slice(0, 300) };
+          }
+        };
+        const data = {
+          coverage: await read("backup_coverage"),
+          history: await read("backup_history"),
+          verification: await read("backup_verification_audit"),
+        };
+        const unavailable = Object.entries(data)
+          .filter(([, value]) => value?.isError || value?.ok === false || ["unavailable", "error", "failed"].includes(String(value?.state || value?.status || "").toLowerCase()))
+          .map(([key]) => key);
+        const findings = Array.isArray(data.verification?.findings) ? data.verification.findings : [];
+        const uncovered = Array.isArray(data.coverage?.uncovered_guests) ? data.coverage.uncovered_guests : [];
+        const failedTasks = Number(data.history?.failed ?? data.history?.recent_backups?.failures ?? 0);
+        const status = unavailable.length === 3
+          ? "unavailable"
+          : unavailable.length > 0
+            ? "partial"
+            : findings.length > 0 || uncovered.length > 0 || failedTasks > 0
+              ? "attention"
+              : "observed";
+        return { content: [{ type: "text", text: JSON.stringify({
+          ok: unavailable.length < 3,
+          status,
+          summary: {
+            guest_count: data.coverage?.guest_count ?? null,
+            uncovered_guest_count: uncovered.length,
+            uncovered_guests: uncovered,
+            recent_backup_failures: Number.isFinite(failedTasks) ? failedTasks : null,
+            latest_backup: data.history?.latest ?? data.history?.recent_backups?.most_recent?.[0] ?? null,
+            verification_finding_count: findings.length,
+            verification_findings: findings,
+            restoreability: "unknown; no restore was performed",
+          },
+          coverage: data.coverage,
+          history: data.history,
+          verification: data.verification,
+          warnings: unavailable.map(key => `${key} is unavailable`),
+          interpretation: "Proxmox job selection and task evidence only; this does not prove backup contents, retention, or restoreability.",
+        }, null, 2) }] };
+       },
     },
   ];
 }
