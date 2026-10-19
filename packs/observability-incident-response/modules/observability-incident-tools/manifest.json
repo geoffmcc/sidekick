@@ -1,7 +1,7 @@
 {
   "name": "observability-incident-tools",
   "displayName": "Observability and Incident Tools",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Governed incident evidence, health, status, and metrics adapters.",
   "author": "Sidekick",
   "type": "plugin",
