@@ -89,7 +89,7 @@ function fakeToolThenDone(decisions) {
 function transcriptPath(id) {
   return path.join(agent.CONV_DIR, id + ".json");
 }
-async function waitForTranscript(id, timeoutMs = 15000) {
+async function waitForTranscript(id, timeoutMs = 60000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     if (fs.existsSync(transcriptPath(id))) {
@@ -407,18 +407,40 @@ let server;
     const childTaskId = res.data.taskId;
     const events = await new Promise((resolve, reject) => {
       const chunks = [];
+      let settled = false;
+      let timer;
+      const finish = (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      };
       const req = http.request({ hostname: "127.0.0.1", port, path: "/api/agent/stream/" + childTaskId, method: "GET" }, (r) => {
-        r.on("data", (c) => chunks.push(c.toString()));
-        r.on("end", () => resolve(chunks.join("")));
+        r.on("data", (c) => {
+          chunks.push(c.toString());
+          const output = chunks.join("");
+          if (output.includes('"type":"done"')) {
+            finish(output);
+            req.destroy();
+          }
+        });
+        r.on("end", () => finish(chunks.join("")));
       });
-      req.on("error", reject);
+      req.on("error", (error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(error);
+      });
       req.end();
-      // Context assembly, durable verification, and memory recording are part
-      // of the real Agent path. Three seconds is below the CI tail latency for
-      // that path and makes this liveness test report a false negative even
-      // though the stream remains healthy. Keep a finite bound, but allow the
-      // durable terminal event enough time to arrive under loaded runners.
-      setTimeout(() => { try { req.destroy(); } catch {} resolve(chunks.join("")); }, 10000);
+      // Wait for the actual terminal frame instead of cutting off a healthy
+      // stream after a fixed delay. Context assembly, durable verification,
+      // and memory recording can be slow under coverage instrumentation.
+      timer = setTimeout(() => {
+        const output = chunks.join("");
+        finish(output);
+        req.destroy();
+      }, 60000);
     });
     assert.match(events, /data:/, "SSE data frames were streamed");
     assert.match(events, /"type":"done"/, "SSE delivered the terminal done event");
