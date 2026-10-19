@@ -3,7 +3,7 @@
   "pack_api": 1,
   "name": "storage-filesystems",
   "display_name": "Storage & Filesystems",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Bounded storage capacity, backend, volume, and host disk inspection through existing providers.",
   "publisher": "Sidekick",
   "compatibility": { "sidekick": ">=1.0.0" },
