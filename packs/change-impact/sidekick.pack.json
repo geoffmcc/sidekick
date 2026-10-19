@@ -3,7 +3,7 @@
   "pack_api": 1,
   "name": "change-impact",
   "display_name": "Change Impact & Blast Radius",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Evidence-backed change impact and blast-radius analysis using the Developer pack's diff and semantic repository primitives. This pack is read-only and does not infer runtime effects that are not evidenced by the repository.",
   "publisher": "Sidekick",
   "compatibility": { "sidekick": ">=1.0.0" },
