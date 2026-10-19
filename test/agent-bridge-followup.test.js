@@ -46,6 +46,10 @@ function request(method, urlPath, body, extraHeaders = {}) {
     const data = body != null ? JSON.stringify(body) : null;
     const req = http.request({
       hostname: "127.0.0.1", port, path: urlPath, method,
+      // These scenarios can spend many seconds waiting for durable Agent work.
+      // Avoid reusing an idle keep-alive socket that the test server may have
+      // closed during that wait.
+      agent: false,
       headers: { "Content-Type": "application/json", ...(data ? { "Content-Length": Buffer.byteLength(data) } : {}), ...extraHeaders },
     }, (res) => {
       let out = "";
