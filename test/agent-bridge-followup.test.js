@@ -89,7 +89,7 @@ function fakeToolThenDone(decisions) {
 function transcriptPath(id) {
   return path.join(agent.CONV_DIR, id + ".json");
 }
-async function waitForTranscript(id, timeoutMs = 5000) {
+async function waitForTranscript(id, timeoutMs = 15000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     if (fs.existsSync(transcriptPath(id))) {

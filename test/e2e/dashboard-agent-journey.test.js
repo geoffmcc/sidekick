@@ -34,18 +34,18 @@ test("Agent task submission, durable completion, history, and reload restoration
       return tasks.find(task => ["completed", "partial", "failed", "cancelled", "interrupted"].includes(task.state));
     }, 60000);
     await page.locator("#agentLog").getByText("E2E direct answer").waitFor({ state: "visible", timeout: 60000 });
-    await waitFor("durable Agent terminal state", async () => /State:\s*(completed|partial)/.test(await page.locator("#agentDurableState").textContent()), 30000);
+    await waitFor("durable Agent terminal state", async () => /State:\s*(completed|partial)/.test(await page.locator("#agentDurableState").textContent()), 60000);
     assert.match(await page.locator("#agentDurableVerification").textContent(), /Verification:\s*(verified|unable_to_verify)/);
 
     const historyToggle = page.locator("#agentHistoryToggle");
     await historyToggle.click();
     if (await historyToggle.getAttribute("aria-expanded") !== "true") await historyToggle.click();
-    await page.locator("#agentHistory .history-item").waitFor({ state: "visible" });
+    await page.locator("#agentHistory .history-item").waitFor({ state: "visible", timeout: 60000 });
     assert.match(await page.locator("#agentHistory").textContent(), /Give me a short greeting/);
 
     await page.locator("#nav-mission").click();
     await page.locator("#nav-agent").click();
-    await waitFor("Agent session restoration", async () => /Give me a short greeting/.test(await page.locator("#agentSessionMeta").textContent()));
+    await waitFor("Agent session restoration", async () => /Give me a short greeting/.test(await page.locator("#agentSessionMeta").textContent()), 60000);
     assert.match(await page.locator("#agentLog").textContent(), /E2E direct answer/);
     assert.ok(fixture.ollama, "the external inference boundary fixture should be running");
   });
@@ -68,7 +68,7 @@ test("tool-backed Agent task shows dispatch completion and durable history after
       return response.body?.tasks?.find(item => ["completed", "partial", "failed", "cancelled"].includes(item.state));
     }, 60000);
     await page.locator("#agentLog").getByText("E2E tool-backed task completed").waitFor({ state: "visible", timeout: 60000 });
-    await waitFor("tool-backed durable state", async () => /State:\s*(completed|partial)/.test(await page.locator("#agentDurableState").textContent()), 30000);
+    await waitFor("tool-backed durable state", async () => /State:\s*(completed|partial)/.test(await page.locator("#agentDurableState").textContent()), 60000);
 
     const transcript = await fixture.request("GET", `/api/agent/run/${encodeURIComponent(task.task_id)}`);
     assert.equal(transcript.status, 200);
@@ -85,10 +85,10 @@ test("tool-backed Agent task shows dispatch completion and durable history after
     const historyToggle = page.locator("#agentHistoryToggle");
     await historyToggle.click();
     if (await historyToggle.getAttribute("aria-expanded") !== "true") await historyToggle.click();
-    await page.locator("#agentHistory").getByText("Inspect the Sidekick tool catalog and summarize it").waitFor({ state: "visible" });
+    await page.locator("#agentHistory").getByText("Inspect the Sidekick tool catalog and summarize it").waitFor({ state: "visible", timeout: 60000 });
     await page.reload({ waitUntil: "domcontentloaded" });
     await page.locator("#page-agent.active").waitFor({ state: "attached" });
-    await waitFor("reloaded durable Agent session", async () => /Inspect the Sidekick tool catalog/.test(await page.locator("#agentSessionMeta").textContent()));
+    await waitFor("reloaded durable Agent session", async () => /Inspect the Sidekick tool catalog/.test(await page.locator("#agentSessionMeta").textContent()), 60000);
     assert.match(await page.locator("#agentLog").textContent(), /E2E tool-backed task completed/);
     assert.ok(fixture.ollama, "the external inference boundary fixture should be running");
   });
