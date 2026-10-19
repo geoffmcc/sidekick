@@ -3,7 +3,7 @@
   "pack_api": 1,
   "name": "documentation-knowledge",
   "display_name": "Documentation & Knowledge Engineering",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Bounded documentation inventory and knowledge retrieval grounded in repository semantics.",
   "publisher": "Sidekick",
   "compatibility": { "sidekick": ">=1.0.0" },

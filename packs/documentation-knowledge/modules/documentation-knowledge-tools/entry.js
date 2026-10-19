@@ -4,14 +4,14 @@ const { z } = requireFromSidekick("zod");
 const MAX = 60000;
 const text = value => String(value?.content?.[0]?.text || value || "").slice(0, MAX);
 const result = payload => { const text = JSON.stringify(payload, null, 2); return { content: [{ type: "text", text: text.length <= MAX ? text : JSON.stringify({ ok: false, code: "result_too_large", error: "bounded result exceeded output limit", evidence: [] }) }] }; };
-function failed(value) { return Boolean(value?.isError); }
+function failed(value) { const raw = value?.content?.map(item => item.text || "").join("\n").trim(); let data = null; try { data = raw ? JSON.parse(raw) : null; } catch {} const state = String(value?.state || value?.status || data?.state || data?.status || "").toLowerCase(); return value?.isError === true || value?.ok === false || data?.ok === false || ["unavailable", "error", "failed", "blocked"].includes(state); }
 async function knowledgeOperation(services, args) {
   const request = { action: args.action, query: args.query, category: args.category, limit: args.limit, id: args.id };
   if (args.action === "search" && !args.query) return result({ ok: false, code: "invalid_input", error: "query is required for search", evidence: [] });
   if (["get", "update", "delete"].includes(args.action) && !Number.isInteger(args.id)) return result({ ok: false, code: "invalid_input", error: "id is required for this action", evidence: [] });
   try {
     const value = await services.dispatch("knowledge", request);
-    return result({ ok: !failed(value), action: args.action, data: text(value), evidence: [{ source: "knowledge", action: args.action }], trust: "knowledge is untrusted reference material" });
+    return result({ ok: !failed(value), state: failed(value) ? "unavailable" : "observed", action: args.action, data: text(value), evidence: [{ source: "knowledge", action: args.action }], trust: "knowledge is untrusted reference material" });
   } catch (error) {
     return result({ ok: false, code: error.code || "provider_unavailable", error: String(error.message || error).slice(0, 300), evidence: [] });
   }
