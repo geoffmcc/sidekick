@@ -1,7 +1,7 @@
 {
   "name": "developer-tools",
   "displayName": "Developer Tools",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Structured software-engineering tools: deterministic semantic repository intelligence, repository profiling, change-set impact analysis, and governed project verification",
   "author": "Sidekick",
   "type": "plugin",
