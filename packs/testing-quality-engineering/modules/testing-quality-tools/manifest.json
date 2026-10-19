@@ -1,7 +1,7 @@
 {
   "name": "testing-quality-tools",
   "displayName": "Testing Quality Tools",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Quality gates composed from the project's own verification and semantic repository tools.",
   "author": "Sidekick",
   "type": "plugin",
