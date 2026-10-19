@@ -2,7 +2,8 @@
 const { requireFromSidekick } = require("./deps");
 const { z } = requireFromSidekick("zod");
 const result = value => ({ content: [{ type: "text", text: JSON.stringify(value, null, 2) }] });
-async function call(services, name, args) { const value = await services.dispatch(name, args); if (value?.isError) { const error = new Error(`${name} dependency failed`); error.code = value.code || "dependency_failed"; throw error; } return value; }
+function failed(value) { const raw = value?.content?.map(item => item.text || "").join("\n").trim(); let data = null; try { data = raw ? JSON.parse(raw) : null; } catch {} const state = String(value?.state || value?.status || data?.state || data?.status || "").toLowerCase(); return value?.isError === true || value?.ok === false || data?.ok === false || ["unavailable", "error", "failed"].includes(state); }
+async function call(services, name, args) { const value = await services.dispatch(name, args); if (failed(value)) { const error = new Error(`${name} dependency failed or returned an unsuccessful contract result`); error.code = value.code || "dependency_failed"; throw error; } return value; }
 function targetUrl(value) { const url = new URL(value); if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.hash) throw new Error("URL must be HTTP(S) without credentials or fragments"); return url; }
 async function contract(services, args) {
   try { targetUrl(args.url); } catch (error) { return result({ ok: false, code: "invalid_target", error: error.message }); }
@@ -10,9 +11,9 @@ async function contract(services, args) {
   if (!Array.isArray(args.assertions) || args.assertions.length === 0) return result({ ok: false, code: "assertions_required", error: "at least one deterministic assertion is required" });
   const assertions = args.assertions.slice(0, Math.max(1, Math.min(50, Number(services.config?.max_assertions) || 20)));
   const check = await call(services, "web_check", { url: args.url, assertions, allowed_hosts: args.allowed_hosts, network_scope: args.network_scope, capture_evidence: args.capture_evidence === true, project: args.project, wait_until: "domcontentloaded" });
-  return result({ ok: !check.isError, contract: check, target: args.url, network_scope: args.network_scope, bounded: { assertions: assertions.length }, mutation: "none" });
+  return result({ ok: !failed(check), state: failed(check) ? "failed" : "observed", contract: check, target: args.url, network_scope: args.network_scope, bounded: { assertions: assertions.length }, mutation: "none" });
 }
-async function health(services, args) { if (!args.network_scope) return result({ ok: false, code: "network_scope_required", error: "health probes also require a named network scope" }); try { const check = await call(services, "web_check", { url: args.url, assertions: [{ kind: "url_contains", value: new URL(args.url).host }], allowed_hosts: args.allowed_hosts, network_scope: args.network_scope, wait_until: "domcontentloaded" }); return result({ ok: !check.isError, check, network_scope: args.network_scope }); } catch (error) { return result({ ok: false, error: error.message, network_scope: args.network_scope }); } }
+async function health(services, args) { if (!args.network_scope) return result({ ok: false, code: "network_scope_required", error: "health probes also require a named network scope" }); try { const check = await call(services, "web_check", { url: args.url, assertions: [{ kind: "url_contains", value: new URL(args.url).host }], allowed_hosts: args.allowed_hosts, network_scope: args.network_scope, wait_until: "domcontentloaded" }); return result({ ok: !failed(check), state: failed(check) ? "failed" : "observed", check, network_scope: args.network_scope }); } catch (error) { return result({ ok: false, state: "unavailable", error: error.message, network_scope: args.network_scope }); } }
 async function matrix(services, args) {
   const results = [];
   const maxTargets = Math.max(1, Math.min(10, Number(services.config?.max_targets) || 10));
@@ -20,7 +21,7 @@ async function matrix(services, args) {
     try {
       targetUrl(target.url);
       const check = await call(services, "web_check", { url: target.url, assertions: target.assertions, allowed_hosts: args.allowed_hosts, network_scope: args.network_scope, capture_evidence: args.capture_evidence === true, project: args.project, wait_until: "domcontentloaded" });
-      results.push({ url: target.url, ok: !check.isError, check });
+      results.push({ url: target.url, ok: !failed(check), check });
     } catch (error) {
       results.push({ url: target.url, ok: false, code: error.code || "probe_failed", error: String(error.message || error).slice(0, 300) });
     }
