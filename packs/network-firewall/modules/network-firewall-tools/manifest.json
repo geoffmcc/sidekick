@@ -1,13 +1,13 @@
 {
   "name": "network-firewall-tools",
   "displayName": "Network & Firewall Tools",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Provider-neutral, bounded network and firewall operations with OpenWrt ubus/UCI as the reference implementation.",
   "author": "Sidekick",
   "type": "plugin",
   "entryPoint": "entry.js",
   "sidekick": ">=1.0.0",
-  "capabilities": ["network-discovery", "firewall-inspection", "dhcp-inspection", "vpn-inspection", "connectivity-analysis", "safe-network-change"],
+  "capabilities": ["network-discovery", "firewall-inspection", "dhcp-inspection", "vpn-inspection", "connectivity-analysis", "network-change-planning"],
   "configSchema": { "type": "object" },
   "tools": {
     "network": { "risk": "low", "category": "Infrastructure & Homelab", "aliases": ["network_status"] },
