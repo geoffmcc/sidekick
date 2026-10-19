@@ -1,5 +1,5 @@
 {
-  "schema_version": 1, "pack_api": 1, "name": "local-ai-model-operations", "display_name": "Local AI & Model Operations", "version": "1.0.0",
+  "schema_version": 1, "pack_api": 1, "name": "local-ai-model-operations", "display_name": "Local AI & Model Operations", "version": "1.0.1",
   "description": "Truthful local inference readiness and model inventory without downloads or direct provider access.", "publisher": "Sidekick", "compatibility": { "sidekick": ">=1.0.0" },
   "modules": [{ "name": "local-ai-model-tools", "path": "modules/local-ai-model-tools", "entry_point": "entry.js", "config_from_pack": true }],
   "workflows": [{ "path": "workflows/model-readiness.json" }, { "path": "workflows/route-explain.json" }],
