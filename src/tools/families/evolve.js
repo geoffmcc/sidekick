@@ -10,8 +10,11 @@
 
 const { z } = require("zod");
 const { loadProcedures } = require("../../core/procedures-store");
+const { requireToolExecution } = require("../read-authorization");
 
 async function sidekick_evolve(args = {}) {
+  const authorizationError = requireToolExecution({ tool: "evolve", action: args.action || null }, "tools.execute_critical", "evolve");
+  if (authorizationError) return authorizationError;
   const evolveImpl = require("../../evolve");
   const { TOOL_DEFS } = require("../index");
   // Active module tools count as built-in names so evolve cannot mint a
