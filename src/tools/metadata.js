@@ -13,10 +13,10 @@ const TOOL_RISK = {
   delay: "high",
   watch: "high",
   github: "high",
-  ci_status: "low",
+  ci_status: "medium",
   teach: "high",
   secret: "high",
-  security_scan: "low",
+  security_scan: "medium",
   db_migrate: "high",
   queue: "high",
   orchestrate: "high",
@@ -30,13 +30,13 @@ const TOOL_RISK = {
   session: "medium",
   handoff: "medium",
   memory: "medium",
-  memory_export: "low",
+  memory_export: "medium",
   memory_import: "medium",
   memory_manage: "medium",
-  sync_identity: "low",
-  sync_export: "low",
+  sync_identity: "medium",
+  sync_export: "medium",
   sync_import: "medium",
-  sync_diff: "low",
+  sync_diff: "medium",
   health: "high",
   snapshot: "medium",
   retry: "medium",
@@ -61,43 +61,43 @@ const TOOL_RISK = {
   media: "medium",
   transcribe: "medium",
   analytics: "medium",
-  insight_report: "low",
+  insight_report: "medium",
   embed: "low",
-  ollama: "low",
+  ollama: "high",
   tunnel: "high",
   download: "medium",
   wireguard: "high",
   nginx: "high",
   tools: "low",
   respond: "low",
-  list: "low",
-  store: "low",
-  get: "low",
-  list_projects: "low",
-  get_by_project: "low",
-  search: "low",
-  webhook: "low",
+  list: "medium",
+  store: "medium",
+  get: "medium",
+  list_projects: "medium",
+  get_by_project: "medium",
+  search: "medium",
+  webhook: "high",
   transform: "low",
   parse: "low",
   diff: "low",
-  hash: "low",
+  hash: "medium",
   validate: "low",
   template: "low",
   // medium, matching black_box: the purge action performs a bulk delete.
   predict: "medium",
-  debug_tool: "low",
-  cache: "low",
-  summarize: "low",
-  filter: "low",
+  debug_tool: "medium",
+  cache: "medium",
+  summarize: "medium",
+  filter: "medium",
   project: "low",
-  diff_files: "low",
-  anonymize: "low",
-  db_schema: "low",
-  db_stats: "low",
-  log_query: "low",
-  db_search: "low",
-  db_diff: "low",
-  knowledge: "low",
+  diff_files: "medium",
+  anonymize: "high",
+  db_schema: "medium",
+  db_stats: "medium",
+  log_query: "medium",
+  db_search: "medium",
+  db_diff: "medium",
+  knowledge: "medium",
   compute: "medium",
   compute_nodes: "medium",
   // create/update select the endpoint inference traffic is sent to and set the
@@ -108,9 +108,9 @@ const TOOL_RISK = {
   compute_models: "medium",
   compute_jobs: "medium",
   compute_route: "medium",
-  delete: "low",
+  delete: "medium",
   resume: "low",
-  metrics: "low",
+  metrics: "high",
   module: "high",
   project_registry: "high",
   // Workspace writes provision project workspaces and manage encrypted
@@ -119,6 +119,7 @@ const TOOL_RISK = {
   // Installing or enabling a capability pack activates third-party executable
   // module code inside the Sidekick process; that is a critical operation.
   capability: "critical",
+  network_scopes: "critical",
   // A workflow run dispatches governed tool calls; each step's own tool risk
   // still applies on top of this at dispatch time.
   workflow: "high",
@@ -282,8 +283,9 @@ function getToolEffectMetadata(name) {
  * Per-action risk overrides for tools whose actions differ in danger.
  *
  * Risk was a per-TOOL label, which is wrong for a tool that both reads and
- * mutates. `capability` is the case that exposed it: installing or enabling a
- * pack executes third-party code in-process (correctly critical), but merely
+ * mutates. `capability` is the case that exposed it: installation changes
+ * persistent extension state; enabling may execute trusted first-party code
+ * in Core. Merely
  * LISTING packs is a read — and because the dashboard's Capabilities tab calls
  * `capability action="list"` on load, simply opening that tab filed a
  * critical-risk approval request. Rejecting it did not help; the tab refetched
@@ -291,7 +293,7 @@ function getToolEffectMetadata(name) {
  *
  * The damage is not the noise. It is that the operator learns `capability`
  * prompts are routine UI chatter, and the one prompt that genuinely matters —
- * an install activating unsandboxed third-party code — arrives looking exactly
+ * an install or enable that can activate trusted in-process code — arrives looking exactly
  * like the twenty they already waved through. An approval control spent on
  * browsing is not protecting anything.
  *
@@ -309,6 +311,21 @@ function getToolEffectMetadata(name) {
  * an extra prompt; the cost of adding one wrongly is a silent bypass.
  */
 const TOOL_ACTION_RISK = Object.freeze({
+  // Text transformation is local and non-persistent; pattern metadata requires
+  // identity and global pattern changes remain high risk.
+  anonymize: Object.freeze({ anonymize: "low", patterns: "medium" }),
+  // Local model administration can download large executable/model artifacts;
+  // inventory is authenticated metadata access, while pull remains high risk.
+  ollama: Object.freeze({ list: "medium", ps: "medium", show: "medium" }),
+  // Metrics queries can disclose operational telemetry and writes mutate the
+  // configured telemetry store. Read actions require identity; writes remain high.
+  metrics: Object.freeze({ query: "medium", list_measurements: "medium", list_fields: "medium" }),
+  // Webhook bodies are externally supplied persistent data. Viewing them
+  // requires an authenticated read grant; clearing remains high risk.
+  webhook: Object.freeze({
+    list: "medium",
+    get: "medium",
+  }),
   // Listing secret names is metadata-only and is separately authorized as
   // secrets.read_metadata. Secret disclosure and all mutations retain the
   // tool-level high risk.
@@ -317,12 +334,21 @@ const TOOL_ACTION_RISK = Object.freeze({
   }),
   knowledge: Object.freeze({
     promote: "high",
+    add: "high",
+    update: "high",
+    delete: "high",
+    purge: "high",
+  }),
+  sync_identity: Object.freeze({
+    get: "medium",
+    set_user: "high",
   }),
   // Read-only pack inspection. `inspect` is deliberately ABSENT: it reads a
   // caller-supplied path, so it keeps the tool-level risk.
   capability: Object.freeze({
     list: "low",
     available: "low",
+    catalog: "low",
     show: "low",
     health: "low",
   }),
@@ -362,6 +388,11 @@ const TOOL_ACTION_RISK = Object.freeze({
     pages: "medium",
     downloads: "medium",
   }),
+  // Read-only projections of the core outbound-scope registry are medium risk;
+  // scope changes remain critical.
+  research_project: Object.freeze({ list: "medium" }),
+  research_run: Object.freeze({ list: "medium" }),
+  network_scopes: Object.freeze({ list: "medium", get: "medium" }),
 });
 
 // Explicit per-action effects feed Agent authority and workflow disclosure.
