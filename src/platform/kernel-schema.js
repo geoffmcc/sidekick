@@ -442,6 +442,23 @@ const KERNEL_SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS idx_platform_project_sources_project ON platform_project_sources(project_id, last_seen_at DESC);
   CREATE INDEX IF NOT EXISTS idx_platform_project_sources_source ON platform_project_sources(source, source_id, last_seen_at DESC);
 
+  -- Principal-scoped project grants are part of the runtime project boundary
+  -- and must be present on both migration and kernel-only bootstrap paths.
+  CREATE TABLE IF NOT EXISTS platform_project_principal_access (
+    project_id TEXT NOT NULL,
+    principal_id TEXT NOT NULL,
+    access_level TEXT NOT NULL CHECK (access_level IN ('read', 'write')),
+    granted_by_principal_id TEXT NOT NULL,
+    granted_at TEXT NOT NULL,
+    revoked_at TEXT,
+    PRIMARY KEY (project_id, principal_id),
+    FOREIGN KEY (project_id) REFERENCES platform_projects(project_id) ON DELETE CASCADE,
+    FOREIGN KEY (principal_id) REFERENCES principals(principal_id) ON DELETE CASCADE,
+    FOREIGN KEY (granted_by_principal_id) REFERENCES principals(principal_id) ON DELETE RESTRICT
+  );
+  CREATE INDEX IF NOT EXISTS idx_project_principal_access_principal
+    ON platform_project_principal_access(principal_id, revoked_at, project_id);
+
   CREATE TABLE IF NOT EXISTS platform_workspace_secrets (
     workspace_id TEXT NOT NULL,
     secret_name TEXT NOT NULL,

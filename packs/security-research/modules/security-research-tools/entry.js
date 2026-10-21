@@ -80,14 +80,16 @@ function runContext(services, runId, runtime) {
   };
 }
 
-function projectScope(args, runtime, run = null) {
+function projectScope(args, runtime, run = null, accessLevel = "read") {
   const runtimeProject = runtime && runtime.context && runtime.context.project;
   const runProject = run && (run.project_id || run.projectId);
-  const projectId = runtimeProject || runProject || args.project_id;
+  const projectId = runProject || runtimeProject || args.project_id;
   if (!projectId) throw new ResearchError("invalid_input", "project scope is required for evidence access");
-  if (runtimeProject && args.project_id && String(runtimeProject) !== String(args.project_id)) {
+  if (runtimeProject && projectId && canonicalizeProjectName(runtimeProject) !== canonicalizeProjectName(projectId)
+    || runProject && args.project_id && canonicalizeProjectName(runProject) !== canonicalizeProjectName(args.project_id)) {
     throw new ResearchError("not_found", "evidence not found");
   }
+  assertResearchProjectAccess(projectId, runtime, accessLevel);
   return String(projectId);
 }
 
@@ -102,21 +104,65 @@ function handleStatus(services) {
 function handleProject(services, args, runtime) {
   const actor = resolveActor(args, runtime);
   switch (args.action) {
-    case "create":
-      return ok({ campaign: records.createCampaign(args, actor) });
+    case "create": {
+      const projectId = args.project_id || runtime?.context?.project;
+      assertCampaignProjectAccess(projectId, runtime, "write");
+      return ok({ campaign: records.createCampaign({ ...args, project_id: projectId }, actor) });
+    }
     case "get": {
       const campaign = records.getCampaign(args.campaign_id);
+      assertCampaignProjectAccess(campaign.project_id, runtime, "read");
+      if (runtime?.context?.project && canonicalizeProjectName(runtime.context.project) !== canonicalizeProjectName(campaign.project_id)) throw new ResearchError("not_found", "campaign not found");
       if (args.project_id && canonicalizeProjectName(args.project_id) !== canonicalizeProjectName(campaign.project_id)) throw new ResearchError("not_found", "campaign not found");
       const hypotheses = records.listHypotheses({ campaign_id: campaign.campaign_id, limit: 100 });
       const runs = runsLib.list({ campaign_id: campaign.campaign_id, limit: 100 });
       return ok({ campaign, hypotheses_count: hypotheses.length, runs_count: runs.length, hypotheses, runs });
     }
-    case "list":
-      return ok({ campaigns: records.listCampaigns({ project_id: args.project_id, state: args.state, limit: args.limit }) });
-    case "transition":
+    case "list": {
+      const projectId = args.project_id || runtime?.context?.project;
+      if (projectId) {
+        assertCampaignProjectAccess(projectId, runtime, "read");
+        return ok({ campaigns: records.listCampaigns({ project_id: projectId, state: args.state, limit: args.limit }) });
+      }
+      const identity = runtime?.context?.authIdentity;
+      const principalId = identity?.principal_id;
+      const access = requireSidekickSrc("src/core/project-access.js");
+      const scopes = identity?.scopes;
+      const delegationId = identity?.delegation_id || identity?.delegationId || null;
+      if (!principalId) throw new ResearchError("authorization_failed", "authenticated project access is required");
+      if (access.hasGlobalProjectAccess(principalId, scopes, delegationId)) {
+        return ok({ campaigns: records.listCampaigns({ state: args.state, limit: args.limit }) });
+      }
+      const projects = access.listAccessibleProjectsForPermission(principalId, "tools.execute", scopes, delegationId);
+      const campaigns = projects.flatMap((project) => records.listCampaigns({ project_id: project.project_id, state: args.state, limit: args.limit }));
+      return ok({ campaigns: campaigns.slice(0, args.limit || 100) });
+    }
+    case "transition": {
+      const campaign = records.getCampaign(args.campaign_id);
+      assertCampaignProjectAccess(campaign.project_id, runtime, "write");
       return ok({ campaign: records.transitionCampaign(args.campaign_id, args.state, actor, args.reason) });
+    }
     default:
       return errorResult(new ResearchError("invalid_input", `unknown action: ${args.action}`));
+  }
+}
+
+function assertCampaignProjectAccess(projectId, runtime, accessLevel) {
+  return assertResearchProjectAccess(projectId, runtime, accessLevel, "tools.execute");
+}
+
+function assertResearchProjectAccess(projectId, runtime, accessLevel, permission = "tools.execute") {
+  const identity = runtime?.context?.authIdentity;
+  const principalId = identity?.principal_id;
+  const projectAccess = requireSidekickSrc("src/core/project-access.js");
+  const scopes = identity?.scopes;
+  const delegationId = identity?.delegation_id || identity?.delegationId || null;
+  const contextProject = runtime?.context?.project;
+  if (contextProject && projectId && canonicalizeProjectName(contextProject) !== canonicalizeProjectName(projectId)) {
+    throw new ResearchError("not_found", "campaign not found");
+  }
+  if (!principalId || !projectId || !projectAccess.hasProjectPermission(principalId, projectId, permission, accessLevel, scopes, delegationId)) {
+    throw new ResearchError("not_found", "campaign not found");
   }
 }
 
@@ -125,14 +171,29 @@ function handleProject(services, args, runtime) {
 function handleHypothesis(services, args, runtime) {
   const actor = resolveActor(args, runtime);
   switch (args.action) {
-    case "create":
+    case "create": {
+      const campaign = records.getCampaign(args.campaign_id);
+      assertResearchProjectAccess(campaign.project_id, runtime, "write");
       return ok({ hypothesis: records.createHypothesis(args, actor) });
-    case "get":
-      return ok({ hypothesis: records.getHypothesis(args.hypothesis_id) });
-    case "list":
-      return ok({ hypotheses: records.listHypotheses({ campaign_id: args.campaign_id, project_id: args.project_id, state: args.state, limit: args.limit }) });
-    case "transition":
+    }
+    case "get": {
+      const hypothesis = records.getHypothesis(args.hypothesis_id);
+      assertResearchProjectAccess(hypothesis.project_id, runtime, "read");
+      return ok({ hypothesis });
+    }
+    case "list": {
+      const projectId = args.project_id || runtime?.context?.project || (args.campaign_id && records.getCampaign(args.campaign_id).project_id);
+      if (projectId) assertResearchProjectAccess(projectId, runtime, "read", "tools.execute");
+      const query = { campaign_id: args.campaign_id, project_id: projectId, state: args.state, limit: args.limit };
+      if (projectId || hasGlobalResearchProjectAccess(runtime, "tools.execute")) return ok({ hypotheses: records.listHypotheses(query) });
+      const hypotheses = accessibleResearchProjects(runtime, "tools.execute").flatMap((project) => records.listHypotheses({ ...query, project_id: project.project_id }));
+      return ok({ hypotheses: hypotheses.slice(0, args.limit || 100) });
+    }
+    case "transition": {
+      const hypothesis = records.getHypothesis(args.hypothesis_id);
+      assertResearchProjectAccess(hypothesis.project_id, runtime, "write");
       return ok({ hypothesis: records.transitionHypothesis(args.hypothesis_id, args.state, actor, args.reason) });
+    }
     default:
       return errorResult(new ResearchError("invalid_input", `unknown action: ${args.action}`));
   }
@@ -144,12 +205,26 @@ function handleScope(services, args, runtime) {
   const actor = resolveActor(args, runtime);
   switch (args.action) {
     case "create":
-      return ok({ snapshot: records.createScopeSnapshot(args, actor) });
-    case "get":
-      return ok({ snapshot: records.getScopeSnapshot(args.snapshot_id) });
-    case "list":
-      return ok({ snapshots: records.listScopeSnapshots({ project_id: args.project_id, state: args.state, limit: args.limit }) });
+      assertResearchProjectAccess(args.project_id || runtime?.context?.project, runtime, "write");
+      return ok({ snapshot: records.createScopeSnapshot({ ...args, project_id: args.project_id || runtime?.context?.project }, actor) });
+    case "get": {
+      const snapshot = records.getScopeSnapshot(args.snapshot_id);
+      assertResearchProjectAccess(snapshot.project_id, runtime, "read");
+      return ok({ snapshot });
+    }
+    case "list": {
+      const projectId = args.project_id || runtime?.context?.project;
+      if (projectId) assertResearchProjectAccess(projectId, runtime, "read");
+      const query = { project_id: projectId, state: args.state, limit: args.limit };
+      if (projectId || hasGlobalResearchProjectAccess(runtime, "tools.execute")) return ok({ snapshots: records.listScopeSnapshots(query) });
+      const snapshots = accessibleResearchProjects(runtime, "tools.execute").flatMap((project) => records.listScopeSnapshots({ ...query, project_id: project.project_id }));
+      return ok({ snapshots: snapshots.slice(0, args.limit || 100) });
+    }
     case "evaluate": {
+      const snapshot = records.getScopeSnapshot(args.snapshot_id);
+      const requestedProject = args.project_id || runtime?.context?.project || snapshot.project_id;
+      if (requestedProject !== snapshot.project_id) throw new ResearchError("not_found", "scope snapshot not found");
+      assertResearchProjectAccess(snapshot.project_id, runtime, "read");
       const structured = args.target && typeof args.target === "object" ? args.target : null;
       if (structured && args.target_kind && args.target_kind !== structured.kind) throw new ResearchError("invalid_input", "target_kind must match target.kind");
       return ok({ decision: records.evaluateScope(args.snapshot_id, { project_id: args.project_id, target: structured ? structured.value : args.target, target_kind: structured ? structured.kind : args.target_kind, operation: args.operation }) });
@@ -165,19 +240,28 @@ async function handleRun(services, args, runtime) {
   const actor = resolveActor(args, runtime);
   const config = services.config || {};
   switch (args.action) {
-    case "plan":
+    case "plan": {
+      const hypothesis = records.getHypothesis(args.hypothesis_id);
+      assertResearchProjectAccess(hypothesis.project_id, runtime, "write");
       return ok({ run: runsLib.plan(args, actor, config) });
+    }
     case "start":
+      authorizeRun(args.run_id, runtime, "write");
       return ok({ run: await runsLib.start(args.run_id, actor, services) });
     case "status":
+      authorizeRun(args.run_id, runtime, "read");
       return ok({ run: runsLib.get(args.run_id) });
     case "resume":
+      authorizeRun(args.run_id, runtime, "read");
       return ok({ run: runsLib.resume(args.run_id) });
     case "cancel":
+      authorizeRun(args.run_id, runtime, "write");
       return ok({ run: runsLib.cancel(args.run_id, actor, args.reason) });
     case "complete":
+      authorizeRun(args.run_id, runtime, "write");
       return ok({ run: runsLib.complete(args.run_id, { outcome: args.outcome, evidence: args.evidence, actor }) });
     case "provision": {
+      authorizeRun(args.run_id, runtime, "write");
       // Provision the run's disposable lab by composing the Proxmox pack. The
       // WHICH-lab specifics (profile, clone spec) come from the run's environment,
       // supplied by the operator at runtime — never from this repository.
@@ -185,19 +269,66 @@ async function handleRun(services, args, runtime) {
       return ok({ lab: await labLib.provision(services, ctx, runtime) });
     }
     case "cleanup": {
+      authorizeRun(args.run_id, runtime, "write");
       const ctx = runContext(services, args.run_id, runtime);
       return ok({ lab: await labLib.cleanup(services, ctx, runtime) });
     }
-    case "list":
-      return ok({ runs: runsLib.list({ project_id: args.project_id, campaign_id: args.campaign_id, hypothesis_id: args.hypothesis_id, state: args.state, limit: args.limit }) });
+    case "list": {
+      const campaign = args.campaign_id ? records.getCampaign(args.campaign_id) : null;
+      const hypothesis = args.hypothesis_id ? records.getHypothesis(args.hypothesis_id) : null;
+      if (campaign && hypothesis && campaign.project_id !== hypothesis.project_id) throw new ResearchError("not_found", "run not found");
+      const projectId = args.project_id || runtime?.context?.project || campaign?.project_id || hypothesis?.project_id;
+      if (projectId) assertResearchProjectAccess(projectId, runtime, "read", "tools.execute_high");
+      const query = { project_id: projectId, campaign_id: args.campaign_id, hypothesis_id: args.hypothesis_id, state: args.state, limit: args.limit };
+      if (projectId || hasGlobalResearchProjectAccess(runtime, "tools.execute_high")) return ok({ runs: runsLib.list(query) });
+      const runs = accessibleResearchProjects(runtime, "tools.execute_high").flatMap((project) => runsLib.list({ ...query, project_id: project.project_id }));
+      return ok({ runs: runs.slice(0, args.limit || 100) });
+    }
     default:
       return errorResult(new ResearchError("invalid_input", `unknown action: ${args.action}`));
   }
 }
 
+function authorizeRun(runId, runtime, accessLevel) {
+  return getAuthorizedResearchRun(runId, runtime, accessLevel, "tools.execute_high");
+}
+
+function getAuthorizedResearchRun(runId, runtime, accessLevel, permission = "tools.execute") {
+  const run = require("./lib/platform").kernel().getResearchTestRun(String(runId || ""));
+  if (!run) throw new ResearchError("not_found", "run not found");
+  assertResearchProjectAccess(run.project_id, runtime, accessLevel, permission);
+  return run;
+}
+
+function hasGlobalResearchProjectAccess(runtime, permission) {
+  const identity = runtime?.context?.authIdentity;
+  return Boolean(identity?.principal_id && requireSidekickSrc("src/core/project-access.js").hasGlobalProjectAccess(
+    identity.principal_id,
+    identity.scopes,
+    identity.delegation_id || identity.delegationId || null,
+  ) && requireSidekickSrc("src/core/authorization.js").authorize({
+    principalId: identity.principal_id,
+    permission,
+    credentialScopes: identity.scopes,
+    delegationId: identity.delegation_id || identity.delegationId || null,
+  }).ok);
+}
+
+function accessibleResearchProjects(runtime, permission) {
+  const identity = runtime?.context?.authIdentity;
+  if (!identity?.principal_id) throw new ResearchError("authorization_failed", "authenticated project access is required");
+  return requireSidekickSrc("src/core/project-access.js").listAccessibleProjectsForPermission(
+    identity.principal_id,
+    permission,
+    identity.scopes,
+    identity.delegation_id || identity.delegationId || null,
+  );
+}
+
 // --- research_probe ---------------------------------------------------------
 
 async function handleProbe(services, args, runtime) {
+  authorizeRun(args.run_id, runtime, "write");
   const ctx = runContext(services, args.run_id, runtime);
   if (["completed", "cancelled", "failed", "inconclusive"].includes(ctx.run.state)) {
     return errorResult(new ResearchError("state_conflict", `run is terminal (${ctx.run.state}); start a new run to probe again`));
@@ -212,7 +343,9 @@ function handleEvidence(services, args, runtime) {
   const actor = resolveActor(args, runtime);
   switch (args.action) {
     case "capture": {
+      getAuthorizedResearchRun(args.run_id, runtime, "write");
       const ctx = runContext(services, args.run_id, runtime);
+      projectScope(args, runtime, ctx.run, "write");
       const captured = evidenceLib.capture(ctx, {
         type: args.type || "observation",
         name: args.name,
@@ -230,19 +363,22 @@ function handleEvidence(services, args, runtime) {
       // run_id is the precise, convenient filter: a run's evidence is the set of
       // research-evidence artifacts linked to its execution.
       let executionId = args.execution_id;
-      if (args.run_id && !executionId) executionId = runsLib.get(args.run_id).execution_id;
-      const run = args.run_id ? runsLib.get(args.run_id) : null;
+      const runRow = args.run_id ? getAuthorizedResearchRun(args.run_id, runtime, "read") : null;
+      if (runRow && !executionId) executionId = runRow.execution_id;
+      const run = runRow ? runsLib.get(args.run_id) : null;
       return ok({ evidence: evidenceLib.list({ project_id: projectScope(args, runtime, run), execution_id: executionId, limit: args.limit }) });
     }
     case "inspect": {
-      const run = args.run_id ? runsLib.get(args.run_id) : null;
+      const runRow = args.run_id ? getAuthorizedResearchRun(args.run_id, runtime, "read") : null;
+      const run = runRow ? runsLib.get(args.run_id) : null;
       const references = args.references || (args.evidence_id ? [`artifact:${args.evidence_id.replace(/^artifact:/, "")}`] : null);
       return ok({ evidence: evidenceLib.inspect(references, { projectId: projectScope(args, runtime, run) }) });
     }
     case "redact": {
       const root = requireWorkspace(services);
-      const run = args.run_id ? runsLib.get(args.run_id) : null;
-      return ok({ evidence: evidenceLib.redactEvidence({ root, projectId: projectScope(args, runtime, run) }, args.evidence_id) });
+      const runRow = args.run_id ? getAuthorizedResearchRun(args.run_id, runtime, "write") : null;
+      const run = runRow ? runsLib.get(args.run_id) : null;
+      return ok({ evidence: evidenceLib.redactEvidence({ root, projectId: projectScope(args, runtime, run, "write") }, args.evidence_id) });
     }
     default:
       return errorResult(new ResearchError("invalid_input", `unknown action: ${args.action}`));
@@ -270,7 +406,8 @@ function handleCompare(services, args, runtime) {
   let baseline = args.baseline;
   let candidate = args.candidate;
   const fromEvidence = Boolean(args.baseline_evidence || args.candidate_evidence);
-  const run = args.run_id ? runsLib.get(args.run_id) : null;
+  const runRow = fromEvidence && args.run_id ? getAuthorizedResearchRun(args.run_id, runtime, "read") : null;
+  const run = runRow ? runsLib.get(args.run_id) : null;
   const projectId = fromEvidence ? projectScope(args, runtime, run) : null;
   if (args.baseline_evidence) baseline = extractObservationOutput(services, args.baseline_evidence, projectId);
   if (args.candidate_evidence) candidate = extractObservationOutput(services, args.candidate_evidence, projectId);
@@ -297,7 +434,9 @@ function handleValidate(services, args, runtime) {
   const result = { validation: verdict };
 
   if (args.run_id && args.record_outcome) {
+    const authorizedRun = getAuthorizedResearchRun(args.run_id, runtime, "write");
     const run = runsLib.get(args.run_id);
+    if (run.project_id !== authorizedRun.project_id) throw new ResearchError("not_found", "run not found");
     const outcome = args.outcome_label || (verdict.changed ? "expectation_not_met" : "expectation_met");
     if (!run.evidence || run.evidence.length === 0) {
       return errorResult(new ResearchError("validation_failed", "cannot record a run outcome without evidence; capture a probe observation first"));
@@ -328,13 +467,29 @@ function handleReport(services, args, runtime) {
   const actor = resolveActor(args, runtime);
   switch (args.action) {
     case "materialize": {
+      const campaign = records.getCampaign(args.campaign_id);
+      assertResearchProjectAccess(campaign.project_id, runtime, "write");
+      if (args.run_id) {
+        const run = getAuthorizedResearchRun(args.run_id, runtime, "read");
+        if (run.project_id !== campaign.project_id) throw new ResearchError("not_found", "campaign not found");
+      }
       const root = requireWorkspace(services);
       return ok(reportLib.materialize({ root }, args, actor));
     }
-    case "get":
-      return ok({ report: records.getReport(args.report_id) });
-    case "list":
-      return ok({ reports: records.listReports({ project_id: args.project_id, campaign_id: args.campaign_id, status: args.status, limit: args.limit }) });
+    case "get": {
+      const report = records.getReport(args.report_id);
+      assertResearchProjectAccess(report.project_id, runtime, "read");
+      return ok({ report });
+    }
+    case "list": {
+      const campaign = args.campaign_id ? records.getCampaign(args.campaign_id) : null;
+      const projectId = args.project_id || runtime?.context?.project || campaign?.project_id;
+      if (projectId) assertResearchProjectAccess(projectId, runtime, "read");
+      const query = { project_id: projectId, campaign_id: args.campaign_id, status: args.status, limit: args.limit };
+      if (projectId || hasGlobalResearchProjectAccess(runtime, "tools.execute")) return ok({ reports: records.listReports(query) });
+      const reports = accessibleResearchProjects(runtime, "tools.execute").flatMap((project) => records.listReports({ ...query, project_id: project.project_id }));
+      return ok({ reports: reports.slice(0, args.limit || 100) });
+    }
     default:
       return errorResult(new ResearchError("invalid_input", `unknown action: ${args.action}`));
   }
@@ -347,7 +502,12 @@ function handleSource(services, args, runtime) {
   if (args.action === "authority" && (!runtimeActor || !String(runtimeActor).trim())) {
     throw new ResearchError("authorization_failed", "an authenticated runtime actor is required for source authority");
   }
-  return sourceLib.execute(services, { ...args, _runtime_project: runtime && runtime.context && runtime.context.project || null }, args.action === "authority" ? String(runtimeActor).trim() : resolveActor({}, runtime));
+  return sourceLib.execute(
+    services,
+    { ...args, _runtime_project: runtime && runtime.context && runtime.context.project || null },
+    args.action === "authority" ? String(runtimeActor).trim() : resolveActor({}, runtime),
+    runtime && runtime.context && runtime.context.authIdentity || null,
+  );
 }
 
 // Wrap a handler so any thrown ResearchError/Error becomes a structured result.

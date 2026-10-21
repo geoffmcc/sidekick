@@ -26,15 +26,23 @@ process.env.SIDEKICK_DB_FILE = path.join(TEST_DATA_DIR, "sidekick.db");
 process.env.SIDEKICK_TOOL_POLICY = "open";
 process.env.SIDEKICK_APPROVAL_MODE = "off";
 process.env.SIDEKICK_SECRET_KEY = "security-research-pack-test-secret-key";
+// Path policy now denies access by default. Keep this synthetic integration
+// workspace explicitly authorized so legitimate Git workflow steps still run.
+process.env.SIDEKICK_ALLOWED_PATHS = WORKSPACE;
 
 require(path.join(REPO, "src/db")).runPendingMigrations();
 const bundled = require(path.join(REPO, "src/packs/bundled"));
 const packLifecycle = require(path.join(REPO, "src/packs/lifecycle"));
 const platformKernel = require(path.join(REPO, "src/platform/kernel"));
+const identity = require(path.join(REPO, "src/core/identity"));
+const projectAccess = require(path.join(REPO, "src/core/project-access"));
 const { callInternalTool } = require(path.join(REPO, "src/tools/dispatcher"));
 const labLib = require(path.join(REPO, "packs/security-research/modules/security-research-tools/lib/lab.js"));
 
 const PROJECT = "demo_project"; // already canonical, so scope project_id matches
+const serviceContext = require(path.join(REPO, "test/helpers/authorized-context")).createOwnerContext({ source: "internal", project: PROJECT });
+const toolContext = require(path.join(REPO, "src/tools/context"));
+const authorizedExecutionContext = toolContext.createInternalExecutionContext(serviceContext);
 
 let failures = 0;
 async function test(label, fn) {
@@ -43,7 +51,7 @@ async function test(label, fn) {
 }
 function json(result) { return JSON.parse(result.content[0].text); }
 async function call(tool, args) {
-  const r = await callInternalTool(tool, args);
+  const r = await callInternalTool(tool, args, serviceContext);
   return { r, j: json(r), isError: Boolean(r.isError), code: r.code || null };
 }
 async function okCall(tool, args) {
@@ -78,6 +86,124 @@ function makeGitRepo() {
     });
     const health = packLifecycle.health("security-research");
     assert.strictEqual(health.status, "healthy", `health: ${JSON.stringify(health)}`);
+  });
+
+  await test("SR.1a source repositories enforce project read/write membership through the dispatcher", async () => {
+    const foreignProject = `source_scope_${process.pid}`;
+    platformKernel.registerProject({ project_id: foreignProject, owner_actor_id: serviceContext.authIdentity.principal_id, source: "test" });
+    const campaign = platformKernel.createResearchCampaign({ project_id: foreignProject, name: "Scoped source authorization", created_by: "test" });
+    const foreignOwnerContext = { ...serviceContext, project: foreignProject };
+    const createdHypothesis = await callInternalTool("research_hypothesis", { action: "create", campaign_id: campaign.campaign_id, title: "Scoped hypothesis", claim: "Synthetic claim" }, foreignOwnerContext);
+    assert.notEqual(createdHypothesis.isError, true);
+    const hypothesis = JSON.parse(createdHypothesis.content[0].text).hypothesis;
+    const createdRun = await callInternalTool("research_run", { action: "plan", hypothesis_id: hypothesis.hypothesis_id, environment: { kind: "local" } }, foreignOwnerContext);
+    assert.notEqual(createdRun.isError, true);
+    const run = JSON.parse(createdRun.content[0].text).run;
+    const scopeSnapshot = platformKernel.createScopeSnapshot({ project_id: foreignProject, created_by: serviceContext.authIdentity.principal_id, targets: [{ kind: "host", value: "synthetic.example.test" }], rules: { allowed_operations: ["observe"] } });
+    const createdReport = await callInternalTool("research_report", { action: "materialize", campaign_id: campaign.campaign_id, title: "Synthetic scope report" }, foreignOwnerContext);
+    assert.notEqual(createdReport.isError, true);
+    const report = JSON.parse(createdReport.content[0].text).report;
+    const mismatchedContextRead = await callInternalTool("research_project", { action: "get", campaign_id: campaign.campaign_id }, { ...serviceContext, project: PROJECT });
+    assert.equal(mismatchedContextRead.isError, true, "a task project context cannot be redirected to another campaign project");
+    const outsider = identity.createPrincipal({ type: "service", displayName: "Research source limited administrator" });
+    identity.assignRole(outsider.principal_id, "administrator", serviceContext.authIdentity.principal_id);
+    const limitedContext = { source: "internal", authIdentity: { principal_id: outsider.principal_id, principal_type: "service", scopes: ["tools.execute", "tools.execute_high"] } };
+    const staging = path.join(WORKSPACE, "projects", campaign.campaign_id, "repositories", "fixture_repo", ".source_snap_authorization.staging");
+    fs.mkdirSync(staging, { recursive: true });
+    const marker = path.join(staging, "must-survive-denial.txt");
+    fs.writeFileSync(marker, "synthetic");
+
+    const deniedCampaignRead = await callInternalTool("research_project", { action: "get", campaign_id: campaign.campaign_id }, limitedContext);
+    assert.equal(deniedCampaignRead.isError, true, "campaign identifiers cannot bypass project membership");
+    const deniedCampaignTransition = await callInternalTool("research_project", { action: "transition", campaign_id: campaign.campaign_id, state: "active" }, limitedContext);
+    assert.equal(deniedCampaignTransition.isError, true, "campaign mutation requires project write access");
+    assert.equal(platformKernel.getResearchCampaign(campaign.campaign_id).state, "draft", "denied transition must not mutate campaign state");
+    const deniedHypothesisRead = await callInternalTool("research_hypothesis", { action: "get", hypothesis_id: hypothesis.hypothesis_id }, limitedContext);
+    assert.equal(deniedHypothesisRead.isError, true, "hypothesis identifiers cannot bypass project membership");
+    const deniedHypothesisTransition = await callInternalTool("research_hypothesis", { action: "transition", hypothesis_id: hypothesis.hypothesis_id, state: "ready" }, limitedContext);
+    assert.equal(deniedHypothesisTransition.isError, true, "hypothesis mutation requires project write access");
+    const deniedRunRead = await callInternalTool("research_run", { action: "status", run_id: run.run_id }, limitedContext);
+    assert.equal(deniedRunRead.isError, true, "run identifiers cannot bypass project membership");
+    const deniedRunPlan = await callInternalTool("research_run", { action: "plan", hypothesis_id: hypothesis.hypothesis_id, environment: { kind: "local" } }, limitedContext);
+    assert.equal(deniedRunPlan.isError, true, "run planning requires project write access");
+    const deniedProbe = await callInternalTool("research_probe", { run_id: run.run_id, probe: { type: "command", command: "echo must-not-run" } }, limitedContext);
+    assert.equal(deniedProbe.isError, true, "probe execution requires project write access before side effects");
+    const deniedEvidenceRead = await callInternalTool("research_evidence", { action: "list", run_id: run.run_id }, limitedContext);
+    assert.equal(deniedEvidenceRead.isError, true, "run evidence cannot be listed without project membership");
+    const deniedScopeRead = await callInternalTool("research_scope", { action: "get", snapshot_id: scopeSnapshot.snapshot_id }, limitedContext);
+    assert.equal(deniedScopeRead.isError, true, "scope snapshots require project membership");
+    const deniedScopeEvaluate = await callInternalTool("research_scope", { action: "evaluate", snapshot_id: scopeSnapshot.snapshot_id, target: "synthetic.example.test", target_kind: "host", operation: "observe" }, limitedContext);
+    assert.equal(deniedScopeEvaluate.isError, true, "scope evaluation cannot expose another project's authorization rules");
+    const deniedScopeCreate = await callInternalTool("research_scope", { action: "create", project_id: foreignProject, targets: [{ kind: "host", value: "other.synthetic.test" }] }, limitedContext);
+    assert.equal(deniedScopeCreate.isError, true, "scope snapshot creation requires project write access");
+    const deniedReportRead = await callInternalTool("research_report", { action: "get", report_id: report.report_id }, limitedContext);
+    assert.equal(deniedReportRead.isError, true, "report IDs cannot bypass project membership");
+    const deniedReportWrite = await callInternalTool("research_report", { action: "materialize", campaign_id: campaign.campaign_id, title: "Must not materialize" }, limitedContext);
+    assert.equal(deniedReportWrite.isError, true, "report materialization requires project write access");
+    for (const [tool, key, id] of [
+      ["research_project", "campaigns", campaign.campaign_id],
+      ["research_hypothesis", "hypotheses", hypothesis.hypothesis_id],
+      ["research_run", "runs", run.run_id],
+      ["research_scope", "snapshots", scopeSnapshot.snapshot_id],
+      ["research_report", "reports", report.report_id],
+    ]) {
+      const unscoped = await callInternalTool(tool, { action: "list" }, limitedContext);
+      assert.notEqual(unscoped.isError, true, `${tool} unscoped list remains usable`);
+      assert.equal(JSON.parse(unscoped.content[0].text)[key].some((item) => Object.values(item).includes(id)), false, `${tool} unscoped list excludes inaccessible project records`);
+    }
+
+    const deniedRead = await callInternalTool("research_source", { action: "list", project_id: foreignProject }, limitedContext);
+    assert.equal(deniedRead.isError, true);
+    assert.equal(deniedRead.code, "not_found");
+    assert.equal(fs.existsSync(marker), true);
+
+    projectAccess.grantProjectAccess({ actorPrincipalId: serviceContext.authIdentity.principal_id, principalId: outsider.principal_id, project: foreignProject, accessLevel: "read" });
+    const allowedCampaignRead = await callInternalTool("research_project", { action: "get", campaign_id: campaign.campaign_id }, limitedContext);
+    assert.notEqual(allowedCampaignRead.isError, true, "project read membership permits campaign reads");
+    const stillDeniedTransition = await callInternalTool("research_project", { action: "transition", campaign_id: campaign.campaign_id, state: "active" }, limitedContext);
+    assert.equal(stillDeniedTransition.isError, true, "read membership cannot mutate campaign state");
+    const allowedHypothesisRead = await callInternalTool("research_hypothesis", { action: "get", hypothesis_id: hypothesis.hypothesis_id }, limitedContext);
+    assert.notEqual(allowedHypothesisRead.isError, true, "project read membership permits hypothesis reads");
+    const stillDeniedHypothesisTransition = await callInternalTool("research_hypothesis", { action: "transition", hypothesis_id: hypothesis.hypothesis_id, state: "ready" }, limitedContext);
+    assert.equal(stillDeniedHypothesisTransition.isError, true, "read membership cannot mutate a hypothesis");
+    const allowedRunRead = await callInternalTool("research_run", { action: "status", run_id: run.run_id }, limitedContext);
+    assert.notEqual(allowedRunRead.isError, true, "project read membership permits run status reads");
+    const allowedEvidenceRead = await callInternalTool("research_evidence", { action: "list", run_id: run.run_id }, limitedContext);
+    assert.notEqual(allowedEvidenceRead.isError, true, "project read membership permits scoped evidence listing");
+    const allowedScopeRead = await callInternalTool("research_scope", { action: "get", snapshot_id: scopeSnapshot.snapshot_id }, limitedContext);
+    assert.notEqual(allowedScopeRead.isError, true, "project read membership permits scope snapshot reads");
+    const allowedReportRead = await callInternalTool("research_report", { action: "get", report_id: report.report_id }, limitedContext);
+    assert.notEqual(allowedReportRead.isError, true, "project read membership permits report reads");
+    for (const [tool, key, id] of [
+      ["research_project", "campaigns", campaign.campaign_id],
+      ["research_hypothesis", "hypotheses", hypothesis.hypothesis_id],
+      ["research_run", "runs", run.run_id],
+      ["research_scope", "snapshots", scopeSnapshot.snapshot_id],
+      ["research_report", "reports", report.report_id],
+    ]) {
+      const unscoped = await callInternalTool(tool, { action: "list" }, limitedContext);
+      assert.notEqual(unscoped.isError, true, `${tool} scoped unscoped list remains usable`);
+      assert.equal(JSON.parse(unscoped.content[0].text)[key].some((item) => Object.values(item).includes(id)), true, `${tool} unscoped list includes accessible project records`);
+    }
+    const deniedRunCancel = await callInternalTool("research_run", { action: "cancel", run_id: run.run_id, reason: "synthetic denial check" }, limitedContext);
+    assert.equal(deniedRunCancel.isError, true, "read membership cannot cancel a run");
+    const allowedRead = await callInternalTool("research_source", { action: "list", project_id: foreignProject }, limitedContext);
+    assert.notEqual(allowedRead.isError, true, "project read membership permits a scoped list");
+
+    const deniedWrite = await callInternalTool("research_source", { action: "recover", campaign_id: campaign.campaign_id, project_id: foreignProject, confirm: true }, limitedContext);
+    assert.equal(deniedWrite.isError, true, "read membership does not permit recovery mutation");
+    assert.equal(fs.existsSync(marker), true, "unauthorized recovery must not remove staging data");
+
+    projectAccess.grantProjectAccess({ actorPrincipalId: serviceContext.authIdentity.principal_id, principalId: outsider.principal_id, project: foreignProject, accessLevel: "write" });
+    const allowedTransition = await callInternalTool("research_project", { action: "transition", campaign_id: campaign.campaign_id, state: "active" }, limitedContext);
+    assert.notEqual(allowedTransition.isError, true, "write membership preserves authorized campaign transitions");
+    const allowedHypothesisTransition = await callInternalTool("research_hypothesis", { action: "transition", hypothesis_id: hypothesis.hypothesis_id, state: "ready" }, limitedContext);
+    assert.notEqual(allowedHypothesisTransition.isError, true, "write membership permits authorized hypothesis transitions");
+    const allowedRunCancel = await callInternalTool("research_run", { action: "cancel", run_id: run.run_id, reason: "synthetic authorized check" }, limitedContext);
+    assert.notEqual(allowedRunCancel.isError, true, "write membership permits authorized run cancellation");
+    const allowedWrite = await callInternalTool("research_source", { action: "recover", campaign_id: campaign.campaign_id, project_id: foreignProject, confirm: true }, limitedContext);
+    assert.notEqual(allowedWrite.isError, true, "write membership preserves authorized recovery");
+    assert.equal(fs.existsSync(marker), false, "authorized recovery removes the abandoned staging directory");
   });
 
   await test("SR.2 research_status reports configured workspace and available capabilities", async () => {
@@ -154,8 +280,8 @@ function makeGitRepo() {
   let baselineRef, candidateRef;
 
   await test("SR.7 command probes compose bash and capture observations as evidence", async () => {
-    const baseline = await okCall("research_probe", { run_id: runId, probe: { name: "baseline", type: "command", target: "lab", command: "printf 'status:403'" } });
-    const candidate = await okCall("research_probe", { run_id: runId, probe: { name: "candidate", type: "command", target: "lab", command: "printf 'status:200'" } });
+    const baseline = await okCall("research_probe", { run_id: runId, probe: { name: "baseline", type: "command", target: "lab", command: `node -e "process.stdout.write('status:403')"` } });
+    const candidate = await okCall("research_probe", { run_id: runId, probe: { name: "candidate", type: "command", target: "lab", command: `node -e "process.stdout.write('status:200')"` } });
     assert.strictEqual(baseline.observation.succeeded, true);
     assert.ok(baseline.evidence.reference.startsWith("artifact:"));
     assert.ok(baseline.evidence.content_hash.startsWith("sha256:"));
@@ -167,7 +293,7 @@ function makeGitRepo() {
 
   await test("SR.8 deterministic comparison of the two observations", async () => {
     const cmp = await okCall("research_compare", { run_id: runId, baseline_evidence: baselineRef, candidate_evidence: candidateRef, mode: "text" });
-    assert.strictEqual(cmp.comparison.changed, true);
+    assert.strictEqual(cmp.comparison.changed, true, `text comparison should detect different probe outputs: ${JSON.stringify(cmp)}`);
     // Comparing evidence must not echo the raw evidence values back into the result.
     const statusCmp = await okCall("research_compare", { run_id: runId, baseline_evidence: baselineRef, candidate_evidence: candidateRef, mode: "status" });
     assert.strictEqual(statusCmp.comparison.changed, true);
@@ -311,14 +437,14 @@ function makeGitRepo() {
       action: "run", name: "security-research/version-regression-check",
       inputs: {
         run_id: planned.run.run_id,
-        baseline_probe: { name: "baseline", type: "command", target: "lab", command: "printf 'status:403'" },
-        candidate_probe: { name: "candidate", type: "command", target: "lab", command: "printf 'status:200'" },
+        baseline_probe: { name: "baseline", type: "command", target: "lab", command: `node -e "process.stdout.write('status:403')"` },
+        candidate_probe: { name: "candidate", type: "command", target: "lab", command: `node -e "process.stdout.write('status:200')"` },
         compare_mode: "text",
       },
     });
     assert.strictEqual(run.owner, "pack:security-research");
     assert.ok(run.result && run.result.comparison, `workflow should return a comparison: ${JSON.stringify(run.result)}`);
-    assert.strictEqual(run.result.comparison.changed, true);
+    assert.strictEqual(run.result.comparison.changed, true, `workflow comparison should detect different probe outputs: ${JSON.stringify(run.result.comparison)}`);
   });
 
   // --- disposable lab composition (stub provider, offline) -------------------
@@ -450,7 +576,7 @@ function makeGitRepo() {
       ["proxmox_guest", { action: "shutdown", vmid: 9999 }],
       ["proxmox_retire", { action: "retire", vmid: 9999, dry_run: true, require_test: true }],
     ]) {
-      const res = await services.v1.dispatch(tool, args);
+      const res = await toolContext.runWithContext(authorizedExecutionContext, () => services.v1.dispatch(tool, args));
       assert.notStrictEqual(res.code, "module_permission_denied", `facade must not deny declared tool ${tool}: ${JSON.stringify(res)}`);
       // Unconfigured provider: the refusal must come from the Proxmox side.
       assert.strictEqual(res.code, "not_configured", `${tool} should fail provider-side without a profile, got ${res.code}`);
@@ -468,6 +594,7 @@ function makeGitRepo() {
   });
 
   // cleanup
+  try { require(path.join(REPO, "src/db")).closeDatabase?.(); } catch {}
   fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
   fs.rmSync(WORKSPACE, { recursive: true, force: true });
 
