@@ -14,13 +14,16 @@
 const { z } = require("zod");
 const blackbox = require("../../blackbox");
 const toolContext = require("../context");
-const { sidekick_llm } = require("./inference");
+const { runLlm } = require("./inference");
+const { requireCanonicalInvocation } = require("../read-authorization");
 
 function getCurrentSource() {
   return toolContext.getExecutionSource() || "unknown";
 }
 
 async function sidekick_black_box(args = {}) {
+  const denied = requireCanonicalInvocation("black_box");
+  if (denied) return denied;
   const action = args.action || "list";
   try {
     if (action === "list" || action === "list_incidents") {
@@ -75,7 +78,7 @@ async function sidekick_black_box(args = {}) {
         total_bytes: capture.total_bytes,
         sources: (capture.sources || []).map(source => ({ id: source.id, key: source.source_key, state: source.state, duration_ms: source.duration_ms, exit_code: source.exit_code, timed_out: source.timed_out, truncated: source.truncated }))
       };
-      if (args.analyze_with_llm) payload.analysis = await blackbox.analyzeIncident(capture.incident_id, { capture_id: capture.id, llm: sidekick_llm, actor: getCurrentSource() });
+      if (args.analyze_with_llm) payload.analysis = await blackbox.analyzeIncident(capture.incident_id, { capture_id: capture.id, llm: runLlm, actor: getCurrentSource() });
       return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
     }
 
@@ -88,8 +91,8 @@ async function sidekick_black_box(args = {}) {
     if (action === "list_sources") return { content: [{ type: "text", text: JSON.stringify({ sources: blackbox.listSources(args.capture_id) }, null, 2) }] };
     if (action === "get_source") return { content: [{ type: "text", text: JSON.stringify(blackbox.getSource(args.source_id, { offset: args.offset, limit: args.limit }), null, 2) }] };
     if (action === "search") return { content: [{ type: "text", text: JSON.stringify({ results: blackbox.searchIncidents(args.query, args) }, null, 2) }] };
-    if (action === "analyze") return { content: [{ type: "text", text: JSON.stringify(await blackbox.analyzeIncident(args.incident_id, { capture_id: args.capture_id, llm: args.use_llm === false ? null : sidekick_llm, actor: getCurrentSource() }), null, 2) }] };
-    if (action === "analyze_async") return { content: [{ type: "text", text: JSON.stringify(await blackbox.startAnalysis(args.incident_id, { capture_id: args.capture_id, llm: sidekick_llm, timeout_ms: args.analysis_timeout_ms, actor: getCurrentSource() }), null, 2) }] };
+    if (action === "analyze") return { content: [{ type: "text", text: JSON.stringify(await blackbox.analyzeIncident(args.incident_id, { capture_id: args.capture_id, llm: args.use_llm === false ? null : runLlm, actor: getCurrentSource() }), null, 2) }] };
+    if (action === "analyze_async") return { content: [{ type: "text", text: JSON.stringify(await blackbox.startAnalysis(args.incident_id, { capture_id: args.capture_id, llm: runLlm, timeout_ms: args.analysis_timeout_ms, actor: getCurrentSource() }), null, 2) }] };
     if (action === "compare") return { content: [{ type: "text", text: JSON.stringify(blackbox.compareCaptures(args.capture_id, args.compare_capture_id), null, 2) }] };
     if (action === "add_note") return { content: [{ type: "text", text: JSON.stringify(blackbox.addNote(args.incident_id, { content: args.note || args.content, type: args.note_type, source: getCurrentSource() }), null, 2) }] };
     if (action === "update_incident") return { content: [{ type: "text", text: JSON.stringify(blackbox.updateIncident(args.incident_id, args, getCurrentSource()), null, 2) }] };
