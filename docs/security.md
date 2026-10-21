@@ -14,6 +14,25 @@ Query-string API keys are not supported because URLs are routinely exposed in lo
 
 Set `SIDEKICK_API_KEY` to a strong non-placeholder value before starting the MCP server or dashboard.
 
+The Dashboard-to-Agent Bridge uses a separate file-backed
+`SIDEKICK_AGENT_PROXY_KEY` (`sidekick_agent_proxy_key`). Generate a distinct
+random secret and provide it only to the Dashboard and Agent services. Never
+reuse `SIDEKICK_API_KEY` or distribute the proxy key to MCP clients. Both
+services require the secret before startup outside test mode.
+
+MCP scheduling tools use `SIDEKICK_AGENT_SCHEDULER_KEY`
+(`sidekick_agent_scheduler_key`) for timer reloads. It must be distinct from
+both the MCP API key and Dashboard proxy key. The Agent accepts this identity
+only on the exact delay/watch reload POST routes; absent configuration blocks
+new delay/watch definitions before they are persisted.
+
+Signed Dashboard and scheduler proxy nonces are consumed in the shared Core
+SQLite database, so replay is rejected across Agent processes using that same
+database. Migration `101_agent_proxy_nonce_replay_store.sql` keeps only nonce
+hashes until the timestamp acceptance window expires and enforces a 10,000
+active-entry cap. A multi-host Agent deployment using separate database files
+needs an atomic shared nonce backend for the same cross-host guarantee.
+
 ## IP allowlists
 
 `SIDEKICK_ALLOWED_IPS` restricts MCP access by IPv4 address or CIDR range. Localhost is always allowed. `SIDEKICK_DASHBOARD_ALLOWED_IPS` provides similar filtering for the dashboard.
@@ -66,6 +85,21 @@ Policy lists accept tool names and risk selectors such as `risk:high` or `risk:c
 
 High and critical tools are not removed from the project because trusted operators need them. For internet-reachable or shared deployments, run the agent and MCP source in `restricted` mode and allow only the tools required for the workflow.
 
+The canonical dispatcher also requires an attributable principal for every
+medium, high, or critical operation, including higher-risk actions on mixed
+tools. A legacy installation-wide API key authenticates the transport but does
+not identify a principal, so it cannot run non-low-risk tools through the
+dispatcher. Create a scoped credential for an enabled principal with the
+required permission and project grant. Explicit low-risk inventory remains
+available under the configured source policy. Direct API routes must enforce
+their own permission checks and are audited separately.
+
+The local CLI's MCP stdio transport uses the file-backed `sidekick_mcp_credential`
+(`SIDEKICK_MCP_CREDENTIAL_FILE` may point to a protected file). It authenticates
+each tool call against the current credential record, so missing, expired, or
+revoked credentials cannot run privileged tools. Configure only the scopes the
+local client needs; no implicit local owner identity is granted.
+
 Use the tool policy inspector to verify effective access before and after changing environment variables:
 
 ```javascript
@@ -79,17 +113,18 @@ It reports the policy decision, active mode, matching selector when applicable, 
 Risk was originally a per-**tool** label. That is wrong for a tool whose actions
 differ in danger, and the failure mode is not merely cosmetic.
 
-`capability` is the case that exposed it. Installing or enabling a pack executes
-third-party code inside the Sidekick process, so the tool is correctly labelled
-`critical`. But merely *listing* packs is a read — and because the dashboard's
+`capability` is the case that exposed it. Installing a pack stores executable
+code for review; third-party activation currently fails closed until OS
+isolation is available. The capability lifecycle remains high impact because
+it changes persistent extension state. But merely *listing* packs is a read — and because the dashboard's
 Capabilities tab calls `capability action="list"` when it loads, opening that tab
 filed a critical-risk approval request. Rejecting it did not help: the tab
 refetched and filed another.
 
 The damage is the erosion, not the noise. An operator who learns that
 `capability` prompts are routine UI chatter will wave through the one prompt that
-genuinely matters — an install activating unsandboxed third-party code — because
-it looks exactly like the twenty before it. An approval control spent on browsing
+genuinely matters — activation after isolation is delivered — because it looks
+exactly like the twenty before it. An approval control spent on browsing
 is not protecting anything.
 
 `TOOL_ACTION_RISK` in `src/tools/metadata.js` declares per-action overrides, and
@@ -137,7 +172,7 @@ demonstrably exists, not because an action is named `list`.
 
 ## Filesystem path guardrails
 
-Filesystem path guardrails restrict direct file and repository path arguments while preserving open defaults for trusted single-user deployments. Leave these variables unset for current behavior, or set comma-separated absolute paths:
+Filesystem operations fail closed until an allowed root is configured. Set comma-separated absolute paths for the directories Sidekick is authorized to access; leaving all allow-list variables empty denies filesystem path operations. Denied paths further narrow access and never create an allow grant:
 
 ```env
 SIDEKICK_ALLOWED_PATHS=/home/sidekick/sidekick,/home/sidekick/projects
@@ -145,13 +180,13 @@ SIDEKICK_DENIED_PATHS=/home/sidekick/.ssh,/etc
 SIDEKICK_AGENT_ALLOWED_PATHS=/home/sidekick/projects
 ```
 
-Allowed entries match the path itself and descendants. Denied entries take precedence over allowed entries. Source-specific variants are available for `MCP`, `DASHBOARD`, and `AGENT`, for example `SIDEKICK_AGENT_DENIED_PATHS`.
+Allowed entries match the path itself and descendants. Denied entries take precedence over allowed entries. Source-specific allow-lists (`MCP`, `DASHBOARD`, `AGENT`) are separate; a root configured for one source does not authorize another. Existing deployments with empty allow-lists must configure roots before filesystem-backed tools will work. Keep roots as narrow as the authorized project or workspace; broad roots expose all files readable by the Sidekick service account to callers who have the relevant tool permission. Source-specific deny lists are also available, for example `SIDEKICK_AGENT_DENIED_PATHS`.
 
 Paths are canonicalized before they are compared, so a symlink is judged by where it points rather than by where it sits: a link beneath an allowed root cannot reach a target outside it, and a path that resolves into a denied root is denied whichever route reaches it. Resolution follows the path component by component, so a `..` after a symlink applies to the link's target as the kernel applies it, rather than being collapsed away first. Configured roots are canonicalized the same way, so an allowed root that is itself a symlink keeps working. A target that does not exist yet is resolved through its nearest existing ancestor, which is enough to catch an escaping link in the part of the path that does exist. A dangling symlink, a symlink cycle, or a configured root that exists but cannot be resolved is refused rather than guessed past — note that a single unresolvable root denies every path, so a broken entry locks the guard shut rather than opening it.
 
 Three limits are worth stating plainly. A hard link is not a symlink and has no separate target to resolve, so a hard link created inside an allowed root to a file outside it reads as an ordinary file in that root and is permitted; keep allowed roots on filesystems where untrusted users cannot create links to sensitive files. Comparison is case-sensitive, so on a case-insensitive filesystem — a `/mnt/c` DrvFS mount under WSL, for example — a differently-cased spelling of a denied root is not recognised; keep roots on a case-sensitive filesystem where this matters. And this is a check on the path, performed before the operation: it does not close the window between the check and the subsequent filesystem access, so a path that is replaced in that interval can still be followed.
 
-The guard applies to direct path arguments on file, archive, search, diff, database export/backup/restore, media, watch, snapshot, changelog, and ops tools. It does not parse arbitrary commands passed to shell-capable tools, so keep `bash`, sandbox execution, deploy workflows, and other high-power tools behind tool policy and approval.
+The guard applies to direct path arguments on file, archive, search, diff, database export/backup/restore, media, watch, snapshot, changelog, and ops tools. It does not parse arbitrary commands passed to shell-capable tools, so keep `bash`, deploy workflows, and other high-power tools behind tool policy and approval. The `sandbox` tool's `exec` action is disabled because backups and rollback do not provide OS-enforced isolation; it returns `isolation_unavailable` before execution.
 
 ### Media download egress
 
@@ -184,6 +219,8 @@ SIDEKICK_AGENT_APPROVAL_MODE=strict
 ```
 
 Pending requests appear in the dashboard Approvals tab with structurally redacted argument previews. Full arguments are encrypted with `SIDEKICK_SECRET_KEY`, never returned by the approval-list API, and discarded after approval, rejection, failure, or expiry. Pending approvals expire after `SIDEKICK_APPROVAL_TTL_SECONDS` (default: one hour). If the secret key is missing, Sidekick refuses to queue the action instead of storing its arguments in plaintext.
+
+Delayed tool executions also require `SIDEKICK_SECRET_KEY`. Core signs the exact tool, arguments, deadline, execution ID, and authority context; Agent verifies the signature at dispatch, rechecks current principal/credential state, intersects current credential scopes with the original grant, and re-evaluates the Agent authority envelope. Both services must use the same key file. Unsigned delays from older versions fail closed; review and recreate still-authorized delays after upgrade. Key rotation invalidates outstanding signed delays.
 
 Approving a request executes it under the original source and reuses current tool-policy enforcement while bypassing only the approval check. A tool blocked after it was queued therefore remains blocked at execution time.
 
@@ -243,6 +280,30 @@ The supplied sudoers file allows the `sidekick` user to run specific systemctl a
 
 `secret` provides AES-256-GCM encrypted credential management and requires `SIDEKICK_SECRET_KEY`. Store the secret key outside the repository and include it in your host secret management or systemd environment strategy. API tokens such as the GitHub PAT used by `github` belong in `secret` as encrypted secrets, not in KV memory.
 
+## Dashboard permissions
+
+Dashboard sign-in establishes identity; it does not by itself grant access to every operation. Direct sync endpoints enforce `sync.read` for identity, diff, and export, and `sync.manage` for identity changes and imports. Direct event delivery endpoints enforce `events.read` for listing and `events.manage` for subscription and delivery mutations. Migration `081_dashboard_sync_event_permissions.sql` grants these permissions to administrators; auditors receive event-read access only. Other Dashboard routes continue to use their dispatcher or route-specific authorization and remain subject to the platform authorization review.
+
+Direct connector endpoints enforce `connectors.read` for connector records, health probes, and lifecycle events, and `connectors.manage` for registration, configuration, and lifecycle changes. Migration `084_dashboard_connector_permissions.sql` grants these permissions to owners and administrators. Connector routes check permission before accessing the platform kernel or starting a health probe.
+
+Dashboard quick actions enforce `dashboard.operations.read` for health, deployment metadata, recent failures, and service logs, and `dashboard.operations.manage` for restarting the Agent service. Migration `085_dashboard_operations_permissions.sql` grants both to owners and administrators. The dispatcher’s own policy remains in force for quick actions that invoke a tool.
+
+Scope snapshot list, create, and evaluation routes require `scopes.read` or `scopes.manage`, an active project, and either project membership at the required access level or explicit global `projects.access.manage` authority. Snapshot evaluation conceals missing or inaccessible snapshot IDs as 404. Migration `086_dashboard_scope_permissions.sql` grants the route permissions to owners and administrators; those grants alone do not replace project authorization.
+
+Webhook intake requires the `webhooks.receive` identity permission, validates the source name and JSON object payload, rejects payloads larger than 256 KiB, and retains at most 1,000 records and 16 MiB total encoded JSON. It writes an audit event containing the generated ID and source without copying the payload. Migration `087_dashboard_webhook_permission.sql` grants intake to owners and administrators. External integrations must authenticate through a supported Dashboard identity; this endpoint does not yet implement provider-specific HMAC signatures or replay timestamps.
+
+Network-scope reads require `network_scopes.read`; validation, creation, update, diagnosis, and state changes require `network_scopes.manage`. Migration `088_dashboard_network_scope_permissions.sql` grants both to owners and administrators. Scope definitions expose outbound allowlists and remain administrator-managed.
+
+Direct Compute reads require `compute.nodes.read` for provider/worker and enrollment views, and `compute.jobs.read` for job details. Job lists require a project filter and active read membership unless the principal has explicit global project-management authority; job details, attempts, artifacts, and aggregate counts are limited to the authorized project. Migration `089_dashboard_compute_read_permissions.sql` grants the read permissions to owners and administrators.
+
+Execution-node administration routes under `/execution-node/admin` require scoped Core credentials and operation-specific permissions. Listing nodes requires `compute.nodes.read`; workspace authorization and worker revocation require `compute.nodes.manage`; job cancellation requires `compute.jobs.cancel`. Migration 099 grants the management permissions to owners and administrators. These routes reject the installation-wide API key and record each successful mutation with its initiating principal.
+
+Compute HTTP administrative routes under `/compute/admin`, enrollment-token creation, and the retained `/compute/jobs`, `/compute/recover`, `/compute/health`, and enrollment-token aliases also require scoped Core credentials; `SIDEKICK_API_KEY` alone is insufficient. Worker views and changes use `compute.nodes.read` and `compute.nodes.manage`. Job create, read, cancel, and retry operations use separate `compute.jobs.*` permissions and additionally enforce active project membership or explicit global project authority. Migration `100_compute_admin_permissions.sql` registers the additional job permissions; lease recovery uses `compute.jobs.recover`, granted only to Owner. Mutation audit records identify the principal and are persisted atomically with the mutation (lease recovery audits inside each per-job transaction).
+
+Dashboard KV record and project-metadata reads require `kv.read`, consistent with the existing administrator-only KV writes. Migration `090_dashboard_kv_read_permission.sql` grants this permission to owners and administrators.
+
+The `/api/logs` endpoint requires `audit.read` because log entries can contain tool arguments and results. Migration 081 grants this permission to administrators; auditors retain it through the existing role mapping.
+
 ## Configuration and secret scanning
 
 Use `security_scan` for a read-only audit before deployments or after configuration changes:
@@ -267,3 +328,53 @@ Recommended safest setup:
 6. Keep the Agent Bridge private; access it through the dashboard proxy only.
 7. Use HTTPS if crossing an untrusted network.
 8. Back up the data directory but protect backups because they can contain sensitive operational history.
+
+## Project-scoped memory access
+
+Memory reads and writes are bound to active project membership. Migration
+`082_project_principal_access.sql` adds audited read/write grants managed by
+principals with `projects.access.manage`. New projects registered through the
+project registry record the authenticated registering principal as owner;
+legacy projects without an owner require an explicit grant. Non-manager
+Dashboard users must specify a project for memory listing and export, and the
+server verifies that grant before returning data. Project names supplied by a
+caller do not establish membership. Migration `083_memory_permissions.sql`
+adds separate `memory.read` and `memory.write` role grants. Both the operation
+permission and project membership are checked, and explicit credential scopes
+are intersected. Grant administration is available through
+`/api/projects/:project/access` and its grant/revoke routes.
+
+## Runtime configuration diagnostics
+
+`GET /api/config` requires the high-risk `dashboard.config.read` permission
+(owner and administrator roles by default). Values whose names identify keys,
+passwords, tokens, secrets, credentials, private keys, authentication material,
+certificates, signatures, or endpoint/connection strings are redacted. This
+endpoint is diagnostic output, not a secret retrieval interface.
+
+## Dashboard operational and catalog reads
+
+Identity-authenticated reads of host/service/metrics state require `dashboard.operations.read`; aggregate execution statistics require `audit.read`; tool inventory requires `dashboard.catalog.read`. Route checks run before local probes or stored log/catalog access. Pre-bootstrap deployments must verify that Dashboard authentication adopts a principal before serving these routes.
+
+### Agent internal service assertions
+
+Dashboard calls to the Agent Bridge are authenticated with the distinct `SIDEKICK_AGENT_PROXY_KEY`; they do not use the MCP client key. Scheduler timer reloads use the separate `SIDEKICK_AGENT_SCHEDULER_KEY`. Identityless services are restricted by service name, HTTP method, and exact route in `src/agent/task-access.js`. The `scheduler` identity can only refresh delay or watch timers. A rejected reload is surfaced as a durable but inactive schedule, not reported as active.
+
+Dashboard Doctor diagnostics require `dashboard.operations.read` before running checks. Support bundles include runtime and reliability metadata; sensitive values are redacted, but operators should review bundles before sharing them.
+
+Dashboard prediction lists, details, and explanations require `predictions.read`
+and enforce active project membership plus current credential scopes for
+non-global principals. Inaccessible IDs return not found. Engine-wide status and
+maintenance diagnostics require `dashboard.operations.read`. Migration
+`093_prediction_read_permissions.sql` grants read access to owner,
+administrator, operator, and viewer roles; project membership remains an
+independent boundary. The canonical MCP/Agent Predict tool still requires a
+separate resource-scope audit (RR-22).
+
+Security Research source repositories and snapshots use project membership in
+addition to the high-risk tool permission. The module checks project ownership
+for campaign, repository, snapshot, comparison, and authority-claim IDs before
+reading or mutating its store. Read membership permits inspection; source
+imports, selection, indexing, archive/remove, and recovery require write
+membership. The Dashboard carries its selected workspace project to these
+routes. Global project managers retain global access. See SI-5 and RR-28.

@@ -100,7 +100,9 @@ credential values in `.env`:
 SIDEKICK_SECRET_DIR=/etc/sidekick/secrets
 ```
 
-Place these files there: `sidekick_api_key`, `sidekick_dashboard_pass`,
+Place these files there: `sidekick_api_key`, `sidekick_agent_proxy_key`,
+`sidekick_mcp_credential`,
+`sidekick_agent_scheduler_key`, `sidekick_dashboard_pass`,
 `sidekick_grafana_admin_password`, `sidekick_influx_token`,
 `sidekick_influx_password`, `sidekick_postgres_password`, and
 `sidekick_secret_key`. Optional integration files include `groq_api_key`,
@@ -113,6 +115,14 @@ oversized, symlinked, or group/world-writable files. Explicit
 variables are rejected; production and development runtimes require a
 configured file. The test harness may inject synthetic fixtures only for
 isolated tests.
+
+Local MCP stdio calls use a scoped principal credential from
+`sidekick_mcp_credential` (or an explicit `SIDEKICK_MCP_CREDENTIAL_FILE` path).
+The credential is revalidated for each tool call, so revocation, expiry, or
+rotating the file applies to an open stdio session. Without a valid credential,
+only explicitly low-risk operations are available. Issue credentials with the
+minimum scopes required for the local client; do not configure an owner-wide
+scope merely to avoid authorization errors.
 
 The bundled PostgreSQL, InfluxDB, and Grafana Compose services consume Docker
 Secrets from this directory. Compose fails closed if `SIDEKICK_SECRET_DIR` or
@@ -161,7 +171,7 @@ tools({ action: "policy", source: "mcp,dashboard,agent", name: "bash", format: "
 
 The policy inspector reports whether each source/tool decision is allowed or blocked, the active mode, the matching allow/block selector when one applies, and whether approval is required.
 
-Filesystem path guardrails default to open when unset. Set allowed paths to constrain direct file tools to specific directories, and denied paths to block sensitive locations. A path entry matches itself and its descendants; denied paths win over allowed paths.
+Filesystem path operations fail closed when no allowed path root is configured. Set allowed paths for directories Sidekick may access, and denied paths to narrow those roots further. A path entry matches itself and its descendants; denied paths win over allowed paths. Existing deployments with empty allow-lists must add roots before file-backed operations will work. Keep roots limited to projects/workspaces appropriate for the service identity.
 
 ```env
 SIDEKICK_ALLOWED_PATHS=/home/sidekick/sidekick,/home/sidekick/projects
@@ -186,6 +196,8 @@ SIDEKICK_AGENT_APPROVAL_MODE=strict
 
 Approval variables support the same source prefixes as tool policy: `SIDEKICK_MCP_APPROVAL_MODE`, `SIDEKICK_DASHBOARD_APPROVAL_REQUIRED_TOOLS`, `SIDEKICK_AGENT_APPROVAL_EXEMPT_TOOLS`, and related required/exempt lists.
 Queued arguments are encrypted with the file-backed `SIDEKICK_SECRET_KEY_FILE` secret, removed after approval, rejection, failure, or expiry, and never returned by the approval-list API. Pending approvals expire after `SIDEKICK_APPROVAL_TTL_SECONDS` (default: `3600`). If the secret key file is missing or an unsupported raw environment value is supplied, Sidekick refuses to queue the action instead of storing its arguments in plaintext.
+
+The same file-backed `SIDEKICK_SECRET_KEY` protects durable scheduled-delay authority records. Both Core and Agent must have access to the same secret file. Delays created without the key are refused; delays created before signed authority records were introduced have no valid signature and will not execute after upgrade. Review pending delays before upgrading and recreate only the work that remains authorized. Rotating the key invalidates pending signed delays as well as parked encrypted approvals/checkpoints.
 
 ### Approval continuation (Brain tasks)
 

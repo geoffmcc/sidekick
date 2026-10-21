@@ -23,7 +23,7 @@ contract names a registered provisioner and cleanup handler from
 `test/suite-resources.json`; arbitrary, generic, or unknown names fail closed.
 The runner creates an owned per-suite temp root and passes only child-scoped
 values such as `SIDEKICK_TEST_DATA_DIR`, `SIDEKICK_TEST_DB_FILE`, fixture/workspace roots,
-and `SIDEKICK_TEST_PORT` in the child environment. SQLite files, directories,
+and `SIDEKICK_TEST_PORT` in the child environment. It also supplies an explicit allow-list limited to the checkout and OS temporary directory for functional fixtures. `test/path-policy.test.cjs` clears that list to verify the production deny-by-default path policy. SQLite files, directories,
 workspaces, environment scopes, process/browser scopes, and loopback ports have
 real built-in provisioners. Cleanup runs after normal exit, assertion failure,
 timeout, cancellation, and spawn/termination failure; an unsuccessful cleanup

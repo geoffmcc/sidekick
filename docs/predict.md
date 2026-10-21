@@ -39,6 +39,27 @@ verified conclusions into memory or knowledge.
 These are the exact values of the backend enum. The dashboard labels and type
 filter are asserted against it by `test/predict-contract.test.js`.
 
+### Dashboard authorization and project scope
+
+Dashboard prediction lists, details, and explanations require the explicit
+`predictions.read` permission. Owners and administrators may read across active
+project-tagged rows under existing global project-access semantics; operators
+and viewers see only active projects they can read, using current project
+membership and credential scopes. An inaccessible prediction ID is
+reported as not found. Global engine status and maintenance diagnostics require
+`dashboard.operations.read`. The Dashboard reports a clear unavailable message
+when the operator diagnostics grant is absent while still loading authorized
+project predictions.
+
+The canonical `predict` tool applies the same checks for MCP, Agent, and
+composed dispatcher calls. `predictions.read` is required for lists, details,
+and explanations; lists without an explicit project are filtered to current
+project membership and credential scopes. `predictions.write` is required for
+project-scoped analysis, feedback, outcomes, and dismissal, and the caller must
+have write membership in the target project. Global analysis, engine status,
+diagnostics, and maintenance use the corresponding `dashboard.operations.*`
+permissions. Predict calls require an authenticated principal.
+
 ## What Predict deliberately does not treat as a prediction
 
 - **A stored memory or handoff.** Recency, pinning, high confidence and a matching

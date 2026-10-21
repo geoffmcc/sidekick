@@ -61,7 +61,7 @@ Extracted from getCanonicalRegistry({includeActiveModules:false}) in the isolate
 | batch | flow-control | medium |  |
 | black_box | black-box | medium |  |
 | browser | browser | high |  |
-| cache | storage | low |  |
+| cache | storage | medium | principal-scoped cache keys |
 | capability | capability-packs | critical | capability_pack, pack |
 | changelog | development | medium |  |
 | ci_status | github | low |  |
@@ -76,17 +76,17 @@ Extracted from getCanonicalRegistry({includeActiveModules:false}) in the isolate
 | context | context | medium |  |
 | cron | scheduling | high |  |
 | db_backup | database-admin | medium |  |
-| db_diff | database-inspection | low |  |
+| db_diff | database-inspection | medium |  |
 | db_export | database-admin | medium |  |
 | db_migrate | database-admin | high |  |
 | db_query | database-inspection | medium |  |
 | db_restore | database-admin | critical |  |
 | db_schema | database-inspection | low |  |
-| db_search | database-inspection | low |  |
+| db_search | database-inspection | medium |  |
 | db_stats | database-inspection | low |  |
 | debug_tool | meta | low |  |
 | delay | scheduling | high |  |
-| delete | storage | low |  |
+| delete | storage | medium |  |
 | depend | development | medium |  |
 | diff_files | filesystem | low |  |
 | download | media | medium |  |
@@ -95,22 +95,22 @@ Extracted from getCanonicalRegistry({includeActiveModules:false}) in the isolate
 | filter | filesystem | low |  |
 | find | filesystem | medium |  |
 | fresheyes | meta | medium |  |
-| get | storage | low |  |
-| get_by_project | storage | low |  |
+| get | storage | medium |  |
+| get_by_project | storage | medium | project ACL checked at handler boundary |
 | git | development | medium |  |
 | github | github | high |  |
 | handoff | memory-handoff | medium |  |
 | hash | hashing | low |  |
 | health | observability | high |  |
 | insight_report | media | low |  |
-| knowledge | knowledge | low |  |
+| knowledge | knowledge | medium | add/update/delete/purge/promote high via per-action risk |
 | list | filesystem | low |  |
-| list_projects | storage | low |  |
+| list_projects | storage | medium | accessible projects only |
 | llm | inference | medium |  |
-| log_query | database-inspection | low |  |
+| log_query | database-inspection | medium |  |
 | media | media | medium |  |
 | memory | memory-core | medium |  |
-| memory_export | memory-portability | low |  |
+| memory_export | memory-portability | medium |  |
 | memory_import | memory-portability | medium |  |
 | memory_maintenance | memory-maintenance | critical |  |
 | memory_manage | memory-lifecycle | medium |  |
@@ -144,11 +144,11 @@ Extracted from getCanonicalRegistry({includeActiveModules:false}) in the isolate
 | session | memory-session | medium |  |
 | snapshot | monitoring | medium |  |
 | status | observability | medium |  |
-| store | storage | low |  |
+| store | storage | medium | project ACL checked at handler boundary |
 | summarize | filesystem | low |  |
-| sync_diff | memory-sync | low |  |
-| sync_export | memory-sync | low |  |
-| sync_identity | memory-sync | low |  |
+| sync_diff | memory-sync | medium |  |
+| sync_export | memory-sync | medium |  |
+| sync_identity | memory-sync | medium | set_user high via per-action risk |
 | sync_import | memory-sync | medium |  |
 | tail | monitoring | medium |  |
 | teach | teach | high |  |

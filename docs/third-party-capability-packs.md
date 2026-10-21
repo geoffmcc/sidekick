@@ -5,11 +5,13 @@ installed into a Sidekick instance. A pack is a directory with a
 `sidekick.pack.json` manifest and zero or more modules, workflow definitions,
 and knowledge assets.
 
-Third-party packs use the same lifecycle as bundled packs. The difference is
-trust and provenance: third-party modules are executable JavaScript loaded into
-the Sidekick process. Sidekick verifies package identity and integrity, but it
-does not sandbox or isolate the code. Treat installing or enabling a third-party
-pack as deploying code on the server.
+Third-party packs can be inspected, installed, configured and removed through
+the normal lifecycle. Their module code is untrusted executable JavaScript.
+Because Sidekick does not yet have an OS-enforced execution boundary and
+broker, third-party module activation, recovery and upgrades that execute code
+fail closed with `isolation_unavailable`. Bundled first-party packs use a
+separate release-provenance check; that exception is not available to a pack
+manifest or a locally installed third-party package.
 
 ## What you can contribute
 
@@ -135,6 +137,13 @@ Manifest rules:
   direction, so an operator reviewing the pack manifest sees the pack's true
   dispatch surface. Omitting the key entirely is accepted for older packs, but
   `capability validate` will tell you the exact declaration to add.
+- For server-local third-party `capability` install and upgrade actions, first
+  run `capability action="inspect" path="<package-path>"`, review the returned
+  package and permissions, and pass its `package_hash` as
+  `expected_package_hash` on the install/upgrade action. The approved tool
+  arguments then bind to those package bytes; Sidekick rejects the action if
+  the path contents changed after inspection. This is content binding, not
+  publisher authentication or executable-code isolation.
 - `depends.packs` declares other packs this one requires (or optionally uses),
   each with an optional semver range. Required dependencies must be installed
   before yours installs and enabled before yours enables; required-dependency
@@ -190,8 +199,12 @@ module, generated, or other pack tools.
 
 The manifest also supports declared `dependencies`, `optionalDependencies`,
 `workflows`, `agents`, `connectors`, `events`, `dashboard`,
-`backgroundServices`, inline data-only `migrations`, and `retention`. Declare
-only interfaces supported by the Sidekick version you target. See
+`backgroundServices`, inline `migrations`, and `retention`. Managed module SQL
+migrations against Core's database are currently rejected before execution;
+use declared pack-scoped storage for persistent key/value state. Third-party
+schema migrations will remain unavailable until a separate isolated migration
+store and execution boundary is implemented. Declare only interfaces
+supported by the Sidekick version you target. See
 [`module-system-design.md`](module-system-design.md) for the full module
 contract and trust model.
 
@@ -366,15 +379,16 @@ Before distributing a pack:
 4. Route existing operations through `services.dispatch` and shared path
    policy; do not recreate policy, approval, redaction, or audit behavior.
 5. Keep secrets out of source, manifests, configuration, logs, and knowledge.
-6. Test inspection, installation, configuration, enablement, health, disable,
-   upgrade, and uninstall on a disposable Sidekick instance.
+6. Test inspection, installation, configuration, health, and uninstall on a
+   disposable Sidekick instance. Activation remains unavailable until a
+   supported OS isolation backend is delivered and verified.
 7. Document external services, required tools, configuration, data retention,
    network access, and operational failure modes for users.
-8. Ask operators to inspect the package and review its source before enabling
-   it. Installation is not sandboxing.
+8. Ask operators to inspect the package and review its source. Source review
+   does not make the package trusted or permit activation.
 
 Current platform limits are important for publishers and users: third-party
-pack code runs in-process; packages are not signed; there is no remote pack
-registry; and package/module dependency resolution is not automatic. These
-constraints may change in a future Sidekick release, so use the manifest
-compatibility field and re-run inspection when upgrading Sidekick.
+pack modules cannot execute yet; packages are not signed; there is no remote
+pack registry; and package/module dependency resolution is not automatic. Use
+the manifest compatibility field and re-run inspection when upgrading
+Sidekick.
