@@ -10,10 +10,12 @@ const https = require("https");
 const workerConfig = require("../compute/worker-config");
 const credentialStore = require("../compute/worker-credential");
 const { getCanonicalRegistry } = require("../tools/canonical-registry");
+const toolContext = require("../tools/context");
 const { createRegistry } = require("../tools/registry");
 const { normalizeDescriptor } = require("../tools/descriptor");
 const { descriptorIdentity } = require("./placement");
 const { createWorkspace, resolveWorkspacePath, discoverRepositories, stableId } = require("./workspace");
+const { resolveCommandOnPath } = require("../security/command-lookup");
 
 const VERSION = require("../../package.json").version;
 const PROTOCOL_VERSION = "1";
@@ -67,7 +69,13 @@ function registry() {
   return nodeRegistry;
 }
 function descriptorSetHash() { const names = registry().list().map(d => `${d.name}:${descriptorIdentity(d)}`).join("\n"); return crypto.createHash("sha256").update(names).digest("hex"); }
-function binaries() { const names = ["git", "rg", "grep", "node", "npm", "python3", "go", "cargo", "ruby", "java"]; return names.filter(name => { try { require("child_process").execFileSync("which", [name], { stdio: "ignore", timeout: 1000 }); return true; } catch { return false; } }); }
+function commandOnPath(name, searchPath = process.env.PATH || "", pathExt = process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD") {
+  return Boolean(resolveCommandOnPath(name, searchPath, pathExt));
+}
+function binaries() {
+  const names = ["git", "rg", "grep", "node", "npm", "python3", "go", "cargo", "ruby", "java"];
+  return names.filter(name => commandOnPath(name));
+}
 function capabilities() { return { nodeId: nodeId(), executionHost: os.hostname(), nodeVersion: process.version, osType: os.type(), osRelease: os.release(), architecture: os.arch(), platform: process.platform, descriptorSetHash: descriptorSetHash(), binaries: binaries(), packs: Array.isArray(nodeConfig.packs) ? nodeConfig.packs.slice(0, 16) : [], workspaces: workspace ? [{ name: workspace.name, root: workspace.root, permissions: workspace.permissions, limits: workspace.limits }] : [], networkScopes: networkScopes(), browser: false, privilege: false, healthy: true }; }
 function request(method, endpoint, body, timeoutMs = 15000) {
   return new Promise((resolve, reject) => {
@@ -177,7 +185,8 @@ async function execute(job, controller = new AbortController()) {
   }
   const deadlineTimer = deadlineAt ? setTimeout(() => controller.abort(Object.assign(new Error("node execution deadline expired"), { code: "node_execution_timeout" })), Math.max(0, Date.parse(deadlineAt) - Date.now())) : null;
   try {
-    const result = boundedResult(await descriptor.handler(args, { signal: controller.signal, context: job.context, timeoutMs, deadlineAt }));
+    const executionContext = { ...(job.context || {}), signal: controller.signal };
+    const result = boundedResult(await toolContext.runWithContext(executionContext, () => descriptor.handler(args, { signal: controller.signal, context: executionContext, timeoutMs, deadlineAt })));
     if (controller.signal.aborted) throw controller.signal.reason || Object.assign(new Error("node execution cancelled"), { code: "node_execution_cancelled" });
     if (timeoutMs && Date.now() - started > timeoutMs) throw Object.assign(new Error(`node execution exceeded its ${timeoutMs}ms deadline`), { code: "node_execution_timeout" });
     const receipt = { receiptId: stableId("receipt", `${job.jobId}:${started}`), jobId: job.jobId, tool: descriptor.name, descriptorVersion: job.descriptorVersion, descriptorIdentity: job.descriptorIdentity, nodeId: nodeId(), workspace: workspaceName, startedAt: new Date(started).toISOString(), completedAt: new Date().toISOString(), sideEffect: descriptor.risk === "low" ? "read" : "governed", outputBytes: Buffer.byteLength(JSON.stringify(result)), evidence: { untrusted: true, truncated: result.truncated === true } };
@@ -192,4 +201,4 @@ function status() { const record = credentialStore.load(CREDENTIAL_PATH); consol
 async function doctor() { const checks = []; try { prepare(); checks.push({ name: "workspace", ok: true, repositories: discoverRepositories(workspace).length }); } catch (error) { checks.push({ name: "workspace", ok: false, error: error.message }); } const record = credentialStore.load(CREDENTIAL_PATH); checks.push({ name: "credential", ok: Boolean(record), state: record ? "present" : "not_enrolled" }); checks.push({ name: "enrollment_token", ok: Boolean(token()), state: token() ? "configured" : "not_configured" }); checks.push({ name: "descriptor_set", ok: (() => { try { descriptorSetHash(); return true; } catch { return false; } })() }); console.log(JSON.stringify({ ok: checks.every(check => check.ok), checks }, null, 2)); if (checks.some(check => !check.ok)) process.exitCode = 1; }
 async function runCommand(command) { if (command === "version") return console.log(VERSION); if (command === "status") { nodeConfig = loadConfig(); return status(); } if (command === "doctor") return doctor(); if (command === "enroll") { prepare(); await enroll(); return; } return main(); }
 if (require.main === module) runCommand(process.argv[2] || "run").catch(error => { log(error.message); process.exitCode = 1; });
-module.exports = { capabilities, descriptorSetHash, validateLocalArguments, boundedResult, createWorkspace };
+module.exports = { capabilities, descriptorSetHash, validateLocalArguments, boundedResult, createWorkspace, binaries, commandOnPath };
