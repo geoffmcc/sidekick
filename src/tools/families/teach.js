@@ -10,8 +10,9 @@
 
 const { z } = require("zod");
 const { loadProcedures, saveProcedures } = require("../../core/procedures-store");
-const { sidekick_llm } = require("./inference");
+const { runLlm } = require("./inference");
 const { callTool } = require("../dispatch-seam");
+const { requireToolExecution } = require("../read-authorization");
 
 function substituteParams(obj, params) {
   if (typeof obj === "string") {
@@ -32,6 +33,8 @@ function substituteParams(obj, params) {
 }
 
 async function sidekick_teach({ action, name, description, steps, example, trigger_phrases, implementation, parameters, args }) {
+  const authorizationError = requireToolExecution({ tool: "teach", action: action || null, name: name || null }, "tools.execute_high", "teach");
+  if (authorizationError) return authorizationError;
   const allowedActions = ["teach_procedure", "generate_tool", "learn_from_example", "execute", "list", "remove"];
   if (!allowedActions.includes(action)) {
     return { content: [{ type: "text", text: "Invalid action. Allowed: " + allowedActions.join(", ") }], isError: true };
@@ -108,7 +111,7 @@ If the procedure takes no parameters, return an empty "parameters" object.
 IMPORTANT: Use ONLY the parameters shown in the schemas above. Do not invent tool parameters.
 Return ONLY the JSON object, no other text.`;
 
-    const llmResult = await sidekick_llm({ prompt, system: "You are a helpful assistant that generates tool procedures with parameters. Return only valid JSON." });
+    const llmResult = await runLlm({ prompt, system: "You are a helpful assistant that generates tool procedures with parameters. Return only valid JSON." });
     if (llmResult.isError) {
       return { content: [{ type: "text", text: "Failed to generate tool: " + llmResult.content[0].text }], isError: true };
     }
@@ -181,7 +184,7 @@ ${toolSchemas}
 IMPORTANT: Use ONLY the parameters shown in the schemas above. Do not invent tool parameters.
 Return ONLY the JSON object, no other text.`;
 
-    const llmResult = await sidekick_llm({ prompt, system: "You are a helpful assistant that extracts procedures from examples. Return only valid JSON." });
+    const llmResult = await runLlm({ prompt, system: "You are a helpful assistant that extracts procedures from examples. Return only valid JSON." });
     if (llmResult.isError) {
       return { content: [{ type: "text", text: "Failed to parse example: " + llmResult.content[0].text }], isError: true };
     }
