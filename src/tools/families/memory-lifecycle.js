@@ -4,13 +4,25 @@ const { z } = require("zod");
 const dbStore = require("../../db");
 const { loadContext, findContextItemById, updateLegacyContextItem } = require("./context");
 const { scopedProject, assertInScope } = require("./memory-scope");
+const { requireCanonicalInvocation } = require("../read-authorization");
 
-async function sidekick_memory_manage({ action, id, confirmed_by, days, reason, limit, project }) {
+async function manageMemory({ action, id, confirmed_by, days, reason, limit, project }) {
   let effectiveProject;
-  try { effectiveProject = scopedProject(project); } catch (error) { return { content: [{ type: "text", text: error.message }], isError: true }; }
+  const readActions = new Set(["list_by_state", "pending_confirmations"]);
+  try { effectiveProject = scopedProject(project, readActions.has(action) ? "read" : "write"); } catch (error) { return { content: [{ type: "text", text: error.message }], isError: true }; }
   if (!["list_by_state", "pending_confirmations", "process_auto_expirations"].includes(action) && id) {
     const memory = dbStore.getMemoryById(id, { includeDisabled: true });
-    try { assertInScope(memory); } catch { return { content: [{ type: "text", text: "Memory not found: " + id }], isError: true }; }
+    if (memory) {
+      try { assertInScope(memory, "write", effectiveProject); } catch { return { content: [{ type: "text", text: "Memory not found: " + id }], isError: true }; }
+    } else {
+      // Legacy context records are still mutable through this compatibility
+      // API, but only when their persisted project matches the authorized scope.
+      const legacy = findContextItemById(loadContext(), id, "all");
+      const legacyProject = legacy?.item?.project || null;
+      if (!legacy || !effectiveProject || !legacyProject || legacyProject !== effectiveProject) {
+        return { content: [{ type: "text", text: "Memory not found: " + id }], isError: true };
+      }
+    }
   }
   if (action === "confirm") {
     if (!id) return { content: [{ type: "text", text: "id required" }], isError: true };
@@ -64,6 +76,12 @@ async function sidekick_memory_manage({ action, id, confirmed_by, days, reason, 
   return { content: [{ type: "text", text: "Invalid action. Use: confirm, set_requires_confirmation, delete, disable, expire, restore, set_auto_expire, list_by_state, pending_confirmations, process_auto_expirations" }], isError: true };
 }
 
+async function sidekick_memory_manage(args) {
+  const denied = requireCanonicalInvocation("memory_manage");
+  if (denied) return denied;
+  return manageMemory(args);
+}
+
 const descriptors = Object.freeze([Object.freeze({
   name: "memory_manage",
   description: "Manage memory lifecycle: confirm, delete, disable, expire, restore, set auto-expire, list by state, pending confirmations, process auto-expirations",
@@ -84,4 +102,4 @@ const descriptors = Object.freeze([Object.freeze({
   handler: sidekick_memory_manage,
 })]);
 
-module.exports = { descriptors, sidekick_memory_manage };
+module.exports = { descriptors, sidekick_memory_manage, manageMemory };

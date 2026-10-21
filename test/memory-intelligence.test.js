@@ -20,8 +20,15 @@ qdrant.upsert = async () => true;
 inference.embed = async () => ({ embedding: [1, 0, 0] });
 
 const dbStore = require("../src/db");
-const { TOOLS } = require("../src/tools");
+const { TOOLS: rawTools } = require("../src/tools");
+const TOOLS = require('./helpers/authorized-context').withOwnerToolContext(rawTools, { source: 'test', project: 'sidekick' });
+const TOOLS_NO_PROJECT = require('./helpers/authorized-context').withOwnerToolContext(rawTools, { source: 'test' });
 const executionContext = require("../src/tools/context");
+const tools = require("../src/tools");
+// These direct handler calls exercise memory semantics, not MCP authentication.
+// Keep the fixture explicitly internal/test sourced so missing MCP identity is
+// never treated as an authorized external request.
+tools.setSource("test");
 
 dbStore.runPendingMigrations();
 
@@ -48,7 +55,8 @@ dbStore.runPendingMigrations();
   assert.ok(!create.isError, "handoff create should succeed");
   const createData = JSON.parse(create.content[0].text);
   assert.ok(createData.handoff.id, "handoff should have an id");
-  assert.ok(createData.handoff.content.includes("super-secret-value"), "full handoff artifact should be preserved");
+  assert.ok(createData.handoff.content.includes("password=[REDACTED]"), "persisted handoff should redact credential-like values");
+  assert.ok(!createData.handoff.content.includes("super-secret-value"), "persisted handoff must not retain the secret value");
   assert.ok(!createData.memories.some(memory => JSON.stringify(memory).includes("super-secret-value")), "secret-looking value should not be extracted into memory payload");
   assert.ok(createData.memories.some(memory => memory.type === "decision"), "decision memory should be extracted");
   assert.ok(createData.memories.some(memory => memory.type === "negative"), "negative memory should be extracted");
@@ -79,7 +87,7 @@ dbStore.runPendingMigrations();
   const assertBriefExcludes = (brief, excludedClaims) => {
     for (const claim of excludedClaims) {
       assert.ok(!brief.selected.some(item => item.id === claim.id), `brief selection must exclude ${claim.id}`);
-      assert.ok(!(brief.sections || "").includes(claim.content), `brief prose must exclude ${claim.id}`);
+      assert.ok(!(brief.sections || "").includes(claim.content), `brief prose must exclude ${claim.id} (${claim.source}/${claim.type}): ${(brief.sections || "").slice(0, 1200)}`);
     }
   };
   async function assertAutomaticContextExcludes(excludedClaims) {
@@ -106,13 +114,13 @@ dbStore.runPendingMigrations();
   const handoffEvent = dbStore.getDb().prepare("SELECT * FROM platform_execution_events WHERE event_type = 'memory.handoff_processed' AND subject_id = ?").get(createData.handoff.id);
   assert.ok(handoffEvent, "handoff processing should emit a platform memory event");
 
-  const inspect = await TOOLS.handoff({ action: "inspect", id: createData.handoff.id });
+  const inspect = await TOOLS.handoff({ action: "inspect", id: createData.handoff.id, project: "sidekick" });
   const inspectData = JSON.parse(inspect.content[0].text);
   assert.ok(inspectData.extracted_memories.length >= createData.memories.length, "inspect should link extracted memories");
   assert.ok(inspectData.extracted_memories.every(memory => memory.source_ref === createData.handoff.id), "extracted memories should link to handoff source");
 
   const beforeCount = dbStore.searchMemories({ project: "sidekick", includeDisabled: true, limit: 100 }).length;
-  await TOOLS.handoff({ action: "reprocess", id: createData.handoff.id });
+  await TOOLS.handoff({ action: "reprocess", id: createData.handoff.id, project: "sidekick" });
   const afterCount = dbStore.searchMemories({ project: "sidekick", includeDisabled: true, limit: 100 }).length;
   assert.strictEqual(afterCount, beforeCount, "reprocessing same handoff version should be idempotent");
 
@@ -144,7 +152,7 @@ dbStore.runPendingMigrations();
   assert.strictEqual(beginData.session.project, "sidekick", "session project must be persisted");
   assert.strictEqual(dbStore.getHandoffByTaskId(beginData.session.id).project, "sidekick", "session handoff must carry the resolved project");
 
-  const missingProject = await TOOLS.session({ action: "begin", goal: "A session without trusted project scope" });
+  const missingProject = await TOOLS_NO_PROJECT.session({ action: "begin", goal: "A session without trusted project scope" });
   assert.ok(missingProject.isError, "session begin must reject missing project scope");
   assert.match(missingProject.content[0].text, /project is required/i);
   const derivedProject = await executionContext.runWithContext(
@@ -154,18 +162,18 @@ dbStore.runPendingMigrations();
   assert.ok(!derivedProject.isError, "session begin should derive project from trusted execution scope");
   assert.strictEqual(JSON.parse(derivedProject.content[0].text).session.project, "sidekick");
 
-  const otherProjectRecall = await TOOLS.memory({ action: "query", query: "sidekick-mcp port", project: "other_project" });
+  const otherProjectRecall = await TOOLS_NO_PROJECT.memory({ action: "query", query: "sidekick-mcp port", project: "other_project" });
   const otherData = JSON.parse(otherProjectRecall.content[0].text);
   assert.ok(!otherData.memories.some(memory => memory.project === "sidekick"), "unrelated project recall should exclude sidekick-scoped memories");
 
   const end = await TOOLS.session({
     action: "end",
     id: beginData.session.id,
+    project: "sidekick",
     outcome: "success",
     final_summary: "Memory intelligence session completed",
     acceptance_state: "accepted",
     handoff_id: createData.handoff.id,
-    next_step: null,
     reports: [{ id: "subagent-1", source: "test-agent", title: "Verification report", content: "Focused tests passed and the handoff remains resumable.", evidence: ["test/memory-intelligence.test.js"] }],
     artifacts: [{ type: "test", path: "test/memory-intelligence.test.js" }],
     do_not_repeat: ["Do not promote raw tool-log adjacency as durable memory"],
@@ -212,7 +220,7 @@ dbStore.runPendingMigrations();
   assert.ok(endData.memories_created >= 4, "ending session should create supported memories");
   assert.ok(endData.continuation_packet.artifacts.length >= 2, "session finalization should retain reports, artifacts, and continuity plan");
   assert.strictEqual(endData.continuation_packet.provenance.task_id, beginData.session.id, "continuation packet should retain task provenance");
-  const finalizedHandoff = JSON.parse((await TOOLS.handoff({ action: "get", id: createData.handoff.id })).content[0].text);
+  const finalizedHandoff = JSON.parse((await TOOLS.handoff({ action: "get", id: createData.handoff.id, project: "sidekick" })).content[0].text);
   assert.strictEqual(finalizedHandoff.handoff.packet.status, "completed", "linked handoff should receive the finalized continuation packet");
   assert.ok(finalizedHandoff.handoff.links.some(link => link.type === "artifact" && link.payload.type === "subagent_report"), "subagent report should be a first-class handoff artifact");
   const endEvent = dbStore.getDb().prepare("SELECT * FROM platform_execution_events WHERE event_type = 'memory.session_completed' AND subject_id = ?").get(beginData.session.id);
@@ -240,7 +248,7 @@ dbStore.runPendingMigrations();
     acceptance_state: "accepted"
   })).content[0].text);
   assert.strictEqual(preservedEnd.handoff_version, 2, "session finalization should return the new handoff version");
-  const preservedResult = JSON.parse((await TOOLS.handoff({ action: "get", id: preserved.handoff.id })).content[0].text).handoff.packet;
+  const preservedResult = JSON.parse((await TOOLS.handoff({ action: "get", id: preserved.handoff.id, project: "sidekick" })).content[0].text).handoff.packet;
   assert.deepStrictEqual(preservedResult.decisions, preservedPacket.decisions, "finalization should preserve prior decisions");
   assert.deepStrictEqual(preservedResult.risks, preservedPacket.risks, "finalization should preserve prior risks");
   assert.ok(preservedResult.artifacts.some(artifact => artifact.path === "original-artifact.txt"), "finalization should preserve prior artifacts");
@@ -282,7 +290,7 @@ dbStore.runPendingMigrations();
 
   const getByNoSelector = await TOOLS.handoff({ action: "get" });
   assert.ok(getByNoSelector.isError, "handoff get with no selector should be an error");
-  assert.ok(getByNoSelector.content[0].text.includes("requires id"), "error message should state id is required");
+  assert.ok(getByNoSelector.content[0].text.includes("requires id"), `error message should state id is required: ${getByNoSelector.content[0].text}`);
 
   const getByProjectOnly = await TOOLS.handoff({ action: "get", project: "sidekick" });
   assert.ok(getByProjectOnly.isError, "handoff get with only project should be an error");
@@ -301,12 +309,12 @@ dbStore.runPendingMigrations();
   const getByIdData = JSON.parse(getById.content[0].text);
   assert.strictEqual(getByIdData.handoff.id, createData.handoff.id, "get by id should return the correct handoff");
 
-  const getByWrongProject = await TOOLS.handoff({ action: "get", id: createData.handoff.id, project: "other_project" });
+  const getByWrongProject = await TOOLS_NO_PROJECT.handoff({ action: "get", id: createData.handoff.id, project: "other_project" });
   assert.ok(getByWrongProject.isError, "handoff get should enforce the requested project scope");
   assert.ok(getByWrongProject.content[0].text.includes("not found"), "wrong-project handoff access should be indistinguishable from a missing handoff");
 
-  const foreignSession = JSON.parse((await TOOLS.session({ action: "begin", goal: "Reject a cross-project handoff link", project: "other_project", source: "test" })).content[0].text);
-  const foreignEnd = await TOOLS.session({ action: "end", id: foreignSession.session.id, handoff_id: createData.handoff.id, final_summary: "Should not link across projects", acceptance_state: "accepted" });
+  const foreignSession = JSON.parse((await TOOLS_NO_PROJECT.session({ action: "begin", goal: "Reject a cross-project handoff link", project: "other_project", source: "test" })).content[0].text);
+  const foreignEnd = await TOOLS_NO_PROJECT.session({ action: "end", id: foreignSession.session.id, project: "other_project", handoff_id: createData.handoff.id, final_summary: "Should not link across projects", acceptance_state: "accepted" });
   assert.ok(foreignEnd.isError, "session finalization should reject a cross-project handoff link");
   assert.strictEqual(dbStore.getTaskSession(foreignSession.session.id).state, "active", "cross-project handoff rejection must leave the session active");
 

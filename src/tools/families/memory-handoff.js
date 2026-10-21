@@ -6,6 +6,8 @@ const { redactSensitive } = require("../../redact");
 const toolContext = require("../context");
 const { PROJECT_RE, canonicalizeProjectName } = require("../../core/project-identity");
 const authorization = require("../../core/authorization");
+const projectAccess = require("../../core/project-access");
+const { requireCanonicalInvocation } = require("../read-authorization");
 
 const HANDOFF_EXTRACTION_VERSION = "handoff-rules-v1";
 
@@ -81,20 +83,31 @@ function canManageAnyHandoff(authIdentity) {
   }).ok);
 }
 
+function activeDelegationId(authIdentity) {
+  return authIdentity?.delegation_id || authIdentity?.delegationId || null;
+}
+
 function scopedHandoff(id, project, authIdentity = null) {
   const handoff = dbStore.getHandoff(id);
   if (!handoff) return null;
   if (project && canonicalizeProjectName(handoff.project) !== canonicalizeProjectName(project)) return null;
+  if (authIdentity?.principal_id && !projectAccess.hasProjectAccess(authIdentity.principal_id, handoff.project, "read", authIdentity.scopes, activeDelegationId(authIdentity))) return null;
   if (authIdentity?.principal_id && !canManageAnyHandoff(authIdentity)
     && handoff.owner_principal_id !== (authIdentity.acting_for_principal_id || authIdentity.principal_id)
     && handoff.created_by_principal_id !== authIdentity.principal_id) return null;
   return handoff;
 }
 
-async function sidekick_handoff({ action, id, key, project, title, content, source, task_id, reprocess, include_archived, include_completed, limit, version, expected_version, reason, packet, working_directory, owner, lease_seconds, claim_token, lifecycle_state }) {
+async function sidekick_handoff({ action, id, key, project, title, content, source, task_id, reprocess, include_archived, include_completed, limit, version, expected_version, reason, packet, working_directory, owner, lease_seconds, claim_token, lifecycle_state }, runtime = {}) {
+  const denied = requireCanonicalInvocation("handoff");
+  if (denied) return denied;
   if (key !== undefined) return { content: [{ type: "text", text: "handoff key storage is no longer supported; create or address a structured handoff by id" }], isError: true };
-  const authIdentity = toolContext.getExecutionContext().authIdentity || null;
-  const boundProject = toolContext.getExecutionContext().project || null;
+  const execution = toolContext.getExecutionContext();
+  const authIdentity = execution.authIdentity || null;
+  if (!authIdentity?.principal_id && execution.source !== "test") {
+    return { content: [{ type: "text", text: "Authenticated principal required for handoff access" }], isError: true, code: "unauthenticated" };
+  }
+  const boundProject = execution.project || null;
   if (boundProject) {
     if (project && canonicalizeProjectName(project) !== canonicalizeProjectName(boundProject)) {
       return { content: [{ type: "text", text: "project does not match the trusted execution project scope" }], isError: true };
@@ -106,7 +119,6 @@ async function sidekick_handoff({ action, id, key, project, title, content, sour
   }
   const ownerPrincipalId = authIdentity?.acting_for_principal_id || authIdentity?.principal_id || null;
   const actorPrincipalId = authIdentity?.principal_id || null;
-  const execution = toolContext.getExecutionContext();
   const agentTaskId = execution.source === "agent" && execution.taskId ? String(execution.taskId) : null;
   // The Agent Bridge may have already created the requested continuity record
   // before the model's first tool turn. Treat a later model-level "create
@@ -123,6 +135,14 @@ async function sidekick_handoff({ action, id, key, project, title, content, sour
   if (authIdentity?.principal_id && id && action !== "create" && !scopedHandoff(id, project, authIdentity)) {
     return { content: [{ type: "text", text: "Handoff not found" }], isError: true };
   }
+  const handoffWriteActions = new Set(["create", "update", "restore", "refresh_evidence", "checkpoint", "transition", "claim", "renew_claim", "begin_resume", "release", "reprocess", "archive", "unarchive", "purge_version"]);
+  if (authIdentity?.principal_id && handoffWriteActions.has(action)) {
+    const existingProject = id ? dbStore.getHandoff(id)?.project : null;
+    const targetProject = project || existingProject || agentTask?.project_id || boundProject;
+    if (!targetProject || !projectAccess.hasProjectAccess(authIdentity.principal_id, targetProject, "write", authIdentity.scopes, activeDelegationId(authIdentity))) {
+      return { content: [{ type: "text", text: "project write access denied" }], isError: true };
+    }
+  }
   if (action === "create" || action === "update") {
     const existing = id ? scopedHandoff(id, project, authIdentity) : null;
     if (action === "create" && !existing) {
@@ -130,6 +150,7 @@ async function sidekick_handoff({ action, id, key, project, title, content, sour
       const resolvedProject = canonicalizeProjectName(requestedProject);
       if (!requestedProject) return { content: [{ type: "text", text: "project is required to create a handoff" }], isError: true };
       if (!PROJECT_RE.test(resolvedProject)) return { content: [{ type: "text", text: "project must match /^[a-z][a-z0-9_]*$/" }], isError: true };
+      if (authIdentity?.principal_id && !projectAccess.hasProjectAccess(authIdentity.principal_id, resolvedProject, "write", authIdentity.scopes, activeDelegationId(authIdentity))) return { content: [{ type: "text", text: "project access denied" }], isError: true };
       if (project && boundProject && resolvedProject !== canonicalizeProjectName(boundProject)) return { content: [{ type: "text", text: "project does not match the trusted execution project scope" }], isError: true };
       project = String(requestedProject).trim();
     }
@@ -297,7 +318,11 @@ async function sidekick_handoff({ action, id, key, project, title, content, sour
       }
       if (action === "claim") {
         if (owner && (ownerPrincipalId || actorPrincipalId) && owner !== ownerPrincipalId && owner !== actorPrincipalId) return { content: [{ type: "text", text: "handoff claim owner must match the authenticated principal" }], isError: true };
-        return jsonText({ ok: true, ...dbStore.claimHandoff(id, { owner: owner || ownerPrincipalId || actorPrincipalId, leaseSeconds: lease_seconds, expectedVersion: expected_version, actor: actorPrincipalId || ownerPrincipalId || "system", source: source || toolContext.getExecutionSource() }) });
+        const result = { ok: true, ...dbStore.claimHandoff(id, { owner: owner || ownerPrincipalId || actorPrincipalId, leaseSeconds: lease_seconds, expectedVersion: expected_version, actor: actorPrincipalId || ownerPrincipalId || "system", source: source || toolContext.getExecutionSource() }) };
+        // The short-lived claim token is a bearer capability scoped to this
+        // handoff. Expose it once only to a dispatcher-authenticated session;
+        // result logging still stores only sanitized summaries.
+        return runtime.createSensitiveResult ? runtime.createSensitiveResult(result) : jsonText(result);
       }
       if (action === "renew_claim") return jsonText({ ok: true, ...dbStore.renewHandoffClaim(id, { claim_token, leaseSeconds: lease_seconds, actor: actorPrincipalId || ownerPrincipalId || "system", source: source || toolContext.getExecutionSource() }) });
       if (action === "begin_resume") return jsonText({ ok: true, ...dbStore.beginHandoffResume(id, { claim_token, working_directory, recipient: owner || null, actor: actorPrincipalId || ownerPrincipalId || "system", source: source || toolContext.getExecutionSource() }) });

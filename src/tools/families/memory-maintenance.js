@@ -4,22 +4,25 @@ const { z } = require("zod");
 const dbStore = require("../../db");
 const toolContext = require("../context");
 const { scopedProject } = require("./memory-scope");
+const { requireToolExecution } = require("../read-authorization");
 
 function response(value, isError = false) {
   return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }], isError };
 }
 
 async function sidekick_memory_maintenance({ action, project, run_id, max_candidates, handoff_retention_days, purge_handoff_versions, purge_approved, max_execution_ms }) {
+  const authorizationError = requireToolExecution({ tool: "memory_maintenance", action: action || null, project: project || null }, "tools.execute_critical", "memory_maintenance");
+  if (authorizationError) return authorizationError;
   try {
     if (action === "preview") {
-      const effectiveProject = scopedProject(project);
+      const effectiveProject = scopedProject(project, "read");
       if (!effectiveProject) return response({ ok: false, error: "memory maintenance requires an explicit project" }, true);
       return response({ ok: true, action, ...dbStore.memoryMaintenancePreview({ project: effectiveProject, maxCandidates: max_candidates, handoffRetentionDays: handoff_retention_days }) });
     }
     if (!run_id) return response({ ok: false, error: `${action} requires run_id` }, true);
     const run = dbStore.getMemoryMaintenanceRun(run_id);
     if (!run) return response({ ok: false, error: "maintenance run not found" }, true);
-    const effectiveProject = scopedProject(project || run.project);
+    const effectiveProject = scopedProject(project || run.project, ["status"].includes(action) ? "read" : "write");
     if (!effectiveProject || effectiveProject !== run.project) return response({ ok: false, error: "memory project scope denied" }, true);
     if (action === "status") return response({ ok: true, action, run });
     if (action === "cancel") return response({ ok: true, action, run: dbStore.cancelMemoryMaintenance(run_id) });

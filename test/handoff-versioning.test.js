@@ -13,12 +13,33 @@ const path = require("path");
 const { execFileSync } = require("child_process");
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-handoff-versioning-test-"));
+const repoDir = path.join(tempDir, "repo");
+fs.mkdirSync(repoDir, { recursive: true });
+execFileSync("git", ["init", "-b", "main"], { cwd: repoDir, stdio: "ignore" });
+execFileSync("git", ["config", "user.name", "Handoff Test"], { cwd: repoDir, stdio: "ignore" });
+execFileSync("git", ["config", "user.email", "handoff-test@example.invalid"], { cwd: repoDir, stdio: "ignore" });
+fs.writeFileSync(path.join(repoDir, "README.md"), "handoff provenance fixture\n");
+execFileSync("git", ["add", "README.md"], { cwd: repoDir, stdio: "ignore" });
+execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "-m", "create handoff fixture"], { cwd: repoDir, stdio: "ignore" });
 process.env.SIDEKICK_DATA_DIR = tempDir;
 process.env.SIDEKICK_AUTO_MEMORY = "1";
 process.env.SIDEKICK_EMBEDDINGS = "0";
 
 const dbStore = require("../src/db");
-const { TOOLS } = require("../src/tools");
+const { TOOLS: rawTools } = require("../src/tools");
+const { createOwnerContext } = require('./helpers/authorized-context');
+const { runWithContext } = require('../src/tools/context');
+const ownerContext = { ...createOwnerContext({ source: 'test' }), requestId: 'handoff-versioning-test-request' };
+const TOOLS = Object.freeze({
+  ...rawTools,
+  handoff: args => runWithContext({ ...ownerContext, project: args.project || dbStore.getHandoff(args.id)?.project || 'hv-test' }, () => rawTools.handoff(
+    args.action === 'claim' ? { ...args, owner: ownerContext.authIdentity.principal_id } : args,
+  )),
+  session: args => runWithContext({ ...ownerContext, project: args.project || 'hv-session-resume' }, () => rawTools.session(args)),
+});
+// This suite calls the built-in handlers directly; mark that harness explicitly
+// so identityless production-source calls remain denied.
+require("../src/tools").setSource("test");
 
 dbStore.runPendingMigrations();
 
@@ -26,6 +47,7 @@ const handoffColumns = dbStore.getDb().prepare("PRAGMA table_info(memory_handoff
 assert.ok(!handoffColumns.includes("kv_key"), "Handoff v2 persistence must not retain the legacy KV identity column");
 
 function parse(result) {
+  if (result?.isError) throw new Error(`handoff tool failed: ${result.content?.[0]?.text || "unknown error"}`);
   return JSON.parse(result.content[0].text);
 }
 
@@ -73,9 +95,9 @@ function parse(result) {
     ...packet,
     provenance: {
       ...packet.provenance,
-      working_directory: process.cwd(),
+      working_directory: repoDir,
       branch: "HEAD",
-      commit_sha: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim()
+      commit_sha: execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoDir, encoding: "utf8" }).trim()
     }
   } }));
   const provenanceVerification = parse(await TOOLS.handoff({ action: "verify", id: verifiedPacket.handoff.id }));
@@ -95,7 +117,7 @@ function parse(result) {
 
   const legacyKey = await TOOLS.handoff({ action: "create", key: "hv-legacy-key", project: "hv-test", content: "Fact: legacy key must be rejected." });
   assert.ok(legacyKey.isError, "legacy KV handoff keys must be rejected");
-  assert.ok(legacyKey.content[0].text.includes("no longer supported"));
+  assert.match(legacyKey.content[0].text, /Invalid arguments|no longer supported/i);
   console.log("HV.0b passed: legacy KV handoff keys are rejected");
 
   const updated = parse(await TOOLS.handoff({
@@ -246,18 +268,18 @@ function parse(result) {
     next_step: "Verify the checkpoint",
     completed_steps: ["Created the continuity fixture"],
     acceptance_criteria: ["Checkpoint is captured"]
-    ,provenance: { working_directory: process.cwd(), commit_sha: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(), branch: execFileSync("git", ["branch", "--show-current"], { encoding: "utf8" }).trim() }
+    ,provenance: { working_directory: repoDir, commit_sha: execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoDir, encoding: "utf8" }).trim(), branch: execFileSync("git", ["branch", "--show-current"], { cwd: repoDir, encoding: "utf8" }).trim() }
     ,evidence: [{ type: "test", label: "continuity fixture", status: "passed", observed_at: new Date().toISOString() }]
   } }));
   assert.strictEqual(continuity.handoff.schema_version, 3, "new handoffs should use the v3 schema marker");
-  const checkpoint = parse(await TOOLS.handoff({ action: "checkpoint", id: continuity.handoff.id, working_directory: process.cwd(), expected_version: 1 }));
+  const checkpoint = parse(await TOOLS.handoff({ action: "checkpoint", id: continuity.handoff.id, working_directory: repoDir, expected_version: 1 }));
   assert.ok(checkpoint.handoff.checkpoint_hash, "checkpoint should have a deterministic integrity hash");
-  assert.strictEqual(checkpoint.handoff.checkpoint.repository.head, execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim());
+  assert.strictEqual(checkpoint.handoff.checkpoint.repository.head, execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoDir, encoding: "utf8" }).trim());
   const ready = parse(await TOOLS.handoff({ action: "transition", id: continuity.handoff.id, lifecycle_state: "ready", expected_version: 1 }));
   assert.strictEqual(ready.handoff.lifecycle_state, "ready");
   const claimed = parse(await TOOLS.handoff({ action: "claim", id: continuity.handoff.id, owner: "hv-agent", expected_version: 1, lease_seconds: 60 }));
   assert.ok(claimed.claim_token && claimed.handoff.lifecycle_state === "claimed", "claim should be atomic and return a one-time token");
-  const refreshed = parse(await TOOLS.handoff({ action: "refresh_evidence", id: continuity.handoff.id, working_directory: process.cwd() }));
+  const refreshed = parse(await TOOLS.handoff({ action: "refresh_evidence", id: continuity.handoff.id, working_directory: repoDir }));
   assert.strictEqual(refreshed.evidence.status, "refreshed", "evidence refresh should persist a bounded state report");
   const renewed = parse(await TOOLS.handoff({ action: "renew_claim", id: continuity.handoff.id, claim_token: claimed.claim_token, lease_seconds: 120 }));
   assert.ok(renewed.expires_at && renewed.handoff.claim.active, "claim renewal should extend the active lease");
@@ -268,24 +290,24 @@ function parse(result) {
     completed_steps: ["Created the fixture"],
     next_step: "Begin the claimed resume",
     acceptance_criteria: ["Receiver can begin safely"],
-    provenance: { working_directory: process.cwd(), commit_sha: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(), branch: execFileSync("git", ["branch", "--show-current"], { encoding: "utf8" }).trim() },
+    provenance: { working_directory: repoDir, commit_sha: execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoDir, encoding: "utf8" }).trim(), branch: execFileSync("git", ["branch", "--show-current"], { cwd: repoDir, encoding: "utf8" }).trim() },
     evidence: [{ type: "test", label: "receiver fixture", status: "passed", observed_at: new Date().toISOString() }]
   } }));
-  parse(await TOOLS.handoff({ action: "checkpoint", id: receiverReady.handoff.id, working_directory: process.cwd() }));
-  parse(await TOOLS.handoff({ action: "refresh_evidence", id: receiverReady.handoff.id, working_directory: process.cwd() }));
+  parse(await TOOLS.handoff({ action: "checkpoint", id: receiverReady.handoff.id, working_directory: repoDir }));
+  parse(await TOOLS.handoff({ action: "refresh_evidence", id: receiverReady.handoff.id, working_directory: repoDir }));
   parse(await TOOLS.handoff({ action: "transition", id: receiverReady.handoff.id, lifecycle_state: "ready", expected_version: 1 }));
   const receiverClaim = parse(await TOOLS.handoff({ action: "claim", id: receiverReady.handoff.id, owner: "hv-receiver", expected_version: 1, lease_seconds: 60 }));
-  const began = parse(await TOOLS.handoff({ action: "begin_resume", id: receiverReady.handoff.id, owner: "hv-receiver", claim_token: receiverClaim.claim_token, working_directory: process.cwd() }));
+  const began = parse(await TOOLS.handoff({ action: "begin_resume", id: receiverReady.handoff.id, owner: "hv-receiver", claim_token: receiverClaim.claim_token, working_directory: repoDir }));
   assert.strictEqual(began.handoff.lifecycle_state, "verifying", "receiver begin_resume should enter verifying state");
   parse(await TOOLS.handoff({ action: "release", id: receiverReady.handoff.id, claim_token: receiverClaim.claim_token }));
-  const readiness = parse(await TOOLS.handoff({ action: "readiness", id: continuity.handoff.id, working_directory: process.cwd() }));
+  const readiness = parse(await TOOLS.handoff({ action: "readiness", id: continuity.handoff.id, working_directory: repoDir }));
   assert.strictEqual(readiness.readiness.status, "ready", "clean claimed checkpoint should be resumable");
-  const receiver = parse(await TOOLS.handoff({ action: "start_here", id: continuity.handoff.id, working_directory: process.cwd() }));
+  const receiver = parse(await TOOLS.handoff({ action: "start_here", id: continuity.handoff.id, working_directory: repoDir }));
   assert.strictEqual(receiver.projection.start_here.next_step, "Verify the checkpoint", "receiver projection should expose the next step");
   assert.strictEqual(receiver.projection.quality.valid, true, "receiver projection should report a complete packet");
   const quality = parse(await TOOLS.handoff({ action: "quality", id: continuity.handoff.id }));
   assert.strictEqual(quality.quality.valid, true, "complete packet should pass the quality gate");
-  const simulated = parse(await TOOLS.handoff({ action: "simulate_resume", id: continuity.handoff.id, working_directory: process.cwd(), owner: "hv-agent" }));
+  const simulated = parse(await TOOLS.handoff({ action: "simulate_resume", id: continuity.handoff.id, working_directory: repoDir, owner: "hv-agent" }));
   assert.strictEqual(simulated.preflight.safe_to_resume, true, "resume simulation should pass for a complete packet");
   const detailedCompare = parse(await TOOLS.handoff({ action: "compare", id: continuity.handoff.id, version: 1, expected_version: 1 }));
   assert.strictEqual(detailedCompare.comparison.content_changed, false, "same-version comparison should be deterministic");
@@ -308,8 +330,12 @@ function parse(result) {
   console.log("HV.20 passed: partial session resume reopens active work");
 
   console.log("\nAll handoff versioning tests passed");
+  dbStore.closeDatabase();
+  fs.rmSync(tempDir, { recursive: true, force: true });
   process.exit(0);
 })().catch(error => {
   console.error("FAILED:", error && error.stack ? error.stack : error);
+  try { dbStore.closeDatabase(); } catch {}
+  try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch {}
   process.exit(1);
 });

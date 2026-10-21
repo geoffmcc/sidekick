@@ -611,7 +611,11 @@ function recallMemoryForText(query, options = {}) {
 
   const candidates = [
     ...structured,
-    ...ctx.memories,
+    // The compatibility context document has no reliable per-item
+    // provenance or trust classification. Keep it available to explicit
+    // legacy recall calls, but never promote it into an automatic agent
+    // memory brief where arbitrary stored text can be mistaken for authority.
+    ...(options.includeLegacyContext === false ? [] : ctx.memories),
     ...ctx.sessions.map(s => ({ ...s, type: "session" })),
     ...ctx.decisions.map(d => ({ ...d, type: "decision", summary: d.decision, notes: d.reasoning })),
     ...ctx.problems.map(p => ({ ...p, type: "problem", summary: p.description, notes: p.solution })),
@@ -708,7 +712,7 @@ function buildMemoryBrief(goal, options = {}) {
     limit: maxPerType
   }).filter(m => !requiresMemoryConfirmation(m)).map(m => m.content || m.summary).filter(Boolean);
 
-  const recalled = recallMemoryForText(goal, { project, limit: 5 });
+  const recalled = recallMemoryForText(goal, { project, limit: 5, includeLegacyContext: false });
   const relatedContext = recalled
     .filter(item => !["preference", "fact", "decision", "open_thread"].includes(item.type))
     .slice(0, 3)
