@@ -15,6 +15,7 @@ const { promisify } = require("util");
 const { z } = require("zod");
 const { redactSensitive } = require("../../redact");
 const { childProcessEnv } = require("../../security/child-process");
+const { requireToolExecution } = require("../read-authorization");
 
 const DANGEROUS_PATTERNS = [
   /\brm\s+-(?:[a-z]*r[a-z]*f|[a-z]*f[a-z]*r)[a-z]*\s+(?:--no-preserve-root\s+)?\/(?:\s|$|[/*])/i,
@@ -41,6 +42,8 @@ const DEFAULT_TIMEOUT_MS = 60000;
 const MAX_TIMEOUT_MS = 3600000;
 
 async function sidekick_bash({ command }, runtime = {}) {
+  const authError = requireToolExecution({ tool: "bash" }, "tools.execute_critical", "bash");
+  if (authError) return authError;
   if (isDangerous(command)) {
     return { content: [{ type: "text", text: "Blocked: command matches a dangerous pattern" }], isError: true };
   }

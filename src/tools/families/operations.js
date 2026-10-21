@@ -16,9 +16,9 @@ const path = require("path");
 const { execFile, execFileSync, spawn } = require("child_process");
 const { z } = require("zod");
 const { enforcePathPolicy } = require("../path-policy");
-const { sidekick_status } = require("./observability");
 const { callTool } = require("../dispatch-seam");
 const { childProcessEnv } = require("../../security/child-process");
+const { requireToolExecution } = require("../read-authorization");
 
 const SIDEKICK_SERVICES = ["sidekick-mcp", "sidekick-dashboard", "sidekick-agent"];
 const SIDEKICK_DEPLOY_REPO_PATH = "/home/sidekick/sidekick";
@@ -121,6 +121,8 @@ function scheduleMcpRestart(delaySeconds = 2) {
 }
 
 async function sidekick_ops({ action, repo_path, restart_mcp }) {
+  const denied = requireToolExecution({ tool: "ops" }, "tools.execute_critical", "ops");
+  if (denied) return denied;
   const repoPath = repo_path || SIDEKICK_DEPLOY_REPO_PATH;
   if (repoPath !== SIDEKICK_DEPLOY_REPO_PATH) {
     return { content: [{ type: "text", text: `sidekick_ops deployments are restricted to ${SIDEKICK_DEPLOY_REPO_PATH}` }], isError: true };
@@ -212,7 +214,7 @@ async function sidekick_ops({ action, repo_path, restart_mcp }) {
 
   if (action === "incident_snapshot") {
     const states = getServiceStates();
-    const status = await sidekick_status({ include: "services,disk,memory,load,uptime,processes" });
+    const status = await callTool("status", { include: "services,disk,memory,load,uptime,processes" });
     const logs = {};
     for (const service of SIDEKICK_SERVICES) {
       const result = runOpsCommand("journalctl", ["-u", service, "-n", "25", "--no-pager"], { timeout: 10000, maxBuffer: 2 * 1024 * 1024 });
@@ -342,6 +344,8 @@ function formatMissionRoute(route) {
 }
 
 async function sidekick_mission({ action, intent, profile, confirm, key, project, query, include, services, repo_path, limit, tool, source, format }) {
+  const authorizationError = requireToolExecution({ tool: "mission", action: action || "route" }, "tools.execute_critical", "mission");
+  if (authorizationError) return authorizationError;
   const selectedAction = action || "route";
   if (selectedAction === "profiles") {
     return { content: [{ type: "text", text: JSON.stringify(MISSION_PROFILES, null, 2) }] };
