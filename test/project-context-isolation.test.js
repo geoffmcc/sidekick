@@ -9,7 +9,9 @@ const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-project-context-
 process.env.SIDEKICK_DATA_DIR = dataDir;
 
 const db = require("../src/db");
-const { TOOLS } = require("../src/tools");
+const tools = require("../src/tools");
+const { TOOLS } = tools;
+tools.setSource("test");
 const { createTestExecutionContext, runWithContext } = require("../src/tools/context");
 
 async function main() {
