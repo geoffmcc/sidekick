@@ -27,8 +27,9 @@ const PERM_MANIFEST = {
   description: 'Permission enforcement test module',
   tools: { perm_probe: { risk: 'low', category: 'Test' } },
   permissions: [
-    { tool: 'store', risk: 'low' },
-    // Conflicting duplicates must resolve to the most restrictive cap (low),
+    { tool: 'store', risk: 'medium' },
+    { tool: 'secret', risk: 'high' },
+    // Conflicting duplicates must resolve to the most restrictive cap (medium),
     // so the bash dispatch in MP.2 stays denied despite the critical grant.
     { tool: 'bash', risk: 'critical' },
     { tool: 'bash', risk: 'low' },
@@ -42,10 +43,15 @@ const permEntry = {
       {
         name: 'perm_probe',
         description: 'Dispatch a target tool through the module facade',
-        schema: z.object({ target: z.string(), targetArgs: z.record(z.any()).optional() }),
+        schema: z.object({ target: z.string(), targetArgs: z.record(z.any()).optional(), dispatchOptions: z.record(z.any()).optional() }),
         risk: 'low',
         category: 'Test',
-        handler: async args => services.dispatch(args.target, args.targetArgs || {}),
+        handler: async args => {
+          if (args.target === 'direct_secret') {
+            return require('../src/tools/families/secret').sidekick_secret(args.targetArgs || {});
+          }
+          return services.dispatch(args.target, args.targetArgs || {}, args.dispatchOptions || {});
+        },
       },
     ];
   },
@@ -77,7 +83,9 @@ const riskEntry = {
 };
 
 function installAndEnable(manifest, entry) {
-  repository.registerModule(manifest, { source: 'test' });
+  // Exercise descriptor and service permission enforcement with an explicitly
+  // trusted test fixture; third-party source denial is covered separately.
+  repository.registerModule(manifest, { source: 'builtin' });
   repository.applyModuleMigrations(manifest.name, { transitionTo: 'installed' });
   return loader.enableModule(manifest.name, entry);
 }
@@ -87,25 +95,46 @@ console.log('Running Module Permission Tests...\n');
 (async () => {
   try {
     dbStore.runPendingMigrations();
+    const authenticatedContext = require('./helpers/authorized-context').createOwnerContext({ source: 'internal' });
     installAndEnable(PERM_MANIFEST, permEntry);
     installAndEnable(RISK_MANIFEST, riskEntry);
 
     console.log('Test MP.1: facade dispatch denies undeclared tools by default');
-    const undeclared = await tools.callInternalTool('perm_probe', { target: 'hash' });
+    const undeclared = await tools.callInternalTool('perm_probe', { target: 'hash' }, authenticatedContext);
     assert.ok(undeclared.isError, 'Undeclared tool dispatch should fail');
     assert.strictEqual(undeclared.code, 'module_permission_denied', 'Denial should use the module permission code');
     assert.ok(/no declared permission for tool "hash"/.test(undeclared.content[0].text), 'Denial should name the tool');
     console.log('Passed\n');
 
+    console.log('Test MP.3a: module dispatch cannot replace the authenticated principal');
+    const operatorContext = require('./helpers/authorized-context').createServiceContext({ role: 'operator', source: 'internal' });
+    const spoofedIdentity = await tools.callInternalTool('perm_probe', {
+      target: 'secret',
+      targetArgs: { action: 'list' },
+      dispatchOptions: { authIdentity: authenticatedContext.authIdentity },
+    }, operatorContext);
+    assert.ok(spoofedIdentity.isError, 'Nested dispatch must retain the initiating operator identity');
+    assert.ok(['authorization_denied', 'forbidden'].includes(spoofedIdentity.code), `Unexpected identity-spoof result: ${spoofedIdentity.code}`);
+    console.log('Passed\n');
+
+    console.log('Test MP.3b: module code cannot call a protected family handler directly');
+    const directHandler = await tools.callInternalTool('perm_probe', {
+      target: 'direct_secret',
+      targetArgs: { action: 'list' },
+    }, authenticatedContext);
+    assert.ok(directHandler.isError, 'A nested direct handler call must fail closed');
+    assert.strictEqual(directHandler.code, 'canonical_dispatch_required');
+    console.log('Passed\n');
+
     console.log('Test MP.2: facade dispatch enforces the declared risk cap');
-    const overCap = await tools.callInternalTool('perm_probe', { target: 'bash' });
+    const overCap = await tools.callInternalTool('perm_probe', { target: 'bash' }, authenticatedContext);
     assert.ok(overCap.isError, 'Over-cap dispatch should fail');
     assert.strictEqual(overCap.code, 'module_permission_denied', 'Risk cap should use the module permission code');
     assert.ok(/caps risk at low but the tool resolves to critical/.test(overCap.content[0].text), 'Denial should state the risk mismatch');
     console.log('Passed\n');
 
     console.log('Test MP.3: permitted dispatch succeeds and is attributed to the module');
-    const allowed = await tools.callInternalTool('perm_probe', { target: 'store', targetArgs: { key: 'perm_test_key', value: 'v1' } });
+    const allowed = await tools.callInternalTool('perm_probe', { target: 'store', targetArgs: { key: 'perm_test_key', value: 'v1' } }, authenticatedContext);
     assert.ok(!allowed.isError, `Permitted dispatch should succeed: ${JSON.stringify(allowed.content)}`);
     const childLog = dbStore.getDb()
       .prepare("SELECT entry_json FROM tool_logs WHERE tool_name = 'store' ORDER BY id DESC LIMIT 1")
@@ -140,7 +169,7 @@ console.log('Running Module Permission Tests...\n');
     console.log('Passed\n');
 
     console.log('Test MP.6: permission declared for a canonical tool covers its aliases');
-    const viaAlias = await tools.callInternalTool('perm_probe', { target: 'mod_low_alias' });
+    const viaAlias = await tools.callInternalTool('perm_probe', { target: 'mod_low_alias' }, authenticatedContext);
     assert.ok(!viaAlias.isError, `Alias dispatch under a canonical permission should succeed: ${JSON.stringify(viaAlias.content)}`);
     assert.strictEqual(viaAlias.content[0].text, 'ok', 'Alias dispatch should reach the module tool');
     console.log('Passed\n');

@@ -16,8 +16,11 @@ const { z } = require("zod");
 const dbStore = require("../../db");
 const pgStore = require("../../pg");
 const { enforcePathPolicy } = require("../path-policy");
+const { requireToolExecution, requireCanonicalInvocation } = require("../read-authorization");
 
 async function sidekick_db_backup({ path: destPath, compress }) {
+  const dispatchError = requireCanonicalInvocation("db_backup");
+  if (dispatchError) return dispatchError;
   try {
     if (destPath) {
       const policyError = enforcePathPolicy(destPath, "write");
@@ -31,6 +34,8 @@ async function sidekick_db_backup({ path: destPath, compress }) {
 }
 
 async function sidekick_db_restore({ path: backupPath, verify }) {
+  const authError = requireToolExecution({ tool: "db_restore", path: backupPath }, "tools.execute_critical", "db_restore");
+  if (authError) return authError;
   try {
     const policyError = enforcePathPolicy(backupPath, "read");
     if (policyError) return policyError;
@@ -42,6 +47,8 @@ async function sidekick_db_restore({ path: backupPath, verify }) {
 }
 
 async function sidekick_db_export({ table, format, path: outputPath, database }) {
+  const dispatchError = requireCanonicalInvocation("db_export");
+  if (dispatchError) return dispatchError;
   try {
     const fmt = format || "json";
     if (outputPath) {
@@ -94,6 +101,8 @@ async function sidekick_db_export({ table, format, path: outputPath, database })
 }
 
 async function sidekick_db_migrate({ action, version, name }) {
+  const authError = requireToolExecution({ tool: "db_migrate", action }, "tools.execute_high", "db_migrate");
+  if (authError) return authError;
   try {
     if (action === "status") {
       const current = dbStore.getMigrationVersion();

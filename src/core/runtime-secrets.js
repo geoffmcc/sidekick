@@ -8,6 +8,9 @@ const path = require("path");
 // file. Other environment variables remain ordinary configuration.
 const FILE_SECRET_NAMES = new Set([
   "SIDEKICK_API_KEY",
+  "SIDEKICK_MCP_CREDENTIAL",
+  "SIDEKICK_AGENT_PROXY_KEY",
+  "SIDEKICK_AGENT_SCHEDULER_KEY",
   "SIDEKICK_DASHBOARD_PASS",
   "SIDEKICK_GRAFANA_ADMIN_PASSWORD",
   "SIDEKICK_INFLUX_TOKEN",
@@ -30,6 +33,9 @@ const FILE_SECRET_NAMES = new Set([
 
 const SECRET_FILE_NAMES = Object.freeze({
   SIDEKICK_API_KEY: "sidekick_api_key",
+  SIDEKICK_MCP_CREDENTIAL: "sidekick_mcp_credential",
+  SIDEKICK_AGENT_PROXY_KEY: "sidekick_agent_proxy_key",
+  SIDEKICK_AGENT_SCHEDULER_KEY: "sidekick_agent_scheduler_key",
   SIDEKICK_DASHBOARD_PASS: "sidekick_dashboard_pass",
   SIDEKICK_GRAFANA_ADMIN_PASSWORD: "sidekick_grafana_admin_password",
   SIDEKICK_INFLUX_TOKEN: "sidekick_influx_token",

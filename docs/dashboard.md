@@ -119,6 +119,12 @@ Dashboard Basic Auth is enabled only when both `SIDEKICK_DASHBOARD_USER` and `SI
 
 If the dashboard is exposed outside a private network, put it behind a reverse proxy, VPN, or additional authentication. For shared deployments, also set `SIDEKICK_TOOL_POLICY=restricted`.
 
+The Research Sources panel uses the selected workspace project for repository,
+snapshot, and mutation requests. Global workspace access requires global
+project authority; other users must select a project to which they have access.
+The server rechecks project membership and requires write access for imports,
+selection, indexing, archive/remove, and staging recovery.
+
 ## Tool catalog
 
 `GET /api/tools` returns tool metadata for the dashboard, including risk classification and whether the active dashboard policy enables each tool. The Tools tab displays that policy state alongside search, category filtering, and argument details.
@@ -207,7 +213,7 @@ baselines are not currently maintained.
 
 ## Webhook capture
 
-`POST /api/webhook/:source` stores a webhook payload with a generated ID, source name, timestamp, and body. Webhook storage is backed by the `webhooks` document in the SQLite `json_documents` table.
+`POST /api/webhook/:source` stores an authenticated webhook payload with a generated ID, source name, timestamp, and body. Payloads are limited to 256 KiB; retention is bounded to 1,000 records and 16 MiB total encoded JSON. Webhook storage is backed by the `webhooks` document in the SQLite `json_documents` table.
 
 Use `webhook` to list, retrieve, or clear stored webhook payloads from the MCP side.
 

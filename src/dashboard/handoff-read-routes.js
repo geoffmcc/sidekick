@@ -1,9 +1,14 @@
 const authorization = require("../core/authorization");
+const projectAccess = require("../core/project-access");
 
 function registerHandoffReadRoutes({ app, dbStore, errorResponse }) {
   function canRead(req, handoff) {
     const principal = req.authPrincipal;
     if (!principal?.principal_id || !handoff) return false;
+    // Ownership identifies the handoff recipient/creator, but it cannot
+    // outlive project authorization. Recheck the active grant on every read
+    // so revocation applies to already-known handoff IDs and subroutes.
+    if (!projectAccess.hasProjectAccess(principal.principal_id, handoff.project, "read", principal.scopes, principal.delegation_id || principal.delegationId || null)) return false;
     if (handoff.owner_principal_id === principal.principal_id || handoff.created_by_principal_id === principal.principal_id) return true;
     return authorization.authorize({
       principalId: principal.principal_id,
@@ -24,7 +29,11 @@ function registerHandoffReadRoutes({ app, dbStore, errorResponse }) {
 
   app.get("/api/handoffs", (req, res) => {
     try {
-      const handoffs = dbStore.listHandoffs({ project: req.query.project, includeArchived: req.query.include_archived === "true", includeCompleted: req.query.include_completed === "true", limit: Math.min(Number(req.query.limit) || 50, 500) });
+      const requestedLimit = Number.parseInt(req.query.limit, 10);
+      const limit = Number.isFinite(requestedLimit) && requestedLimit > 0
+        ? Math.min(requestedLimit, 500)
+        : 50;
+      const handoffs = dbStore.listHandoffs({ project: req.query.project, includeArchived: req.query.include_archived === "true", includeCompleted: req.query.include_completed === "true", limit });
       const visible = handoffs.filter(handoff => canRead(req, handoff));
       if (req.query.include === "start_here") {
         for (const handoff of visible) {
@@ -87,12 +96,7 @@ function registerHandoffReadRoutes({ app, dbStore, errorResponse }) {
       const principal = req.authPrincipal;
       const authorized = principal?.principal_id && (handoff
         ? canRead(req, handoff)
-        : authorization.authorize({
-          principalId: principal.principal_id,
-          permission: "principals.manage",
-          credentialScopes: principal.scopes,
-          delegationId: principal.delegation_id || null,
-        }).ok);
+        : projectAccess.hasProjectAccess(principal.principal_id, memory.project, "read", principal.scopes, principal.delegation_id || principal.delegationId || null));
       if (!authorized) return res.status(404).json({ ok: false, error: "Memory not found" });
       res.json({ ok: true, memory, evidence: dbStore.getMemoryEvidence(req.params.id) });
     } catch (error) { errorResponse(req, res, error, { status: 500, code: "service_unavailable", component: "memories" }); }

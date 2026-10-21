@@ -884,7 +884,7 @@ function renewLease(jobId, workerIdOrLeaseId, leaseIdOrDuration = 300000, leaseD
 // dead-letters it instead.
 const MAX_LEASE_INTERRUPTIONS = 3;
 
-function recoverExpiredLeases() {
+function recoverExpiredLeases({ onRecovered = null } = {}) {
   ensureSchema();
   const db = dbStore.getDb();
   const now = nowIso();
@@ -909,6 +909,7 @@ function recoverExpiredLeases() {
         if (result.changes === 1) {
           db.prepare("UPDATE compute_job_attempts SET status = 'cancelled', completed_at = ? WHERE job_id = ? AND lease_id = ?").run(now, row.job_id, row.lease_id);
           if (row.selected_worker_id) db.prepare("UPDATE compute_workers SET current_jobs = MAX(current_jobs - 1, 0), updated_at = ? WHERE worker_id = ?").run(now, row.selected_worker_id);
+          if (typeof onRecovered === "function") onRecovered({ jobId: row.job_id, priorStatus: row.status, status: "cancelled" });
           recovered++;
         }
         db.exec("COMMIT");
@@ -934,6 +935,7 @@ function recoverExpiredLeases() {
         db.prepare("UPDATE compute_job_attempts SET status = ?, completed_at = ?, error_category = 'lease_expired', error_message = 'Worker lease expired' WHERE job_id = ? AND lease_id = ?")
           .run(exhausted ? "dead_letter" : "expired", now, row.job_id, row.lease_id);
         if (row.selected_worker_id) db.prepare("UPDATE compute_workers SET current_jobs = MAX(current_jobs - 1, 0), updated_at = ? WHERE worker_id = ?").run(now, row.selected_worker_id);
+        if (typeof onRecovered === "function") onRecovered({ jobId: row.job_id, priorStatus: row.status, status: nextStatus });
         recovered++;
       }
       db.exec("COMMIT");

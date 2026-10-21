@@ -6,9 +6,10 @@ const qdrantStore = require("../../qdrant");
 const { redactSensitive } = require("../../redact");
 const { assembleContext } = require("../../context");
 const { getExecutionContext } = require("../context");
-const { scopedProject: authorizeMemoryProject } = require("./memory-scope");
+const { scopedProject: authorizeMemoryProject, inScope } = require("./memory-scope");
 const { canonicalizeProjectName } = require("../../core/project-identity");
 const { requiresMemoryConfirmation } = require("../../core/memory-trust");
+const { requireCanonicalInvocation } = require("../read-authorization");
 
 const DEFAULT_CONTEXT = {
   projects: {},
@@ -152,10 +153,10 @@ function updateLegacyContextItem(id, action, reason) {
   return { found: true, supported: true, type: found.type, id };
 }
 
-async function searchContext(ctx, query, type, limit = 10) {
+async function searchContext(ctx, query, type, limit = 10, project = null) {
   const results = [];
   const structuredExact = findStructuredMemoryById(query, type);
-  if (structuredExact) return [{ type: "memory", item: structuredExact, score: 1 }];
+  if (structuredExact && inScope(structuredExact, "read", project)) return [{ type: "memory", item: structuredExact, score: 1 }];
   const exact = findContextItemById(ctx, query, type);
   if (exact && contextItemIsActive(exact.item)) return [{ type: exact.type, item: exact.item, score: 1 }];
 
@@ -168,16 +169,16 @@ async function searchContext(ctx, query, type, limit = 10) {
         const semanticResults = await qdrantStore.search(embedding, limit, filter);
         for (const r of semanticResults) {
           const item = r.payload.type === "memory" ? findStructuredMemoryById(r.payload.data?.id) : r.payload.data;
-          if (contextItemIsActive(item) && !requiresMemoryConfirmation(item)) results.push({ type: r.payload.type, item, score: r.score });
+          if (contextItemIsActive(item) && !requiresMemoryConfirmation(item) && inScope(item, "read", project)) results.push({ type: r.payload.type, item, score: r.score });
         }
       } catch (e) {}
     }
   }
 
   if (type === "all" || type === "memories") {
-    const structuredMemories = dbStore.searchMemories({ type: "all", limit: Math.max(limit * 5, 50) });
+    const structuredMemories = dbStore.searchMemories({ type: "all", project: project || undefined, limit: Math.max(limit * 5, 50) });
     for (const mem of structuredMemories) {
-      if (!contextItemIsActive(mem) || requiresMemoryConfirmation(mem)) continue;
+      if (!contextItemIsActive(mem) || requiresMemoryConfirmation(mem) || !inScope(mem, "read", project)) continue;
       const text = `${mem.type || ""} ${mem.project || ""} ${mem.content || ""} ${mem.summary || ""} ${mem.source_tool || ""} ${(mem.tags || []).join(" ")}`;
       const score = simpleSimilarity(query, text);
       if (score > 0.1) results.push({ type: "memory", item: structuredMemoryToContextItem(mem), score: score * (mem.confidence || 1) });
@@ -194,7 +195,7 @@ async function searchContext(ctx, query, type, limit = 10) {
   for (const [key, entryType, textFor] of collections) {
     if (type !== "all" && type !== key) continue;
     for (const item of (ctx[key] || [])) {
-      if (!contextItemIsActive(item) || requiresMemoryConfirmation(item)) continue;
+      if (!contextItemIsActive(item) || requiresMemoryConfirmation(item) || (project && (!item.project || canonicalizeProjectName(item.project) !== canonicalizeProjectName(project)))) continue;
       const score = simpleSimilarity(query, textFor(item));
       if (score > 0.1) results.push({ type: entryType, item, score });
     }
@@ -204,6 +205,8 @@ async function searchContext(ctx, query, type, limit = 10) {
 }
 
 async function sidekick_context({ action, project, context, decision, reasoning, problem, solution, pattern, summary, topics, outcome, notes, query, type, limit }) {
+  const denied = requireCanonicalInvocation("context");
+  if (denied) return denied;
   const allowedActions = ["track_project", "track_decision", "track_problem", "track_pattern", "track_session", "assemble", "recall", "suggest", "summarize", "list"];
   if (!allowedActions.includes(action)) return { content: [{ type: "text", text: "Invalid action. Allowed: " + allowedActions.join(", ") }], isError: true };
 
@@ -214,8 +217,12 @@ async function sidekick_context({ action, project, context, decision, reasoning,
   try {
     // Reuse the memory family's execution-scope guard so an argument cannot
     // override a dispatcher-bound project, including for non-human callers.
-    scopedProject = authorizeMemoryProject(project);
+    const readActions = new Set(["assemble", "recall", "suggest", "summarize", "list"]);
+    scopedProject = authorizeMemoryProject(project, readActions.has(action) ? "read" : "write");
   } catch (error) {
+    if (action === "recall" && /scope denied|project access|authenticated principal/i.test(error.message)) {
+      return { content: [{ type: "text", text: "No relevant context found" }] };
+    }
     return { content: [{ type: "text", text: error.message }], isError: true };
   }
   if (action === "track_project") {
@@ -290,7 +297,9 @@ async function sidekick_context({ action, project, context, decision, reasoning,
     return { content: [{ type: "text", text: summaryText }] };
   }
   if (action === "list") {
-    const items = []; if (!type || type === "all" || type === "decisions") items.push(`Decisions: ${ctx.decisions.length}`); if (!type || type === "all" || type === "problems") items.push(`Problems: ${ctx.problems.length}`); if (!type || type === "all" || type === "patterns") items.push(`Patterns: ${ctx.patterns.length}`); if (!type || type === "all" || type === "projects") items.push(`Projects: ${Object.keys(ctx.projects).length}`); if (!type || type === "all" || type === "sessions") items.push(`Sessions: ${(ctx.sessions || []).length}`); if (!type || type === "all" || type === "memories") items.push(`Automatic memories: ${(ctx.memories || []).length}`);
+    const inProject = item => !scopedProject || Boolean(item?.project && canonicalizeProjectName(item.project) === scopedProject);
+    const decisions = (ctx.decisions || []).filter(inProject), problems = (ctx.problems || []).filter(inProject), patterns = (ctx.patterns || []).filter(inProject), sessions = (ctx.sessions || []).filter(inProject), memories = (ctx.memories || []).filter(item => contextItemIsActive(item) && inProject(item));
+    const items = []; if (!type || type === "all" || type === "decisions") items.push(`Decisions: ${decisions.length}`); if (!type || type === "all" || type === "problems") items.push(`Problems: ${problems.length}`); if (!type || type === "all" || type === "patterns") items.push(`Patterns: ${patterns.length}`); if (!type || type === "all" || type === "projects") items.push(`Projects: ${scopedProject ? 1 : Object.keys(ctx.projects).length}`); if (!type || type === "all" || type === "sessions") items.push(`Sessions: ${sessions.length}`); if (!type || type === "all" || type === "memories") items.push(`Automatic memories: ${memories.length}`);
     return { content: [{ type: "text", text: items.join("\n") }] };
   }
 }
@@ -303,6 +312,8 @@ const { loadProcedures } = require("../../core/procedures-store");
 const loadSharedContext = loadContext;
 
 async function sidekick_project({ name, include }) {
+  const denied = requireCanonicalInvocation("project");
+  if (denied) return denied;
   let projectName;
   try {
     projectName = authorizeMemoryProject(name);
@@ -313,14 +324,20 @@ async function sidekick_project({ name, include }) {
   const sections = (include || "kv,context").split(",").map(s => s.trim());
   const output = {};
   if (sections.includes("kv")) {
-    const allKV = dbStore.getAllKV();
+    const principalId = getExecutionContext().authIdentity?.principal_id;
+    if (!principalId) return { content: [{ type: "text", text: "Authenticated identity required for project KV context" }], isError: true, code: "unauthenticated" };
+    const keyPrefix = `__sidekick_principal_v1:${encodeURIComponent(principalId)}:${encodeURIComponent(projectName)}:`;
+    const { entries, truncated, oversized } = dbStore.listScopedKV({ project: projectName, keyPrefix, limit: 1000 });
+    if (oversized) return { content: [{ type: "text", text: "Project KV context withheld because oversized records need operator review" }], isError: true, code: "kv_value_too_large" };
     const kvResults = [];
-    for (const [key, entry] of Object.entries(allKV)) {
+    for (const [key, entry] of entries) {
       if (typeof entry === 'object' && entry !== null && canonicalizeProjectName(entry.project) === projectName) {
-        kvResults.push({ key, value: typeof entry.value === 'string' ? entry.value.substring(0, 200) : entry.value, updated: entry.updated });
+        const publicKey = key.slice(keyPrefix.length);
+        kvResults.push({ key: publicKey, value: typeof entry.value === 'string' ? entry.value.substring(0, 200) : entry.value, updated: entry.updated });
       }
     }
     output.kv = kvResults;
+    if (truncated) output.kv_truncated = true;
   }
   if (sections.includes("context")) {
     const ctx = loadSharedContext();
@@ -336,12 +353,14 @@ async function sidekick_project({ name, include }) {
       project: i.project
     }));
     const items = [
-      ...structuredMemories,
       ...(ctx.decisions || []).map(i => ({ type: "decision", summary: i.decision, created: i.date, project: i.project })),
       ...(ctx.problems || []).map(i => ({ type: "problem", summary: i.description, created: i.date, project: i.project })),
       ...(ctx.patterns || []).map(i => ({ type: "pattern", summary: i.description, created: i.date, project: i.project })),
       ...(ctx.sessions || []).map(i => ({ type: "session", summary: i.summary, created: i.date, project: i.project })),
-      ...(ctx.memories || []).filter(i => contextItemIsActive(i) && !requiresMemoryConfirmation(i)).map(i => ({ ...i, type: i.type || "memory", summary: i.summary || i.goal || i.tool, created: i.date, project: i.project }))
+      ...(ctx.memories || []).filter(i => contextItemIsActive(i) && !requiresMemoryConfirmation(i)).map(i => ({ ...i, type: i.type || "memory", summary: i.summary || i.goal || i.tool, created: i.date, project: i.project })),
+      // Keep typed, provenance-bearing records at the end of the bounded
+      // project projection so legacy context volume cannot evict them.
+      ...structuredMemories,
     ].filter(i => canonicalizeProjectName(i.project) === projectName);
     output.context = items.slice(-20).map(i => ({
       id: i.id,

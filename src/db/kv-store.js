@@ -5,6 +5,11 @@
  * this module owns only the kv_store domain and keeps its public API stable.
  */
 function createKvStore({ db, parseJson, nowIso }) {
+  const MAX_KV_VALUE_BYTES = 2 * 1024 * 1024;
+  function prefixUpperBound(prefix) {
+    if (!prefix) return "\uFFFF";
+    return `${prefix.slice(0, -1)}${String.fromCharCode(prefix.charCodeAt(prefix.length - 1) + 1)}`;
+  }
   function loadKV(fallback = {}) {
     const rows = db.prepare("SELECT key, value_json FROM kv_store ORDER BY key").all();
     if (rows.length > 0) {
@@ -20,8 +25,18 @@ function createKvStore({ db, parseJson, nowIso }) {
   }
 
   function getKV(key) {
-    const row = db.prepare("SELECT value_json FROM kv_store WHERE key = ?").get(key);
+    const row = db.prepare("SELECT CASE WHEN length(CAST(value_json AS BLOB)) <= ? THEN value_json ELSE NULL END AS value_json, length(CAST(value_json AS BLOB)) AS value_bytes FROM kv_store WHERE key = ?")
+      .get(MAX_KV_VALUE_BYTES, key);
+    if (row && row.value_bytes > MAX_KV_VALUE_BYTES) {
+      const error = new Error("KV value exceeds the safe read limit");
+      error.code = "KV_VALUE_TOO_LARGE";
+      throw error;
+    }
     return row ? parseJson(row.value_json, null) : null;
+  }
+
+  function hasKV(key) {
+    return Boolean(db.prepare("SELECT 1 AS present FROM kv_store WHERE key = ?").get(key));
   }
 
   function setKV(key, value, project, source, category) {
@@ -35,6 +50,12 @@ function createKvStore({ db, parseJson, nowIso }) {
       created: existing ? existing.created : ts,
       updated: ts,
     };
+    const serialized = JSON.stringify(entry);
+    if (Buffer.byteLength(serialized, "utf8") > MAX_KV_VALUE_BYTES) {
+      const error = new Error("KV value exceeds the 2 MiB storage limit");
+      error.code = "KV_VALUE_TOO_LARGE";
+      throw error;
+    }
     db.prepare(`
       INSERT INTO kv_store (key, value_json, project, source, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?)
@@ -43,15 +64,35 @@ function createKvStore({ db, parseJson, nowIso }) {
         project = excluded.project,
         source = excluded.source,
         updated_at = excluded.updated_at
-    `).run(key, JSON.stringify(entry), project, source, ts, ts);
+    `).run(key, serialized, project, source, ts, ts);
   }
 
   function deleteKV(key) {
     db.prepare("DELETE FROM kv_store WHERE key = ?").run(key);
   }
 
+  function deleteKVByPrefix(prefix) {
+    if (typeof prefix !== "string" || !prefix) throw new TypeError("A non-empty KV key prefix is required");
+    const result = db.prepare("DELETE FROM kv_store WHERE key >= ? AND key < ?").run(prefix, prefixUpperBound(prefix));
+    return result.changes;
+  }
+
+  function countKV() {
+    return db.prepare("SELECT COUNT(*) AS count FROM kv_store").get().count;
+  }
+
   function listKVProjects() {
     return db.prepare("SELECT DISTINCT project FROM kv_store WHERE project IS NOT NULL").all().map(row => row.project);
+  }
+
+  function listKVProjectPage(limit = 1000) {
+    const safeLimit = Math.max(1, Math.min(5000, Math.floor(Number(limit) || 1000)));
+    const rows = db.prepare("SELECT DISTINCT project FROM kv_store WHERE project IS NOT NULL ORDER BY project LIMIT ?").all(safeLimit + 1);
+    return { projects: rows.slice(0, safeLimit).map(row => row.project), truncated: rows.length > safeLimit };
+  }
+
+  function listKVPage(limit = 1000) {
+    return listScopedKV({ limit });
   }
 
   function getAllKV() {
@@ -82,7 +123,29 @@ function createKvStore({ db, parseJson, nowIso }) {
     }
   }
 
-  return { loadKV, clearKV, replaceKV, setKV, getKV, deleteKV, listKVProjects, getAllKV };
+  // Scoped reads for user facing storage tools. Keep filtering and limits in
+  // SQLite so a project request never materializes unrelated namespaces.
+  function listScopedKV({ project, keyPrefix = "", limit = 1000 } = {}) {
+    const safeLimit = Math.max(1, Math.min(5000, Math.floor(Number(limit) || 1000)));
+    const upper = prefixUpperBound(keyPrefix);
+    const scope = project !== undefined && project !== null
+      ? { where: "project = ? AND key >= ? AND key < ?", values: [project, keyPrefix, upper] }
+      : { where: "key >= ? AND key < ?", values: [keyPrefix, upper] };
+    const oversized = db.prepare(`SELECT COUNT(*) AS count FROM kv_store WHERE ${scope.where} AND length(CAST(value_json AS BLOB)) > ?`)
+      .get(...scope.values, MAX_KV_VALUE_BYTES).count;
+    const rows = project !== undefined && project !== null
+      ? db.prepare("SELECT key, value_json FROM kv_store WHERE project = ? AND key >= ? AND key < ? AND length(CAST(value_json AS BLOB)) <= ? ORDER BY key LIMIT ?")
+        .all(project, keyPrefix, upper, MAX_KV_VALUE_BYTES, safeLimit + 1)
+      : db.prepare("SELECT key, value_json FROM kv_store WHERE key >= ? AND key < ? AND length(CAST(value_json AS BLOB)) <= ? ORDER BY key LIMIT ?")
+        .all(keyPrefix, upper, MAX_KV_VALUE_BYTES, safeLimit + 1);
+    return {
+      entries: rows.slice(0, safeLimit).map(row => [row.key, parseJson(row.value_json, null)]),
+      truncated: rows.length > safeLimit,
+      oversized,
+    };
+  }
+
+  return { loadKV, clearKV, replaceKV, setKV, getKV, hasKV, deleteKV, deleteKVByPrefix, countKV, listKVProjects, listKVProjectPage, listKVPage, getAllKV, listScopedKV };
 }
 
 module.exports = { createKvStore };

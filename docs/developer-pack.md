@@ -231,5 +231,11 @@ module's whole-package integrity, so a mutated installation shows as
   via the module services facade — the same boundary the built-in filesystem
   family uses. `repository_roots` is an *additional* confinement, not a
   replacement for it.
+- Manifest and configuration readers reject final-component symlinks, verify
+  the opened file identity, and cap bytes read. Semantic `.gitignore` loading
+  uses the same safe reader; source traversal skips symlink entries. Keep
+  `repository_roots` configured where Developer tools should be limited to a
+  known set of repositories. These checks do not isolate the pack's in-process
+  code from Core or the host.
 - `dev_verify` reports the exact command it executed, so a verification claim
   can always be checked against what actually ran.

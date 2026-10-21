@@ -86,9 +86,15 @@ function createModuleServices(moduleName, config = {}, { permissions = [], packN
       );
     }
     const dispatcher = require("../tools/dispatcher");
-    // `module` is set last so a handler cannot spoof another module's identity
-    // through options.
-    return dispatcher.callTool(String(name), args || {}, { ...(options || {}), module: moduleName });
+    // Nested dispatch inherits the active request identity and scope through
+    // AsyncLocalStorage. A module must not replace those values with caller-
+    // supplied options (notably authIdentity, project, approval, or source).
+    // Correlation is the only caller-controlled option needed by the facade;
+    // keep it as metadata and let the dispatcher validate its shape.
+    const safeOptions = options && typeof options === "object" && !Array.isArray(options)
+      ? { ...(typeof options.correlationId === "string" ? { correlationId: options.correlationId } : {}) }
+      : {};
+    return dispatcher.callTool(String(name), args || {}, { ...safeOptions, module: moduleName });
   }
 
   // The canonical filesystem boundary, not a copy of it. `enforce` returns

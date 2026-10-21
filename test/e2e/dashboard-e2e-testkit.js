@@ -102,6 +102,7 @@ function serviceEnvironment({ dataDir, dashboardPort, agentPort, mcpPort, ollama
     SIDEKICK_DASHBOARD_USER: dashboardUser,
     SIDEKICK_DASHBOARD_PASS: dashboardPassword,
     SIDEKICK_API_KEY: "sk-e2e-testkit",
+    SIDEKICK_AGENT_PROXY_KEY: "sk-e2e-testkit-dedicated-agent-proxy",
     SIDEKICK_SECRET_KEY: secretKey,
     SIDEKICK_PORT: String(mcpPort),
     SIDEKICK_AGENT_PORT: String(agentPort),

@@ -58,7 +58,7 @@ Use `status` for a compact system overview. Use `health` for a scored health che
 
 ## Safe experimentation
 
-Use `sandbox` when a command may change files and you want automatic backup and rollback support. Use `snapshot` before and after operational changes to compare system state.
+Use approved, scoped execution tools for commands. The `sandbox` tool currently manages tracked backup and rollback records; its `exec` action is disabled because it has no OS-enforced isolation backend. Use `snapshot` before and after separately authorized operational changes to compare system state.
 
 ## Data manipulation
 

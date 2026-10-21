@@ -10,6 +10,7 @@
 // still apply on top.
 
 const { z } = require("zod");
+const { requireCanonicalInvocation, requireToolExecution } = require("../read-authorization");
 
 function jsonText(payload) {
   return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
@@ -43,6 +44,10 @@ function summarize(record) {
 }
 
 async function sidekick_workflow({ action = "list", name, inputs, project, owner, run_id, include_evidence }) {
+  const authorizationError = ["list", "show"].includes(action)
+    ? requireCanonicalInvocation("workflow")
+    : requireToolExecution({ tool: "workflow", action }, "workflows.execute", "workflow");
+  if (authorizationError) return authorizationError;
   const repository = require("../../workflows/repository");
   const runner = require("../../workflows/runner");
   require("../../workflows/core-definitions").ensureCoreWorkflowDefinitions();

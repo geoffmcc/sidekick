@@ -1,8 +1,19 @@
 /** Register dashboard approval inspection and resolution routes. */
 function registerApprovalRoutes({ app, listApprovals, renderContinuationApprovalPreview, authenticatedUser, auditLog, logError, resolveApproval, requireIdentityPermission, errorResponse }) {
+  function requireApprovalPermission(req, res, permission) {
+    if (!req.authPrincipal?.principal_id) {
+      res.status(401).json({ ok: false, error: "authenticated principal required", code: "unauthenticated" });
+      return false;
+    }
+    if (typeof requireIdentityPermission !== "function") {
+      res.status(503).json({ ok: false, error: "authorization service unavailable", code: "authorization_unavailable" });
+      return false;
+    }
+    return requireIdentityPermission(req, res, permission);
+  }
+
   app.get("/api/approvals", (req, res) => {
-    if (req.authPrincipal && requireIdentityPermission && !requireIdentityPermission(req, res, "approvals.read")) return;
-    if (!req.authPrincipal && authenticatedUser(req)) return res.status(403).json({ ok: false, error: "approval inspection requires an authenticated principal" });
+    if (!requireApprovalPermission(req, res, "approvals.read")) return;
     res.json({ ok: true, approvals: listApprovals({ status: req.query.status, limit: req.query.limit }) });
   });
 
@@ -11,7 +22,7 @@ function registerApprovalRoutes({ app, listApprovals, renderContinuationApproval
       if (!authenticatedUser(req)) {
         return res.status(403).json({ ok: false, error: "Rendering approval arguments requires an authenticated principal; configure dashboard authentication" });
       }
-      if (req.authPrincipal && requireIdentityPermission && !requireIdentityPermission(req, res, "approvals.read")) return;
+      if (!requireApprovalPermission(req, res, "approvals.read")) return;
       const preview = renderContinuationApprovalPreview(req.params.id);
       if (!preview.ok) return res.status(preview.code === "not_found" ? 404 : 409).json({ ok: false, error: preview.code });
       auditLog(req, "approval.preview", { id: req.params.id, viewer: authenticatedUser(req) });
@@ -26,10 +37,7 @@ function registerApprovalRoutes({ app, listApprovals, renderContinuationApproval
       try {
         const principalId = req.authPrincipal?.principal_id || null;
         if (!principalId) return res.status(401).json({ ok: false, error: "unauthenticated" });
-        const permitted = requireIdentityPermission
-          ? requireIdentityPermission(req, res, "approvals.grant")
-          : true;
-        if (!permitted) return;
+        if (!requireApprovalPermission(req, res, "approvals.grant")) return;
         const reviewer = principalId;
         auditLog(req, `approval.${action}`, { id: req.params.id, reviewer_principal_id: principalId });
         const result = await resolveApproval(req.params.id, verb, reviewer, { reviewerPrincipalId: principalId });

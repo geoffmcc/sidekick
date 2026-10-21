@@ -169,8 +169,11 @@ function assignRole(principalIdValue, role, actorPrincipalId = null) {
       if (!authorization.authorize({ principalId: actorPrincipalId, permission: "roles.manage" }).ok) throw new Error("Owner promotion requires an authorized actor");
     }
   }
-  dbStore.getDb().prepare("INSERT INTO principal_roles (principal_id, role_name, assigned_by_principal_id, assigned_at) VALUES (?, ?, ?, ?)").run(principal.principal_id, role, actorPrincipalId, now());
-  audit("role.assigned", principal.principal_id, actorPrincipalId, { role });
+  const db = dbStore.getDb();
+  db.transaction(() => {
+    db.prepare("INSERT INTO principal_roles (principal_id, role_name, assigned_by_principal_id, assigned_at) VALUES (?, ?, ?, ?)").run(principal.principal_id, role, actorPrincipalId, now());
+    audit("role.assigned", principal.principal_id, actorPrincipalId, { role });
+  })();
   return getPrincipal(principal.principal_id);
 }
 
@@ -185,8 +188,11 @@ function removeRole(principalIdValue, role, actorPrincipalId = null) {
     const authorization = require("./authorization");
     if (!authorization.authorize({ principalId: actorPrincipalId, permission: "roles.manage" }).ok) throw new Error("Owner demotion requires roles.manage");
   }
-  dbStore.getDb().prepare("DELETE FROM principal_roles WHERE principal_id = ? AND role_name = ?").run(principal.principal_id, role);
-  audit("role.removed", principal.principal_id, actorPrincipalId, { role });
+  const db = dbStore.getDb();
+  db.transaction(() => {
+    db.prepare("DELETE FROM principal_roles WHERE principal_id = ? AND role_name = ?").run(principal.principal_id, role);
+    audit("role.removed", principal.principal_id, actorPrincipalId, { role });
+  })();
   return getPrincipal(principal.principal_id);
 }
 

@@ -10,6 +10,7 @@ const path = require("path");
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-download-custody-"));
 process.env.SIDEKICK_DATA_DIR = dataDir;
 process.env.SIDEKICK_SECRET_KEY = "download-custody-test-key";
+process.env.SIDEKICK_ALLOWED_PATHS = dataDir;
 
 const originalExecFileSync = childProcess.execFileSync;
 const originalLookup = dns.promises.lookup;
@@ -25,11 +26,22 @@ childProcess.execFileSync = (_command, args) => {
 };
 
 const dbStore = require("../src/db");
+const { callMcpTool } = require("../src/tools");
 const { sidekick_download } = require("../src/tools/families/media");
+const { runWithContext } = require("../src/tools/context");
+const { createOwnerContext } = require("./helpers/authorized-context");
+process.env.SIDEKICK_TOOL_POLICY = "open";
+process.env.SIDEKICK_APPROVAL_MODE = "off";
+const owner = createOwnerContext({ project: "download-custody-test" });
 
 async function main() {
-  const result = await sidekick_download({ url: "https://www.youtube.com/watch?v=fixture" });
-  assert.strictEqual(result.isError, undefined);
+  capturedArgs = undefined;
+  const direct = await runWithContext(owner, () => sidekick_download({ url: "https://www.youtube.com/watch?v=must-not-run" }));
+  assert.strictEqual(direct.code, "canonical_dispatch_required", "raw download handler calls must fail before starting a process");
+  assert.strictEqual(capturedArgs, undefined, "direct denial must happen before invoking yt-dlp");
+
+  const result = await callMcpTool("download", { url: "https://www.youtube.com/watch?v=fixture" }, owner);
+  assert.ok(!result.isError, result.content?.[0]?.text);
   const payload = JSON.parse(result.content[0].text);
   assert.strictEqual(payload.status, "success");
   assert.ok(payload.artifact_id, "managed downloads must return an artifact id");
@@ -40,7 +52,7 @@ async function main() {
   assert.ok(capturedArgs.includes("--socket-timeout"), "downloads must enforce a network socket timeout");
 
   dns.promises.lookup = async () => [{ address: "127.0.0.1", family: 4 }];
-  const refused = await sidekick_download({ url: "https://media.example/video" });
+  const refused = await callMcpTool("download", { url: "https://media.example/video" }, owner);
   assert.strictEqual(refused.isError, true, "DNS-resolved private download targets must be refused");
 
   const artifact = dbStore.getDb().prepare("SELECT type, storage_ref, byte_size, content_hash, content_type, producer FROM platform_artifacts WHERE artifact_id = ?").get(payload.artifact_id);
@@ -57,11 +69,13 @@ async function main() {
 main().then(() => {
   childProcess.execFileSync = originalExecFileSync;
   dns.promises.lookup = originalLookup;
+  try { dbStore.getDb().close(); } catch {}
   fs.rmSync(dataDir, { recursive: true, force: true });
   console.log("Download custody test passed");
 }).catch((error) => {
   childProcess.execFileSync = originalExecFileSync;
   dns.promises.lookup = originalLookup;
+  try { dbStore.getDb().close(); } catch {}
   fs.rmSync(dataDir, { recursive: true, force: true });
   console.error(error.stack || error);
   process.exitCode = 1;

@@ -40,6 +40,7 @@ async function main() {
   console.log('Running Compute Worker Rotate Tests...\n');
   const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'wrot-'));
   const credPath = path.join(TMP, 'worker-credential.json');
+  process.env.SIDEKICK_WORKER_CONFIG_FILE = path.join(TMP, 'no-external-worker-config.json');
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   const port = server.address().port;
   process.env.SIDEKICK_URL = `http://127.0.0.1:${port}`;

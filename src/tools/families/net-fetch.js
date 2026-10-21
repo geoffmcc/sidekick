@@ -9,6 +9,7 @@
 
 const { z } = require("zod");
 const { resolveOutboundUrl, filterRequestHeaders } = require("../../security/outbound-url");
+const { requireCanonicalInvocation } = require("../read-authorization");
 
 const DEFAULT_TIMEOUT_MS = 30000;
 // Responses are accumulated in memory and returned as tool output, so an
@@ -32,6 +33,8 @@ function connectionFailure(error) {
 }
 
 async function sidekick_web_fetch({ url: targetUrl, method, headers, body, network_scope, network_scope_revision }, runtime = {}) {
+  const denied = requireCanonicalInvocation("web_fetch");
+  if (denied) return denied;
   const https = require("https");
   const http = require("http");
 

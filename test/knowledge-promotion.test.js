@@ -1,62 +1,64 @@
 "use strict";
 
 const assert = require("assert");
+const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
-process.env.SIDEKICK_DATA_DIR = path.join(os.tmpdir(), `sidekick-knowledge-promotion-${process.pid}`);
+process.env.SIDEKICK_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-knowledge-promotion-"));
 delete process.env.SIDEKICK_DB_FILE;
+process.env.SIDEKICK_TOOL_POLICY = "open";
+process.env.SIDEKICK_APPROVAL_MODE = "required";
 
 const dbStore = require("../src/db");
-const { sidekick_knowledge } = require("../src/tools/families/knowledge");
-const { sidekick_teach } = require("../src/tools/families/teach");
+const { callMcpTool } = require("../src/tools");
+const { createOwnerContext } = require("./helpers/authorized-context");
+const owner = createOwnerContext({ project: "knowledge-promotion-test" });
+
+function promote(args) {
+  return callMcpTool("knowledge", args, owner);
+}
 
 async function main() {
   dbStore.runPendingMigrations();
 
-  const taught = await sidekick_teach({
+  const taught = await callMcpTool("teach", {
     action: "teach_procedure",
     name: "knowledge-promotion-regression",
     description: "A procedure used to verify governed knowledge promotion",
     steps: [{ tool: "get", args: { key: "api_token", token: "super-secret-value" } }],
-  });
+  }, owner);
   assert.match(taught.content[0].text, /Taught procedure/);
 
-  const promoted = await sidekick_knowledge({
+  const forged = await promote({
     action: "promote",
     source: "procedure",
     source_id: "knowledge-promotion-regression",
     category: "development",
-    title: "Governed knowledge promotion regression",
-    approver: "test-operator",
+    approver: "forged-operator",
   });
-  const promotedPayload = JSON.parse(promoted.content[0].text);
-  assert.strictEqual(promotedPayload.promoted, true);
+  assert.strictEqual(forged.isError, true, "caller-supplied approver labels cannot authorize promotion");
 
-  const row = dbStore.getDb().prepare(
-    "SELECT source_type, source_id, source_version, approved_by, content FROM knowledge WHERE id = ?"
-  ).get(promotedPayload.id);
-  assert.strictEqual(row.source_type, "procedure");
-  assert.strictEqual(row.source_id, "knowledge-promotion-regression");
-  assert.strictEqual(row.approved_by, "test-operator");
-  assert.ok(!row.content.includes("super-secret-value"), "promoted content must redact sensitive values");
-
-  const duplicate = await sidekick_knowledge({
+  const unapproved = await promote({
     action: "promote",
     source: "procedure",
     source_id: "knowledge-promotion-regression",
     category: "development",
-    approver: "test-operator",
+    approver: owner.authIdentity.principal_id,
   });
-  assert.ok(JSON.parse(duplicate.content[0].text).existing_id, "promotion must be idempotent");
+  assert.strictEqual(unapproved.isError, true, "promotion requires a separate dispatcher approval");
+  assert.strictEqual(unapproved.code, "approval_required");
+  assert.strictEqual(dbStore.getDb().prepare(
+    "SELECT COUNT(*) AS count FROM knowledge WHERE source_type = 'procedure' AND source_id = ? AND enabled = 1"
+  ).get("knowledge-promotion-regression").count, 0, "denied promotion must not persist content");
 
-  const search = await sidekick_knowledge({
+  const search = await promote({
     action: "search",
     query: "governed knowledge promotion",
     category: "development",
   });
   const rows = JSON.parse(search.content[0].text);
-  assert.ok(rows.some(item => item.id === promotedPayload.id), "promoted knowledge must be FTS-searchable");
+  assert.ok(!rows.some(item => item.title === "Governed knowledge promotion regression"), "denied promotion must remain absent from knowledge search");
 
   console.log("Knowledge promotion tests passed.");
 }

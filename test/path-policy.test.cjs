@@ -32,6 +32,8 @@ const toolContext = require('../src/tools/context');
 const { parsePolicyList, sourceEnvName } = require('../src/core/policy-env');
 const legacy = require('../src/tools-legacy');
 const tools = require('../src/tools');
+const { createOwnerContext } = require('./helpers/authorized-context');
+const authorizedReadContext = createOwnerContext({ source: 'mcp' });
 
 const {
   normalizePolicyPath,
@@ -170,16 +172,16 @@ function setupSymlinkFixtures() {
     );
     console.log('✓ Passed\n');
 
-    console.log('Test 2: open by default when no policy is configured');
+    console.log('Test 2: deny by default when no allow-list is configured');
     resetPathEnv();
     toolContext.setExecutionSource('mcp');
-    const openDecision = getPathPolicyDecision(outsideFile, 'read');
-    assert.strictEqual(openDecision.allowed, true, 'Unset policy should allow everything');
-    assert.strictEqual(openDecision.reason, 'path policy is open');
-    assert.strictEqual(openDecision.operation, 'read');
-    assert.strictEqual(openDecision.source, 'mcp');
-    assert.strictEqual(openDecision.path, path.resolve(outsideFile));
-    assert.strictEqual(enforcePathPolicy(outsideFile, 'read'), null, 'Allowed path should enforce to null');
+    const defaultDecision = getPathPolicyDecision(outsideFile, 'read');
+    assert.strictEqual(defaultDecision.allowed, false, 'Unset allow-list must deny host filesystem access');
+    assert.strictEqual(defaultDecision.reason, 'no allowed filesystem paths are configured');
+    assert.strictEqual(defaultDecision.operation, 'read');
+    assert.strictEqual(defaultDecision.source, 'mcp');
+    assert.strictEqual(defaultDecision.path, path.resolve(outsideFile));
+    assert.strictEqual(enforcePathPolicy(outsideFile, 'read').isError, true, 'Unconfigured policy must fail closed');
     console.log('✓ Passed\n');
 
     console.log('Test 3: allow list permits members and blocks non-members');
@@ -266,6 +268,7 @@ function setupSymlinkFixtures() {
     console.log('Test 7: per-source policy isolation');
     resetPathEnv();
     process.env.SIDEKICK_AGENT_ALLOWED_PATHS = allowedDir;
+    process.env.SIDEKICK_MCP_ALLOWED_PATHS = outsideDir;
     toolContext.setExecutionSource('agent');
     const agentDecision = getPathPolicyDecision(outsideFile, 'read');
     assert.strictEqual(agentDecision.allowed, false, 'Source-specific allow list should constrain that source');
@@ -275,7 +278,7 @@ function setupSymlinkFixtures() {
     assert.strictEqual(
       getPathPolicyDecision(outsideFile, 'read').allowed,
       true,
-      'Source-specific allow list should not affect other sources'
+      'An explicit MCP allow root remains independent from the Agent allow root'
     );
 
     // An explicit source argument overrides the ambient context.
@@ -298,6 +301,7 @@ function setupSymlinkFixtures() {
 
     console.log('Test 8: legacy setSource compatibility still drives the policy');
     resetPathEnv();
+    process.env.SIDEKICK_ALLOWED_PATHS = TEST_DATA_DIR;
     process.env.SIDEKICK_AGENT_DENIED_PATHS = deniedDir;
     legacy.setSource('agent');
     assert.strictEqual(getPathPolicyDecision(deniedFile, 'read').allowed, false, 'legacy setSource should reach the extracted module');
@@ -305,14 +309,16 @@ function setupSymlinkFixtures() {
     assert.strictEqual(getPathPolicyDecision(deniedFile, 'read').allowed, true, 'legacy setSource should switch the resolved source back');
     console.log('✓ Passed\n');
 
-    console.log('Test 9: environment is re-read on every call');
+    console.log('Test 9: environment is re-read on every call with deny-by-default');
     resetPathEnv();
     toolContext.setExecutionSource('mcp');
-    assert.strictEqual(getPathPolicyDecision(outsideFile, 'read').allowed, true, 'Open before configuration');
+    assert.strictEqual(getPathPolicyDecision(outsideFile, 'read').allowed, false, 'No allow root denies before configuration');
     process.env.SIDEKICK_DENIED_PATHS = outsideDir;
     assert.strictEqual(getPathPolicyDecision(outsideFile, 'read').allowed, false, 'Newly set deny list applies without a reload');
     delete process.env.SIDEKICK_DENIED_PATHS;
-    assert.strictEqual(getPathPolicyDecision(outsideFile, 'read').allowed, true, 'Cleared deny list applies without a reload');
+    assert.strictEqual(getPathPolicyDecision(outsideFile, 'read').allowed, false, 'Clearing a deny list does not create an allow grant');
+    process.env.SIDEKICK_ALLOWED_PATHS = outsideDir;
+    assert.strictEqual(getPathPolicyDecision(outsideFile, 'read').allowed, true, 'Adding an allow root applies without a reload');
     // Comma-separated lists with whitespace and empty members.
     process.env.SIDEKICK_DENIED_PATHS = `  ${outsideDir} , , ${deniedDir}  `;
     assert.strictEqual(getPathPolicyDecision(outsideFile, 'read').allowed, false, 'Whitespace-padded list members should be honored');
@@ -322,7 +328,7 @@ function setupSymlinkFixtures() {
     assert.strictEqual(sourceEnvName('my-source', 'DENIED_PATHS'), 'SIDEKICK_MY_SOURCE_DENIED_PATHS', 'Non-alphanumerics collapse to underscore');
     console.log('✓ Passed\n');
 
-    console.log('Test 10: blocked error shape and message are unchanged');
+    console.log('Test 10: blocked error shape and message are stable');
     resetPathEnv();
     toolContext.setExecutionSource('mcp');
     process.env.SIDEKICK_ALLOWED_PATHS = allowedDir;
@@ -353,22 +359,23 @@ function setupSymlinkFixtures() {
     resetPathEnv();
     toolContext.setExecutionSource('mcp');
     process.env.SIDEKICK_ALLOWED_PATHS = allowedDir;
-    const readOk = await tools.TOOLS.read({ path: allowedFile });
+    const readOk = await toolContext.runWithContext(authorizedReadContext, () => tools.TOOLS.read({ path: allowedFile }));
     assert.ok(!readOk.isError, 'Allowed read should succeed through the tool surface');
 
-    const readBlocked = await tools.TOOLS.read({ path: outsideFile });
+    const readBlocked = await toolContext.runWithContext(authorizedReadContext, () => tools.TOOLS.read({ path: outsideFile }));
     assert.ok(readBlocked.isError, 'Read outside the allow root should be blocked');
     assert.ok(readBlocked.content[0].text.includes('Path blocked by policy'), 'Handler should surface the shared policy message');
 
-    const writeBlocked = await tools.TOOLS.write({ path: outsideFile, content: 'should not land' });
+    const writeBlocked = await toolContext.runWithContext(authorizedReadContext, () => tools.TOOLS.write({ path: outsideFile, content: 'should not land' }));
     assert.ok(writeBlocked.isError, 'Blocked write should return an error');
     assert.strictEqual(fs.readFileSync(outsideFile, 'utf-8'), 'outside content', 'Blocked write must not mutate the target');
 
     // hash still routes through the shared boundary after descriptor extraction.
-    const hashBlocked = await tools.TOOLS.hash({ path: outsideFile });
+    const hashContext = require('./helpers/authorized-context').createServiceContext({ role: 'operator', source: 'mcp' });
+    const hashBlocked = await toolContext.runWithContext(hashContext, () => tools.TOOLS.hash({ path: outsideFile }));
     assert.ok(hashBlocked.isError, 'hash should still enforce the shared path policy');
     assert.ok(hashBlocked.content[0].text.includes('Path blocked by policy'), 'hash should surface the shared policy message');
-    const hashOk = await tools.TOOLS.hash({ path: allowedFile });
+    const hashOk = await toolContext.runWithContext(hashContext, () => tools.TOOLS.hash({ path: allowedFile }));
     assert.ok(!hashOk.isError, 'hash should still succeed for an allowed path');
     console.log('✓ Passed\n');
 
@@ -534,6 +541,7 @@ function setupSymlinkFixtures() {
     // A deny root reached through a symlink must constrain just as well as a
     // real one; canonicalizing entries is what makes that hold.
     resetPathEnv();
+    process.env.SIDEKICK_ALLOWED_PATHS = LINK_ROOT;
     process.env.SIDEKICK_DENIED_PATHS = at('safe', 'deny-dir');
     assert.strictEqual(
       getPathPolicyDecision(at('secrets', 'top.txt'), 'read').allowed,
@@ -625,6 +633,16 @@ function setupSymlinkFixtures() {
       false,
       'A broken symlink in a parent component must be denied'
     );
+    assert.strictEqual(
+      getPathPolicyDecision(rawAt('safe', 'broken', '..', 'plain.txt'), 'read').reason,
+      'path contains an unresolvable symlink',
+      'A broken symlink before a parent segment must fail closed before resolving ..'
+    );
+    assert.strictEqual(
+      getPathPolicyDecision(rawAt('safe', 'new-parent', '..', 'plain.txt'), 'read').allowed,
+      true,
+      'A missing component before a parent segment is resolved against its safe ancestor'
+    );
     // Outside every configured root, a resolution failure must be indis-
     // tinguishable from an ordinary denial, or the reason string becomes an
     // existence-and-permission oracle for arbitrary paths.
@@ -653,6 +671,16 @@ function setupSymlinkFixtures() {
     console.log('✓ Passed\n');
 
     console.log('Test 17: policy roots and operations');
+    // When a valid allow root exists, an unresolvable deny root must still
+    // fail closed instead of being silently dropped from the comparison.
+    resetPathEnv();
+    process.env.SIDEKICK_ALLOWED_PATHS = safeRoot;
+    process.env.SIDEKICK_DENIED_PATHS = at('safe', 'broken');
+    const badDenyRootWithAllow = getPathPolicyDecision(at('safe', 'plain.txt'), 'read');
+    assert.strictEqual(badDenyRootWithAllow.allowed, false, 'An unresolvable deny root must reject an otherwise allowed path');
+    assert.strictEqual(badDenyRootWithAllow.reason, 'policy configuration could not be resolved', 'An unresolvable deny root gets a controlled reason');
+    assert.ok(!badDenyRootWithAllow.reason.includes(LINK_ROOT), 'An unresolvable deny root must not reveal its configured path');
+
     // An unresolvable configured root fails closed rather than being skipped.
     resetPathEnv();
     process.env.SIDEKICK_DENIED_PATHS = at('safe', 'broken');
@@ -687,6 +715,24 @@ function setupSymlinkFixtures() {
       'An absent allow root still matches its own descendants'
     );
 
+    // Exercise the Windows drive-relative guard even when the suite runs on
+    // another platform. The guard returns before platform-specific path
+    // resolution, so changing this property is safe within this synchronous
+    // assertion and is always restored.
+    resetPathEnv();
+    process.env.SIDEKICK_ALLOWED_PATHS = path.dirname(normalizePolicyPath('C:relative'));
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+    try {
+      Object.defineProperty(process, 'platform', { ...platformDescriptor, value: 'win32' });
+      assert.strictEqual(
+        getPathPolicyDecision('C:relative', 'read').reason,
+        'path could not be resolved',
+        'Windows drive-relative paths are rejected instead of being resolved against an unknown drive directory'
+      );
+    } finally {
+      Object.defineProperty(process, 'platform', platformDescriptor);
+    }
+
     // Operation labels do not select different roots in this policy, and the
     // escape is blocked identically whichever label is used.
     resetPathEnv();
@@ -715,16 +761,16 @@ function setupSymlinkFixtures() {
     process.env.SIDEKICK_ALLOWED_PATHS = safeRoot;
 
     // Read caller: the handler must refuse before touching the filesystem.
-    const linkRead = await tools.TOOLS.read({ path: at('safe', 'escape-file') });
+    const linkRead = await toolContext.runWithContext(authorizedReadContext, () => tools.TOOLS.read({ path: at('safe', 'escape-file') }));
     assert.ok(linkRead.isError, 'read through an escaping symlink must be blocked');
     assert.ok(linkRead.content[0].text.includes('Path blocked by policy'), 'read surfaces the shared policy message');
     assert.ok(!linkRead.content[0].text.includes('outside secret'), 'Blocked read must not leak the target contents');
 
-    const safeRead = await tools.TOOLS.read({ path: at('safe', 'plain.txt') });
+    const safeRead = await toolContext.runWithContext(authorizedReadContext, () => tools.TOOLS.read({ path: at('safe', 'plain.txt') }));
     assert.ok(!safeRead.isError, 'Permitted read still succeeds');
 
     // Write caller: the escaping link must not be followed.
-    const linkWrite = await tools.TOOLS.write({ path: at('safe', 'escape-file'), content: 'clobbered' });
+    const linkWrite = await toolContext.runWithContext(authorizedReadContext, () => tools.TOOLS.write({ path: at('safe', 'escape-file'), content: 'clobbered' }));
     assert.ok(linkWrite.isError, 'write through an escaping symlink must be blocked');
     assert.strictEqual(
       fs.readFileSync(at('outside', 'secret.txt'), 'utf-8'),
@@ -732,12 +778,13 @@ function setupSymlinkFixtures() {
       'Blocked write must not reach the symlink target'
     );
 
-    const safeWrite = await tools.TOOLS.write({ path: at('safe', 'written.txt'), content: 'ok' });
-    assert.ok(!safeWrite.isError, 'Permitted write still succeeds');
+    const authorizedWriteContext = createOwnerContext({ source: 'mcp' });
+    const safeWrite = await toolContext.runWithContext(authorizedWriteContext, () => tools.TOOLS.write({ path: at('safe', 'written.txt'), content: 'ok' }));
+    assert.ok(!safeWrite.isError, `Permitted write still succeeds: ${safeWrite.content?.[0]?.text || safeWrite.code}`);
     assert.strictEqual(fs.readFileSync(at('safe', 'written.txt'), 'utf-8'), 'ok', 'Permitted write lands');
 
     // A broken link surfaces as a policy error, not an unhandled exception.
-    const brokenRead = await tools.TOOLS.read({ path: at('safe', 'broken') });
+    const brokenRead = await toolContext.runWithContext(authorizedReadContext, () => tools.TOOLS.read({ path: at('safe', 'broken') }));
     assert.ok(brokenRead.isError, 'read of a broken symlink is blocked');
     assert.ok(brokenRead.content[0].text.includes('Path blocked by policy'), 'Broken link keeps the shared policy message');
     console.log('✓ Passed\n');

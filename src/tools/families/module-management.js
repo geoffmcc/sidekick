@@ -1,6 +1,7 @@
 "use strict";
 
 const { z } = require("zod");
+const { requireCanonicalInvocation } = require("../read-authorization");
 
 function jsonText(value) {
   return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }] };
@@ -42,6 +43,8 @@ function resolveEntry(record) {
 }
 
 async function sidekick_module({ action = "list", name }) {
+  const authorizationError = requireCanonicalInvocation("module");
+  if (authorizationError) return authorizationError;
   // Keep module runtime dependencies lazy: this family is loaded while the
   // registry itself is being assembled, and eager imports can create a second
   // partially-initialized loader through the registry -> family cycle.

@@ -1141,7 +1141,10 @@ function searchIncidents(query, options = {}) {
   ensureSchema();
   const q = `%${String(query || "").trim()}%`;
   if (q === "%%") return [];
-  const limit = Math.min(Number(options.limit || 50), 200);
+  const requestedLimit = Number(options.limit ?? 50);
+  const limit = Number.isSafeInteger(requestedLimit) && requestedLimit > 0
+    ? Math.min(requestedLimit, 200)
+    : 50;
   const db = dbStore.getDb();
   const meta = db.prepare(`
     SELECT 'incident' AS type, id AS incident_id, NULL AS capture_id, NULL AS source_id, title AS title,

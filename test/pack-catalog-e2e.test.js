@@ -68,5 +68,6 @@ function json(result) {
   console.error(error.stack || error);
   process.exitCode = 1;
 }).finally(() => {
-  setTimeout(() => fs.rmSync(dataDir, { recursive: true, force: true }), 0);
+  try { require("../src/db").closeDatabase(); } catch {}
+  fs.rmSync(dataDir, { recursive: true, force: true });
 });

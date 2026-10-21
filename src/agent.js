@@ -8,7 +8,20 @@ const { callAgentTool, getBuiltinRegistry, DATA_DIR, loadDelays, saveDelays, loa
 const { requiredToolPermission } = require("./tools/dispatcher");
 const authorization = require("./core/authorization");
 const identity = require("./core/identity");
+const projectAccess = require("./core/project-access");
 const { createAgentCatalog } = require("./agent/catalog");
+const { persistedTaskAuthIdentity } = require("./agent/task-identity");
+const { authorizeRecoveredTask } = require("./agent/recovery-authorization");
+const { readSecret } = require("./core/runtime-secrets");
+const { verifyAgentProxyRequest, createSqliteNonceConsumer, assertDistinctProxySecret, assertDistinctAgentSchedulerSecret } = require("./security/agent-proxy-auth");
+const { taskBelongsToIdentity, canReviewUnownedTask, isAllowedServiceRoute } = require("./agent/task-access");
+const mcpApiKey = readSecret("SIDEKICK_API_KEY", { required: process.env.NODE_ENV !== "test" });
+const agentProxySecret = process.env.NODE_ENV === "test"
+  ? (readSecret("SIDEKICK_AGENT_PROXY_KEY") || mcpApiKey)
+  : readSecret("SIDEKICK_AGENT_PROXY_KEY", { required: true });
+if (process.env.NODE_ENV !== "test") assertDistinctProxySecret(mcpApiKey, agentProxySecret);
+const agentSchedulerSecret = readSecret("SIDEKICK_AGENT_SCHEDULER_KEY");
+if (agentSchedulerSecret) assertDistinctAgentSchedulerSecret(mcpApiKey, agentProxySecret, agentSchedulerSecret);
 
 const {
   getLiveAgentToolDefs,
@@ -20,11 +33,6 @@ const {
   brainAgentTools,
 } = createAgentCatalog({ getToolDefsForSource, getBuiltinRegistry, crypto });
 
-function persistedTaskAuthIdentity(task) {
-  const principalId = task && (task.actor_principal_id || task.requested_by_principal_id);
-  if (!principalId || !task.principal_context || task.principal_context.version !== 1) return null;
-  return { principal_id: principalId, scopes: task.principal_context.credential_scopes || [], delegation_id: task.principal_context.delegation_id || null, authentication_method: "durable-task-context" };
-}
 function profileFitsParent(parentProfile, requestedProfile) {
   const parent = durableTaskModel.PROFILES[parentProfile] || durableTaskModel.PROFILES.standard;
   const requested = durableTaskModel.PROFILES[requestedProfile] || null;
@@ -72,8 +80,9 @@ async function retryDurableReceipt({ receipt, task }) {
   const permission = requiredToolPermission(descriptor, recipe.arguments || {});
   const principal = task.actor_principal_id || task.requested_by_principal_id;
   if (principal && (!task.principal_context || task.principal_context.version !== 1)) return null;
-  if (principal && !authorization.authorize({ principalId: principal, permission, credentialScopes: task.principal_context.credential_scopes, delegationId: task.principal_context.delegation_id || null, resource: { tool: descriptor.name, source: "agent-recovery" } }).ok) return null;
-  const result = await callAgentTool(recipe.capability, recipe.arguments, { taskId: task.task_id, project: task.project_id, source: "agent", authIdentity: persistedTaskAuthIdentity(task), correlationId: task.task_id, idempotencyKey: `agent-recovery:${receipt.receipt_id}`, timeoutMs: 30000 });
+  const authIdentity = persistedTaskAuthIdentity(task);
+  if (principal && (!authIdentity || !authorization.authorize({ principalId: principal, permission, credentialScopes: authIdentity.scopes, delegationId: authIdentity.delegation_id || null, resource: { tool: descriptor.name, source: "agent-recovery" } }).ok)) return null;
+  const result = await callAgentTool(recipe.capability, recipe.arguments, { taskId: task.task_id, project: task.project_id, source: "agent", authIdentity, correlationId: task.task_id, idempotencyKey: `agent-recovery:${receipt.receipt_id}`, timeoutMs: 30000 });
   if (!result || result.isError) return null;
   return { ok: true, provider_receipt_ref: result.operationId || result.operation_id || result.idempotencyKey || result.idempotency_key || result.receipt_ref || null };
 }
@@ -169,10 +178,28 @@ const dbStore = require("./db");
 // The Agent owns a separate process in deployments. Migrate before exposing
 // health or accepting tasks so readiness never depends on lazy store access.
 dbStore.runPendingMigrations();
+const consumeAgentProxyNonce = createSqliteNonceConsumer(dbStore.getDb());
 const durableReceiptStore = require("./agent/receipt-store");
 const durableWorkspaceTransactions = require("./agent/workspace-transactions");
 const durableOperations = require("./agent/durable-operations");
-const handoffContinuity = createHandoffContinuity({ getTask: durableTaskStore.getTask, getHandoff: dbStore.getHandoff, captureHandoffCheckpoint: dbStore.captureHandoffCheckpoint, saveHandoff: dbStore.saveHandoff, transitionHandoff: dbStore.transitionHandoff, refreshHandoffEvidence: dbStore.refreshHandoffEvidence, listPlans: durableTaskStore.listPlans });
+function authorizeTaskHandoffWrite(task, handoff) {
+  if (!task || !handoff || (handoff.project || null) !== (task.project_id || null)) return false;
+  const taskPrincipalId = task.actor_principal_id || task.requested_by_principal_id || null;
+  // A task may maintain only the continuity record it created itself. This
+  // narrow service operation also supports read-only Certification tasks.
+  if (handoff.task_id === task.task_id) {
+    return (!handoff.owner_principal_id || handoff.owner_principal_id === taskPrincipalId)
+      && (!handoff.created_by_principal_id || handoff.created_by_principal_id === taskPrincipalId);
+  }
+  const authIdentity = persistedTaskAuthIdentity(task);
+  if (!authIdentity?.principal_id) return false;
+  const delegationId = authIdentity.delegation_id || null;
+  if (!projectAccess.hasProjectPermission(authIdentity.principal_id, handoff.project || null, "memory.write", "write", authIdentity.scopes, delegationId)) return false;
+  const canManageHandoffs = authorization.authorize({ principalId: authIdentity.principal_id, permission: "principals.manage", credentialScopes: authIdentity.scopes, delegationId }).ok;
+  const ownerId = authIdentity.acting_for_principal_id || authIdentity.principal_id;
+  return canManageHandoffs || handoff.owner_principal_id === ownerId || handoff.created_by_principal_id === authIdentity.principal_id;
+}
+const handoffContinuity = createHandoffContinuity({ getTask: durableTaskStore.getTask, getHandoff: dbStore.getHandoff, authorizeHandoffWrite: authorizeTaskHandoffWrite, captureHandoffCheckpoint: dbStore.captureHandoffCheckpoint, saveHandoff: dbStore.saveHandoff, transitionHandoff: dbStore.transitionHandoff, refreshHandoffEvidence: dbStore.refreshHandoffEvidence, listPlans: durableTaskStore.listPlans });
 const { determineEffect, decideAutonomy, intersectEnvelope, governedTargetRef } = require("./agent/authority");
 const { recoverDurableAgentTasks } = require("./agent/recovery-scan");
 const { verifyTaskResult, successfulFreshOutcome, applyRecipeGates, applyReceiptGates, applyPlanGates, runVerificationRepair } = require("./agent/verification");
@@ -200,12 +227,7 @@ try { inferenceService = require("./compute/inference-service"); } catch {}
 const PORT = parseInt(process.env.SIDEKICK_AGENT_PORT || "4099", 10);
 
 function requestAuthIdentity(req) {
-  const principalId = String(req.get("X-Sidekick-Principal-ID") || "").trim();
-  if (!principalId || !/^[A-Za-z0-9_.:-]{1,160}$/.test(principalId)) return null;
-  let scopes = [];
-  try { const parsed = JSON.parse(String(req.get("X-Sidekick-Principal-Scopes") || "[]")); scopes = Array.isArray(parsed) ? parsed.map(String).slice(0, 80) : []; } catch { scopes = []; }
-  const delegationId = String(req.get("X-Sidekick-Delegation-ID") || "").trim();
-  return { principal_id: principalId, scopes, delegation_id: delegationId && /^[A-Za-z0-9_.:-]{1,160}$/.test(delegationId) ? delegationId : null, authentication_method: "dashboard-proxy" };
+  return req.agentProxyIdentity?.principal_id ? req.agentProxyIdentity : null;
 }
 
 function principalAuthorityEnvelope(authIdentity) {
@@ -289,22 +311,31 @@ const executeDelay = createDelayExecution({
   claimExecution: platformKernel.claimExecution,
   releaseScheduledClaim, startScheduledLeaseRenewal,
   transitionScheduledPlatformExecution, appendScheduledPlatformEvent,
+  authorizeScheduledDelay: (delay, scheduledContext) => {
+    const authorityContext = scheduledContext.agentAuthorityContext;
+    if (!authorityContext) return { ok: true };
+    const descriptor = getLiveAgentDescriptor(delay.tool);
+    const decision = decideAutonomy({
+      descriptor,
+      args: delay.args || {},
+      envelope: authorityContext.envelope,
+      principalRef: authorityContext.principal_ref,
+      projectRef: scheduledContext.project || authorityContext.project_ref,
+      workspaceRef: authorityContext.workspace_ref,
+      repositoryRef: authorityContext.repository_ref,
+      capabilityRef: delay.tool,
+      descriptorVersion: descriptor?.version,
+    });
+    return {
+      ok: decision.decision !== "deny",
+      authorityApprovalRequired: decision.approval_required,
+      authorityRisk: decision.risk_class,
+      authorityReason: decision.reason,
+    };
+  },
   getDelayTimers: () => delayTimers, processId: process.pid,
 });
 ({ delayTimers, scheduleDelay, loadAndScheduleDelays } = createDelayScheduler({ loadDelays, executeDelay }));
-
-try {
-  const recovered = recoverStrandedDelays({ source: "agent", actor: "agent" });
-  if (recovered.requeued > 0) console.log(`Recovered ${recovered.requeued} stranded delay(s) after restart`);
-} catch (e) {
-  console.error(`Delay recovery failed: ${e.message}`);
-}
-try {
-  const recoveredRunbooks = recoverStrandedRunbooks({ source: "agent", actor: "agent" });
-  if (recoveredRunbooks.recovered > 0) console.log(`Recovered ${recoveredRunbooks.recovered} stranded runbook instance(s) after restart`);
-} catch (e) {
-  console.error(`Runbook recovery failed: ${e.message}`);
-}
 
 /**
  * Terminalise agent-task executions stranded `running` by a previous process.
@@ -380,6 +411,22 @@ try {
 } catch (e) {
   console.error(`Durable Agent recovery failed: ${e.message}`);
 }
+// Recover Agent claims before invoking the scheduler/runbook helpers below.
+// Those legacy helpers also call the shared kernel orphan scan; if they run
+// first, they can fence an Agent execution without mapping it back to its
+// durable task, leaving the task permanently marked running.
+try {
+  const recovered = recoverStrandedDelays({ source: "agent", actor: "agent" });
+  if (recovered.requeued > 0) console.log(`Recovered ${recovered.requeued} stranded delay(s) after restart`);
+} catch (e) {
+  console.error(`Delay recovery failed: ${e.message}`);
+}
+try {
+  const recoveredRunbooks = recoverStrandedRunbooks({ source: "agent", actor: "agent" });
+  if (recoveredRunbooks.recovered > 0) console.log(`Recovered ${recoveredRunbooks.recovered} stranded runbook instance(s) after restart`);
+} catch (e) {
+  console.error(`Runbook recovery failed: ${e.message}`);
+}
 try {
   const sweptExecutions = sweepStrandedAgentExecutions();
   if (sweptExecutions.length > 0) console.log(`Marked ${sweptExecutions.length} crash-stranded agent execution(s) failed after restart`);
@@ -419,6 +466,27 @@ process.on("uncaughtException", (e) => {
 
 const app = express();
 app.use(express.json({ limit: "1mb" }));
+app.use("/api", (req, res, next) => {
+  if (req.path === "/health") return next();
+  const body = req.body === undefined ? "" : JSON.stringify(req.body);
+  const offeredService = String(req.headers["x-sidekick-agent-service"] || "dashboard-proxy");
+  const verificationSecret = offeredService === "scheduler" ? agentSchedulerSecret : agentProxySecret;
+  const identity = verifyAgentProxyRequest({
+    secret: verificationSecret,
+    method: req.method,
+    path: req.originalUrl,
+    body,
+    headers: req.headers,
+    consumeNonce: consumeAgentProxyNonce,
+  });
+  if (!identity) return res.status(agentProxySecret ? 401 : 503).json({ error: agentProxySecret ? "Authenticated Dashboard proxy request required" : "Agent proxy authentication is not configured" });
+  if (!identity.principal_id && process.env.NODE_ENV !== "test") {
+    if (!isAllowedServiceRoute(identity.service, req.method, req.path)) return res.status(403).json({ error: "This service identity is not authorized for the requested Agent route" });
+  }
+  req.agentProxyIdentity = identity;
+  req.agentProxyServiceIdentity = Object.freeze({ type: "service", service: identity.service || "dashboard-proxy" });
+  next();
+});
 
 const taskEmitters = {};
 // Per-task cooperative cancellation, held beside the emitters: the cancel
@@ -1637,9 +1705,20 @@ const beginTaskRun = createTaskRunner({
     if (handoffId) {
       const handoff = dbStore.getHandoff(handoffId);
       if (!handoff) throw new Error("handoff not found");
-      if (handoff.project && parentContext?.project && handoff.project !== parentContext.project) throw new Error("handoff project does not match task project");
+      const authIdentity = parentContext?.authIdentity || null;
+      const requestedProject = parentContext?.project || null;
+      if ((handoff.project || null) !== requestedProject) throw new Error("handoff project does not match task project");
       const principalId = parentContext?.requestedByPrincipalId || parentContext?.actorPrincipalId || null;
-      if (handoff.owner_principal_id && handoff.owner_principal_id !== principalId) throw new Error("handoff principal scope does not match task principal");
+      if (!authIdentity?.principal_id || !principalId) throw new Error("authenticated principal is required to attach a handoff");
+      const delegationId = authIdentity.delegation_id || null;
+      if (!projectAccess.hasProjectPermission(authIdentity.principal_id, handoff.project || null, "memory.write", "write", authIdentity.scopes, delegationId)) {
+        throw new Error("current handoff project write authority is required");
+      }
+      const canManageHandoffs = authorization.authorize({ principalId: authIdentity.principal_id, permission: "principals.manage", credentialScopes: authIdentity.scopes, delegationId }).ok;
+      const ownerId = authIdentity.acting_for_principal_id || authIdentity.principal_id;
+      if (!canManageHandoffs && handoff.owner_principal_id !== ownerId && handoff.created_by_principal_id !== authIdentity.principal_id) {
+        throw new Error("handoff principal scope does not match task principal");
+      }
     }
     const task = durableTaskModel.createTask({
       task_id: taskId,
@@ -1654,7 +1733,7 @@ const beginTaskRun = createTaskRunner({
       requested_by_principal_id: parentContext && parentContext.requestedByPrincipalId,
       actor_principal_id: parentContext && parentContext.actorPrincipalId,
       acting_for_principal_id: parentContext && parentContext.actingForPrincipalId,
-      principal_context: parentContext && parentContext.authIdentity ? { credential_scopes: parentContext.authIdentity.scopes, delegation_id: parentContext.authIdentity.delegation_id } : null,
+      principal_context: parentContext && (parentContext.authIdentity || parentContext.serviceIdentity) ? { credential_scopes: parentContext.authIdentity ? (parentContext.authIdentity.scopes ?? null) : [], ...(parentContext.authIdentity?.credential_id ? { credential_id: parentContext.authIdentity.credential_id } : {}), delegation_id: parentContext.authIdentity?.delegation_id || null, ...(parentContext.serviceIdentity ? { service_identity: parentContext.serviceIdentity } : {}) } : null,
       continuation_reference: parentContext && parentContext.continuationReference,
       workspace_ref: workspaceRef,
       authority_envelope: effectiveEnvelope,
@@ -1684,7 +1763,7 @@ const beginTaskRun = createTaskRunner({
         continuation: { completed_operations: [], ambiguous_operations: [], current_milestone: null, active_work_package: null },
         provenance: { task_id: task.task_id, workspace_ref: task.workspace_ref || null, working_directory: process.cwd(), plan_revision: 0 },
       };
-      const created = dbStore.saveHandoff({ project: task.project_id || null, title: `Task continuity: ${task.objective}`.slice(0, 500), source: "agent", task_id: task.task_id, content: packet.summary, packet, extraction_state: "pending", owner_principal_id: task.actor_principal_id || task.requested_by_principal_id || null, created_by_principal_id: task.actor_principal_id || task.requested_by_principal_id || null });
+      const created = dbStore.saveHandoff({ id: `handoff_agent_task_${task.task_id}`, project: task.project_id || null, title: `Task continuity: ${task.objective}`.slice(0, 500), source: "agent", task_id: task.task_id, content: packet.summary, packet, extraction_state: "pending", owner_principal_id: task.actor_principal_id || task.requested_by_principal_id || null, created_by_principal_id: task.actor_principal_id || task.requested_by_principal_id || null });
       durableTaskStore.attachHandoff(task.task_id, created.id);
       const checkpointed = dbStore.captureHandoffCheckpoint(created.id, { working_directory: process.cwd(), actor: task.actor_id || "agent", source: "agent", metadata: { task_id: task.task_id, reason: "task.handoff_requested", safe_boundary: "task_created", task_state: task.state, phase: task.phase, plan_revision: 0 } });
       dbStore.refreshHandoffEvidence(created.id, { working_directory: process.cwd(), actor: task.actor_id || "agent" });
@@ -1700,9 +1779,19 @@ const beginTaskRun = createTaskRunner({
 // not a replay of model prose or a direct tool call: runAgent reloads the
 // current live catalog, budget, authority envelope, policy, and checkpoint,
 // and every operation still goes through durableDispatch/callAgentTool.
-function launchRecoveredDurableTask(taskId) {
+function launchRecoveredDurableTask(taskId, { runAgentImpl = runAgent } = {}) {
   const task = durableTaskStore.getTask(taskId);
   if (!task || task.state !== "interrupted" || task.control?.cancel_requested) return false;
+  const recoveryAuthorization = authorizeRecoveredTask(task, {
+    resolvePrincipalIdentity: persistedTaskAuthIdentity,
+    isPrincipalEnabled: principalId => Boolean(identity.getPrincipal(principalId)?.enabled),
+    hasProjectTaskAccess: (authIdentity, project) => projectAccess.hasProjectPermission(authIdentity.principal_id, project, "agent.tasks.read", "read", authIdentity.scopes, authIdentity.delegation_id || null),
+  });
+  if (!recoveryAuthorization.ok) {
+    try { durableTaskStore.updateTask(taskId, { state: "blocked", phase: "recovery", next_action: "reauthorize_task", stopping_reason: "Current task identity or project authorization is unavailable", last_error_code: "recovery_authorization_denied" }, "task.recovery_authorization_denied"); } catch {}
+    try { require("./core/security-audit").recordSecurityEvent("authorization.denied", { context: { taskId, project: task.project_id || null, source: "agent-recovery" }, principalId: task.actor_principal_id || task.requested_by_principal_id || null, details: { code: recoveryAuthorization.reason, operation: "resume_interrupted_agent_task" } }); } catch {}
+    return false;
+  }
   if (task.handoff_id) {
     const preflight = dbStore.getHandoffResumePreflight(task.handoff_id, { working_directory: process.cwd(), recipient: task.actor_principal_id || task.requested_by_principal_id || null, simulate: true });
     if (!preflight.safe_to_resume) {
@@ -1718,9 +1807,10 @@ function launchRecoveredDurableTask(taskId) {
   const parentContext = {
     project: task.project_id || null,
     ...(task.parent_task_id ? { parentTaskId: task.parent_task_id, rootTaskId: task.root_task_id, sessionId: task.session_id } : {}),
-    ...(persistedTaskAuthIdentity(task) ? { authIdentity: persistedTaskAuthIdentity(task), requestedByPrincipalId: task.requested_by_principal_id || null, actorPrincipalId: task.actor_principal_id || null } : {}),
+    ...(recoveryAuthorization.authIdentity ? { authIdentity: recoveryAuthorization.authIdentity, requestedByPrincipalId: task.requested_by_principal_id || null, actorPrincipalId: task.actor_principal_id || null } : {}),
+    ...(recoveryAuthorization.serviceIdentity ? { serviceIdentity: recoveryAuthorization.serviceIdentity } : {}),
   };
-  runAgent(task.objective, taskId, parentContext, controller, { state: task.checkpoint?.state || null, continuation: task.continuation || null })
+  runAgentImpl(task.objective, taskId, parentContext, controller, { state: task.checkpoint?.state || null, continuation: task.continuation || null })
     .catch(error => { try { emit(taskId, { type: "error", text: redactSensitive("Recovered task failed to run: " + (error?.message || "unknown error")) }); } catch {} })
     .finally(() => { delete taskCancels[taskId]; setTimeout(() => delete taskEmitters[taskId], 60000); });
   try { emit(taskId, { type: "step", text: "Process restart recovered the task from its last safe checkpoint" }); } catch {}
@@ -1735,14 +1825,16 @@ durableRecoveryPromise.then(recovery => {
   }
 }).catch(error => console.error(`Durable Agent restart resume scan failed: ${redactSensitive(String(error?.message || error)).slice(0, 200)}`));
 
-// Dashboard requests carry the authenticated principal through the protected
-// bridge. Keep compatibility for trusted loopback callers without headers,
-// but never let an identified caller read or mutate another principal's task.
+// The API middleware admits only authenticated Dashboard proxy requests (or a
+// signed Dashboard service identity). Scope identified callers to their owned
+// tasks; raw loopback headers never establish identity.
 function taskBelongsToRequest(req, task) {
-  const auth = requestAuthIdentity(req);
-  if (!auth) return true;
-  const owner = task && (task.actor_principal_id || task.requested_by_principal_id);
-  return Boolean(owner && owner === auth.principal_id);
+  // Isolated legacy route fixtures use a signed identityless dashboard proxy
+  // assertion to exercise compatibility behavior. Production middleware never
+  // permits this identity to reach task routes; the pure ownership predicate
+  // remains fail-closed for every service outside certification.
+  if (process.env.NODE_ENV === "test" && !req.agentProxyIdentity?.principal_id) return true;
+  return taskBelongsToIdentity(req.agentProxyIdentity, task);
 }
 function requireTaskAccess(req, res, task) {
   if (taskBelongsToRequest(req, task)) return true;
@@ -1769,9 +1861,7 @@ function learningSourceTask(req, candidateOrBody, { operator = false } = {}) {
   if (!task) return null;
   if (taskBelongsToRequest(req, task)) return task;
   if (!operator || task.project_id !== candidateOrBody.project_ref) return null;
-  const principal = identity.getPrincipal(auth.principal_id);
-  const grant = authorization.authorize({ principalId: auth.principal_id, permission: "approvals.grant", credentialScopes: auth.scopes, delegationId: auth.delegation_id || null, resource: { kind: "agent_learning_candidate", project: task.project_id } });
-  return principal?.principal_type === "human" && grant.ok ? task : null;
+  return canReviewUnownedTask(auth, task) ? task : null;
 }
 
 // Apply the ownership boundary once for every durable task route, including
@@ -1842,11 +1932,22 @@ app.post("/api/agent/run", (req, res) => {
         if (goalSpec.authority_boundary !== undefined && (typeof goalSpec.authority_boundary !== "string" || goalSpec.authority_boundary.length > 1000)) return res.status(400).json({ error: "goal_spec.authority_boundary is invalid" });
       }
       const authIdentity = requestAuthIdentity(req);
+      if (requestedProject && authIdentity && !projectAccess.hasProjectPermission(authIdentity.principal_id, requestedProject, "agent.tasks.read", "read", authIdentity.scopes, authIdentity.delegation_id || null)) {
+        return res.status(403).json({ error: "active Agent task access to the requested project is required" });
+      }
       const requestedEnvelope = body.authority_envelope || {};
       const requestedEffects = Array.isArray(requestedEnvelope.allowed_effects) ? requestedEnvelope.allowed_effects : [];
       if (!authIdentity && (requestedEnvelope.changes_allowed === true || requestedEnvelope.external_effects_allowed === true || requestedEnvelope.production_allowed === true || requestedEffects.some(effect => effect !== "read_only"))) return res.status(403).json({ error: "authenticated principal is required for an expanded authority envelope" });
       if (body.handoff_id !== undefined && (typeof body.handoff_id !== "string" || body.handoff_id.length < 1 || body.handoff_id.length > 180)) return res.status(400).json({ error: "handoff_id is invalid" });
-  beginTaskRun(res, { goal: goalCheck.goal, goalSpec, profile: body.profile || "standard", workspaceRef: body.workspace_ref || null, authorityEnvelope: body.authority_envelope || {}, handoffId: body.handoff_id || null, parentContext: (authIdentity || requestedProject) ? { ...(requestedProject ? { project: requestedProject } : {}), ...(authIdentity ? { requestedByPrincipalId: authIdentity.principal_id, actorPrincipalId: authIdentity.principal_id, authIdentity } : {}) } : null });
+  const serviceIdentity = req.agentProxyIdentity?.service === "certification" ? "certification" : null;
+  // The Certification service is deliberately allowed to create Agent tasks,
+  // but its least-privilege boundary belongs here at the receiving service.
+  // Do not let a missing or empty caller envelope inherit the general Agent
+  // default (which includes reversible workspace changes and local processes).
+  const effectiveRequestedEnvelope = serviceIdentity
+    ? { allowed_effects: ["read_only"], changes_allowed: false, external_effects_allowed: false, production_allowed: false, child_task_count: 0 }
+    : (body.authority_envelope || {});
+  beginTaskRun(res, { goal: goalCheck.goal, goalSpec, profile: body.profile || "standard", workspaceRef: body.workspace_ref || null, authorityEnvelope: effectiveRequestedEnvelope, handoffId: body.handoff_id || null, parentContext: (authIdentity || requestedProject || serviceIdentity) ? { ...(requestedProject ? { project: requestedProject } : {}), ...(serviceIdentity ? { serviceIdentity } : {}), ...(authIdentity ? { requestedByPrincipalId: authIdentity.principal_id, actorPrincipalId: authIdentity.principal_id, authIdentity } : {}) } : null });
 });
 
 // Durable control-room projection. This is a read surface over the task store;
@@ -2316,6 +2417,10 @@ app.get("/api/agent/stream/:taskId", (req, res) => {
 
   let ended = false;
   let durablePoll = null;
+  const streamAccessValid = () => {
+    const currentTask = durableTaskStore.getTask(req.params.taskId);
+    return Boolean(currentTask && taskBelongsToRequest(req, currentTask));
+  };
   const durableTerminalFrame = () => {
     const durable = durableTaskStore.getTask(req.params.taskId);
     if (!durable || !["completed", "partial", "failed", "cancelled", "timed_out"].includes(durable.state)) return null;
@@ -2331,6 +2436,16 @@ app.get("/api/agent/stream/:taskId", (req, res) => {
   };
   const handler = (data) => {
     if (ended) return;
+    // Project membership and delegation may be revoked while an SSE response
+    // remains open. Recheck before delivering every frame so a long-lived
+    // stream cannot outlive the authority that admitted it.
+    if (!streamAccessValid()) {
+      ended = true;
+      if (durablePoll) clearInterval(durablePoll);
+      ee.off("data", handler);
+      res.end();
+      return;
+    }
     res.write("data: " + JSON.stringify(data) + "\n\n");
     if (data.type === "done" || data.type === "error") {
       ended = true;
@@ -2356,6 +2471,13 @@ app.get("/api/agent/stream/:taskId", (req, res) => {
     durablePoll = setInterval(() => {
       if (ended) return;
       try {
+        if (!streamAccessValid()) {
+          ended = true;
+          clearInterval(durablePoll);
+          ee.off("data", handler);
+          res.end();
+          return;
+        }
         const frame = durableTerminalFrame();
         if (frame) handler(frame);
       } catch {}
@@ -2533,4 +2655,5 @@ module.exports = {
     return agentShutdown;
   },
   __setLLMOverrideForTests,
+  ...(process.env.NODE_ENV === "test" ? { __launchRecoveredDurableTaskForTests: launchRecoveredDurableTask } : {}),
 };

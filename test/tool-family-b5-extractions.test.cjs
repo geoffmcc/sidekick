@@ -14,6 +14,10 @@ const path = require("path");
 
 const testDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-b5-"));
 process.env.SIDEKICK_DATA_DIR = testDataDir;
+const testAllowedPaths = [path.resolve(__dirname, ".."), testDataDir, "/home/sidekick/sidekick"].join(",");
+process.env.SIDEKICK_TEST_ALLOWED_PATHS = testAllowedPaths;
+process.env.SIDEKICK_MCP_ALLOWED_PATHS = testAllowedPaths;
+process.env.SIDEKICK_INTERNAL_ALLOWED_PATHS = testAllowedPaths;
 
 delete require.cache[require.resolve("../src/tools")];
 const tools = require("../src/tools");
@@ -32,18 +36,18 @@ const EXPECTED = {
   media: ["media", "medium"],
   transcribe: ["media", "medium"],
   analytics: ["media", "medium"],
-  insight_report: ["media", "low"],
+  insight_report: ["media", "medium"],
   download: ["media", "medium"],
   snapshot: ["monitoring", "medium"],
   timeline: ["monitoring", "medium"],
   baseline: ["monitoring", "high"],
-  security_scan: ["security", "low"],
+  security_scan: ["security", "medium"],
   sandbox: ["security", "critical"],
-  anonymize: ["security", "low"],
+  anonymize: ["security", "high"],
   predict: ["meta", "medium"],
-  debug_tool: ["meta", "low"],
+  debug_tool: ["meta", "medium"],
   fresheyes: ["meta", "medium"],
-  knowledge: ["knowledge", "low"],
+  knowledge: ["knowledge", "medium"],
   ops: ["operations", "critical"],
   black_box: ["black-box", "medium"],
 };
@@ -60,24 +64,34 @@ const EXPECTED = {
   }
 
   // Cheap validation-error paths: executes each moved body with no side effects.
-  const invalidAction = async name => (await registry.get(name).handler({ action: "zzz-invalid" })).content[0].text;
-  assert.match(await invalidAction("git"), /Invalid action/);
-  assert.match(await invalidAction("depend"), /Unknown action/);
-  assert.match(await invalidAction("snapshot"), /Unknown action/);
-  assert.match(await invalidAction("baseline"), /Unknown action/);
-  assert.match(await invalidAction("sandbox"), /Unknown action/);
-  assert.match(await invalidAction("anonymize"), /Unknown action/);
-  assert.match(await invalidAction("predict"), /Invalid action/);
-  assert.match(await invalidAction("debug_tool"), /Unknown action/);
-  assert.match(await invalidAction("ops"), /Unknown action|Invalid action/);
-  assert.match(await invalidAction("knowledge"), /Unknown action|Invalid action/);
-  assert.match(await invalidAction("black_box"), /Unknown action|Invalid action|unknown/i);
-  assert.match((await registry.get("media").handler({ action: "zzz-invalid" })).content[0].text, /input is required|Invalid action|Unknown action/);
-  assert.match((await registry.get("download").handler({})).content[0].text, /url required|Error/i);
+  const testContexts = require("./helpers/authorized-context");
+  const runAsOperator = require("../src/tools/context").runWithContext.bind(null,
+    testContexts.createServiceContext({ role: "operator", source: "test" }));
+  const runAsOwner = require("../src/tools/context").runWithContext.bind(null,
+    testContexts.createOwnerContext({ source: "test" }));
+  const invalidAction = async name => {
+    const run = ["baseline", "ops"].includes(name) ? runAsOwner : runAsOperator;
+    return run(() => tools.dispatchTool({ name, args: { action: "zzz-invalid" } })).then(result => result.content[0].text);
+  };
+  assert.match(await invalidAction("git"), /Invalid action|Invalid arguments/);
+  assert.match(await invalidAction("depend"), /Unknown action|Invalid arguments/);
+  assert.match(await invalidAction("snapshot"), /Unknown action|Invalid arguments/);
+  assert.match(await invalidAction("baseline"), /Unknown action|Invalid arguments/);
+  assert.match(await invalidAction("sandbox"), /Unknown action|Invalid arguments/);
+  assert.match(await invalidAction("anonymize"), /Unknown action|Invalid arguments/);
+  assert.match(await invalidAction("predict"), /Invalid action|Invalid arguments/);
+  assert.match(await invalidAction("debug_tool"), /Unknown action|Invalid arguments/);
+  assert.match(await invalidAction("ops"), /Unknown action|Invalid action|Invalid arguments/);
+  assert.match(await invalidAction("knowledge"), /Unknown action|Invalid action|Invalid arguments/);
+  assert.match(await invalidAction("black_box"), /Unknown action|Invalid action|Invalid arguments|unknown/i);
+  const mediaInvalid = await runAsOperator(() => tools.dispatchTool({ name: "media", args: { action: "zzz-invalid" } }));
+  assert.match(mediaInvalid.content[0].text, /input is required|Invalid action|Unknown action|Invalid arguments/);
+  const downloadInvalid = await runAsOwner(() => tools.dispatchTool({ name: "download", args: {} }));
+  assert.match(downloadInvalid.content[0].text, /url required|Error|Invalid arguments/i);
 
   // bash's dangerous-pattern pre-filter runs before any execution.
-  const blocked = await registry.get("bash").handler({ command: "rm -rf /" });
-  assert.match(blocked.content[0].text, /Blocked/);
+  const blocked = await runAsOwner(() => tools.dispatchTool({ name: "bash", args: { command: "rm -rf /" } }));
+  assert.match(blocked.content[0].text, /blocked by policy|Blocked/i);
   assert.strictEqual(blocked.isError, true);
 
   // The compatibility surface still carries the migrated helpers.
@@ -105,7 +119,8 @@ const EXPECTED = {
 
   // security_scan's no-argument default must scan the repository root, not a
   // subdirectory (the __dirname re-basing regression class).
-  const scanOut = await registry.get("security_scan").handler({ format: "json", max_files: 1 });
+  const scanContext = require("./helpers/authorized-context").createServiceContext({ role: "operator", source: "test" });
+  const scanOut = await tools.dispatchTool({ name: "security_scan", args: { format: "json", max_files: 1 }, context: scanContext });
   const scanReport = JSON.parse(scanOut.content[0].text);
   const repoRoot = path.resolve(__dirname, "..");
   assert.strictEqual(path.resolve(scanReport.root), repoRoot, "security_scan default root must be the repo root");

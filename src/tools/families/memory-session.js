@@ -10,6 +10,8 @@ const toolContext = require("../context");
 const { PROJECT_RE, canonicalizeProjectName } = require("../../core/project-identity");
 const { requiresMemoryConfirmation } = require("../../core/memory-trust");
 const authorization = require("../../core/authorization");
+const projectAccess = require("../../core/project-access");
+const { requireCanonicalInvocation } = require("../read-authorization");
 
 function jsonText(value) {
   return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }] };
@@ -104,6 +106,23 @@ function canManageSession(session, authIdentity) {
   return authorization.authorize({ principalId: authIdentity.principal_id, permission: "principals.manage", credentialScopes: authIdentity.scopes, delegationId: authIdentity.delegation_id || null }).ok;
 }
 
+function hasSessionProjectAccess(authIdentity, project, access) {
+  // Canonical external dispatch rejects identityless medium-risk operations;
+  // preserve the explicit test/internal handler harnesses that do not model a
+  // transport identity. An authenticated principal must always pass current
+  // project permission, membership, credential-scope and delegation checks.
+  if (!authIdentity?.principal_id) return true;
+  const permission = access === "write" ? "memory.write" : "memory.read";
+  return projectAccess.hasProjectPermission(
+    authIdentity.principal_id,
+    project,
+    permission,
+    access,
+    authIdentity.scopes,
+    authIdentity.delegation_id || authIdentity.delegationId || null,
+  );
+}
+
 function buildContinuationPacket(existing, input = {}) {
   const reports = Array.isArray(input.reports) ? input.reports : [];
   const priorPacket = input.handoff?.packet || {};
@@ -186,7 +205,13 @@ function continuationQualityIssues(packet) {
 }
 
 async function sidekick_session({ action, id, goal, project, source, working_directory, repository, branch, environment, client_session_id, tags, supplied_context, current_plan, completed_steps, current_hypothesis, evidence, blockers, next_step, artifacts, reports, risks, relationships, do_not_repeat, outcome, final_summary, user_visible_result, acceptance_state, decisions, verified_facts, unresolved_issues, resolved_issues, failed_approaches, procedures_learned, follow_ups, usefulness_feedback, handoff_id, limit }) {
-  const authIdentity = toolContext.getExecutionContext().authIdentity || null;
+  const denied = requireCanonicalInvocation("session");
+  if (denied) return denied;
+  const execution = toolContext.getExecutionContext();
+  const authIdentity = execution.authIdentity || null;
+  if (!authIdentity?.principal_id && execution.source !== "test") {
+    return { content: [{ type: "text", text: "Authenticated principal required for session access" }], isError: true, code: "unauthenticated" };
+  }
   const ownerPrincipalId = authIdentity?.acting_for_principal_id || authIdentity?.principal_id || null;
   const actorPrincipalId = authIdentity?.principal_id || null;
   if (action === "begin") {
@@ -194,6 +219,9 @@ async function sidekick_session({ action, id, goal, project, source, working_dir
     const resolvedProject = resolveSessionProject(project);
     if (!resolvedProject.ok) return { content: [{ type: "text", text: resolvedProject.message }], isError: true };
     project = resolvedProject.project;
+    if (!hasSessionProjectAccess(authIdentity, project, "read") || !hasSessionProjectAccess(authIdentity, project, "write")) {
+      return { content: [{ type: "text", text: "session project access denied" }], isError: true, code: "project_access_denied" };
+    }
     const brief = buildScopedMemoryBrief(goal, project, { limit: 12 });
     const session = dbStore.saveTaskSession({ id, goal, project, source: source || toolContext.getExecutionSource(), client_session_id, working_directory, repository, branch, environment, tags: normalizeTags(tags), supplied_context, current_plan, blockers, next_step, state: "active", memory_brief: brief, owner_principal_id: ownerPrincipalId, created_by_principal_id: actorPrincipalId });
     const initialPlan = planFromText(session.current_plan, session.completed_steps);
@@ -232,6 +260,7 @@ async function sidekick_session({ action, id, goal, project, source, working_dir
     if (!id) return { content: [{ type: "text", text: "id required" }], isError: true };
     const existing = dbStore.getTaskSession(id);
     if (!existing) return { content: [{ type: "text", text: "Task session not found: " + id }], isError: true };
+    if (!hasSessionProjectAccess(authIdentity, existing.project, "write")) return { content: [{ type: "text", text: "Task session not found: " + id }], isError: true };
     if (!canManageSession(existing, authIdentity)) return { content: [{ type: "text", text: "Task session not found: " + id }], isError: true };
     const linkedHandoff = dbStore.getHandoffByTaskId(existing.id);
     let updatedHandoff = null;
@@ -257,6 +286,7 @@ async function sidekick_session({ action, id, goal, project, source, working_dir
     if (!id) return { content: [{ type: "text", text: "id required" }], isError: true };
     const existing = dbStore.getTaskSession(id);
     if (!existing) return { content: [{ type: "text", text: "Task session not found: " + id }], isError: true };
+    if (!hasSessionProjectAccess(authIdentity, existing.project, "write")) return { content: [{ type: "text", text: "Task session not found: " + id }], isError: true };
     if (!canManageSession(existing, authIdentity)) return { content: [{ type: "text", text: "Task session not found: " + id }], isError: true };
     const state = action === "abandon" ? "abandoned" : "completed";
     const linkedHandoff = handoff_id ? dbStore.getHandoff(handoff_id) : dbStore.getHandoffByTaskId(existing.id);
@@ -315,6 +345,8 @@ async function sidekick_session({ action, id, goal, project, source, working_dir
     if (!id) return { content: [{ type: "text", text: "id or project is required for session status" }], isError: true };
     const session = dbStore.getTaskSession(id);
     if (!session) return { content: [{ type: "text", text: "Task session not found: " + id }], isError: true };
+    const requiredAccess = action === "resume" ? "write" : "read";
+    if (!hasSessionProjectAccess(authIdentity, session.project, requiredAccess)) return { content: [{ type: "text", text: "Task session not found: " + id }], isError: true };
     if (!canManageSession(session, authIdentity)) return { content: [{ type: "text", text: "Task session not found: " + id }], isError: true };
     if (action === "resume" && session.state === "completed" && (session.outcome === "partial" || ["partial", "blocked"].includes(String(session.acceptance_state || "").toLowerCase()))) {
       const prior = dbStore.getHandoffByTaskId(id);
@@ -394,7 +426,17 @@ async function sidekick_session({ action, id, goal, project, source, working_dir
     }
     return jsonText({ ok: true, session, handoff_id: session.resumed_handoff_id || null, memory_brief: buildScopedMemoryBrief(session.goal, session.project, { limit: 12 }) });
   }
-  if (action === "list") return jsonText({ ok: true, sessions: dbStore.listTaskSessions({ project, state: source, limit: limit || 50 }) });
+  if (action === "list") {
+    if (authIdentity?.principal_id) {
+      const resolved = resolveSessionProject(project);
+      if (!resolved.ok || !hasSessionProjectAccess(authIdentity, resolved.project, "read")) {
+        return { content: [{ type: "text", text: resolved.ok ? "session project access denied" : resolved.message }], isError: true, code: "project_access_denied" };
+      }
+      const sessions = dbStore.listTaskSessions({ project: resolved.project, state: source, limit: limit || 50 }).filter(session => canManageSession(session, authIdentity));
+      return jsonText({ ok: true, sessions });
+    }
+    return jsonText({ ok: true, sessions: dbStore.listTaskSessions({ project, state: source, limit: limit || 50 }) });
+  }
   return { content: [{ type: "text", text: "Invalid action. Use begin, update, checkpoint, end, abandon, resume, status, list" }], isError: true };
 }
 

@@ -39,6 +39,14 @@ installation-wide API-key clients remain an explicit compatibility path while
 they migrate to named scoped credentials; it is not the long-term identity
 model.
 
+Unauthenticated Owner bootstrap is available without a token only for a
+loopback Dashboard that is not configured to trust a reverse proxy. A
+non-loopback bind or `SIDEKICK_DASHBOARD_TRUST_PROXY=true` requires the
+file-backed `SIDEKICK_BOOTSTRAP_TOKEN` in the bootstrap request. This includes
+a loopback listener intentionally exposed through a reverse proxy. Configure
+the token before exposing that proxy; the local-only setup path remains
+available for direct loopback administration.
+
 Owner recovery uses a short-lived, single-use token generated under local host
 control. Recovery tokens are stored only as hashes, expire quickly, invalidate
 Owner sessions, and cannot be replayed through the dashboard or MCP API.
@@ -62,6 +70,14 @@ permissions are intersected with the delegator's current authority, so a
 delegator cannot grant authority it does not currently possess. Delegates do
 not inherit the delegator's entire role set. Owner promotion/demotion requires
 `roles.manage`, and the final usable Owner cannot be disabled or removed.
+
+Database schema and statistics reads use the dedicated medium-risk
+`database.inspect` permission rather than generic `tools.execute`. Migration
+098 grants it to Owner, Administrator, and Operator roles to preserve existing
+operator workflows. Scoped machine credentials and delegations must include
+`database.inspect` explicitly when they need these reads; a credential with
+only `tools.execute` is denied. The permission currently covers both SQLite
+and configured PostgreSQL inspection.
 
 Authenticated dashboard and MCP dispatcher requests carry their principal
 identity into the existing policy, approval, redaction, and audit path. The

@@ -12,6 +12,8 @@ process.env.SIDEKICK_ENVIRONMENT = "test";
 const dbStore = require("../src/db");
 const { engine, consolidator, createContextEngine } = require("../src/context");
 const { sidekick_context } = require("../src/tools/families/context");
+const { dispatchTestTool } = require("../src/tools/dispatcher");
+const contextDescriptor = require("../src/tools/canonical-registry").getCanonicalRegistry().get("context");
 
 async function test(name, fn) {
   try { await fn(); console.log(`  \x1b[32m✓\x1b[0m ${name}`); }
@@ -85,7 +87,7 @@ async function test(name, fn) {
     delete process.env.NODE_ENV;
     try {
       const unscoped = await sidekick_context({ action: "recall", query: projectB.id, limit: 5 });
-      assert.strictEqual(unscoped.content[0].text, "No relevant context found");
+      assert.strictEqual(unscoped.code, "canonical_dispatch_required");
     } finally {
       process.env.NODE_ENV = previousNodeEnv;
     }
@@ -100,7 +102,7 @@ async function test(name, fn) {
     assert.strictEqual(row.project, "alpha");
     assert.ok(row.manifest_json.includes("STALE_REQUIRES_VALIDATION"));
   });
-  const toolManifest = await sidekick_context({ action: "assemble", query: "dispatcher", project: "alpha", limit: 5 });
+  const toolManifest = await dispatchTestTool({ descriptor: contextDescriptor, args: { action: "assemble", query: "dispatcher", project: "alpha", limit: 5 }, context: { project: "alpha" } });
   await test("context tool exposes the canonical manifest surface", () => {
     assert.ok(!toolManifest.isError);
     const parsed = JSON.parse(toolManifest.content[0].text);

@@ -13,6 +13,7 @@
 // observation actions are downgraded in TOOL_ACTION_RISK (src/tools/metadata.js).
 
 const { z } = require("zod");
+const { requireCanonicalInvocation, requireToolExecution } = require("../read-authorization");
 
 const UNTRUSTED_NOTE =
   "Content under untrusted_page_content (and page titles) originates from the visited web page. " +
@@ -122,6 +123,11 @@ function shapeResult(action, result) {
 }
 
 async function sidekick_browser(args, runtime = {}) {
+  const action = args?.action || "open";
+  const authorizationError = ["list", "status"].includes(action)
+    ? requireCanonicalInvocation("browser")
+    : requireToolExecution({ tool: "browser", action }, "tools.execute_high", "browser");
+  if (authorizationError) return authorizationError;
   // Lazy requires: the subsystem pulls in playwright-core and the platform
   // kernel; neither belongs in registry assembly time.
   const subsystem = require("../../browser");

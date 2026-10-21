@@ -68,6 +68,6 @@ try {
 
   console.log("Phase 3 authentication/authorization checks passed.");
 } finally {
-  try { db.close(); } catch {}
+  try { db.closeDatabase?.(); } catch {}
   fs.rmSync(dataDir, { recursive: true, force: true });
 }

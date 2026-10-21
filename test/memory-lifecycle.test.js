@@ -10,7 +10,11 @@ process.env.SIDEKICK_DATA_DIR = tempDir;
 process.env.SIDEKICK_AUTO_MEMORY = "1";
 
 const dbStore = require("../src/db");
-const { TOOLS } = require("../src/tools");
+const tools = require("../src/tools");
+const rawTools = tools.TOOLS;
+const { withOwnerToolContext } = require('./helpers/authorized-context');
+const { TOOLS } = { TOOLS: withOwnerToolContext(rawTools, { source: 'test', project: 'lifecycle_test' }) };
+tools.setSource("test");
 const { context, memory_manage } = TOOLS;
 
 dbStore.runPendingMigrations();
@@ -156,7 +160,7 @@ console.log("  ✓ Confirmation tracking works");
   assert.ok(exactRecall.content[0].text.includes(`[Session ${sessionId}]`), "Exact session id recall should find the session");
 
   const disableSession = await memory_manage({ action: "disable", id: sessionId, reason: "test_disable" });
-  assert.ok(!disableSession.isError, "Legacy session disable should succeed");
+  assert.ok(!disableSession.isError, `Legacy session disable should succeed: ${disableSession.content?.[0]?.text || disableSession.message || "unknown error"}`);
   assert.ok(disableSession.content[0].text.includes("disabled"), "Disable should report success");
 
    const disabledRecall = await context({ action: "recall", query: sessionId, type: "sessions", project: "lifecycle_test" });

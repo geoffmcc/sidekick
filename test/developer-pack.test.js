@@ -17,20 +17,27 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const verify = require('../packs/developer/modules/developer-tools/lib/verify');
 
-const TEST_DATA_DIR = path.join(__dirname, 'test-data-developer-pack');
-fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
-fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
+const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sidekick-developer-pack-'));
+const gitHome = path.join(TEST_DATA_DIR, 'git-home');
+fs.mkdirSync(gitHome, { recursive: true });
+fs.writeFileSync(path.join(gitHome, '.gitconfig'), `[safe]\n\tdirectory = "${path.resolve(__dirname, '..').replace(/\\/g, '/')}"\n`);
+process.env.HOME = gitHome;
+process.env.USERPROFILE = gitHome;
 process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
 process.env.SIDEKICK_DB_FILE = path.join(TEST_DATA_DIR, 'sidekick.db');
 process.env.SIDEKICK_TOOL_POLICY = 'open';
 process.env.SIDEKICK_APPROVAL_MODE = 'off';
-process.env.SIDEKICK_SECRET_KEY = 'developer-pack-test-secret-key';
+process.env.SIDEKICK_SECRET_KEY_FILE = path.join(TEST_DATA_DIR, 'secret-key');
+fs.writeFileSync(process.env.SIDEKICK_SECRET_KEY_FILE, 'developer-pack-test-secret-key');
+process.env.SIDEKICK_ALLOWED_PATHS = `${path.resolve(__dirname, '..')},${TEST_DATA_DIR}`;
 
 require('../src/db').runPendingMigrations();
+const developerTestContext = require('./helpers/authorized-context').createOwnerContext({ source: 'internal' });
 
 const bundled = require('../src/packs/bundled');
 const packLifecycle = require('../src/packs/lifecycle');
-const { callInternalTool } = require('../src/tools/dispatcher');
+const { callInternalTool: rawCallInternalTool } = require('../src/tools/dispatcher');
+const callInternalTool = (name, args, options = {}) => rawCallInternalTool(name, args, { ...developerTestContext, ...options });
 const { callAgentTool, getBuiltinRegistry } = require('../src/tools');
 const { discoverCapabilities, resolveContextProviderArgs } = require('../src/agent/capability-broker');
 const platformKernel = require('../src/platform/kernel');
@@ -184,6 +191,8 @@ function buildFixtureRepository() {
 
   await test('DP.1b: generic Agent semantic context propagates the requested repository scope', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sidekick-agent-scope-'));
+    const previousAgentPaths = process.env.SIDEKICK_AGENT_ALLOWED_PATHS;
+    process.env.SIDEKICK_AGENT_ALLOWED_PATHS = root;
     const repoA = path.join(root, 'repo-a');
     const repoB = path.join(root, 'repo-b');
     fs.mkdirSync(repoA); fs.mkdirSync(repoB);
@@ -207,6 +216,8 @@ function buildFixtureRepository() {
       const current = await callAgentTool(selected.contextProvider.tool, { ...defaultArgs, query: 'Profile this repository', limit: 2, max_chars: 2000 }, { source: selected.contextProvider.source, timeoutMs: 30000 });
       assert.ok(!current.isError, current.content?.[0]?.text || 'default current-repository profiling failed');
     } finally {
+      if (previousAgentPaths === undefined) delete process.env.SIDEKICK_AGENT_ALLOWED_PATHS;
+      else process.env.SIDEKICK_AGENT_ALLOWED_PATHS = previousAgentPaths;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
@@ -463,6 +474,24 @@ function buildFixtureRepository() {
     packLifecycle.configure('developer', { verification_mode: 'standard' });
   });
 
+  await test('DP.8a: dev_repo_profile never follows a repository manifest symlink outside its configured root', async () => {
+    const symlinkRepo = path.join(TEST_DATA_DIR, 'symlink-repo');
+    const protectedManifest = path.join(TEST_DATA_DIR, 'protected-package.json');
+    const protectedIgnore = path.join(TEST_DATA_DIR, 'protected-gitignore');
+    fs.mkdirSync(symlinkRepo, { recursive: true });
+    fs.writeFileSync(protectedManifest, JSON.stringify({ name: 'protected', scripts: { test: 'SYNTHETIC_OUTSIDE_ROOT_CANARY' } }));
+    fs.writeFileSync(protectedIgnore, '*.js\n');
+    fs.writeFileSync(path.join(symlinkRepo, 'src.js'), 'export function visibleSource() { return true; }\n');
+    fs.symlinkSync(protectedManifest, path.join(symlinkRepo, 'package.json'), 'file');
+    fs.symlinkSync(protectedIgnore, path.join(symlinkRepo, '.gitignore'), 'file');
+    packLifecycle.configure('developer', { repository_roots: [symlinkRepo] });
+    const result = await callInternalTool('dev_repo_profile', { path: symlinkRepo, include_git: false, include_semantic: true });
+    assert.strictEqual(result.isError, undefined, result.content[0].text.slice(0, 300));
+    assert.doesNotMatch(result.content[0].text, /SYNTHETIC_OUTSIDE_ROOT_CANARY/, 'outside manifest content must not be returned');
+    assert.ok(json(result).semantic.languages.includes('javascript'), 'outside .gitignore content must not change repository discovery');
+    packLifecycle.configure('developer', { repository_roots: [], verification_mode: 'standard' });
+  });
+
   await test('DP.9: the Developer tools refuse paths outside configured repository roots', async () => {
     packLifecycle.configure('developer', { repository_roots: [FIXTURE_REPO] });
     const denied = await callInternalTool('dev_repo_profile', { path: SIDEKICK_ROOT });
@@ -559,5 +588,7 @@ function buildFixtureRepository() {
   });
 
   console.log(`\n${failures === 0 ? 'All Developer pack tests passed.' : `${failures} Developer pack test(s) FAILED.`}`);
+  try { require('../src/db').closeDatabase(); } catch {}
+  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
   process.exit(failures === 0 ? 0 : 1);
 })();

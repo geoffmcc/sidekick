@@ -41,15 +41,21 @@ function isDirectory(target) {
 }
 
 function readTextFile(target, maxBytes = 512 * 1024) {
+  let fd = null;
   try {
-    const stat = fs.statSync(target);
-    if (!stat.isFile()) return null;
-    if (stat.size > maxBytes) {
-      return fs.readFileSync(target, { encoding: "utf-8" }).slice(0, maxBytes);
-    }
-    return fs.readFileSync(target, "utf-8");
+    const before = fs.lstatSync(target);
+    if (before.isSymbolicLink() || !before.isFile()) return null;
+    fd = fs.openSync(target, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+    const opened = fs.fstatSync(fd);
+    if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino) return null;
+    const limit = Math.max(0, Math.floor(Number(maxBytes) || 0));
+    const buffer = Buffer.alloc(limit);
+    const bytesRead = limit === 0 ? 0 : fs.readSync(fd, buffer, 0, limit, 0);
+    return buffer.subarray(0, bytesRead).toString("utf-8");
   } catch {
     return null;
+  } finally {
+    if (fd !== null) try { fs.closeSync(fd); } catch {}
   }
 }
 

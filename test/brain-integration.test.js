@@ -19,11 +19,15 @@ process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
 process.env.SIDEKICK_TOOL_POLICY = "open";
 process.env.SIDEKICK_APPROVAL_MODE = "off";
 process.env.SIDEKICK_ENVIRONMENT = "test";
+process.env.NODE_ENV = "test";
+process.env.SIDEKICK_API_KEY = "brain-integration-test-api-key";
+process.env.SIDEKICK_AGENT_PROXY_KEY = "brain-integration-dedicated-proxy-key";
 process.env.GROQ_API_KEY = "test-fake-key";
 delete process.env.SIDEKICK_BRAIN_ENABLED;
 
 delete require.cache[require.resolve("../src/agent")];
 const agent = require("../src/agent");
+const { createAgentProxyHeaders } = require("../src/security/agent-proxy-auth");
 
 console.log("Running Brain v0.1 integration tests...\n");
 
@@ -37,7 +41,8 @@ let server, port;
 function post(p, body) {
   return new Promise((resolve, reject) => {
     const data = JSON.stringify(body);
-    const req = http.request({ hostname: "127.0.0.1", port, path: p, method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(data) } }, r => {
+    const proxyHeaders = createAgentProxyHeaders({ secret: process.env.SIDEKICK_AGENT_PROXY_KEY, method: "POST", path: p, body: data });
+    const req = http.request({ hostname: "127.0.0.1", port, path: p, method: "POST", agent: false, headers: { "Content-Type": "application/json", ...proxyHeaders, "Content-Length": Buffer.byteLength(data) } }, r => {
       let out = ""; r.on("data", c => out += c); r.on("end", () => resolve({ status: r.statusCode, body: out ? JSON.parse(out) : null }));
     });
     req.on("error", reject); req.write(data); req.end();

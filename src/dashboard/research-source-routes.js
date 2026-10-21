@@ -98,8 +98,9 @@ function repositoryView(repository = {}) {
 
 function resultErrorResponse(req, res, result, fallback = "research source operation failed", errorResponse) {
   const payload = parseResult(result);
-  const code = payload.code === "policy_denied" ? "policy_denied" : "invalid_request";
-  return errorResponse(req, res, null, { status: code === "policy_denied" ? 403 : 400, code, component: "research_source" });
+  const code = ["policy_denied", "authorization_failed", "not_found"].includes(payload.code) ? payload.code : "invalid_request";
+  const status = code === "not_found" ? 404 : code === "invalid_request" ? 400 : 403;
+  return errorResponse(req, res, null, { status, code, component: "research_source" });
 }
 
 function registerResearchSourceRoutes({ app, callDashboardTool, dashboardExecutionMetadata, authenticatedUser, auditLog, logError, errorResponse }) {

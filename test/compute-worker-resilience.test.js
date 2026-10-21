@@ -42,6 +42,7 @@ function spawnWorker(credPath, port) {
       ...process.env,
       SIDEKICK_URL: `http://127.0.0.1:${port}`,
       SIDEKICK_WORKER_CONFIG: credPath,
+      SIDEKICK_WORKER_CONFIG_FILE: path.join(path.dirname(credPath), 'no-external-worker-config.json'),
       SIDEKICK_HEARTBEAT_MS: '1000',
       SIDEKICK_WORKER_POLL_MS: '500',
       SIDEKICK_WORKER_MAX_RETRY_MS: '2000',

@@ -17,6 +17,8 @@ NODE_VERSION="22"
 INSTALL_SERVICES=false
 INSTALL_TOOLS=false
 SSH_PUB_KEY=""
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/apt-repository.sh"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -163,6 +165,30 @@ EOF
 chmod 440 /etc/sudoers.d/sidekick
 log "Sudoers configured"
 
+install_nodesource_repository() {
+  local node_arch
+  node_arch="$(dpkg --print-architecture)"
+  case "$node_arch" in
+    amd64|arm64|armhf) ;;
+    *) error "NodeSource packages are not configured for architecture: $node_arch" ;;
+  esac
+
+  install_verified_apt_key \
+    "https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key" \
+    "/usr/share/keyrings/nodesource.gpg" \
+    "6F71F525282841EEDAF851B42F59B5F99B1BE0B4"
+
+  cat > /etc/apt/sources.list.d/nodesource.sources <<EOF
+Types: deb
+URIs: https://deb.nodesource.com/node_${NODE_VERSION}.x
+Suites: nodistro
+Components: main
+Architectures: ${node_arch}
+Signed-By: /usr/share/keyrings/nodesource.gpg
+EOF
+  apt-get update -qq
+}
+
 # Install Node.js if not present or wrong version
 if command -v node &> /dev/null; then
   NODE_VER=$(node --version | cut -d'v' -f2 | cut -d'.' -f1)
@@ -170,13 +196,13 @@ if command -v node &> /dev/null; then
     log "Node.js $NODE_VER already installed (meets requirement of v$NODE_VERSION+)"
   else
     log "Node.js version $NODE_VER found, but v$NODE_VERSION+ required. Installing..."
-    curl -fsSL https://deb.nodesource.com/setup_$NODE_VERSION.x | bash - > /dev/null
+    install_nodesource_repository
     apt-get install -y -qq nodejs > /dev/null
     log "Node.js $(node --version) installed"
   fi
 else
   log "Installing Node.js $NODE_VERSION..."
-  curl -fsSL https://deb.nodesource.com/setup_$NODE_VERSION.x | bash - > /dev/null
+  install_nodesource_repository
   apt-get install -y -qq nodejs > /dev/null
   log "Node.js $(node --version) installed"
 fi

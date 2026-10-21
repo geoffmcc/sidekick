@@ -10,9 +10,11 @@ function registerSystemRoutes({
   grafanaPort,
   grafanaConfigured,
   influxConfigured,
+  requireIdentityPermission,
   errorResponse,
 }) {
   app.get("/api/system", (req, res) => {
+    if (!requireIdentityPermission(req, res, "dashboard.operations.read")) return;
     try {
       const snapshot = systemSnapshot();
       res.json({
@@ -29,12 +31,14 @@ function registerSystemRoutes({
   });
 
   app.get("/api/services", (req, res) => {
+    if (!requireIdentityPermission(req, res, "dashboard.operations.read")) return;
     const services = ["sidekick-mcp", "sidekick-dashboard", "sidekick-agent", "ollama"];
     const status = Object.fromEntries(services.map(service => [service, systemctlStatus(service)]));
     res.json({ services: status });
   });
 
   app.get("/api/metrics/status", async (req, res) => {
+    if (!requireIdentityPermission(req, res, "dashboard.operations.read")) return;
     const status = {
       grafana: { configured: grafanaConfigured, reachable: false },
       influxdb: { configured: influxConfigured, reachable: false },

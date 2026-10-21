@@ -4,11 +4,15 @@ const fs = require("fs");
 const path = require("path");
 const { execFileSync } = require("child_process");
 const { childProcessEnv } = require("../../security/child-process");
+const { resolveCommandOnPath } = require("../../security/command-lookup");
 const { z } = require("zod");
 const { redactSensitive } = require("../../redact");
 const { enforcePathPolicy } = require("../path-policy");
+const { requireToolExecution } = require("../read-authorization");
 
 async function sidekick_read({ path: filePath }) {
+  const authError = requireToolExecution({ tool: "filesystem.read" }, "tools.execute", "read");
+  if (authError) return authError;
   const policyError = enforcePathPolicy(filePath, "read");
   if (policyError) return policyError;
   if (!fs.existsSync(filePath)) {
@@ -19,6 +23,8 @@ async function sidekick_read({ path: filePath }) {
 }
 
 async function sidekick_list({ path: dirPath }) {
+  const authError = requireToolExecution({ tool: "filesystem.read" }, "tools.execute", "list");
+  if (authError) return authError;
   const policyError = enforcePathPolicy(dirPath, "read");
   if (policyError) return policyError;
   if (!fs.existsSync(dirPath)) {
@@ -81,6 +87,8 @@ function nodeSearch(pattern, targetPath, include) {
 }
 
 async function sidekick_search({ pattern, path: searchPath, include }) {
+  const authError = requireToolExecution({ tool: "filesystem.read" }, "tools.execute", "search");
+  if (authError) return authError;
   const targetPath = searchPath || ".";
   const policyError = enforcePathPolicy(targetPath, "read");
   if (policyError) return policyError;
@@ -88,31 +96,21 @@ async function sidekick_search({ pattern, path: searchPath, include }) {
     return { content: [{ type: "text", text: "Path not found: " + targetPath }], isError: true };
   }
 
-  let searchCommand = null;
-  try {
-    execFileSync(process.platform === "win32" ? "where.exe" : "which", ["rg"], { stdio: "ignore", env: childProcessEnv() });
-    searchCommand = "rg";
-  } catch (e) {}
-  if (!searchCommand) {
-    try {
-      execFileSync(process.platform === "win32" ? "where.exe" : "which", ["grep"], { stdio: "ignore", env: childProcessEnv() });
-      searchCommand = "grep";
-    } catch (e) {}
-  }
+  const searchCommand = resolveCommandOnPath("rg") || resolveCommandOnPath("grep");
   if (!searchCommand) return nodeSearch(pattern, targetPath, include);
 
   try {
     let stdout;
-    if (searchCommand === "rg") {
+    if (path.basename(searchCommand).toLowerCase().startsWith("rg")) {
       const args = ["--json", "--max-count", "100"];
       if (include) args.push("-g", include);
       args.push(pattern, targetPath);
-      stdout = execFileSync("rg", args, { timeout: 30000, encoding: "utf-8", maxBuffer: 5 * 1024 * 1024, env: childProcessEnv() });
+      stdout = execFileSync(searchCommand, args, { timeout: 30000, encoding: "utf-8", maxBuffer: 5 * 1024 * 1024, env: childProcessEnv() });
     } else {
       const args = ["-rn", "--max-count=100"];
       if (include) args.push("--include=" + include);
       args.push(pattern, targetPath);
-      stdout = execFileSync("grep", args, { timeout: 30000, encoding: "utf-8", maxBuffer: 5 * 1024 * 1024, env: childProcessEnv() });
+      stdout = execFileSync(searchCommand, args, { timeout: 30000, encoding: "utf-8", maxBuffer: 5 * 1024 * 1024, env: childProcessEnv() });
     }
     return { content: [{ type: "text", text: redactSensitive(stdout || "(no matches)") }] };
   } catch (e) {
@@ -122,6 +120,8 @@ async function sidekick_search({ pattern, path: searchPath, include }) {
 }
 
 async function sidekick_summarize({ path: filePath, max_lines, strategy, pattern }) {
+  const authError = requireToolExecution({ tool: "filesystem.read" }, "tools.execute", "summarize");
+  if (authError) return authError;
   const maxLines = max_lines || 50;
   const strat = strategy || "head";
   const policyError = enforcePathPolicy(filePath, "read");
@@ -172,6 +172,8 @@ async function sidekick_summarize({ path: filePath, max_lines, strategy, pattern
 }
 
 async function sidekick_filter({ path: targetPath, pattern, after, before, max_results }) {
+  const authError = requireToolExecution({ tool: "filesystem.read" }, "tools.execute", "filter");
+  if (authError) return authError;
   const maxResults = max_results || 50;
   const policyError = enforcePathPolicy(targetPath, "read");
   if (policyError) return policyError;
@@ -214,6 +216,8 @@ async function sidekick_filter({ path: targetPath, pattern, after, before, max_r
 }
 
 async function sidekick_diff_files({ path_a, path_b, format }) {
+  const authError = requireToolExecution({ tool: "filesystem.read" }, "tools.execute", "diff_files");
+  if (authError) return authError;
   const policyErrorA = enforcePathPolicy(path_a, "read");
   if (policyErrorA) return policyErrorA;
   const policyErrorB = enforcePathPolicy(path_b, "read");
@@ -256,6 +260,8 @@ async function sidekick_diff_files({ path_a, path_b, format }) {
 }
 
 async function sidekick_write({ path: filePath, content }) {
+  const authError = requireToolExecution({ tool: "filesystem.write" }, "tools.execute_critical", "write");
+  if (authError) return authError;
   const policyError = enforcePathPolicy(filePath, "write");
   if (policyError) return policyError;
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -265,6 +271,8 @@ async function sidekick_write({ path: filePath, content }) {
 }
 
 async function sidekick_find({ path: searchPath, name, modified_after, modified_before, size_min, size_max, content, max_results }) {
+  const authError = requireToolExecution({ tool: "filesystem.read" }, "tools.execute", "find");
+  if (authError) return authError;
   const maxResults = max_results || 50;
   const policyError = enforcePathPolicy(searchPath, "read");
   if (policyError) return policyError;
@@ -333,7 +341,7 @@ const descriptors = Object.freeze([
     description: "List files and directories on the remote machine",
     schema: z.object({ path: z.string().optional().default("/home/sidekick").describe("Directory path to list") }),
     args: { path: "string" },
-    risk: "low",
+    risk: "medium",
     category: "Core",
     source: "builtin",
     family: "filesystem",
@@ -348,7 +356,7 @@ const descriptors = Object.freeze([
       include: z.string().optional().describe("File pattern to include (e.g. '*.js', '*.ts')"),
     }),
     args: { pattern: "string", path: "string (optional)", include: "string (optional)" },
-    risk: "low",
+    risk: "medium",
     category: "Core",
     source: "builtin",
     family: "filesystem",
@@ -364,7 +372,7 @@ const descriptors = Object.freeze([
       pattern: z.string().optional().describe("Regex pattern for grep strategy"),
     }),
     args: { path: "string (file path)", max_lines: "number (optional, default 50)", strategy: "string (optional, head|tail|grep|stats - default head)", pattern: "string (optional, regex for grep strategy)" },
-    risk: "low",
+    risk: "medium",
     category: "Efficiency",
     source: "builtin",
     family: "filesystem",
@@ -381,7 +389,7 @@ const descriptors = Object.freeze([
       max_results: z.number().optional().describe("Maximum results to return (default: 50)"),
     }),
     args: { path: "string (file or directory path)", pattern: "string (optional, regex pattern)", after: "string (optional, ISO date for files modified after)", before: "string (optional, ISO date for files modified before)", max_results: "number (optional, default 50)" },
-    risk: "low",
+    risk: "medium",
     category: "Efficiency",
     source: "builtin",
     family: "filesystem",
@@ -396,7 +404,7 @@ const descriptors = Object.freeze([
       format: z.enum(["unified", "summary"]).optional().describe("Output format (default: unified)"),
     }),
     args: { path_a: "string (first file path)", path_b: "string (second file path)", format: "string (optional, unified|summary - default unified)" },
-    risk: "low",
+    risk: "medium",
     category: "Data Pipeline",
     source: "builtin",
     family: "filesystem",

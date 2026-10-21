@@ -4,7 +4,7 @@ const { DEFINITIONS } = require("../core/errors");
 const RESULT_STATUSES = Object.freeze(["succeeded", "partial", "failed", "unavailable", "denied", "approval_required", "cancelled"]);
 const STATUS_BY_CODE = Object.freeze({
   validation_failed: "failed", invalid_arguments: "failed", policy_denied: "denied", authorization_denied: "denied",
-  approval_required: "approval_required", cancelled: "cancelled", cancellation: "cancelled", capability_unavailable: "unavailable",
+  approval_required: "approval_required", cancelled: "cancelled", cancellation: "cancelled", capability_unavailable: "unavailable", isolation_unavailable: "unavailable",
   dependency_missing: "unavailable", provider_unavailable: "unavailable", approval_continuation_unavailable: "unavailable",
 });
 

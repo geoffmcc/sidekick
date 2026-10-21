@@ -2,10 +2,12 @@
 function registerQuickActionsRoute({
   app, startDashboardExecution, finishDashboardExecution, systemctlStatus, systemSnapshot,
   dbStore, auditLog, callDashboardTool, dashboardExecutionMetadata, authenticatedUser,
-  logError, fs, path, rootDir, errorResponse,
+  logError, fs, path, rootDir, errorResponse, requireIdentityPermission,
 }) {
   app.post("/api/quick-actions/:action", async (req, res) => {
     const action = req.params.action;
+    const permission = action === "restart-agent" ? "dashboard.operations.manage" : "dashboard.operations.read";
+    if (!requireIdentityPermission(req, res, permission)) return;
     const execution = startDashboardExecution(req, action);
     try {
       if (action === "health-check") {

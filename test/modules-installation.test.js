@@ -14,7 +14,8 @@ const { discoverModules } = require('../src/modules/discovery');
 const { installDiscoveredModule } = require('../src/modules/installation');
 const { configureInstalledModule } = require('../src/modules/configuration');
 const { activateConfiguredModule } = require('../src/modules/activation');
-const { checkModuleHealth } = require('../src/modules/health');
+const { assertExecutionIsolation, LOAD_FAILURES } = require('../src/modules/entry-loader');
+const loader = require('../src/modules/loader');
 const repository = require('../src/modules/repository');
 
 const root = path.join(process.cwd(), 'test', 'test-data-discovered-module');
@@ -44,17 +45,20 @@ assert.strictEqual(configured.state, 'configured');
 assert.deepStrictEqual(configured.config, { retention_days: 30 });
 assert.throws(() => configureInstalledModule('installed-module', { retention_days: 60 }), /must be installed before configuration/);
 const binding = repository.getModule('installed-module');
-const enabled = activateConfiguredModule('installed-module', {
-  entryPoint: binding.entry_point,
-  entryHash: binding.entry_hash,
-  buildDescriptors: () => [],
-});
-assert.strictEqual(enabled.module.state, 'enabled');
-assert.strictEqual(enabled.descriptors.length, 0);
-const health = checkModuleHealth('installed-module', { healthCheck: ({ config }) => ({ ok: config.retention_days === 30, details: { checked: true } }) });
-assert.strictEqual(health.ok, true);
-assert.strictEqual(health.module.state, 'healthy');
-assert.deepStrictEqual(health.module.health, { ok: true, details: { checked: true } });
+assert.throws(
+  () => activateConfiguredModule('installed-module', {
+    entryPoint: binding.entry_point,
+    entryHash: binding.entry_hash,
+    buildDescriptors: () => [],
+  }),
+  error => error.code === LOAD_FAILURES.ISOLATION_UNAVAILABLE
+);
+assert.throws(
+  () => assertExecutionIsolation(binding),
+  error => error.code === LOAD_FAILURES.ISOLATION_UNAVAILABLE
+);
+assert.strictEqual(loader.isModuleActive('installed-module'), false);
+assert.strictEqual(repository.getModule('installed-module').state, 'configured');
 assert.throws(() => installDiscoveredModule(candidate), /already registered/);
 fs.rmSync(root, { recursive: true, force: true });
 

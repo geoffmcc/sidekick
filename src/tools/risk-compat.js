@@ -12,10 +12,13 @@ function getToolRisk(name, args = undefined) {
   // Module tools first: the registry wins dispatch for these names, so the
   // enforced risk must be the risk of what actually executes. Lazy require —
   // the loader has no top-level dependency back into this module. Per-action
-  // overrides deliberately do NOT apply here: the descriptor's risk is the
-  // risk of foreign code, and a caller-supplied action must not lower it.
+  // overrides apply only to server-verified first-party modules. Foreign code
+  // keeps the manifest risk for every action and cannot self-assert trust.
   const moduleDescriptor = require("../modules/loader").resolveActiveDescriptor(name);
-  if (moduleDescriptor) return RISK_LEVELS.includes(moduleDescriptor.risk) ? moduleDescriptor.risk : "critical";
+  if (moduleDescriptor) {
+    const moduleRisk = RISK_LEVELS.includes(moduleDescriptor.risk) ? moduleDescriptor.risk : "critical";
+    return moduleDescriptor.trustedBuiltin === true ? resolveActionRisk(stripSidekickPrefix(name), args, moduleRisk) : moduleRisk;
+  }
   const generated = dbStore.getGeneratedCapabilityByName(name);
   if (generated) return RISK_LEVELS.includes(generated.risk) ? generated.risk : "critical";
   const canonical = stripSidekickPrefix(name);
@@ -36,6 +39,13 @@ function getToolRisk(name, args = undefined) {
  */
 function resolveActionRisk(canonical, args, toolRisk) {
   if (!args || typeof args !== "object") return toolRisk;
+  // Hashing caller-supplied text has no ambient-data read. A path argument
+  // reads a host file and keeps the authenticated medium-risk baseline.
+  if (canonical === "hash") {
+    if (args.path) return toolRisk;
+    if (typeof args.input === "string" && args.input.length > 0) return "low";
+    return toolRisk;
+  }
   if (!Object.prototype.hasOwnProperty.call(TOOL_ACTION_RISK, canonical)) return toolRisk;
   const action = Object.prototype.hasOwnProperty.call(args, "action") ? args.action : undefined;
   if (typeof action !== "string" || !action) return toolRisk;

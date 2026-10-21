@@ -7,9 +7,12 @@
 // src/tools/metadata.js.
 
 const { z } = require("zod");
+const { getStaticToolRisk } = require("../metadata");
+const toolContext = require("../context");
 const dbStore = require("../../db");
 const { loadProcedures } = require("../../core/procedures-store");
 const { redactSensitiveKeysDeep } = require("../../redact");
+const { requireCanonicalInvocation } = require("../read-authorization");
 
 function refreshKnowledgeFts() {
   if (typeof dbStore.rebuildKnowledgeFts === "function") dbStore.rebuildKnowledgeFts();
@@ -60,6 +63,8 @@ function findPromotionSource(source, sourceId) {
 // --- Knowledge Tool ---
 
 async function sidekick_knowledge({ action, id, category, title, content, tags, query, limit, source, source_id, approver }) {
+  const denied = requireCanonicalInvocation("knowledge");
+  if (denied) return denied;
   try {
     const db = dbStore.getDb();
     const now = new Date().toISOString();
@@ -155,8 +160,13 @@ async function sidekick_knowledge({ action, id, category, title, content, tags, 
     }
 
     if (action === "promote") {
-      if (!source || !source_id || !category || !approver) {
-        return { content: [{ type: "text", text: "source, source_id, category, and approver are required for promote" }], isError: true };
+      if (!source || !source_id || !category) {
+        return { content: [{ type: "text", text: "source, source_id, and category are required for promote" }], isError: true };
+      }
+      const execution = toolContext.getExecutionContext();
+      const verifiedApprover = execution.authIdentity?.principal_id || null;
+      if (!execution.approvedExecution || !execution.approvalId || !verifiedApprover) {
+        return { content: [{ type: "text", text: "Knowledge promotion requires an authenticated dispatcher approval" }], isError: true, code: "approval_required" };
       }
       const resolved = findPromotionSource(source, source_id);
       if (resolved.error) return { content: [{ type: "text", text: `Error: ${resolved.error}` }], isError: true };
@@ -174,7 +184,7 @@ async function sidekick_knowledge({ action, id, category, title, content, tags, 
         source_type: source,
         source_id: resolved.id,
         source_version: resolved.version,
-        approved_by: String(approver),
+        approved_by: verifiedApprover,
         approved_at: now,
       };
       const result = db.prepare(`
@@ -193,11 +203,11 @@ async function sidekick_knowledge({ action, id, category, title, content, tags, 
         resolved.id,
         resolved.version,
         json(provenance),
-        String(approver),
+        verifiedApprover,
         now,
       );
       refreshKnowledgeFts();
-      return { content: [{ type: "text", text: JSON.stringify({ promoted: true, id: result.lastInsertRowid, source, source_id: resolved.id, source_version: resolved.version, approved_by: String(approver) }, null, 2) }] };
+      return { content: [{ type: "text", text: JSON.stringify({ promoted: true, id: result.lastInsertRowid, source, source_id: resolved.id, source_version: resolved.version, approved_by: verifiedApprover }, null, 2) }] };
     }
 
     if (action === "update") {
@@ -272,7 +282,7 @@ const descriptors = Object.freeze([
     description: "Knowledge base management: search, get, list, add, promote reviewed evolved/taught knowledge, update, soft-delete, and purge disabled entries",
     schema: SCHEMAS.knowledge,
     args: { action: "string (search|get|list|add|promote|update|delete|purge)", id: "number (optional, entry ID for get/update/delete/purge)", category: "string (optional, category for list/add/promote/update)", title: "string (optional, title for add/promote/update)", content: "string (optional, content for add/update)", tags: "string (optional, comma-separated tags for add/promote/update)", query: "string (optional, search query for search)", limit: "number (optional, max results for search/list)", source: "string (optional, evolve or procedure for promote)", source_id: "string (optional, source capability/procedure ID for promote)", approver: "string (optional, explicit approver for promote)" },
-    risk: "low",
+    risk: getStaticToolRisk("knowledge"),
     category: "Context & Learning",
     source: "builtin",
     family: "knowledge",

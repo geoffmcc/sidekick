@@ -1,10 +1,12 @@
 "use strict";
 
 /**
- * Verified third-party entry-point loading (B9).
+ * Verified managed entry-point loading (B9).
  *
- * This is the trust boundary. Loading a module means executing its code inside
- * the Sidekick process, so every precondition is checked BEFORE `require`:
+ * This is the entry trust boundary. Untrusted module sources are rejected
+ * before package reads or `require`; only source-verified builtins and
+ * independently recorded first-party bundled packs may enter Core. For those
+ * trusted sources, integrity and compatibility preconditions are checked:
  *
  *   1. the module has a managed installation, inside the managed store
  *   2. the installed package still hashes to the value recorded at install
@@ -18,10 +20,9 @@
  * Only then is the file required, and only by an absolute path derived from
  * the managed installation — never from a caller-supplied string.
  *
- * TRUST MODEL: a loaded module runs in-process with Sidekick's privileges.
- * There is no sandbox and none is claimed. What these controls give is
- * integrity (the bytes are the reviewed bytes), provenance (where they came
- * from), and lifecycle (an operator decided to run them) — not isolation.
+ * TRUST MODEL: first-party exceptions run in-process with Sidekick's
+ * privileges. Third-party executable modules remain unavailable until an
+ * externally enforced OS boundary and capability broker are implemented.
  */
 
 const crypto = require("crypto");
@@ -39,6 +40,7 @@ const LOAD_FAILURES = Object.freeze({
   INVALID_ENTRY_POINT: "invalid_entry_point",
   INCOMPATIBLE: "incompatible",
   CONFIGURATION_REQUIRED: "configuration_required",
+  ISOLATION_UNAVAILABLE: "isolation_unavailable",
   LOAD_FAILURE: "load_failure",
 });
 
@@ -52,6 +54,34 @@ class ModuleLoadError extends Error {
 
 function isManagedRecord(record) {
   return Boolean(record && record.install_path);
+}
+
+/**
+ * Reject executable module sources without a verified OS isolation backend.
+ * `source === "builtin"` is assigned only by the source-verified builtin
+ * provisioner. First-party pack trust is separately checked against the
+ * Core-owned pack registry; package manifests cannot claim either designation.
+ */
+function assertExecutionIsolation(record, candidateProvenance = null) {
+  if (record && record.source === "builtin") return;
+  // A bundled first-party capability pack has an explicit exception in SI-3:
+  // its release provenance is independently recorded by the pack lifecycle.
+  // Do not trust the module's provenance string alone; cross-check the parent
+  // pack record, version, and digest held by the Core-owned pack registry.
+  const provenance = candidateProvenance || record?.provenance;
+  if (record && record.source === "pack" && provenance?.source_kind === "capability_pack") {
+    try {
+      const pack = require("../packs/repository").getPack(provenance.pack);
+      if (pack && provenance.pack_provenance === "first_party" &&
+          pack.provenance === "first_party" &&
+          pack.version === provenance.pack_version &&
+          pack.package_hash === provenance.pack_package_hash) return;
+    } catch {}
+  }
+  throw new ModuleLoadError(
+    LOAD_FAILURES.ISOLATION_UNAVAILABLE,
+    `Module "${record?.name || "unknown"}" cannot execute: OS-enforced module isolation is unavailable; install/configure it, but do not enable it until a supported isolation backend is active`
+  );
 }
 
 /**
@@ -157,6 +187,11 @@ function loadInstalledModuleEntry(record) {
     throw new ModuleLoadError(LOAD_FAILURES.NOT_INSTALLED, `Module "${record.name}" has no managed installation to load`);
   }
 
+  // This check must precede package reads and, especially, `require()`. A
+  // managed package is untrusted executable code even after its integrity and
+  // provenance checks pass; those checks do not isolate it from Core.
+  assertExecutionIsolation(record);
+
   const integrity = verifyInstalledPackage(record);
   if (!integrity.ok) throw new ModuleLoadError(integrity.code, integrity.error);
 
@@ -218,6 +253,7 @@ function loadInstalledModuleEntry(record) {
 module.exports = {
   LOAD_FAILURES,
   ModuleLoadError,
+  assertExecutionIsolation,
   isManagedRecord,
   resolveEntryPath,
   verifyInstalledPackage,

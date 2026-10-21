@@ -1,9 +1,10 @@
 const { createMcpHandler, isLegacyRequest } = require("@modelcontextprotocol/server");
+const { MAX_MCP_REQUEST_BODY_BYTES } = require("./limits");
 
 function createModernMcpHandler(createMcpServer) {
   return createMcpHandler(
     context => createMcpServer(() => context.authInfo || null),
-    { legacy: "reject" }
+    { legacy: "reject", maxRequestBodySize: MAX_MCP_REQUEST_BODY_BYTES }
   );
 }
 

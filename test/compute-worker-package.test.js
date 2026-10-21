@@ -3,6 +3,7 @@
 // free of server-only code, integrity-manifested, and runnable standalone.
 const assert = require('assert');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { execFileSync } = require('child_process');
@@ -101,7 +102,7 @@ test('packaged worker runs standalone', () => {
   const out = execFileSync('node', [path.join(OUT, 'worker-agent.js'), 'version'], { encoding: 'utf8' }).trim();
   assert.strictEqual(out, VERSION, 'version command prints package version');
   const status = execFileSync('node', [path.join(OUT, 'worker-agent.js'), 'status'], {
-    encoding: 'utf8', env: { ...process.env, SIDEKICK_WORKER_CONFIG: '/tmp/nonexistent-cred.json' },
+    encoding: 'utf8', env: { ...process.env, SIDEKICK_WORKER_CONFIG: path.join(os.tmpdir(), 'sidekick-nonexistent-cred.json'), SIDEKICK_WORKER_CONFIG_FILE: path.join(os.tmpdir(), 'sidekick-no-external-worker-config.json') },
   });
   assert.ok(status.includes('Enrolled:        no'));
 });

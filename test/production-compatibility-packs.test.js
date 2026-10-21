@@ -2,11 +2,10 @@
 
 const assert = require("assert");
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 
-const dataDir = path.join(__dirname, "test-data-production-compatibility-packs");
-fs.rmSync(dataDir, { recursive: true, force: true });
-fs.mkdirSync(dataDir, { recursive: true });
+const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-production-compatibility-packs-"));
 process.env.SIDEKICK_DATA_DIR = dataDir;
 process.env.SIDEKICK_DB_FILE = path.join(dataDir, "sidekick.db");
 process.env.SIDEKICK_TOOL_POLICY = "open";
@@ -15,6 +14,7 @@ process.env.SIDEKICK_SECRET_KEY = "production-compatibility-packs-test-key";
 
 require("../src/db").runPendingMigrations();
 const lifecycle = require("../src/packs/lifecycle");
+const bundled = require("../src/packs/bundled");
 const packs = [
   "linux-systems-administration",
   "observability-incident-response",
@@ -86,7 +86,9 @@ test("PCA.3: unavailable delegated providers remain visible", async () => {
   const backup = require("../packs/backup-restore-dr/modules/backup-restore-tools/entry").buildDescriptors({ config: {}, dispatch: async () => ({}) }).find(item => item.name === "backup_database");
   assert.equal((await backup.handler({ path: "../outside.db" })).code, "invalid_path");
   for (const name of packs) {
-    const result = lifecycle.install(path.join(__dirname, "..", "packs", name), { enable: true });
+    // First-party code must enter through the bundled release verifier so the
+    // module loader can validate the independent trust designation.
+    const result = bundled.installBundledPack(name, { enable: true });
     assert.equal(result.pack.state, "enabled", `${name} should enable through the normal lifecycle`);
     assert.equal(lifecycle.health(name).status, "healthy", `${name} should report healthy module preconditions`);
     lifecycle.disable(name);
@@ -94,10 +96,12 @@ test("PCA.3: unavailable delegated providers remain visible", async () => {
     lifecycle.uninstall(name);
   }
   if (!process.exitCode) console.log("All production compatibility pack tests passed.");
+  require("../src/db").closeDatabase();
   fs.rmSync(dataDir, { recursive: true, force: true });
   process.exit(process.exitCode || 0);
 })().catch(error => {
   console.error(error.stack || error);
+  try { require("../src/db").closeDatabase(); } catch {}
   fs.rmSync(dataDir, { recursive: true, force: true });
   process.exit(1);
 });

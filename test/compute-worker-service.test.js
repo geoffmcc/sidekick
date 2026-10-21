@@ -67,9 +67,15 @@ const shInstallers = ['install-linux.sh', 'uninstall-linux.sh', 'install-macos.s
 const psInstallers = ['install-windows.ps1', 'uninstall-windows.ps1'];
 
 test('shell installers are syntactically valid (bash -n) and strict-mode', () => {
+  let wslAvailable = process.platform !== 'win32';
+  if (process.platform === 'win32') {
+    try { execFileSync('wsl.exe', ['--exec', '/bin/true'], { stdio: 'ignore' }); wslAvailable = true; }
+    catch { wslAvailable = false; }
+  }
   for (const f of shInstallers) {
     const p = path.join(PKG, f);
     if (process.platform === 'win32') {
+      if (!wslAvailable) { console.log('    (bash syntax check skipped: WSL is unavailable to this process)'); assert.ok(/set -euo pipefail/.test(read(p)), `${f} missing strict mode`); continue; }
       const windowsPathForWsl = p.replace(/\\/g, '/');
       const wslPath = execFileSync('wsl.exe', ['wslpath', '-a', windowsPathForWsl], { encoding: 'utf8' }).trim();
       execFileSync('wsl.exe', ['bash', '-n', wslPath]);
@@ -132,7 +138,9 @@ test('credential ACL grants LocalSystem read so the service can start', () => {
   const body = read(path.join(ROOT, 'src', 'compute', 'worker-credential.js'));
   assert.ok(/S-1-5-18/.test(body), 'must grant the LocalSystem SID (locale-independent)');
   assert.ok(/\/inheritance:r/.test(body), 'must still drop inherited ACEs');
-  assert.ok(/\$\{user\}:F/.test(body), 'must still grant the installing user full control');
+  assert.ok(/WHOAMI/.test(body) && /\/user/.test(body) && /\*\$\{sid\}:F/.test(body), 'must grant the effective process token SID full control');
+  assert.ok(/sid !== "S-1-5-18"/.test(body), 'must not replace LocalSystem full control with a later read-only ACE');
+  assert.ok(/Unable to apply the current process ACL/.test(body), 'must fail closed when the credential ACL cannot be secured');
 });
 test('enroll verifies an existing credential instead of silently keeping it', () => {
   const body = read(path.join(ROOT, 'src', 'compute', 'worker-agent.js'));

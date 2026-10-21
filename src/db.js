@@ -10,6 +10,7 @@ const { createHandoffStore } = require("./db/handoff-store");
 const { splitSqlStatements, parseAddColumn } = require("./core/sql-statements");
 const { createKvStore } = require("./db/kv-store");
 const { createToolLogStore } = require("./db/tool-logs");
+const { normalizeDatabaseSearchRequest } = require("./db/search-bounds");
 const { createGeneratedCapabilityStore } = require("./db/generated-capabilities");
 const { createGeneratedExecutionRowMappers } = require("./db/generated-execution-rows");
 const { createDatabaseInspection } = require("./db/inspection");
@@ -64,6 +65,7 @@ function configureDatabase(connection) {
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
+  CREATE INDEX IF NOT EXISTS idx_kv_store_project_key ON kv_store(project, key);
 
   CREATE TABLE IF NOT EXISTS json_documents (
     name TEXT PRIMARY KEY,
@@ -278,7 +280,7 @@ function loadDocument(name, fallback) {
   return existing !== undefined ? existing : fallback;
 }
 
-const { loadKV, clearKV, replaceKV, setKV, getKV, deleteKV, listKVProjects, getAllKV } = createKvStore({ db: dbHandle, parseJson, nowIso });
+const { loadKV, clearKV, replaceKV, setKV, getKV, hasKV, deleteKV, deleteKVByPrefix, countKV, listKVProjects, listKVProjectPage, listKVPage, getAllKV, listScopedKV } = createKvStore({ db: dbHandle, parseJson, nowIso });
 
 const { appendToolLog, readToolLogs, clearToolLogs } = createToolLogStore({ db: dbHandle, parseJson, nowIso, maxLog: MAX_LOG });
 
@@ -393,7 +395,10 @@ function getGeneratedToolExecution(id) {
 }
 
 function listGeneratedToolExecutions(options = {}) {
-  const limit = Math.min(Number(options.limit) || 50, 200);
+  const requestedLimit = Number(options.limit ?? 50);
+  const limit = Number.isSafeInteger(requestedLimit) && requestedLimit > 0
+    ? Math.min(requestedLimit, 200)
+    : 50;
   let rows;
   if (options.capabilityId) {
     rows = db.prepare("SELECT * FROM generated_tool_executions WHERE capability_id = ? ORDER BY created_at DESC LIMIT ?").all(options.capabilityId, limit);
@@ -1793,12 +1798,16 @@ function setupFTS5() {
 }
 
 function searchAllTables(query, options = {}) {
-  const { tables = null, limit = 50 } = options;
+  const bounded = normalizeDatabaseSearchRequest(query, options);
+  query = bounded.query;
+  const { tables, limit } = bounded;
+  if (!query) return [];
   
   const results = [];
   const ftsTables = getTableList().filter(t => t.name.endsWith("_fts"));
   
   for (const ftsTable of ftsTables) {
+    if (results.length >= limit) break;
     const baseTableName = ftsTable.name.replace("_fts", "");
     
     if (tables && !tables.includes(baseTableName)) continue;
@@ -1808,7 +1817,7 @@ function searchAllTables(query, options = {}) {
         SELECT rowid, * FROM ${ftsTable.name} 
         WHERE ${ftsTable.name} MATCH ? 
         LIMIT ?
-      `).all(query, limit);
+      `).all(query, limit - results.length);
       
       for (const row of rows) {
         results.push({
@@ -1833,12 +1842,13 @@ function searchAllTables(query, options = {}) {
       );
       
       for (const col of textColumns) {
+        if (results.length >= limit) break;
         try {
           const rows = db.prepare(`
             SELECT rowid, ${col.name} FROM ${table.name}
             WHERE ${col.name} LIKE ?
             LIMIT ?
-          `).all(`%${query}%`, Math.min(limit, 10));
+          `).all(`%${query}%`, Math.min(limit - results.length, 10));
           
           for (const row of rows) {
             results.push({
@@ -2356,11 +2366,17 @@ function getSyncDiff(since, options = {}) {
   if (!hasMemoriesTable()) return { changes: [], since };
   
   const localMachineId = getMachineId();
+  const clauses = ["updated_at > ?"];
+  const params = [since];
+  if (options.project) {
+    clauses.push("project = ?");
+    params.push(options.project);
+  }
   const rows = db.prepare(`
     SELECT * FROM memories
-    WHERE updated_at > ?
+    WHERE ${clauses.join(" AND ")}
     ORDER BY updated_at ASC
-  `).all(since);
+  `).all(...params);
   
   const changes = rows.map(row => ({
     id: row.id,
@@ -2412,9 +2428,15 @@ module.exports = {
   replaceKV,
   setKV,
   getKV,
+  hasKV,
   deleteKV,
+  deleteKVByPrefix,
+  countKV,
   listKVProjects,
+  listKVProjectPage,
+  listKVPage,
   getAllKV,
+  listScopedKV,
   appendToolLog,
   readToolLogs,
   clearToolLogs,

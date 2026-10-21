@@ -7,6 +7,8 @@ function registerEvolveRoutes({
   dbStore,
   shapeExecution,
   requireAttributedActor,
+  requireIdentityPermission,
+  hasIdentityPermission,
   crypto,
   callDashboardTool,
   dashboardExecutionMetadata,
@@ -38,11 +40,13 @@ function registerEvolveRoutes({
   app.post("/api/evolve/:id/feedback", guarded((req, res) => evolveDashboardAction(req, res, "feedback")));
 
   app.get("/api/evolve/executions", guarded((req, res) => {
+    if (!requireIdentityPermission(req, res, "dashboard.operations.read")) return;
     const executions = dbStore.listGeneratedToolExecutions({ capabilityId: req.query.capability_id, limit: req.query.limit }).map(shapeExecution);
     res.json({ ok: true, executions });
   }));
 
   app.get("/api/evolve/executions/:executionId", guarded((req, res) => {
+    if (!requireIdentityPermission(req, res, "dashboard.operations.read")) return;
     const execution = dbStore.getGeneratedToolExecution(req.params.executionId);
     if (!execution) return res.status(404).json({ ok: false, error: "Execution not found" });
     res.json({ ok: true, execution: shapeExecution(execution) });
@@ -106,19 +110,37 @@ function registerEvolveRoutes({
   }));
 
   app.get("/api/evolve/executions/:executionId/stream", guarded((req, res) => {
+    if (!requireIdentityPermission(req, res, "dashboard.operations.read")) return;
+    if (typeof hasIdentityPermission !== "function") return res.status(503).json({ ok: false, error: "Authorization unavailable", code: "authorization_unavailable" });
     res.writeHead(200, {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
       Connection: "keep-alive",
     });
+    let ended = false;
+    let authorizationPoll = null;
+    let off = () => {};
+    const close = () => {
+      if (ended) return;
+      ended = true;
+      if (authorizationPoll) clearInterval(authorizationPoll);
+      off();
+      res.end();
+    };
     const send = execution => {
-      if (execution.id !== req.params.executionId) return;
+      if (ended || execution.id !== req.params.executionId) return;
+      if (!hasIdentityPermission(req, "dashboard.operations.read")) return close();
       res.write(`event: execution\ndata: ${JSON.stringify(shapeExecution(execution))}\n\n`);
     };
     const current = dbStore.getGeneratedToolExecution(req.params.executionId);
-    if (current) res.write(`event: execution\ndata: ${JSON.stringify(shapeExecution(current))}\n\n`);
-    const off = dynamicTools.onExecutionEvent(send);
-    req.on("close", off);
+    if (current) send(current);
+    if (ended) return;
+    off = dynamicTools.onExecutionEvent(send);
+    authorizationPoll = setInterval(() => {
+      if (!hasIdentityPermission(req, "dashboard.operations.read")) close();
+    }, 1000);
+    if (typeof authorizationPoll.unref === "function") authorizationPoll.unref();
+    req.on("close", close);
   }));
 }
 

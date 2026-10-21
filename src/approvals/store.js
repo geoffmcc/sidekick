@@ -339,7 +339,10 @@ function getStepResult(taskId, stepId, planVersion) {
 }
 
 function listApprovalRows({ status, taskId, limit = 100 } = {}) {
-  const max = Math.min(parseInt(limit, 10) || 100, 500);
+  const requestedLimit = Number.parseInt(limit, 10);
+  const max = Number.isFinite(requestedLimit) && requestedLimit > 0
+    ? Math.min(requestedLimit, 500)
+    : 100;
   const clauses = [];
   const params = [];
   if (status) { clauses.push("status = ?"); params.push(status); }

@@ -13,10 +13,10 @@ function frame(message) {
   return Buffer.from(JSON.stringify(message) + "\n", "utf8");
 }
 
-function launch(home) {
+function launch(home, credentialFile = "") {
   const child = spawn(process.execPath, [CLI], {
     cwd: os.tmpdir(),
-    env: { ...process.env, SIDEKICK_HOME: home, SIDEKICK_DATA_DIR: "", NODE_ENV: "production" },
+    env: { ...process.env, SIDEKICK_HOME: home, SIDEKICK_DATA_DIR: "", SIDEKICK_SECRET_DIR: path.join(home, "secrets"), SIDEKICK_MCP_CREDENTIAL_FILE: credentialFile, NODE_ENV: "production" },
     stdio: ["pipe", "pipe", "pipe"]
   });
   let output = Buffer.alloc(0);
@@ -77,15 +77,59 @@ function setupProcess(home) {
   return new Promise((resolve, reject) => {
     execFile(process.execPath, [CLI, "setup"], {
       cwd: os.tmpdir(),
-      env: { ...process.env, SIDEKICK_HOME: home, SIDEKICK_DATA_DIR: "", NODE_ENV: "production" }
+      env: { ...process.env, SIDEKICK_HOME: home, SIDEKICK_DATA_DIR: "", SIDEKICK_SECRET_DIR: path.join(home, "secrets"), NODE_ENV: "production" }
     }, (error, stdout, stderr) => error ? reject(new Error(stderr || error.message)) : resolve({ stdout, stderr }));
+  });
+}
+
+function provisionCredential(home) {
+  const script = [
+    'const db = require("./src/db");',
+    'db.runPendingMigrations();',
+    'const identity = require("./src/core/identity");',
+    'const principal = identity.listPrincipals({ type: "human" }).find(item => item.roles.includes("owner")) || identity.bootstrapOwner({ username: "stdio-test", password: "stdio-test-password-123" });',
+    'require("./src/platform/kernel").registerProject({ project_id: "local_test", owner_actor_id: principal.principal_id, source: "test" });',
+    'const result = require("./src/core/authentication").createCredential({ principalId: principal.principal_id, displayName: "stdio test", scopes: ["tools.execute", "tools.execute_high", "memory.read", "memory.write"] });',
+    'process.stdout.write(result.token);',
+    'db.closeDatabase();'
+  ].join(" ");
+  return new Promise((resolve, reject) => {
+    execFile(process.execPath, ["-e", script], {
+      cwd: ROOT,
+      env: { ...process.env, SIDEKICK_HOME: home, SIDEKICK_DATA_DIR: path.join(home, "data"), SIDEKICK_SECRET_DIR: path.join(home, "secrets"), NODE_ENV: "test" }
+    }, (error, stdout, stderr) => error ? reject(new Error(stderr || error.message)) : resolve(stdout.trim()));
+  });
+}
+
+function revokeCredential(home, credentialId) {
+  const script = 'const db=require("./src/db"); const changed=require("./src/core/authentication").revokeCredential(process.argv[1]); process.stdout.write(String(changed)); db.closeDatabase();';
+  return new Promise((resolve, reject) => {
+    execFile(process.execPath, ["-e", script, credentialId], {
+      cwd: ROOT,
+      env: { ...process.env, SIDEKICK_HOME: home, SIDEKICK_DATA_DIR: path.join(home, "data"), SIDEKICK_SECRET_DIR: path.join(home, "secrets"), NODE_ENV: "test" }
+    }, (error, stdout, stderr) => error ? reject(new Error(stderr || error.message)) : resolve(stdout.trim() === "true"));
   });
 }
 
 let activeRuntime;
 (async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-stdio-"));
+  await setupProcess(home);
+  const token = await provisionCredential(home);
+  const credentialFile = path.join(home, "stdio_credential");
+  fs.writeFileSync(credentialFile, token, { mode: 0o600 });
   let runtime = launch(home);
+  activeRuntime = runtime;
+  await request(runtime, 1, "initialize", {
+    protocolVersion: "2025-06-18",
+    capabilities: {},
+    clientInfo: { name: "sidekick-local-unauthenticated-test", version: "1" }
+  });
+  const unauthenticated = await request(runtime, 2, "tools/call", { name: "handoff", arguments: { action: "create", project: "local_test", title: "should be denied", content: "identityless" } });
+  assert.ok(unauthenticated.result?.isError || unauthenticated.error, "identityless local stdio call unexpectedly succeeded");
+  await stop(runtime);
+
+  runtime = launch(home, credentialFile);
   activeRuntime = runtime;
   const init = await request(runtime, 1, "initialize", {
     protocolVersion: "2025-06-18",
@@ -105,14 +149,19 @@ let activeRuntime;
   const stored = await request(runtime, 3, "tools/call", { name: "store", arguments: { key: "stdio-persistence", value: "survives-restart", project: "local_test" } });
   assert.ok(!stored.error && !stored.result?.isError, `governed store call failed: ${JSON.stringify(stored)}`);
   const handoff = await request(runtime, 4, "tools/call", { name: "handoff", arguments: { action: "create", project: "local_test", title: "stdio test", content: "durable handoff" } });
-  assert.ok(!handoff.error && !handoff.result?.isError, `governed handoff call failed: ${JSON.stringify(handoff)}`);
+  assert.ok(!handoff.error && !handoff.result?.isError, `governed handoff call failed: ${JSON.stringify(handoff)} ${runtime.getDiagnostics()}`);
   await stop(runtime);
 
-  runtime = launch(home);
+  runtime = launch(home, credentialFile);
   activeRuntime = runtime;
-  const get = await request(runtime, 5, "tools/call", { name: "get", arguments: { key: "stdio-persistence" } });
-  assert.ok(!get.error && !get.result?.isError, "persisted value could not be retrieved after restart");
+  const get = await request(runtime, 5, "tools/call", { name: "get", arguments: { key: "stdio-persistence", project: "local_test" } });
+  assert.ok(!get.error && !get.result?.isError, `persisted value could not be retrieved after restart: ${JSON.stringify(get)}`);
   assert.match(JSON.stringify(get), /survives-restart/);
+  const credentialId = token.match(/^skc_(cred_[0-9a-f-]+)_/i)?.[1];
+  assert.ok(credentialId, "test credential id was missing");
+  assert.strictEqual(await revokeCredential(home, credentialId), true, "credential could not be revoked");
+  const revokedCall = await request(runtime, 7, "tools/call", { name: "handoff", arguments: { action: "create", project: "local_test", title: "revoked", content: "must fail" } });
+  assert.ok(revokedCall.result?.isError || revokedCall.error, "revoked credential remained usable in an open stdio session");
   const denied = await request(runtime, 6, "tools/call", { name: "bash", arguments: { command: "echo should-not-run" } });
   assert.ok(denied.result?.isError || denied.error, "approval/policy-gated local call unexpectedly succeeded");
   await stop(runtime);

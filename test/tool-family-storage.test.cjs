@@ -1,15 +1,15 @@
 const assert = require('assert');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
-const TEST_DATA_DIR = path.join(__dirname, 'test-data-storage');
-fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
-fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
+const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sidekick-tool-storage-'));
 
 process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
 process.env.SIDEKICK_TOOL_POLICY = 'open';
 process.env.SIDEKICK_APPROVAL_MODE = 'off';
-process.env.SIDEKICK_SECRET_KEY = 'storage-test-secret-key';
+process.env.SIDEKICK_SECRET_KEY_FILE = path.join(TEST_DATA_DIR, 'secret-key');
+fs.writeFileSync(process.env.SIDEKICK_SECRET_KEY_FILE, 'storage-test-secret-key');
 delete process.env.SIDEKICK_BLOCKED_TOOLS;
 delete process.env.SIDEKICK_APPROVAL_REQUIRED_TOOLS;
 
@@ -27,14 +27,22 @@ console.log('Running Storage Family Tests...');
 (async () => {
   const original = Object.fromEntries(['testConnection', 'get', 'set', 'del', 'keys', 'ttl', 'info', 'flush'].map(name => [name, redis[name]]));
   try {
+    const dbStore = require('../src/db');
+    dbStore.runPendingMigrations();
+    const identity = require('../src/core/identity');
+    const testPrincipal = identity.createPrincipal({ type: 'service', displayName: 'Storage test principal' });
+    identity.assignRole(testPrincipal.principal_id, 'administrator');
+    require('../src/platform/kernel').registerProject({ project_id: 'testproj', owner_actor_id: testPrincipal.principal_id, source: 'test' });
+    const authenticatedContext = { source: 'mcp', authIdentity: { principal_id: testPrincipal.principal_id, principal_type: 'service', scopes: null } };
+    const invoke = (name, args) => tools.dispatchTool({ name, args, context: authenticatedContext });
     const registry = tools.getBuiltinRegistry();
     const expected = {
-      store: ['low', 'Storage'],
-      get: ['low', 'Storage'],
-      delete: ['low', 'Storage'],
-      list_projects: ['low', 'Storage'],
-      get_by_project: ['low', 'Storage'],
-      cache: ['low', 'Efficiency'],
+      store: ['medium', 'Storage'],
+      get: ['medium', 'Storage'],
+      delete: ['medium', 'Storage'],
+      list_projects: ['medium', 'Storage'],
+      get_by_project: ['medium', 'Storage'],
+      cache: ['medium', 'Efficiency'],
       redis: ['medium', 'Storage'],
     };
     for (const [name, [risk, category]] of Object.entries(expected)) {
@@ -59,10 +67,10 @@ console.log('Running Storage Family Tests...');
 
     // Redis unavailable: cache falls back and redis reports the original error.
     redis.testConnection = async () => ({ connected: false, error: 'offline' });
-    assert.strictEqual(text(await family.sidekick_cache({ action: 'set', key: 'local', value: 'value', ttl: '30s' })), 'Cached local (TTL: 30s)');
-    assert.strictEqual(text(await family.sidekick_cache({ action: 'get', key: 'local' })), 'value');
-    assert.deepStrictEqual(JSON.parse(text(await family.sidekick_cache({ action: 'list' })))[0].key, 'local');
-    const unavailable = await family.sidekick_redis({ action: 'get', key: 'x' });
+    assert.strictEqual(text(await invoke('cache', { action: 'set', key: 'local', value: 'value', ttl: '30s' })), 'Cached local (TTL: 30s)');
+    assert.strictEqual(text(await invoke('cache', { action: 'get', key: 'local' })), 'value');
+    assert.deepStrictEqual(JSON.parse(text(await invoke('cache', { action: 'list' })))[0].key, 'local');
+    const unavailable = await invoke('redis', { action: 'get', key: 'x' });
     assert.strictEqual(unavailable.isError, true);
     assert.strictEqual(text(unavailable), 'Error: Redis not available (offline). Start with: sudo systemctl start sidekick-redis');
 
@@ -74,56 +82,60 @@ console.log('Running Storage Family Tests...');
     redis.keys = async pattern => [...values.keys()].filter(key => pattern === '*' || key.startsWith('cache:'));
     redis.ttl = async key => values.get(key)?.ttl || -1;
     redis.del = async key => values.delete(key) ? 1 : 0;
-    assert.strictEqual(text(await family.sidekick_cache({ action: 'set', key: 'remote', value: 'redis-value', ttl: '5m' })), 'Cached remote (TTL: 5m, redis)');
-    assert.deepStrictEqual(values.get('cache:remote'), { value: 'redis-value', ttl: 300 });
-    assert.strictEqual(text(await family.sidekick_cache({ action: 'get', key: 'remote' })), 'redis-value');
-    assert.deepStrictEqual(JSON.parse(text(await family.sidekick_cache({ action: 'list' }))), [{ key: 'remote', expires_in_seconds: 300 }]);
-    assert.strictEqual(text(await family.sidekick_cache({ action: 'clear', key: 'remote' })), 'Cleared cache: remote (redis)');
+    assert.strictEqual(text(await invoke('cache', { action: 'set', key: 'remote', value: 'redis-value', ttl: '5m' })), 'Cached remote (TTL: 5m, redis)');
+    assert.ok([...values.values()].some(entry => entry.value === 'redis-value' && entry.ttl === 300), 'cache values must retain the requested TTL in the principal scope');
+    assert.strictEqual(text(await invoke('cache', { action: 'get', key: 'remote' })), 'redis-value');
+    assert.deepStrictEqual(JSON.parse(text(await invoke('cache', { action: 'list' }))), [{ key: 'remote', expires_in_seconds: 300 }]);
+    assert.strictEqual(text(await invoke('cache', { action: 'clear', key: 'remote' })), 'Cleared cache: remote (redis)');
 
     // Redis actions preserve the legacy validation and response text.
     redis.get = async key => key === 'missing' ? null : 'value';
     redis.info = async () => ({ server: { redis_version: 'test' } });
     redis.flush = async () => 'OK';
-    assert.strictEqual(text(await family.sidekick_redis({ action: 'get', key: 'missing' })), '(nil)');
-    assert.strictEqual(text(await family.sidekick_redis({ action: 'set', key: 'k', value: 'v', ttl: '12' })), 'OK (TTL: 12s)');
-    assert.strictEqual(text(await family.sidekick_redis({ action: 'keys', pattern: 'cache:*' })), '[]');
-    assert.strictEqual(text(await family.sidekick_redis({ action: 'ttl', key: 'k' })), '12');
-    assert.deepStrictEqual(JSON.parse(text(await family.sidekick_redis({ action: 'info' }))), { server: { redis_version: 'test' } });
-    assert.strictEqual(text(await family.sidekick_redis({ action: 'flush' })), 'Redis database flushed');
+    assert.strictEqual(text(await invoke('redis', { action: 'get', key: 'missing' })), '(nil)');
+    assert.strictEqual(text(await invoke('redis', { action: 'set', key: 'k', value: 'v', ttl: '12' })), 'OK (TTL: 12s)');
+    assert.strictEqual(text(await invoke('redis', { action: 'keys', pattern: 'cache:*' })), '[]');
+    assert.strictEqual(text(await invoke('redis', { action: 'ttl', key: 'k' })), '12');
+    assert.deepStrictEqual(JSON.parse(text(await invoke('redis', { action: 'info' }))), { server: { redis_version: 'test' } });
+    assert.strictEqual(text(await invoke('redis', { action: 'flush' })), 'Redis database flushed');
 
     redis.get = async key => values.get(key)?.value ?? null;
     let result = await tools.dispatchTool({ name: 'redis', args: { action: 'get', key: 'missing' }, context: { source: 'mcp' } });
-    assert.strictEqual(text(result), '(nil)');
+    assert.strictEqual(result.code, 'unauthenticated', 'identityless medium-risk Redis operations must be denied');
+    result = await tools.dispatchTool({ name: 'redis', args: { action: 'get', key: 'missing' }, context: authenticatedContext });
+    assert.strictEqual(text(result), '(nil)', 'authorized Redis operation should execute through the dispatcher');
     result = await tools.dispatchTool({ name: 'sidekick_cache', args: { action: 'get', key: 'remote' }, context: { source: 'mcp' } });
     assert.strictEqual(result.isError, true);
+    assert.strictEqual(result.code, 'unauthenticated', 'identityless cache reads must be denied');
+    result = await tools.dispatchTool({ name: 'sidekick_cache', args: { action: 'get', key: 'remote' }, context: authenticatedContext });
     assert.strictEqual(text(result), 'Cache miss: remote');
 
     // KV descriptors execute through the dispatcher under canonical and
     // sidekick_-prefixed names, exactly like the legacy storage handlers did.
-    result = await tools.dispatchTool({ name: 'store', args: { key: 'alpha', value: 'one' }, context: { source: 'mcp' } });
+    result = await tools.dispatchTool({ name: 'store', args: { key: 'alpha', value: 'one' }, context: authenticatedContext });
     assert.strictEqual(result.isError, undefined, 'store should execute through the dispatcher');
     assert.strictEqual(text(result), 'Stored key "alpha" (3 chars)');
-    result = await tools.dispatchTool({ name: 'sidekick_get', args: { key: 'alpha' }, context: { source: 'mcp' } });
+    result = await tools.dispatchTool({ name: 'sidekick_get', args: { key: 'alpha' }, context: authenticatedContext });
     assert.strictEqual(result.isError, undefined, 'sidekick_-prefixed get should resolve to the extracted descriptor');
     assert.strictEqual(text(result), 'one');
-    result = await tools.dispatchTool({ name: 'sidekick_delete', args: { key: 'alpha' }, context: { source: 'mcp' } });
+    result = await tools.dispatchTool({ name: 'sidekick_delete', args: { key: 'alpha' }, context: authenticatedContext });
     assert.strictEqual(result.isError, undefined, 'sidekick_-prefixed delete should resolve to the extracted descriptor');
     assert.strictEqual(text(result), 'Deleted key "alpha"');
-    result = await tools.dispatchTool({ name: 'get', args: { key: 'alpha' }, context: { source: 'mcp' } });
+    result = await tools.dispatchTool({ name: 'get', args: { key: 'alpha' }, context: authenticatedContext });
     assert.strictEqual(result.isError, true, 'get after delete should report the key missing');
     assert.strictEqual(text(result), 'Key not found: alpha');
 
-    result = await tools.dispatchTool({ name: 'sidekick_store', args: { key: 'proj_k1', value: 'v1', project: 'testproj' }, context: { source: 'mcp' } });
+    result = await tools.dispatchTool({ name: 'sidekick_store', args: { key: 'proj_k1', value: 'v1', project: 'testproj' }, context: authenticatedContext });
     assert.strictEqual(result.isError, undefined, 'store with a project should execute');
-    result = await tools.dispatchTool({ name: 'list_projects', args: {}, context: { source: 'mcp' } });
+    result = await tools.dispatchTool({ name: 'list_projects', args: {}, context: authenticatedContext });
     assert.deepStrictEqual(JSON.parse(text(result)), ['testproj'], 'list_projects should surface the stored project');
-    result = await tools.dispatchTool({ name: 'sidekick_get_by_project', args: { project: 'testproj' }, context: { source: 'mcp' } });
+    result = await tools.dispatchTool({ name: 'sidekick_get_by_project', args: { project: 'testproj' }, context: authenticatedContext });
     const byProject = JSON.parse(text(result));
     assert.ok(Array.isArray(byProject) && byProject.length === 1, 'get_by_project should return the project keys');
     assert.strictEqual(byProject[0].key, 'proj_k1');
     assert.strictEqual(byProject[0].value, 'v1');
 
-    result = await tools.dispatchTool({ name: 'store', args: { key: 'nope' }, context: { source: 'mcp' } });
+    result = await tools.dispatchTool({ name: 'store', args: { key: 'nope' }, context: authenticatedContext });
     assert.strictEqual(result.isError, true, 'missing value should fail descriptor validation');
     assert.strictEqual(result.code, 'validation_failed', 'validation should happen before the handler runs');
 
@@ -138,7 +150,7 @@ console.log('Running Storage Family Tests...');
         { tool: 'batch', args: { calls: [{ tool: 'store', args: { key: 'nested_k', value: 'nv' } }] } },
         { tool: 'nope_not_real', args: {} },
       ] },
-      context: { source: 'mcp' },
+      context: authenticatedContext,
     });
     const batched = JSON.parse(text(result));
     assert.strictEqual(batched[0].error, false, 'batch should reach an extracted storage tool');
@@ -153,14 +165,14 @@ console.log('Running Storage Family Tests...');
     // Policy and approval are enforced at the dispatcher for the extracted
     // storage family, not inside the handlers.
     process.env.SIDEKICK_BLOCKED_TOOLS = 'sidekick_get';
-    result = await tools.dispatchTool({ name: 'sidekick_get', args: { key: 'proj_k1' }, context: { source: 'mcp' } });
+    result = await tools.dispatchTool({ name: 'sidekick_get', args: { key: 'proj_k1' }, context: authenticatedContext });
     assert.strictEqual(result.isError, true, 'policy denial should still apply to extracted storage tools');
     assert.strictEqual(result.code, 'policy_denied', 'policy must be enforced at the dispatcher, not in the handler');
     delete process.env.SIDEKICK_BLOCKED_TOOLS;
 
     process.env.SIDEKICK_APPROVAL_MODE = 'risky';
     process.env.SIDEKICK_APPROVAL_REQUIRED_TOOLS = 'sidekick_store';
-    result = await tools.dispatchTool({ name: 'sidekick_store', args: { key: 'approval_k', value: 'av' }, context: { source: 'mcp' } });
+    result = await tools.dispatchTool({ name: 'sidekick_store', args: { key: 'approval_k', value: 'av' }, context: authenticatedContext });
     assert.strictEqual(result.isError, true, 'approval-gated storage tool should not execute directly');
     assert.strictEqual(result.code, 'approval_required', 'approval must be enforced at the dispatcher for extracted families');
     assert.strictEqual(result.approvalRequired, true, 'result should signal that approval is required');
@@ -172,6 +184,7 @@ console.log('Running Storage Family Tests...');
     console.log('Storage Family Tests passed');
   } finally {
     for (const [name, handler] of Object.entries(original)) redis[name] = handler;
+    try { require('../src/db').closeDatabase(); } catch {}
     fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
   }
 })().catch(error => {

@@ -3,8 +3,13 @@
 /**
  * Module migration runner (docs/module-system-design.md).
  *
- * Modules may run migrations against the platform database, but only within
- * strict bounds:
+ * Only source-verified first-party builtins may run SQL migrations against
+ * Core's database. Managed/discovered modules are denied before any SQL is
+ * parsed or executed. This runner has no SQLite authorizer boundary; lexical
+ * table checks are not a safe sandbox. Managed modules should use scoped pack
+ * storage until an isolated migration API exists.
+ *
+ * Trusted builtin migrations additionally follow these bounds:
  *   - Migrations run in declaration order inside a single transaction.
  *   - A migration that already applied (by name) is skipped.
  *   - Module migrations must NOT create or destroy schema objects. Module
@@ -110,6 +115,10 @@ function assertMigrationIsDataOnly(sql) {
  * @param {Array<{name: string, sql: string}>} migrations - declared migrations
  * @param {string[]} alreadyApplied - names already applied (from the row)
  * @param {object} [options]
+ * @param {boolean} [options.trustedBuiltin=false] - true only for source-verified
+ *   first-party builtin modules. Managed/discovered module SQL is not allowed
+ *   to execute against Core's database because this module has no SQLite
+ *   authorizer boundary and lexical SQL checks cannot safely constrain SQLite.
  * @param {function} [options.recordProgress] - called inside the transaction
  *   after all pending migrations execute, with { applied, alreadyApplied }.
  *   If it throws, the whole batch (data changes included) rolls back, so
@@ -123,6 +132,10 @@ function runModuleMigrations(db, moduleName, migrations, alreadyApplied = [], op
 
   if (pending.length === 0) {
     return { applied: [], alreadyApplied: [...appliedSet] };
+  }
+
+  if (options.trustedBuiltin !== true) {
+    throw new Error(`Module "${moduleName}" migrations are disabled for non-builtin modules until an isolated migration API is available`);
   }
 
   for (const migration of pending) {

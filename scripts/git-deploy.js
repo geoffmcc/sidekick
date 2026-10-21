@@ -136,8 +136,10 @@ function git(args, cwd = APP_DIR, options = {}) {
 
 function npmInstall(cwd) {
   const lockfile = path.join(cwd, 'package-lock.json');
-  if (fs.existsSync(lockfile)) return run('npm', ['ci', '--omit=dev'], { cwd, timeout: 180000, maxBuffer: 20 * 1024 * 1024 });
-  return run('npm', ['install', '--omit=dev', '--no-package-lock'], { cwd, timeout: 180000, maxBuffer: 20 * 1024 * 1024 });
+  if (!fs.existsSync(lockfile)) {
+    return { ok: false, stdout: '', stderr: 'package-lock.json is required; refusing unpinned dependency installation' };
+  }
+  return run('npm', ['ci', '--omit=dev'], { cwd, timeout: 180000, maxBuffer: 20 * 1024 * 1024 });
 }
 
 function runSeed(cwd) {
@@ -233,6 +235,7 @@ function validateExistingCheckout(result) {
   if (info.push_url !== PUSH_URL) return fail(result, 'origin push URL is not disabled', { push_url: redact(info.push_url) }), false;
   if (info.branch !== 'main') return fail(result, 'deployment checkout is not on main', { branch: info.branch || '(detached)' }), false;
   if (info.status) return fail(result, 'tracked working tree is not clean', { git_status: info.status }), false;
+  if (!fs.existsSync(path.join(APP_DIR, 'package-lock.json'))) return fail(result, 'deployment checkout is missing package-lock.json'), false;
 
   return true;
 }

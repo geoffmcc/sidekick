@@ -50,7 +50,8 @@ function assertRejects(fn, matchStr) {
 
 const MOCK_CONFIG = {
   enabled: true,
-  pythonPath: path.join(__dirname, "helpers", "mock-python.sh"), // Use shell wrapper to ignore -u
+  pythonPath: process.platform === "win32" ? process.execPath : path.join(__dirname, "helpers", "mock-python.sh"),
+  pythonUnbuffered: process.platform !== "win32",
   modelsDir: path.join(__dirname, "mock-models"),
   cacheDir: path.join(__dirname, "mock-cache"),
   stateDir: path.join(__dirname, "mock-state"),

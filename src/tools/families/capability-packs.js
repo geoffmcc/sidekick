@@ -12,6 +12,7 @@
 // arguments, then delegates to src/packs/lifecycle.js and src/packs/bundled.js.
 
 const { z } = require("zod");
+const { requireCanonicalInvocation, requireToolExecution } = require("../read-authorization");
 
 function jsonText(payload) {
   return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
@@ -26,7 +27,14 @@ function requireName(name, action) {
   return String(name);
 }
 
-async function sidekick_capability({ action = "list", name, path: sourcePath, config, enable, allow_same_version, allow_downgrade, remove_knowledge, remove_module_data, source, query, kind, owner, state, available, offset, limit }, runtime = {}) {
+async function sidekick_capability({ action = "list", name, path: sourcePath, expected_package_hash, config, enable, allow_same_version, allow_downgrade, remove_knowledge, remove_module_data, source, query, kind, owner, state, available, offset, limit }, runtime = {}) {
+  const readActions = new Set(["list", "available", "show", "inspect", "validate", "health", "doctor"]);
+  const permission = readActions.has(action) ? "packs.read" : "packs.manage";
+  const publicReadActions = new Set(["list", "available", "catalog", "show", "health"]);
+  const authorizationError = publicReadActions.has(action)
+    ? requireCanonicalInvocation("capability")
+    : requireToolExecution({ tool: "capability", action }, permission, "capability");
+  if (authorizationError) return authorizationError;
   // Lazy requires: this family is loaded while the registry is assembled, and
   // the pack lifecycle reaches back into the module loader and tool registry.
   const lifecycle = require("../../packs/lifecycle");
@@ -99,8 +107,11 @@ async function sidekick_capability({ action = "list", name, path: sourcePath, co
     }
 
     if (action === "install") {
+      if (sourcePath && !/^[a-f0-9]{64}$/i.test(String(expected_package_hash || ""))) {
+        throw Object.assign(new Error("Inspect the server-local package first and pass its package_hash as expected_package_hash"), { code: "package_hash_required" });
+      }
       const result = sourcePath
-        ? lifecycle.install(sourcePath, { config, enable: enable === true, provenance: "third_party", source: { kind: "local_path" } })
+        ? lifecycle.install(sourcePath, { config, enable: enable === true, provenance: "third_party", source: { kind: "local_path" }, expectedPackageHash: expected_package_hash })
         : bundled.installBundledPack(requireName(name, action), { config, enable: enable === true });
       return jsonText({
         ok: true,
@@ -155,7 +166,10 @@ async function sidekick_capability({ action = "list", name, path: sourcePath, co
 
     if (action === "upgrade") {
       const packName = requireName(name, action);
-      const options = { allowSameVersion: allow_same_version === true, allowDowngrade: allow_downgrade === true, config };
+      if (sourcePath && !/^[a-f0-9]{64}$/i.test(String(expected_package_hash || ""))) {
+        throw Object.assign(new Error("Inspect the server-local package first and pass its package_hash as expected_package_hash"), { code: "package_hash_required" });
+      }
+      const options = { allowSameVersion: allow_same_version === true, allowDowngrade: allow_downgrade === true, config, expectedPackageHash: expected_package_hash };
       const result = sourcePath
         ? lifecycle.upgrade(packName, sourcePath, options)
         : bundled.upgradeBundledPack(packName, options);
@@ -202,6 +216,7 @@ const descriptors = Object.freeze([
         .describe("Capability pack action (default: list)"),
       name: z.string().optional().describe("Pack name (required for show/configure/enable/disable/health/upgrade/uninstall, and for installing a bundled pack)"),
       path: z.string().optional().describe("Server-local package path for inspect/validate/install/upgrade of a non-bundled pack"),
+      expected_package_hash: z.string().regex(/^[a-f0-9]{64}$/i).optional().describe("Required for install/upgrade from a server-local package path; copy the package_hash returned by inspect so approval binds the reviewed package contents"),
       config: z.record(z.any()).optional().describe("Pack configuration or attributed verification object"),
       enable: z.boolean().optional().describe("Enable the pack immediately after install (default false)"),
       allow_same_version: z.boolean().optional().describe("Permit replacing the installed version with the same version (upgrade)"),
@@ -221,6 +236,7 @@ const descriptors = Object.freeze([
        action: "string (list|catalog|available|show|inspect|validate|install|configure|enable|disable|health|maturity|prove|record_verification|doctor|upgrade|uninstall - default list)",
       name: "string (pack name)",
       path: "string (server-local package path)",
+      expected_package_hash: "string (SHA-256 package_hash from inspect; required for install/upgrade from path)",
       config: "object (pack configuration)",
       enable: "boolean (enable immediately after install)",
       allow_same_version: "boolean (upgrade: allow same-version replacement)",

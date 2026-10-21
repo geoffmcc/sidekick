@@ -287,7 +287,19 @@ async function provisionSuiteResources(suite, { platform = process.platform, cwd
   const scope = { suite, cwd, platform, token: `${suite.id}:${crypto.randomUUID()}`, root: rootPath, env: {
     SIDEKICK_TEST_SUITE_ID: suite.id,
     SIDEKICK_TEST_SUITE_ROOT: rootPath,
-    SIDEKICK_TEST_RESOURCE_ROOT: rootPath
+    SIDEKICK_TEST_RESOURCE_ROOT: rootPath,
+    // Tests exercise explicit filesystem roots under the checkout or temp
+    // area. Production defaults remain deny-by-default; each suite receives
+    // this bounded test-only path configuration instead of inheriting ambient
+    // host path policy from the developer shell.
+    SIDEKICK_ALLOWED_PATHS: [cwd, os.tmpdir()].join(","),
+    SIDEKICK_DENIED_PATHS: "",
+    SIDEKICK_MCP_ALLOWED_PATHS: "",
+    SIDEKICK_MCP_DENIED_PATHS: "",
+    SIDEKICK_DASHBOARD_ALLOWED_PATHS: "",
+    SIDEKICK_DASHBOARD_DENIED_PATHS: "",
+    SIDEKICK_AGENT_ALLOWED_PATHS: "",
+    SIDEKICK_AGENT_DENIED_PATHS: ""
   }, resources: [], released: false };
   try {
     for (const resource of suite.resources || []) {
@@ -377,7 +389,26 @@ function terminate(child) {
   if (!child || child.exitCode !== null) return Promise.resolve();
   if (process.platform === "win32") {
     const killer = spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], { windowsHide: true });
-    return new Promise(resolve => killer.once("close", resolve));
+    return new Promise(resolve => {
+      let settled = false;
+      const finish = () => { if (settled) return; settled = true; clearTimeout(fallback); resolve(); };
+      // taskkill can report completion before Node has observed the child's
+      // exit, and can itself fail in restricted Windows environments. Ensure
+      // cancellation still terminates the directly-owned child process.
+      const fallback = setTimeout(() => {
+        if (child.exitCode === null) { try { child.kill(); } catch {} }
+        finish();
+      }, 1000);
+      killer.once("close", () => {
+        if (child.exitCode === null) { try { child.kill(); } catch {} }
+        finish();
+      });
+      killer.once("error", () => {
+        if (child.exitCode === null) { try { child.kill(); } catch {} }
+        finish();
+      });
+      child.once("close", finish);
+    });
   }
   try { process.kill(-child.pid, "SIGTERM"); } catch {}
   return new Promise(resolve => {

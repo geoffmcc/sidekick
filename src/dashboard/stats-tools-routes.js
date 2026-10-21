@@ -1,6 +1,7 @@
 /** Register dashboard statistics and tool-catalog routes. */
-function registerStatsToolsRoutes({ app, dbStore, getToolDefsForSource, errorResponse }) {
+function registerStatsToolsRoutes({ app, dbStore, getToolDefsForSource, requireIdentityPermission, errorResponse }) {
   app.get("/api/stats", (req, res) => {
+    if (!requireIdentityPermission(req, res, "audit.read")) return;
     try {
       const now = new Date();
       const since = req.query.since || new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString();
@@ -23,6 +24,7 @@ function registerStatsToolsRoutes({ app, dbStore, getToolDefsForSource, errorRes
   });
 
   app.get("/api/tools", (req, res) => {
+    if (!requireIdentityPermission(req, res, "dashboard.catalog.read")) return;
     try {
       const query = String(req.query.q || "").trim().toLowerCase().slice(0, 120);
       const requestedLimit = Number.parseInt(req.query.limit, 10);

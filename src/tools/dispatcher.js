@@ -14,16 +14,19 @@ const {
   createTestExecutionContext,
   childContext,
   runWithContext,
+  getExecutionContext,
   dispatcherMetadata,
 } = require("./context");
 const { normalizeResult, errorResult, sanitizeText } = require("./result");
 const authorization = require("../core/authorization");
 const { recordSecurityEvent } = require("../core/security-audit");
 const { performance } = require("perf_hooks");
+const { AsyncLocalStorage } = require("async_hooks");
 const { createFactory } = require("./sensitive-result");
 
 const APPROVED_EXECUTION_CAPABILITY = Symbol("sidekick.approvedExecution");
 const TEST_DESCRIPTOR_CAPABILITY = Symbol("sidekick.testDescriptorExecution");
+const CANONICAL_INVOCATIONS = new AsyncLocalStorage();
 
 function roundMilliseconds(value) {
   return Math.round(value * 1000) / 1000;
@@ -109,6 +112,14 @@ function validationError(name, parsed) {
 
 function requiredToolPermission(descriptor, args = {}) {
   if (descriptor.authorizationPermission) return descriptor.authorizationPermission;
+  if (descriptor.name === "predict") {
+    const action = args.action === "suggest" ? "list" : args.action;
+    if (["list", "get", "explain"].includes(action)) return "predictions.read";
+    if (action === "analyze" && args.scope === "global") return "dashboard.operations.manage";
+    if (["feedback", "outcome", "dismiss", "analyze"].includes(action)) return "predictions.write";
+    if (["purge", "migrate"].includes(action)) return "dashboard.operations.manage";
+    if (["status", "diagnose", "purge_preview"].includes(action)) return "dashboard.operations.read";
+  }
   if (descriptor.name === "capability") {
     // Capability packs are a critical tool because some actions activate
     // executable module code.  That risk must not make harmless inventory and
@@ -120,11 +131,18 @@ function requiredToolPermission(descriptor, args = {}) {
   if (descriptor.name === "workflow") {
     return ["run", "resume"].includes(args.action) ? "workflows.execute" : "workflows.read";
   }
+  if (descriptor.name === "network_scopes" && ["list", "get"].includes(args.action || "list")) {
+    return "network_scopes.read";
+  }
   if (descriptor.name === "secret") {
     if (args.action === "list") return "secrets.read_metadata";
     if (args.action === "get") return "secrets.read";
     return "secrets.manage";
   }
+  if (descriptor.name === "webhook") {
+    return args.action === "clear" ? "webhooks.manage" : "webhooks.read";
+  }
+  if (descriptor.name === "ci_status") return "github.read";
   if (descriptor.risk === "critical") return "tools.execute_critical";
   if (descriptor.risk === "high") return "tools.execute_high";
   return "tools.execute";
@@ -164,10 +182,12 @@ function withTimeoutAndCancellation(handler, args, runtime, context) {
 }
 
 function sensitiveResultFactoryFor(descriptor, args, context) {
-  // Enrollment-token creation is the sole built-in operation with a one-time
-  // sensitive response. The source and authenticated principal/session are
-  // checked here, outside any pack handler.
-  if (descriptor.name !== "compute_nodes" || args.action !== "create_token") return null;
+  // One-time sensitive responses are allowlisted here so pack handlers cannot
+  // mint unredacted outputs. The dispatcher verifies the authenticated
+  // principal and live request/session boundary before exposing either token.
+  const oneTimeOperation = (descriptor.name === "compute_nodes" && args.action === "create_token")
+    || (descriptor.name === "handoff" && args.action === "claim");
+  if (!oneTimeOperation) return null;
   if (!context.authIdentity || (!context.authIdentity.principal_id && !context.authIdentity.principalId)) return null;
   if (!context.sessionId && !context.requestId) return null;
   return createFactory();
@@ -226,15 +246,33 @@ async function executeResolvedTool(descriptor, args, context, requestedName = de
   const executionArgs = freezeDeep(clonePlain(parsed.data));
   context.latencyTracker?.mark("validation");
 
-  const requiresIdentity = descriptor.name === "secret";
+  // Resolve the effective action risk before any handler can execute. Mixed
+  // tools inherit their stricter action risk here, so a low-risk tool label
+  // cannot make a privileged action identity-free.
+  let approvalDecision;
+  try {
+    approvalDecision = legacy.getApprovalDecision(descriptor.name, context.source, executionArgs);
+  } catch {
+    return errorResult("Approval evaluation failed", "approval_evaluation_failed");
+  }
+  const effectiveRisk = approvalDecision?.risk;
+  const requiresIdentity = !options.testExecution && (descriptor.name === "secret" || descriptor.name === "predict" || effectiveRisk !== "low");
   if (requiresIdentity && !context.authIdentity?.principal_id) {
-    return errorResult("Authentication required for secret operations", "unauthenticated");
+    try {
+      recordSecurityEvent("authorization.denied", {
+        context,
+        principalId: null,
+        details: { tool: descriptor.name, risk: effectiveRisk, code: "unauthenticated" },
+      });
+    } catch {}
+    return errorResult(`Authentication required for ${descriptor.name} operations`, "unauthenticated");
   }
 
   // Authenticated HTTP/MCP callers are subject to Core authorization in
   // addition to the existing source policy and approval layers. Explicit
   // legacy API-key compatibility remains transitional and is intentionally
   // visible as a separate authentication method.
+  let nodeAuthorization = null;
   if (context.authIdentity?.principal_id) {
     const permission = requiredToolPermission(descriptor, executionArgs);
     const decision = authorization.authorize({
@@ -254,6 +292,13 @@ async function executeResolvedTool(descriptor, args, context, requestedName = de
       } catch {}
       return errorResult(`Authorization denied: ${decision.code}`, "authorization_denied", { authorization: decision });
     }
+    nodeAuthorization = {
+      principalId: context.authIdentity.principal_id,
+      permission,
+      credentialScopes: Array.isArray(context.authIdentity.scopes) ? context.authIdentity.scopes.slice(0, 128) : null,
+      delegationId: context.authIdentity.delegation_id || context.authIdentity.delegationId || null,
+      resource: { tool: descriptor.name, source: context.source },
+    };
   }
 
   context.latencyTracker?.mark("policy");
@@ -269,14 +314,9 @@ async function executeResolvedTool(descriptor, args, context, requestedName = de
   context.latencyTracker?.mark("approval");
 
   if (!options.approvedExecution) {
-    let approval;
-    try {
-      // executionArgs is the frozen, validated object that will be dispatched,
-      // so a per-action risk decision cannot disagree with what actually runs.
-      approval = legacy.getApprovalDecision(descriptor.name, context.source, executionArgs);
-    } catch (e) {
-      return errorResult("Approval evaluation failed", "approval_evaluation_failed");
-    }
+    // Reuse the risk decision computed before identity authorization. Both
+    // checks apply to these exact validated, frozen arguments.
+    const approval = approvalDecision;
     if (context.authorityApprovalRequired || approval.required) {
       let item;
       try {
@@ -296,15 +336,18 @@ async function executeResolvedTool(descriptor, args, context, requestedName = de
     // validated, authorized, and approved the canonical call above; the node
     // dispatcher receives only the frozen parsed arguments and must validate
     // the descriptor and workspace again locally before invoking its handler.
-    const nodeResult = await require("../node/dispatch").maybeExecute(descriptor, executionArgs, context);
+    const nodeResult = await require("../node/dispatch").maybeExecute(descriptor, executionArgs, context, nodeAuthorization);
     if (nodeResult) return normalizeResult(nodeResult);
     const createSensitiveResult = sensitiveResultFactoryFor(descriptor, executionArgs, context);
-    const handlerResult = await withTimeoutAndCancellation(
-      descriptor.handler,
-      executionArgs,
-      { context, signal: context.signal, createSensitiveResult },
-      context
-    );
+    const handlerResult = await runWithContext(context, () => {
+      const handlerContext = getExecutionContext();
+      return CANONICAL_INVOCATIONS.run({ toolName: stripSidekickPrefix(descriptor.name), used: false }, () => withTimeoutAndCancellation(
+        descriptor.handler,
+        executionArgs,
+        { context: handlerContext, signal: context.signal, createSensitiveResult },
+        handlerContext
+      ));
+    });
     return normalizeResult(handlerResult, { allowSensitiveOnce: Boolean(createSensitiveResult) });
   } catch (e) {
     return errorResult(e, "handler_error");
@@ -354,7 +397,10 @@ async function dispatchCore(request, context, started) {
     }
   }
   const logName = name || descriptor.name;
-  const result = await executeResolvedTool(descriptor, request.args || {}, context, logName, { approvedExecution: isApprovedInternal(request) });
+  const result = await executeResolvedTool(descriptor, request.args || {}, context, logName, {
+    approvedExecution: isApprovedInternal(request),
+    testExecution: request.internalCapability === TEST_DESCRIPTOR_CAPABILITY,
+  });
   return log(logName, request.args || {}, started, result, context, { risk: descriptor.risk, approvalId: result.approvalId || context.approvalId });
 }
 
@@ -574,6 +620,16 @@ async function dispatchTool(input, maybeArgs, maybeContext) {
   });
 }
 
+// Family handlers use this read-only check when they expose an internal
+// function for legacy or test callers. The marker itself stays private to
+// this module; callers can inspect the decision but cannot mint one.
+function consumeCanonicalInvocation(context, toolName) {
+  const invocation = CANONICAL_INVOCATIONS.getStore();
+  if (!invocation || invocation.used || invocation.toolName !== toolName) return false;
+  invocation.used = true;
+  return true;
+}
+
 async function callTool(name, args, options = {}) {
   return dispatchTool({ name, args, context: createExecutionContext(options), options });
 }
@@ -594,4 +650,4 @@ async function callInternalTool(name, args, options = {}) {
   return dispatchTool({ name, args, context: createInternalExecutionContext(options), options });
 }
 
-module.exports = { dispatchTool, dispatchTestTool, callTool, callMcpTool, callAgentTool, callDashboardTool, callInternalTool, executeApprovedTool, executeAuthorizedTaskStep, getHandlerMap, getBuiltinRegistry, requiredToolPermission };
+module.exports = { dispatchTool, dispatchTestTool, callTool, callMcpTool, callAgentTool, callDashboardTool, callInternalTool, executeApprovedTool, executeAuthorizedTaskStep, getHandlerMap, getBuiltinRegistry, requiredToolPermission, consumeCanonicalInvocation };

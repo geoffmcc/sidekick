@@ -7,11 +7,10 @@
 
 const assert = require('assert');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
-const TEST_DATA_DIR = path.join(__dirname, 'test-kernel-canonicalization-data');
-fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
-fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
+const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sidekick-kernel-canonicalization-'));
 
 process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
 process.env.SIDEKICK_SECRET_KEY = 'canon-test-key';
@@ -93,6 +92,7 @@ try {
   assert.ok(errorSources.length >= 1, 'this minimal DB should have at least one unreadable scan source');
   console.log('Passed\n');
 
+  db.getDb().close();
   fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
   console.log('All Kernel Canonicalization Tests Passed!');
 } catch (e) {

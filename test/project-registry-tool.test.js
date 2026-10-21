@@ -1,10 +1,9 @@
 const assert = require('assert');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
-const TEST_DATA_DIR = path.join(__dirname, 'test-project-registry-data');
-fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
-fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
+const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sidekick-project-registry-'));
 
 process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
 process.env.SIDEKICK_APPROVAL_MODE = 'off';
@@ -16,13 +15,15 @@ const tools = require('../src/tools');
 const db = require('../src/db');
 const platformKernel = require('../src/platform/kernel');
 
-const { TOOLS } = tools;
+const TOOLS = require('./helpers/authorized-context').withOwnerToolContext(tools.TOOLS, { source: 'test' });
 
 console.log('Running Project Registry Tool Tests...\n');
 
 (async () => {
   try {
-    tools.setSource('mcp');
+    // This file invokes tool handlers directly without transport authentication.
+    // Use the explicit test source rather than impersonating an MCP request.
+    tools.setSource('test');
 
     console.log('Test PRT.1: register canonicalizes the id and preserves the original spelling');
     let result = await TOOLS.project_registry({ action: 'register', project: 'Sidekick-Test', description: 'registry test project' });
@@ -138,6 +139,7 @@ console.log('Running Project Registry Tool Tests...\n');
     assert.strictEqual(db.getDb().prepare("SELECT COUNT(*) AS c FROM platform_execution_events WHERE event_type = 'project.sources_backfilled'").get().c, 1);
     console.log('Passed\n');
 
+    db.closeDatabase();
     fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
     console.log('All Project Registry Tool Tests Passed!');
   } catch (e) {

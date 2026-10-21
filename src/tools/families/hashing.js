@@ -4,8 +4,13 @@ const crypto = require("crypto");
 const fs = require("fs");
 const { z } = require("zod");
 const { enforcePathPolicy } = require("../path-policy");
+const { requireToolExecution } = require("../read-authorization");
 
 async function sidekick_hash({ input, algorithm, verify, path: filePath }) {
+  if (filePath) {
+    const authError = requireToolExecution({ tool: "hash", path: filePath }, "tools.execute", "hash");
+    if (authError) return authError;
+  }
   const algo = algorithm || "sha256";
   const validAlgorithms = ["md5", "sha1", "sha256", "sha512"];
 
@@ -57,7 +62,7 @@ const descriptors = Object.freeze([
       algorithm: "string (optional, md5|sha1|sha256|sha512 - default sha256)",
       verify: "string (optional, expected hash to verify against)",
     },
-    risk: "low",
+    risk: "medium",
     category: "Data Pipeline",
     source: "builtin",
     family: "hashing",

@@ -61,6 +61,10 @@ function getApprovalDecision(toolName, source = getCurrentSource(), args = undef
     return { required: true, source, mode, risk, reason: "matched approval requirement", matched: requiredMatch, list: "required" };
   }
 
+  if (source === "certification" && require("../certification/fixture-policy").isBoundedCertificationFixtureOperation(toolName, args)) {
+    return { required: false, source, mode, risk, reason: "exact immutable hermetic certification fixture", list: "certification-fixture" };
+  }
+
   if (mode === "strict" && RISK_ORDER[risk] >= RISK_ORDER.high) {
     return { required: true, source, mode, risk, reason: "strict mode requires approval for high and critical risk tools", list: "mode" };
   }
@@ -98,6 +102,10 @@ function getToolPolicyDecision(toolName, source = getCurrentSource(), args = und
       matched: allowedMatch,
       list: "allowed"
     };
+  }
+
+  if (source === "certification" && require("../certification/fixture-policy").isBoundedCertificationFixtureOperation(toolName, args)) {
+    return { allowed: true, source, mode, risk, reason: "exact immutable hermetic certification fixture", list: "certification-fixture" };
   }
 
   if (mode === "restricted" && RISK_ORDER[risk] >= RISK_ORDER.high) {

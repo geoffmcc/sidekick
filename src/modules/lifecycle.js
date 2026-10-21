@@ -41,6 +41,7 @@ const HEALTH_STATUS = Object.freeze({
   CONFIGURATION_REQUIRED: "configuration_required",
   INCOMPATIBLE: "incompatible",
   INTEGRITY_FAILURE: "integrity_failure",
+  ISOLATION_UNAVAILABLE: "isolation_unavailable",
   LOAD_FAILURE: "load_failure",
   RESTART_REQUIRED: "restart_required",
   NOT_INSTALLED: "not_installed",
@@ -334,7 +335,9 @@ function health(name, { runCheck = true } = {}) {
     } catch (error) {
       status = error.code === entryLoader.LOAD_FAILURES.INTEGRITY_FAILURE
         ? HEALTH_STATUS.INTEGRITY_FAILURE
-        : HEALTH_STATUS.RESTART_REQUIRED;
+        : error.code === entryLoader.LOAD_FAILURES.ISOLATION_UNAVAILABLE
+          ? HEALTH_STATUS.ISOLATION_UNAVAILABLE
+          : HEALTH_STATUS.RESTART_REQUIRED;
       components.push({ component: "activation", ok: false, detail: error.message });
     }
   }
@@ -354,6 +357,17 @@ function health(name, { runCheck = true } = {}) {
   }
 
   const current = repository.getModule(name);
+  // Functional health and containment are separate properties. Do not let a
+  // successful module healthCheck imply that its code is isolated. Untrusted
+  // executable sources are fail-closed until an OS-enforced backend exists.
+  let trustedInProcess = false;
+  try { entryLoader.assertExecutionIsolation(current); trustedInProcess = true; } catch {}
+  const isolation = {
+    enforced: false,
+    boundary: trustedInProcess ? "same_process" : "none",
+    status: trustedInProcess ? "trusted_in_process" : "unavailable",
+    mechanism: null,
+  };
   return {
     name,
     status,
@@ -365,6 +379,7 @@ function health(name, { runCheck = true } = {}) {
     install_path: current.install_path || null,
     package_hash: current.package_hash || null,
     active_in_process: loader.isModuleActive(name),
+    isolation,
     components,
     error: current.error || null,
     last_health_check_at: current.last_health_check_at || null,

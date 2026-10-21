@@ -9,15 +9,19 @@ const { collectTextFiles, readTextFiles } = require("./helpers/static-source-sca
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-static-scan-"));
 const source = path.join(root, "src", "kept.js");
 const generated = path.join(root, "test", "test-data-installation-race", "modules", "sample", "entry.js");
+const generatedDatabaseData = path.join(root, "test", "test-project-registry-data", "snapshot.json");
 fs.mkdirSync(path.dirname(source), { recursive: true });
 fs.mkdirSync(path.dirname(generated), { recursive: true });
+fs.mkdirSync(path.dirname(generatedDatabaseData), { recursive: true });
 fs.writeFileSync(source, "module.exports = 'committed source';\n");
 fs.writeFileSync(generated, "module.exports = 'temporary fixture';\n");
+fs.writeFileSync(generatedDatabaseData, "temporary fixture data\r\n");
 
 try {
   const files = collectTextFiles(root);
   assert.ok(files.includes(source), "legitimate repository source remains covered");
   assert.ok(!files.includes(generated), "ephemeral generated module fixtures are not repository source");
+  assert.ok(!files.includes(generatedDatabaseData), "test-owned *-data directories are not repository source even when they contain text files");
 
   // Deterministically reproduce cleanup between traversal and content reads.
   fs.rmSync(path.dirname(path.dirname(path.dirname(generated))), { recursive: true, force: true });

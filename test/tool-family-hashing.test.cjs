@@ -1,24 +1,34 @@
 const assert = require('assert');
 const crypto = require('crypto');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
-const TEST_DATA_DIR = path.join(__dirname, 'test-data-hashing');
-fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
-fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
+const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sidekick-tool-hashing-'));
 
 process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
 process.env.SIDEKICK_TOOL_POLICY = 'open';
 process.env.SIDEKICK_APPROVAL_MODE = 'off';
 process.env.SIDEKICK_SECRET_KEY = 'hashing-test-secret-key';
 for (const key of ['SIDEKICK_ALLOWED_PATHS', 'SIDEKICK_DENIED_PATHS']) delete process.env[key];
+process.env.SIDEKICK_MCP_ALLOWED_PATHS = TEST_DATA_DIR;
 
 delete require.cache[require.resolve('../src/tools')];
 
 const tools = require('../src/tools');
 const legacy = require('../src/tools-legacy');
-const family = require('../src/tools/families/hashing');
+const rawFamily = require('../src/tools/families/hashing');
 const { dispatchTool } = tools;
+const toolContext = require('../src/tools/context');
+const authorizedContext = require('./helpers/authorized-context').createServiceContext({ role: 'operator', source: 'mcp' });
+const family = new Proxy(rawFamily, {
+  get(target, property, receiver) {
+    const value = Reflect.get(target, property, receiver);
+    if (typeof value !== 'function' || !String(property).startsWith('sidekick_')) return value;
+    const name = String(property).replace(/^sidekick_/, '');
+    return (...args) => dispatchTool({ name, args: args[0] || {}, context: authorizedContext });
+  },
+});
 
 console.log('Running Hashing Family Tests...');
 
@@ -34,12 +44,12 @@ fs.writeFileSync(filePath, 'file contents\n', 'utf8');
     assert.strictEqual(descriptor.family, 'hashing');
     assert.strictEqual(descriptor.category, 'Data Pipeline');
     assert.strictEqual(descriptor.source, 'builtin');
-    assert.strictEqual(descriptor.risk, 'low');
+    assert.strictEqual(descriptor.risk, 'medium');
     assert.deepStrictEqual(descriptor.args, legacy.TOOL_DEFS.find(def => def.name === 'hash').args);
     assert.strictEqual(typeof descriptor.handler, 'function');
     assert.strictEqual(legacy.TOOLS.hash, undefined, 'legacy handler map must not retain hash');
     assert.strictEqual(family.descriptors.length, 1);
-    assert.strictEqual(family.descriptors[0].handler, family.sidekick_hash);
+    assert.strictEqual(family.descriptors[0].handler, rawFamily.sidekick_hash);
     assert.ok(!fs.readFileSync(path.join(__dirname, '../src/tools/families/hashing.js'), 'utf8').includes('tools-legacy'));
 
     // Default SHA-256 and all supported algorithms preserve the existing text.
@@ -70,8 +80,8 @@ fs.writeFileSync(filePath, 'file contents\n', 'utf8');
     const missingInput = await family.sidekick_hash({});
     assert.strictEqual(text(missingInput), 'input or path required');
     assert.strictEqual(missingInput.isError, true);
-    const readFailure = await family.sidekick_hash({ path: missingPath });
-    assert.ok(text(readFailure).startsWith('File read error:'));
+    const readFailure = await dispatchTool({ name: 'hash', args: { path: missingPath }, context: { ...authorizedContext, allowNodeExecution: false } });
+    assert.ok(text(readFailure).startsWith('File read error:'), text(readFailure));
     assert.strictEqual(readFailure.isError, true);
 
     // The shared path-policy module remains the filesystem security boundary.
@@ -88,17 +98,17 @@ fs.writeFileSync(filePath, 'file contents\n', 'utf8');
     }
 
     // Dispatcher execution accepts both canonical and sidekick_-prefixed names.
-    let result = await dispatchTool({ name: 'hash', args: { input: 'abc' }, context: { source: 'mcp', requestId: 'hash_canonical' } });
+    let result = await dispatchTool({ name: 'hash', args: { input: 'abc' }, context: { ...authorizedContext, requestId: 'hash_canonical' } });
     assert.strictEqual(text(result), `SHA256: ${expected}`);
-    result = await dispatchTool({ name: 'sidekick_hash', args: { input: 'abc' }, context: { source: 'mcp', requestId: 'hash_alias' } });
+    result = await dispatchTool({ name: 'sidekick_hash', args: { input: 'abc' }, context: { ...authorizedContext, requestId: 'hash_alias' } });
     assert.strictEqual(text(result), `SHA256: ${expected}`);
 
     // Batch is a generic nested execution path and must recognize the legacy
     // definition anchor even though hash is absent from legacy.TOOLS.
-    const batch = await tools.TOOLS.batch({ calls: [
+    const batch = await toolContext.runWithContext(authorizedContext, () => tools.TOOLS.batch({ calls: [
       { tool: 'hash', args: { input: 'abc' } },
       { tool: 'sidekick_hash', args: { input: 'abc', algorithm: 'md5' } },
-    ] });
+    ] }));
     const batchResults = JSON.parse(text(batch));
     assert.strictEqual(batchResults[0].error, false);
     assert.strictEqual(batchResults[0].result, `SHA256: ${expected}`);
@@ -123,6 +133,7 @@ fs.writeFileSync(filePath, 'file contents\n', 'utf8');
   } finally {
     delete process.env.SIDEKICK_ALLOWED_PATHS;
     delete process.env.SIDEKICK_DENIED_PATHS;
+    try { require('../src/db').closeDatabase(); } catch {}
     fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
   }
 })().catch(error => {

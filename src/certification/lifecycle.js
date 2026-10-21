@@ -1,6 +1,8 @@
 "use strict";
 
 const { sanitize } = require("./reports");
+const { createAgentProxyHeaders, assertDistinctProxySecret } = require("../security/agent-proxy-auth");
+const { readSecret } = require("../core/runtime-secrets");
 
 const TERMINAL_STATES = new Set(["completed", "partial", "failed", "cancelled", "timed_out", "blocked"]);
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
@@ -88,22 +90,27 @@ function observation(taskId, projection, extra = {}) {
   });
 }
 
-function createLifecycleExecutor({ baseUrl, fetchImpl = globalThis.fetch, timeoutMs = 120000, pollMs = 250, headers = {} } = {}) {
+function createLifecycleExecutor({ baseUrl, fetchImpl = globalThis.fetch, timeoutMs = 120000, pollMs = 250, headers = {}, proxySecret = "" } = {}) {
   const root = validateBaseUrl(baseUrl);
   if (typeof fetchImpl !== "function") throw new Error("fetch is unavailable for certification Agent lifecycle");
   const timeout = boundedNumber(timeoutMs, 120000, 1000, MAX_TIMEOUT_MS);
   const interval = boundedNumber(pollMs, 250, 0, MAX_POLL_MS);
   const configuredHeaders = { ...headers };
   if (Object.keys(configuredHeaders).some(name => /fault|inject/i.test(name))) throw new Error("fault injection is not available to certification callers");
+  if (fetchImpl === globalThis.fetch && !proxySecret) throw new Error("Agent proxy authentication key is unavailable");
 
   async function request(pathname, options = {}) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeout);
     try {
-      const response = await fetchImpl(new URL(pathname, root), {
+      const url = new URL(pathname, root);
+      const method = String(options.method || "GET").toUpperCase();
+      const requestBody = options.body === undefined ? "" : String(options.body);
+      const authHeaders = proxySecret ? createAgentProxyHeaders({ secret: proxySecret, service: "certification", method, path: `${url.pathname}${url.search}`, body: requestBody }) : {};
+      const response = await fetchImpl(url, {
         ...options,
         signal: controller.signal,
-        headers: { accept: "application/json", ...configuredHeaders, ...(options.headers || {}) },
+        headers: { accept: "application/json", ...configuredHeaders, ...(options.headers || {}), ...authHeaders },
       });
       const text = await boundedResponseText(response);
       let body;
@@ -160,9 +167,13 @@ function createLifecycleExecutor({ baseUrl, fetchImpl = globalThis.fetch, timeou
 
 function createLifecycleExecutorFromEnv(env = process.env) {
   if (!env.SIDEKICK_CERTIFICATION_AGENT_URL) return null;
+  const proxySecret = env === process.env
+    ? readSecret("SIDEKICK_AGENT_PROXY_KEY", { required: true })
+    : (env.SIDEKICK_AGENT_PROXY_KEY || "");
+  if (env.SIDEKICK_API_KEY && proxySecret) assertDistinctProxySecret(env.SIDEKICK_API_KEY, proxySecret);
   return createLifecycleExecutor({
     baseUrl: env.SIDEKICK_CERTIFICATION_AGENT_URL,
-    headers: env.SIDEKICK_API_KEY ? { "x-api-key": env.SIDEKICK_API_KEY } : {},
+    proxySecret,
     timeoutMs: env.SIDEKICK_CERTIFICATION_TIMEOUT_MS,
   });
 }

@@ -1,11 +1,15 @@
 "use strict";
 
 const { z } = require("zod");
+const { getStaticToolRisk } = require("../metadata");
 const dbStore = require("../../db");
 const { scopedProject } = require("./memory-scope");
+const { requireCanonicalInvocation } = require("../read-authorization");
 
 async function sidekick_memory_export({ project, type, include_disabled, automatic_only }) {
-  let effectiveProject; try { effectiveProject = scopedProject(project); } catch (e) { return { content: [{ type: "text", text: e.message }], isError: true }; }
+  const denied = requireCanonicalInvocation("memory_export");
+  if (denied) return denied;
+  let effectiveProject; try { effectiveProject = scopedProject(project, "read"); } catch (e) { return { content: [{ type: "text", text: e.message }], isError: true }; }
   const options = {};
   if (effectiveProject) options.project = effectiveProject;
   if (type) options.type = type;
@@ -16,7 +20,9 @@ async function sidekick_memory_export({ project, type, include_disabled, automat
   return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
 }
 
-async function sidekick_memory_import({ data, on_conflict, preserve_ids }) {
+async function sidekick_memory_import({ data, on_conflict, preserve_ids, project }) {
+  const denied = requireCanonicalInvocation("memory_import");
+  if (denied) return denied;
   let parsed;
   try {
     parsed = typeof data === "string" ? JSON.parse(data) : data;
@@ -28,7 +34,7 @@ async function sidekick_memory_import({ data, on_conflict, preserve_ids }) {
     onConflict: on_conflict || "merge",
     preserveIds: preserve_ids === true,
   };
-  try { options.projectScope = scopedProject(); } catch (e) { return { content: [{ type: "text", text: e.message }], isError: true }; }
+  try { options.projectScope = scopedProject(project, "write"); } catch (e) { return { content: [{ type: "text", text: e.message }], isError: true }; }
 
   const result = dbStore.importMemories(parsed, options);
   const summary = `Import complete: ${result.imported} imported, ${result.updated || 0} updated, ${result.skipped} skipped`;
@@ -47,7 +53,7 @@ const descriptors = Object.freeze([
       automatic_only: z.boolean().optional().describe("Only include automatic memories (default: false)"),
     }),
     args: { project: "string (optional, filter by project)", type: "string (optional, filter by memory type)", include_disabled: "boolean (optional, include disabled memories - default true)", automatic_only: "boolean (optional, only automatic memories - default false)" },
-    risk: "low",
+    risk: getStaticToolRisk("memory_export"),
     category: "Context & Learning",
     source: "builtin",
     family: "memory-portability",
@@ -57,11 +63,12 @@ const descriptors = Object.freeze([
     name: "memory_import",
     description: "Import memories from JSON export. Supports merge (update existing) or skip conflict modes.",
     schema: z.object({
+      project: z.string().optional().describe("Project scope for imported memories"),
       data: z.string().describe("JSON export data (string or object)"),
       on_conflict: z.enum(["merge", "skip"]).optional().describe("Conflict resolution: merge (update existing) or skip (default: merge)"),
       preserve_ids: z.boolean().optional().describe("Preserve original memory IDs (default: false)"),
     }),
-    args: { data: "string|object (JSON export data or parsed object)", on_conflict: "string (optional, merge|skip - default merge)", preserve_ids: "boolean (optional, preserve original IDs - default false)" },
+    args: { data: "string|object (JSON export data or parsed object)", project: "string (optional project scope)", on_conflict: "string (optional, merge|skip - default merge)", preserve_ids: "boolean (optional, preserve original IDs - default false)" },
     risk: "medium",
     category: "Context & Learning",
     source: "builtin",

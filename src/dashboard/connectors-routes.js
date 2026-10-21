@@ -9,12 +9,14 @@ function registerConnectorRoutes({
   platformKernel,
   probeConnector,
   authenticatedUser,
+  requireIdentityPermission,
   startDashboardExecution,
   finishDashboardExecution,
   auditLog,
   errorResponse,
 }) {
   app.get("/api/connectors", (req, res) => {
+    if (!requireIdentityPermission(req, res, "connectors.read")) return;
     try {
       const connectors = platformKernel.listConnectors({
         state: req.query.state,
@@ -37,7 +39,7 @@ function registerConnectorRoutes({
 
   app.post("/api/connectors", (req, res) => {
     const actor = authenticatedUser(req);
-    if (!actor) return res.status(403).json({ ok: false, error: "Connector operations require an authenticated dashboard user" });
+    if (!actor || !requireIdentityPermission(req, res, "connectors.manage")) return;
     let execution = null;
     try {
       execution = startDashboardExecution(req, "connector.register");
@@ -52,12 +54,14 @@ function registerConnectorRoutes({
   });
 
   app.get("/api/connectors/:connectorId", (req, res) => {
+    if (!requireIdentityPermission(req, res, "connectors.read")) return;
     const connector = platformKernel.getConnector(req.params.connectorId);
     if (!connector) return res.status(404).json({ ok: false, error: "connector not found" });
     res.json({ ok: true, connector, events: platformKernel.listConnectorEvents(connector.connector_id, req.query.event_limit) });
   });
 
   app.get("/api/connectors/:connectorId/health", async (req, res) => {
+    if (!requireIdentityPermission(req, res, "connectors.read")) return;
     const connector = platformKernel.getConnector(req.params.connectorId);
     if (!connector) return res.status(404).json({ ok: false, error: "connector not found" });
     try {
@@ -76,6 +80,7 @@ function registerConnectorRoutes({
   });
 
   app.get("/api/connectors/:connectorId/events", (req, res) => {
+    if (!requireIdentityPermission(req, res, "connectors.read")) return;
     const connector = platformKernel.getConnector(req.params.connectorId);
     if (!connector) return res.status(404).json({ ok: false, error: "connector not found" });
     res.json({ ok: true, events: platformKernel.listConnectorEvents(connector.connector_id, req.query.limit) });
@@ -83,7 +88,7 @@ function registerConnectorRoutes({
 
   app.post("/api/connectors/:connectorId/configure", (req, res) => {
     const actor = authenticatedUser(req);
-    if (!actor) return res.status(403).json({ ok: false, error: "Connector operations require an authenticated dashboard user" });
+    if (!actor || !requireIdentityPermission(req, res, "connectors.manage")) return;
     try {
       const connector = platformKernel.configureConnector(req.params.connectorId, { ...req.body, source: "dashboard" });
       auditLog(req, "connector.configure", { connector_id: connector.connector_id, actor, has_secret_ref: Boolean(connector.secret_ref) });
@@ -93,7 +98,7 @@ function registerConnectorRoutes({
 
   app.post("/api/connectors/:connectorId/:action", (req, res) => {
     const actor = authenticatedUser(req);
-    if (!actor) return res.status(403).json({ ok: false, error: "Connector operations require an authenticated dashboard user" });
+    if (!actor || !requireIdentityPermission(req, res, "connectors.manage")) return;
     const states = { enable: "enabled", disable: "disabled", retire: "retired" };
     const nextState = states[req.params.action];
     if (!nextState) return res.status(404).json({ ok: false, error: "unknown connector action" });

@@ -104,11 +104,17 @@ provider, model, worker, routing, job, and artifact state; do not select
 credentials or provider endpoints in an inference request.
 
 Capability packs are executable extensions composed of modules, tools,
-workflows, knowledge, and configuration. Installing or enabling one executes
-verified package code in-process without a sandbox. Use `capability action="show"`,
-`inspect`, `validate`, `health`, and `maturity` before relying on a pack; use
-`prove`/`record_verification` only with attributable, server-verifiable evidence.
-The live registry, not this file, defines exact pack and tool availability.
+workflows, knowledge, and configuration. Installing a third-party pack verifies
+and registers it but does not execute its modules. Enabling third-party
+executable modules fails closed with `isolation_unavailable` until an externally
+enforced OS isolation backend is available. Bundled first-party modules remain
+a trusted in-process exception and therefore share Core's process privileges.
+See `src/modules/entry-loader.js` and
+`test/modules-third-party-lifecycle.test.js` for the enforced behavior. Use
+`capability action="show"`, `inspect`, `validate`, `health`, and `maturity`
+before relying on a pack; use `prove`/`record_verification` only with
+attributable, server-verifiable evidence. The live registry, not this file,
+defines exact pack and tool availability.
 
 The Agent Bridge is a durable task system separate from MCP conversation flow.
 It uses structured goals, finite task profiles, governed capability execution,

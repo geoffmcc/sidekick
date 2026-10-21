@@ -15,8 +15,11 @@ const path = require('path');
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'creg-'));
 process.env.SIDEKICK_DATA_DIR = TMP;
 process.env.SIDEKICK_DB_PATH = path.join(TMP, 'test.db');
+process.env.SIDEKICK_TOOL_POLICY = 'open';
+process.env.SIDEKICK_APPROVAL_MODE = 'off';
 
-const computeTools = require('../src/compute/tools');
+const tools = require('../src/tools');
+const TOOLS = require('./helpers/authorized-context').withOwnerToolContext(tools.TOOLS, { source: 'test' });
 const { TOOL_DEFS } = require('../src/tools-legacy');
 const { TOOL_SCHEMAS } = require('../src/tools/schemas');
 
@@ -47,8 +50,8 @@ function viaSchema(toolName, args) {
   assert.ok(parsed.success, `schema rejected args: ${JSON.stringify(parsed.error?.issues)}`);
   return parsed.data;
 }
-const providers = args => computeTools.sidekick_compute_providers(viaSchema('compute_providers', args));
-const models = args => computeTools.sidekick_compute_models(viaSchema('compute_models', args));
+const providers = args => TOOLS.compute_providers(viaSchema('compute_providers', args));
+const models = args => TOOLS.compute_models(viaSchema('compute_models', args));
 
 (async () => {
   let providerId = null;
@@ -118,12 +121,12 @@ const models = args => computeTools.sidekick_compute_models(viaSchema('compute_m
       ['http://169.254.169.254/', /link-local/],
       ['http://[fe80::1]:11434', /link-local/],
       ['http://metadata.google.internal/', /metadata/],
-      ['http://user:pw@10.0.0.9:11434', /credentials embedded/],
+      ['http://user:pw@10.0.0.9:11434', /credentials=\[REDACTED\] in the URL/],
       ['not a url', /not a valid URL/],
     ];
     for (const [url, pattern] of cases) {
       const msg = errorText(await providers({ action: 'create', type: 'ollama', name: 'bad', base_url: url }));
-      assert.match(msg, pattern, `${url} must be refused`);
+      assert.match(msg, pattern, `${url} must be refused: ${msg}`);
     }
   });
 
@@ -290,6 +293,7 @@ const models = args => computeTools.sidekick_compute_models(viaSchema('compute_m
       'before the handler runs, so the tool advertises an action it cannot perform');
   });
 
+  require('../src/db').closeDatabase();
   fs.rmSync(TMP, { recursive: true, force: true });
   for (const [status, name, detail] of results) {
     if (status === 'ok') console.log(`  \x1b[32m✓\x1b[0m ${name}`);

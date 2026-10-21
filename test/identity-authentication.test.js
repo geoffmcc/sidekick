@@ -10,6 +10,7 @@ const db = require("../src/db");
 db.runPendingMigrations();
 const identity = require("../src/core/identity");
 const authentication = require("../src/core/authentication");
+const authorization = require("../src/core/authorization");
 
 let passed = 0;
 function test(name, fn) { fn(); passed++; console.log(`  ✓ ${name}`); }
@@ -22,9 +23,17 @@ try {
     const created = authentication.createSession(owner.principal_id, { userAgent: "test", ipAddress: "127.0.0.1" });
     assert.ok(created.token.length >= 40);
     assert.ok(authentication.getSession(created.token));
+    const session = authentication.getSession(created.token);
+    assert.ok(authentication.isSessionActive(session.session_id));
+    assert.strictEqual(authentication.isSessionActive("invalid-session-id"), false);
     assert.strictEqual(db.getDb().prepare("SELECT session_id_hash FROM identity_sessions").get().session_id_hash.includes(created.token), false);
     assert.strictEqual(authentication.invalidateSession(created.token), true);
     assert.strictEqual(authentication.getSession(created.token), null);
+    assert.strictEqual(authentication.isSessionActive(session.session_id), false, "long-lived streams can observe server-side logout immediately");
+    const expiring = authentication.createSession(owner.principal_id);
+    const expiringSession = authentication.getSession(expiring.token);
+    db.getDb().prepare("UPDATE identity_sessions SET expires_at = ? WHERE session_id_hash = ?").run("2000-01-01T00:00:00.000Z", expiringSession.session_id);
+    assert.strictEqual(authentication.isSessionActive(expiringSession.session_id), false, "expired sessions cannot retain long-lived stream access");
   });
 
   test("scoped machine credential is revealed once and stores only a verifier", () => {
@@ -45,6 +54,13 @@ try {
     assert.strictEqual(authentication.revokeCredential(created.credential.credential_id), true);
     assert.strictEqual(authentication.authenticateCredential(created.token), null);
     assert.strictEqual(authentication.revokeCredential(created.credential.credential_id), false);
+  });
+
+  test("a machine credential with no scopes grants none of its principal's role permissions", () => {
+    const created = authentication.createCredential({ principalId: owner.principal_id, displayName: "Empty Scope API", scopes: [] });
+    const authenticated = authentication.authenticateCredential(created.token);
+    assert.deepStrictEqual(authenticated.scopes, []);
+    assert.strictEqual(authorization.authorize({ principalId: owner.principal_id, permission: "tools.execute", credentialScopes: authenticated.scopes }).code, "forbidden");
   });
 
   test("credential rotation creates a replacement and revokes the old token", () => {

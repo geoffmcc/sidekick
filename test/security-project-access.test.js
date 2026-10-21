@@ -1,0 +1,1107 @@
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+
+const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-project-access-"));
+process.env.SIDEKICK_DATA_DIR = dataDir;
+process.env.SIDEKICK_TOOL_POLICY = "open";
+process.env.SIDEKICK_APPROVAL_MODE = "off";
+const db = require("../src/db");
+db.runPendingMigrations();
+const identity = require("../src/core/identity");
+const authorization = require("../src/core/authorization");
+const projectAccess = require("../src/core/project-access");
+const { canReviewUnownedTask, taskBelongsToIdentity } = require("../src/agent/task-access");
+const platformKernel = require("../src/platform/kernel");
+const dispatcher = require("../src/tools/dispatcher");
+const tools = require("../src/tools");
+require("../src/tools");
+const handoffTool = require("../src/tools/families/memory-handoff");
+const projectRegistryTool = require("../src/tools/families/project-registry");
+const storageTools = require("../src/tools/families/storage");
+const networkingTools = require("../src/tools/families/networking");
+const processManagementTools = require("../src/tools/families/process-mgmt");
+const operationsTools = require("../src/tools/families/operations");
+const secretTools = require("../src/tools/families/secret");
+const toolContext = require("../src/tools/context");
+const { registerHandoffReadRoutes } = require("../src/dashboard/handoff-read-routes");
+const predictEngine = require("../src/predict");
+
+const owner = identity.bootstrapOwner({ username: "access_owner", password: "a sufficiently long owner password" });
+const operator = identity.createHumanUser({ username: "access_operator", password: "a sufficiently long operator password" });
+identity.assignRole(operator.principal_id, "operator", owner.principal_id);
+const denied = identity.createHumanUser({ username: "access_denied", password: "a sufficiently long denied password" });
+platformKernel.registerProject({ project_id: "memory_a", owner_actor_id: owner.principal_id });
+platformKernel.registerProject({ project_id: "memory_b", owner_actor_id: owner.principal_id });
+projectAccess.grantProjectAccess({ actorPrincipalId: owner.principal_id, principalId: operator.principal_id, project: "memory_a", accessLevel: "read" });
+const memoryA = db.upsertMemory({ type: "fact", project: "memory_a", content: "Project A fact", summary: "Project A fact", confidence: 0.9, source: "test" });
+const secretB = db.upsertMemory({ type: "fact", project: "memory_b", content: "Project B private fact", summary: "Project B private fact", confidence: 0.9, source: "test" });
+
+test("Agent cross-principal learning review requires project membership in addition to approvals.grant", () => {
+  const reviewer = identity.createHumanUser({ username: "scoped_learning_reviewer", password: "a sufficiently long reviewer password" });
+  identity.assignRole(reviewer.principal_id, "administrator", owner.principal_id);
+  const task = { task_id: "agt_cross_project_review", project_id: "memory_b", actor_principal_id: denied.principal_id };
+  const scopedReviewer = { principal_id: reviewer.principal_id, scopes: ["approvals.grant"] };
+  assert.equal(canReviewUnownedTask(scopedReviewer, task), false, "approval permission alone cannot read a source task in an ungranted project");
+  projectAccess.grantProjectAccess({ actorPrincipalId: owner.principal_id, principalId: reviewer.principal_id, project: "memory_b", accessLevel: "read" });
+  assert.equal(canReviewUnownedTask(scopedReviewer, task), true, "a current read membership plus the scoped approval grant can review the task");
+  assert.equal(canReviewUnownedTask({ ...scopedReviewer, scopes: [] }, task), false, "empty credential scopes still deny review");
+  const agentSource = fs.readFileSync(path.join(__dirname, "../src/agent.js"), "utf8");
+  assert.match(agentSource, /return canReviewUnownedTask\(auth, task\) \? task : null/);
+});
+
+test("project grants attenuate access and revoke immediately", () => {
+  assert.equal(projectAccess.hasProjectAccess(operator.principal_id, "memory_a", "read"), true);
+  assert.equal(projectAccess.hasProjectAccess(operator.principal_id, "memory_a", "write"), false);
+  assert.equal(projectAccess.hasProjectAccess(operator.principal_id, "memory_b", "read"), false);
+  const task = { actor_principal_id: operator.principal_id, project_id: "memory_a" };
+  assert.equal(taskBelongsToIdentity({ principal_id: operator.principal_id, scopes: null }, task), true, "task ownership and current project membership permit reading project-derived task content");
+  assert.deepEqual(projectAccess.listAccessibleProjects(operator.principal_id).map(project => project.project_id), ["memory_a"]);
+  assert.equal(projectAccess.hasProjectAccess(owner.principal_id, "memory_b", "write"), true, "owners have explicit global management access");
+  assert.equal(projectAccess.revokeProjectAccess({ actorPrincipalId: owner.principal_id, principalId: operator.principal_id, project: "memory_a" }), true);
+  assert.equal(projectAccess.hasProjectAccess(operator.principal_id, "memory_a", "read"), false);
+  assert.equal(taskBelongsToIdentity({ principal_id: operator.principal_id, scopes: null }, task), false, "project membership revocation immediately hides the owner's project-scoped task");
+  assert.equal(taskBelongsToIdentity({ principal_id: operator.principal_id, scopes: [] }, task), false, "empty credential scopes cannot retain task access");
+  const agentSource = fs.readFileSync(path.join(__dirname, "../src/agent.js"), "utf8");
+  assert.match(agentSource, /requestedProject && authIdentity && !projectAccess\.hasProjectPermission\(authIdentity\.principal_id, requestedProject, "agent\.tasks\.read"/);
+});
+
+test("project access changes roll back when their authoritative audit event cannot be written", () => {
+  const target = identity.createHumanUser({ username: "audit_atomic_target", password: "a sufficiently long target password" });
+  platformKernel.registerProject({ project_id: "audit_atomic_project", owner_actor_id: owner.principal_id });
+  const connection = db.getDb();
+
+  connection.exec(`CREATE TRIGGER reject_project_grant_audit BEFORE INSERT ON identity_audit_events
+    WHEN NEW.event_type = 'project.access.granted' AND json_extract(NEW.details_json, '$.project_id') = 'audit_atomic_project'
+    BEGIN SELECT RAISE(ABORT, 'synthetic audit failure'); END`);
+  try {
+    assert.throws(() => projectAccess.grantProjectAccess({
+      actorPrincipalId: owner.principal_id, principalId: target.principal_id,
+      project: "audit_atomic_project", accessLevel: "read",
+    }), /synthetic audit failure/);
+    assert.equal(projectAccess.hasProjectMembership(target.principal_id, "audit_atomic_project", "read"), false,
+      "failed audit must roll back the access grant");
+  } finally {
+    connection.exec("DROP TRIGGER reject_project_grant_audit");
+  }
+
+  projectAccess.grantProjectAccess({ actorPrincipalId: owner.principal_id, principalId: target.principal_id, project: "audit_atomic_project", accessLevel: "read" });
+  connection.exec(`CREATE TRIGGER reject_project_revoke_audit BEFORE INSERT ON identity_audit_events
+    WHEN NEW.event_type = 'project.access.revoked' AND json_extract(NEW.details_json, '$.project_id') = 'audit_atomic_project'
+    BEGIN SELECT RAISE(ABORT, 'synthetic audit failure'); END`);
+  try {
+    assert.throws(() => projectAccess.revokeProjectAccess({
+      actorPrincipalId: owner.principal_id, principalId: target.principal_id,
+      project: "audit_atomic_project",
+    }), /synthetic audit failure/);
+    assert.equal(projectAccess.hasProjectMembership(target.principal_id, "audit_atomic_project", "read"), true,
+      "failed audit must roll back the access revocation");
+  } finally {
+    connection.exec("DROP TRIGGER reject_project_revoke_audit");
+  }
+});
+
+test("role and delegation authority changes roll back when their audit event fails", () => {
+  const roleTarget = identity.createHumanUser({ username: "audit_role_target", password: "a sufficiently long role password" });
+  const connection = db.getDb();
+  connection.exec(`CREATE TRIGGER reject_role_grant_audit BEFORE INSERT ON identity_audit_events
+    WHEN NEW.event_type = 'role.assigned' AND NEW.principal_id = '${roleTarget.principal_id}'
+    BEGIN SELECT RAISE(ABORT, 'synthetic role audit failure'); END`);
+  try {
+    assert.throws(() => identity.assignRole(roleTarget.principal_id, "operator", owner.principal_id), /synthetic role audit failure/);
+    assert.equal(authorization.authorize({ principalId: roleTarget.principal_id, permission: "workflows.execute" }).ok, false,
+      "failed role audit must roll back the permission grant");
+  } finally {
+    connection.exec("DROP TRIGGER reject_role_grant_audit");
+  }
+  identity.assignRole(roleTarget.principal_id, "operator", owner.principal_id);
+  connection.exec(`CREATE TRIGGER reject_role_revoke_audit BEFORE INSERT ON identity_audit_events
+    WHEN NEW.event_type = 'role.removed' AND NEW.principal_id = '${roleTarget.principal_id}'
+    BEGIN SELECT RAISE(ABORT, 'synthetic role audit failure'); END`);
+  try {
+    assert.throws(() => identity.removeRole(roleTarget.principal_id, "operator", owner.principal_id), /synthetic role audit failure/);
+    assert.equal(authorization.authorize({ principalId: roleTarget.principal_id, permission: "workflows.execute" }).ok, true,
+      "failed role audit must roll back permission revocation");
+  } finally {
+    connection.exec("DROP TRIGGER reject_role_revoke_audit");
+  }
+
+  const delegate = identity.createPrincipal({ type: "agent", displayName: "Audit delegation target", actorPrincipalId: owner.principal_id });
+  connection.exec(`CREATE TRIGGER reject_delegation_grant_audit BEFORE INSERT ON identity_audit_events
+    WHEN NEW.event_type = 'delegation.created' AND NEW.principal_id = '${delegate.principal_id}'
+    BEGIN SELECT RAISE(ABORT, 'synthetic delegation audit failure'); END`);
+  try {
+    assert.throws(() => authorization.createDelegation({ delegatorPrincipalId: owner.principal_id, delegatePrincipalId: delegate.principal_id, permissions: ["memory.read"] }), /synthetic delegation audit failure/);
+    assert.equal(connection.prepare("SELECT COUNT(*) AS count FROM identity_delegations WHERE delegate_principal_id = ?").get(delegate.principal_id).count, 0,
+      "failed delegation audit must roll back delegated authority");
+  } finally {
+    connection.exec("DROP TRIGGER reject_delegation_grant_audit");
+  }
+  const delegation = authorization.createDelegation({ delegatorPrincipalId: owner.principal_id, delegatePrincipalId: delegate.principal_id, permissions: ["memory.read"] });
+  connection.exec(`CREATE TRIGGER reject_delegation_revoke_audit BEFORE INSERT ON identity_audit_events
+    WHEN NEW.event_type = 'delegation.revoked' AND json_extract(NEW.details_json, '$.delegation_id') = '${delegation.delegation_id}'
+    BEGIN SELECT RAISE(ABORT, 'synthetic delegation audit failure'); END`);
+  try {
+    assert.throws(() => authorization.revokeDelegation(delegation.delegation_id, owner.principal_id), /synthetic delegation audit failure/);
+    assert.equal(authorization.getDelegation(delegation.delegation_id).revoked_at, null,
+      "failed revocation audit must roll back delegation revocation");
+  } finally {
+    connection.exec("DROP TRIGGER reject_delegation_revoke_audit");
+  }
+});
+
+test("KV reads cannot escape the current project membership", async () => {
+  projectAccess.grantProjectAccess({ actorPrincipalId: owner.principal_id, principalId: operator.principal_id, project: "memory_a", accessLevel: "read" });
+  const namespacedKey = `__sidekick_principal_v1:${encodeURIComponent(operator.principal_id)}:${encodeURIComponent("memory_b")}:kv-private`;
+  db.setKV(namespacedKey, "synthetic private value", "memory_b", "test");
+  const context = toolContext.createMcpExecutionContext({
+    authIdentity: { principal_id: operator.principal_id, principal_type: "human" },
+    project: "memory_a",
+  });
+  const results = await Promise.all([
+    dispatcher.dispatchTool({ name: "get", args: { key: "kv-private", project: "memory_b" }, context }),
+    dispatcher.dispatchTool({ name: "get_by_project", args: { project: "memory_b" }, context }),
+  ]);
+  for (const result of results) {
+    assert.equal(result.isError, true);
+    assert.equal(result.code, "project_scope_denied");
+    assert.doesNotMatch(result.content[0].text, /synthetic private value/);
+  }
+});
+
+test("global project grants are required to manage memberships", () => {
+  assert.throws(() => projectAccess.grantProjectAccess({ actorPrincipalId: operator.principal_id, principalId: denied.principal_id, project: "memory_a", accessLevel: "read" }), /projects.access.manage/);
+});
+
+test("explicit credential scopes attenuate global project management", () => {
+  assert.equal(projectAccess.hasGlobalProjectAccess(owner.principal_id, []), false);
+  assert.equal(projectAccess.hasGlobalProjectAccess(owner.principal_id, [projectAccess.MANAGE_PERMISSION]), true);
+  assert.throws(() => projectAccess.grantProjectAccess({
+    actorPrincipalId: owner.principal_id, credentialScopes: [], principalId: denied.principal_id,
+    project: "memory_a", accessLevel: "read",
+  }), /projects.access.manage/);
+});
+
+test("project membership does not replace the memory read/write permission", () => {
+  projectAccess.grantProjectAccess({ actorPrincipalId: owner.principal_id, principalId: operator.principal_id, project: "memory_a", accessLevel: "write" });
+  assert.equal(projectAccess.hasProjectAccess(operator.principal_id, "memory_a", "read", ["tools.execute"]), false);
+  assert.equal(projectAccess.hasProjectAccess(operator.principal_id, "memory_a", "read", ["memory.read"]), true);
+  assert.equal(projectAccess.hasProjectAccess(operator.principal_id, "memory_a", "write", ["memory.read"]), false);
+  assert.equal(projectAccess.hasProjectAccess(operator.principal_id, "memory_a", "write", ["memory.write"]), true);
+});
+
+test("project resource permissions compose with membership and credential scopes", () => {
+  assert.equal(projectAccess.hasProjectPermission(operator.principal_id, "memory_a", "predictions.read", "read"), true);
+  assert.equal(projectAccess.hasProjectPermission(operator.principal_id, "memory_b", "predictions.read", "read"), false);
+  assert.equal(projectAccess.hasProjectPermission(operator.principal_id, "memory_a", "predictions.read", "read", []), false);
+  assert.deepEqual(projectAccess.listAccessibleProjectsForPermission(operator.principal_id, "predictions.read").map(project => project.project_id), ["memory_a"]);
+  assert.deepEqual(projectAccess.listAccessibleProjectsForPermission(operator.principal_id, "predictions.read", []).map(project => project.project_id), []);
+});
+
+test("memory project helpers preserve delegated authority attenuation and recheck revocation", () => {
+  const authorization = require("../src/core/authorization");
+  const delegation = authorization.createDelegation({
+    delegatorPrincipalId: owner.principal_id,
+    delegatePrincipalId: operator.principal_id,
+    permissions: ["predictions.read"],
+  });
+  const delegatedIdentity = {
+    principal_id: operator.principal_id,
+    principal_type: "human",
+    scopes: null,
+    delegation_id: delegation.delegation_id,
+  };
+  assert.equal(projectAccess.hasProjectAccess(operator.principal_id, "memory_a", "read", null, delegation.delegation_id), false,
+    "the operator role's memory.read grant cannot exceed the active narrower delegation");
+  const delegatedContext = toolContext.createMcpExecutionContext({ authIdentity: delegatedIdentity, project: "memory_a" });
+  assert.throws(() => toolContext.runWithContext(delegatedContext, () => require("../src/tools/families/memory-scope").scopedProject("memory_a")), /scope denied/);
+
+  authorization.revokeDelegation(delegation.delegation_id, owner.principal_id);
+  assert.equal(projectAccess.hasProjectAccess(operator.principal_id, "memory_a", "read", null, delegation.delegation_id), false,
+    "revocation remains effective in direct project-access helper calls");
+});
+
+test("session begin and continuation require current project memory permissions", async () => {
+  const unauthenticated = await dispatcher.callMcpTool("session", { action: "list", project: "memory_a" });
+  assert.equal(unauthenticated.isError, true);
+  assert.equal(unauthenticated.code, "unauthenticated", "low-risk session classification cannot expose identityless session reads");
+
+  projectAccess.grantProjectAccess({ actorPrincipalId: owner.principal_id, principalId: operator.principal_id, project: "memory_a", accessLevel: "write" });
+  const auth = { authIdentity: { principal_id: operator.principal_id, principal_type: "human" } };
+  const beforeForeign = db.listTaskSessions({ project: "memory_b", limit: 100 }).length;
+  const foreign = await dispatcher.callAgentTool("session", { action: "begin", goal: "cross-project session must not read or write memory", project: "memory_b" }, auth);
+  assert.equal(foreign.isError, true);
+  assert.equal(foreign.code, "project_access_denied");
+  assert.equal(db.listTaskSessions({ project: "memory_b", limit: 100 }).length, beforeForeign, "denial occurs before session persistence");
+
+  const allowed = await dispatcher.callAgentTool("session", { action: "begin", goal: "authorized scoped session", project: "memory_a" }, auth);
+  assert.equal(allowed.isError, undefined);
+  const session = JSON.parse(allowed.content[0].text).session;
+  const before = db.getTaskSession(session.id);
+  projectAccess.revokeProjectAccess({ actorPrincipalId: owner.principal_id, principalId: operator.principal_id, project: "memory_a" });
+  const checkpoint = await dispatcher.callAgentTool("session", { action: "checkpoint", id: session.id, current_plan: "should not persist" }, auth);
+  assert.equal(checkpoint.isError, true);
+  assert.equal(checkpoint.content[0].text, `Task session not found: ${session.id}`);
+  assert.equal(db.getTaskSession(session.id).updated_at, before.updated_at, "revoked project access prevents session and linked-handoff writes");
+});
+
+test("filesystem directory and content reads reject identityless callers before accessing paths", async () => {
+  const unauthenticated = await dispatcher.callMcpTool("list", { path: dataDir });
+  assert.equal(unauthenticated.isError, true);
+  assert.equal(unauthenticated.code, "unauthenticated");
+
+  const direct = await require("../src/tools/families/filesystem").sidekick_list({ path: dataDir });
+  assert.equal(direct.isError, true);
+  assert.equal(direct.code, "unauthenticated", "direct family calls must enforce identity too");
+
+  const family = require("../src/tools/families/filesystem");
+  const canary = path.join(dataDir, "filesystem-direct-read-canary.txt");
+  fs.writeFileSync(canary, "synthetic filesystem canary", "utf8");
+  for (const [handler, args] of [
+    [family.sidekick_read, { path: canary }],
+    [family.sidekick_find, { path: dataDir, name: "filesystem-direct-read-canary.txt" }],
+  ]) {
+    const result = await handler(args);
+    assert.equal(result.isError, true);
+    assert.equal(result.code, "unauthenticated", "direct filesystem content reads must require identity");
+    assert.doesNotMatch(JSON.stringify(result), /synthetic filesystem canary/, "denial must precede filesystem content access");
+  }
+
+  const writeTarget = path.join(dataDir, "filesystem-direct-write-canary.txt");
+  const write = await family.sidekick_write({ path: writeTarget, content: "must not write" });
+  assert.equal(write.isError, true);
+  assert.equal(write.code, "unauthenticated", "direct filesystem writes must require identity and critical execution permission");
+  assert.equal(fs.existsSync(writeTarget), false, "denial must precede filesystem mutation");
+
+  const insufficient = await toolContext.runWithContext({
+    source: "mcp",
+    authIdentity: { principal_id: denied.principal_id, scopes: ["tools.execute"] },
+  }, () => family.sidekick_write({ path: writeTarget, content: "must still not write" }));
+  assert.equal(insufficient.isError, true);
+  assert.equal(insufficient.code, "forbidden", "ordinary execution scope cannot authorize a critical direct handler");
+  assert.equal(fs.existsSync(writeTarget), false, "insufficient authority must be rejected before mutation");
+});
+
+test("database metadata, host scanning, and file hashing reject identityless callers", async () => {
+  for (const [name, args] of [
+    ["db_schema", {}],
+    ["db_stats", {}],
+    ["security_scan", { path: dataDir, max_files: 1 }],
+    ["insight_report", { paths: [dataDir] }],
+    ["hash", { path: path.join(dataDir, "synthetic-missing-file") }],
+  ]) {
+    const result = await dispatcher.callMcpTool(name, args);
+    assert.equal(result.isError, true, `${name} must deny before reading internal state`);
+    assert.equal(result.code, "unauthenticated", `${name} must identify missing caller identity`);
+  }
+
+  const directChecks = [
+    ["../src/tools/families/database-inspection", "sidekick_db_schema", {}],
+    ["../src/tools/families/database-inspection", "sidekick_db_stats", {}],
+    ["../src/tools/families/security", "sidekick_security_scan", { path: dataDir, max_files: 1 }],
+    ["../src/tools/families/media", "sidekick_insight_report", { paths: [dataDir] }],
+    ["../src/tools/families/hashing", "sidekick_hash", { path: path.join(dataDir, "synthetic-missing-file") }],
+  ];
+  for (const [familyPath, handlerName, args] of directChecks) {
+    const result = await require(familyPath)[handlerName](args);
+    assert.equal(result.isError, true, `${handlerName} direct invocation must deny without identity`);
+    assert.equal(result.code, "unauthenticated", `${handlerName} direct invocation must fail closed`);
+  }
+
+  const pureHash = await dispatcher.callMcpTool("hash", { input: "caller supplied text" });
+  assert.equal(pureHash.isError, undefined, "pure text hashing does not read ambient filesystem state");
+});
+
+test("direct Git handler calls require canonical dispatch even for an authorized Owner", async () => {
+  const development = require("../src/tools/families/development");
+  const context = toolContext.createAgentExecutionContext({
+    authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+  });
+  const result = await toolContext.runWithContext(context, () => development.sidekick_git({
+    action: "push",
+    path: dataDir,
+  }));
+  assert.equal(result.isError, true);
+  assert.equal(result.code, "canonical_dispatch_required", "direct Git mutation must fail before invoking Git");
+});
+
+test("direct dependency inspection requires canonical dispatch before process inspection", async () => {
+  const context = toolContext.createAgentExecutionContext({
+    authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+  });
+  const result = await toolContext.runWithContext(context, () => require("../src/tools/families/development").sidekick_depend({ action: "tree", type: "process", target: "1" }));
+  assert.equal(result.isError, true);
+  assert.equal(result.code, "canonical_dispatch_required");
+});
+
+test("direct runbook creation requires canonical dispatch before persistence", async () => {
+  const runbook = require("../src/tools/families/runbook");
+  const runbookPath = path.join(dataDir, "runbooks.json");
+  const context = toolContext.createAgentExecutionContext({
+    authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+  });
+  const result = await toolContext.runWithContext(context, () => runbook.sidekick_runbook({
+    action: "create",
+    name: "direct-handler-canary",
+    steps: [{ name: "canary", command: "echo must not run" }],
+  }));
+  assert.equal(result.isError, true);
+  assert.equal(result.code, "canonical_dispatch_required");
+  assert.equal(fs.existsSync(runbookPath), false, "direct call must not persist the runbook definition");
+});
+
+test("direct high-impact control and recovery handlers require canonical dispatch", async () => {
+  const calls = [
+    ["memory maintenance", () => require("../src/tools/families/memory-maintenance").sidekick_memory_maintenance({ action: "apply", project: "memory_a", run_id: "missing" })],
+    ["generated-tool lifecycle", () => require("../src/tools/families/evolve").sidekick_evolve({ action: "cleanup", confirm: true })],
+    ["network-scope mutation", () => require("../src/tools/families/network-scopes").sidekick_network_scopes({ action: "create", name: "direct-call-canary", policy: {} })],
+    ["mission execution", () => require("../src/tools/families/operations").sidekick_mission({ action: "execute", intent: "delete key", key: "direct-call-canary", confirm: true })],
+    ["workflow execution", () => require("../src/tools/families/workflow-definitions").sidekick_workflow({ action: "run", name: "developer/repository-recon" })],
+  ];
+  const context = toolContext.createAgentExecutionContext({
+    authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+  });
+  for (const [label, invoke] of calls) {
+    const result = await toolContext.runWithContext(context, invoke);
+    assert.equal(result.isError, true, `${label} direct invocation must fail closed`);
+    assert.equal(result.code, "canonical_dispatch_required", `${label} must require canonical dispatch before effects`);
+  }
+});
+
+test("direct browser, module, project, and workspace handlers require canonical dispatch", async () => {
+  const calls = [
+    ["browser interaction", () => require("../src/tools/families/browser").sidekick_browser({ action: "click", session: "synthetic" })],
+    ["module activation", () => require("../src/tools/families/module-management").sidekick_module({ action: "enable", name: "synthetic" })],
+    ["project registration", () => projectRegistryTool.sidekick_project_registry({ action: "register", project: "direct-call-canary" })],
+    ["workspace deletion", () => require("../src/tools/families/workspace").sidekick_workspace({ action: "delete", workspace_id: "synthetic" })],
+  ];
+  const context = toolContext.createAgentExecutionContext({
+    authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+  });
+  for (const [label, invoke] of calls) {
+    const result = await toolContext.runWithContext(context, invoke);
+    assert.equal(result.isError, true, `${label} direct invocation must fail closed`);
+    assert.equal(result.code, "canonical_dispatch_required", `${label} must require canonical dispatch before effects`);
+  }
+});
+
+test("direct scheduled execution handlers require canonical dispatch before persistence", async () => {
+  const scheduling = require("../src/tools/families/scheduling");
+  const calls = [
+    ["cron creation", () => scheduling.sidekick_cron({ action: "add", name: "direct-call-canary", schedule: "* * * * *", command: "echo must-not-run" })],
+    ["delay creation", () => scheduling.sidekick_delay({ action: "add", when: "1h", tool: "bash", args: { command: "echo must-not-run" } })],
+    ["watch creation", () => scheduling.sidekick_watch({ action: "add", name: "direct-call-canary", source: "service", target: "synthetic", condition: "stopped", interval: 60, action_tool: "bash", action_args: { command: "echo must-not-run" } })],
+  ];
+  const context = toolContext.createAgentExecutionContext({
+    authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+  });
+  for (const [label, invoke] of calls) {
+    const result = await toolContext.runWithContext(context, invoke);
+    assert.equal(result.isError, true, `${label} direct invocation must fail closed`);
+    assert.equal(result.code, "canonical_dispatch_required", `${label} must require canonical dispatch before effects`);
+  }
+});
+
+test("direct notification handlers require canonical dispatch before outbound effects", async () => {
+  const comms = require("../src/tools/families/comms");
+  const result = await toolContext.runWithContext(
+    toolContext.createAgentExecutionContext({
+      authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+    }),
+    () => comms.sidekick_notify({ channel: "discord", webhook_url: "https://example.invalid/hook", message: "must not send" }),
+  );
+  assert.equal(result.isError, true);
+  assert.equal(result.code, "canonical_dispatch_required");
+});
+
+test("direct queue, orchestration, retry, batch, and circuit handlers require canonical dispatch", async () => {
+  const flowControl = require("../src/tools/families/flow-control");
+  const calls = [
+    ["queued task creation", () => flowControl.sidekick_queue({ action: "add", tool: "bash", args: { command: "echo must-not-run" } })],
+    ["orchestration creation", () => flowControl.sidekick_orchestrate({ action: "create", task_name: "direct-call-canary", subtasks: [{ name: "canary", tool: "bash", args: { command: "echo must-not-run" } }] })],
+    ["retry execution", () => flowControl.sidekick_retry({ tool: "bash", args: { command: "echo must-not-run" }, max_attempts: 1 })],
+    ["batch execution", () => flowControl.sidekick_batch({ calls: [{ tool: "bash", args: { command: "echo must-not-run" } }] })],
+    ["circuit state access", () => flowControl.sidekick_circuit({ action: "reset", target: "direct-call-canary" })],
+  ];
+  const context = toolContext.createAgentExecutionContext({
+    authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+  });
+  for (const [label, invoke] of calls) {
+    const result = await toolContext.runWithContext(context, invoke);
+    assert.equal(result.isError, true, `${label} direct invocation must fail closed`);
+    assert.equal(result.code, "canonical_dispatch_required", `${label} must require canonical dispatch before effects`);
+  }
+});
+
+test("direct model administration and learned-procedure handlers require canonical dispatch", async () => {
+  const calls = [
+    ["Ollama model administration", () => require("../src/tools/families/inference").sidekick_ollama({ action: "pull", model: "synthetic-canary" })],
+    ["learned procedure creation", () => require("../src/tools/families/teach").sidekick_teach({ action: "teach_procedure", name: "direct-call-canary", description: "synthetic", steps: [{ tool: "bash", args: { command: "echo must-not-run" } }] })],
+  ];
+  const context = toolContext.createAgentExecutionContext({
+    authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+  });
+  for (const [label, invoke] of calls) {
+    const result = await toolContext.runWithContext(context, invoke);
+    assert.equal(result.isError, true, `${label} direct invocation must fail closed`);
+    assert.equal(result.code, "canonical_dispatch_required", `${label} must require canonical dispatch before effects`);
+  }
+});
+
+test("direct GitHub API handler requires canonical dispatch before credential resolution", async () => {
+  const result = await toolContext.runWithContext(
+    toolContext.createAgentExecutionContext({
+      authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+    }),
+    () => require("../src/tools/families/github").sidekick_github({ action: "create_issue", repo: "owner/repo", args: "{}" }),
+  );
+  assert.equal(result.isError, true);
+  assert.equal(result.code, "canonical_dispatch_required");
+});
+
+test("direct GitHub CI status handler requires canonical dispatch", async () => {
+  const context = toolContext.createAgentExecutionContext({
+    authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+  });
+  const result = await toolContext.runWithContext(context, () => require("../src/tools/families/github").sidekick_ci_status({ repo: "owner/repo" }));
+  assert.equal(result.isError, true);
+  assert.equal(result.code, "canonical_dispatch_required");
+});
+
+test("direct task session handler requires canonical dispatch before persistence", async () => {
+  const context = toolContext.createAgentExecutionContext({
+    authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+    project: "memory_a",
+  });
+  const result = await toolContext.runWithContext(context, () => require("../src/tools/families/memory-session").sidekick_session({ action: "begin", goal: "must not persist directly", project: "memory_a" }));
+  assert.equal(result.isError, true);
+  assert.equal(result.code, "canonical_dispatch_required");
+});
+
+test("direct low-risk project, resume, and embedding handlers require canonical dispatch", async () => {
+  const context = toolContext.createAgentExecutionContext({
+    authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+    project: "memory_a",
+  });
+  const calls = [
+    ["project context", () => require("../src/tools/families/context").sidekick_project({ name: "memory_a", include: "kv" })],
+    ["resume context", () => require("../src/tools/families/resume").sidekick_resume({ action: "check", project: "memory_a" })],
+    ["embedding submission", () => require("../src/tools/families/inference").sidekick_embed({ text: "synthetic direct-call canary" })],
+  ];
+  for (const [label, invoke] of calls) {
+    const result = await toolContext.runWithContext(context, invoke);
+    assert.equal(result.isError, true, `${label} direct invocation must fail closed`);
+    assert.equal(result.code, "canonical_dispatch_required", `${label} must require dispatch before reading or submitting data`);
+  }
+});
+
+test("direct infrastructure diagnostic and metrics handlers require canonical dispatch", async () => {
+  const observability = require("../src/tools/families/observability");
+  const calls = [
+    ["health diagnostics", () => observability.sidekick_health({ check: "services" })],
+    ["network diagnostics", () => observability.sidekick_netdiag({ action: "listeners" })],
+    ["metrics access", () => observability.sidekick_metrics({ action: "query", query: "from(bucket: \"sidekick\")" })],
+  ];
+  const context = toolContext.createAgentExecutionContext({
+    authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+  });
+  for (const [label, invoke] of calls) {
+    const result = await toolContext.runWithContext(context, invoke);
+    assert.equal(result.isError, true, `${label} direct invocation must fail closed`);
+    assert.equal(result.code, "canonical_dispatch_required", `${label} must require canonical dispatch before effects`);
+  }
+});
+
+test("direct host status handler requires canonical dispatch", async () => {
+  const context = toolContext.createAgentExecutionContext({
+    authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+  });
+  const result = await toolContext.runWithContext(context, () => require("../src/tools/families/observability").sidekick_status({ include: "services" }));
+  assert.equal(result.isError, true);
+  assert.equal(result.code, "canonical_dispatch_required");
+  const governed = await dispatcher.callAgentTool("status", { include: "uptime" }, {
+    authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+  });
+  assert.notEqual(governed.isError, true, "canonical host status read remains available to the authorized caller");
+});
+
+test("direct Black Box handler requires canonical dispatch before incident access", async () => {
+  const context = toolContext.createAgentExecutionContext({
+    authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+  });
+  const result = await toolContext.runWithContext(context, () => require("../src/tools/families/black-box").sidekick_black_box({ action: "list_incidents" }));
+  assert.equal(result.isError, true);
+  assert.equal(result.code, "canonical_dispatch_required");
+  const governed = await dispatcher.callAgentTool("black_box", { action: "list_incidents" }, {
+    authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+  });
+  assert.notEqual(governed.isError, true, "canonical incident listing remains available to the authorized caller");
+});
+
+test("direct Predict handler requires canonical dispatch before prediction access", async () => {
+  const context = toolContext.createAgentExecutionContext({
+    authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+  });
+  const result = await toolContext.runWithContext(context, () => require("../src/tools/families/meta").sidekick_predict({ action: "list" }));
+  assert.equal(result.isError, true);
+  assert.equal(result.code, "canonical_dispatch_required");
+});
+
+test("direct Compute provider administration requires canonical dispatch", async () => {
+  const result = await toolContext.runWithContext(
+    toolContext.createAgentExecutionContext({
+      authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+    }),
+    () => require("../src/compute/tools").sidekick_compute_providers({ action: "create", name: "direct-call-canary", type: "ollama" }),
+  );
+  assert.equal(result.isError, true);
+  assert.equal(result.code, "canonical_dispatch_required");
+});
+
+test("direct Compute worker, model, job, and routing handlers reject an authorized Owner before effects", async () => {
+  const computeTools = require("../src/compute/tools");
+  const db = require("../src/db");
+  const context = toolContext.createAgentExecutionContext({
+    authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+  });
+  const beforeTokens = db.getDb().prepare("SELECT COUNT(*) AS count FROM compute_enrollment_tokens").get().count;
+  const beforeRules = db.getDb().prepare("SELECT COUNT(*) AS count FROM compute_routing_rules").get().count;
+  const results = await toolContext.runWithContext(context, async () => Promise.all([
+    computeTools.sidekick_compute({ action: "overview" }),
+    computeTools.sidekick_compute_nodes({ action: "create_token", display_name: "direct-call-canary" }),
+    computeTools.sidekick_compute_models({ action: "list" }),
+    computeTools.sidekick_compute_jobs({ action: "recover" }),
+    computeTools.sidekick_compute_route({ action: "create_rule", name: "direct-call-canary" }),
+  ]));
+  for (const result of results) {
+    assert.equal(result.isError, true);
+    assert.equal(result.code, "canonical_dispatch_required");
+  }
+  assert.equal(db.getDb().prepare("SELECT COUNT(*) AS count FROM compute_enrollment_tokens").get().count, beforeTokens);
+  assert.equal(db.getDb().prepare("SELECT COUNT(*) AS count FROM compute_routing_rules").get().count, beforeRules);
+});
+
+test("direct memory lifecycle, portability, and sync handlers require canonical dispatch", async () => {
+  const memoryCore = require("../src/tools/families/memory-core");
+  const memoryLifecycle = require("../src/tools/families/memory-lifecycle");
+  const memoryPortability = require("../src/tools/families/memory-portability");
+  const memorySync = require("../src/tools/families/memory-sync");
+  const beforeMemories = db.getDb().prepare("SELECT COUNT(*) AS count FROM memories").get().count;
+  const beforeUserId = db.getUserId();
+  const context = toolContext.createAgentExecutionContext({ authIdentity: { principal_id: owner.principal_id, principal_type: "human" } });
+  const calls = [
+    () => memoryCore.sidekick_memory({ action: "remember", project: "memory_a", content: "direct memory canary" }),
+    () => memoryLifecycle.sidekick_memory_manage({ action: "process_auto_expirations", project: "memory_a" }),
+    () => memoryPortability.sidekick_memory_export({ project: "memory_a" }),
+    () => memoryPortability.sidekick_memory_import({ project: "memory_a", data: { memories: [] } }),
+    () => memorySync.sidekick_sync_identity({ action: "set_user", user_id: "direct-call-canary" }),
+    () => memorySync.sidekick_sync_export({ project: "memory_a" }),
+    () => memorySync.sidekick_sync_import({ project: "memory_a", data: { memories: [] } }),
+    () => memorySync.sidekick_sync_diff({ project: "memory_a", since: new Date(0).toISOString() }),
+  ];
+  const results = await toolContext.runWithContext(context, () => Promise.all(calls.map(invoke => invoke())));
+  for (const result of results) {
+    assert.equal(result.isError, true);
+    assert.equal(result.code, "canonical_dispatch_required");
+  }
+  assert.equal(db.getDb().prepare("SELECT COUNT(*) AS count FROM memories").get().count, beforeMemories);
+  assert.equal(db.getUserId(), beforeUserId);
+});
+
+test("direct context and connector handlers require canonical dispatch", async () => {
+  const contextTool = require("../src/tools/families/context");
+  const connectorTool = require("../src/tools/families/connectors");
+  const context = toolContext.createAgentExecutionContext({ authIdentity: { principal_id: owner.principal_id, principal_type: "human" }, project: "memory_a" });
+  const results = await toolContext.runWithContext(context, () => Promise.all([
+    contextTool.sidekick_context({ action: "recall", query: "private context", project: "memory_a" }),
+    connectorTool.sidekick_connector({ action: "health", connector_id: "direct-call-canary" }),
+  ]));
+  for (const result of results) {
+    assert.equal(result.isError, true);
+    assert.equal(result.code, "canonical_dispatch_required");
+  }
+});
+
+test("direct inference and LLM-backed handlers require canonical dispatch", async () => {
+  const inference = require("../src/tools/families/inference");
+  const development = require("../src/tools/families/development");
+  const meta = require("../src/tools/families/meta");
+  const context = toolContext.createAgentExecutionContext({ authIdentity: { principal_id: owner.principal_id, principal_type: "human" }, project: "memory_a" });
+  const calls = [
+    () => inference.sidekick_llm({ prompt: "synthetic direct-call canary" }),
+    () => development.sidekick_changelog({ from: "HEAD", use_llm: true }),
+    () => meta.sidekick_fresheyes({ problem: "synthetic direct-call canary" }),
+  ];
+  const results = await toolContext.runWithContext(context, () => Promise.all(calls.map(invoke => invoke())));
+  for (const result of results) {
+    assert.equal(result.isError, true);
+    assert.equal(result.code, "canonical_dispatch_required");
+  }
+});
+
+test("direct media and analytics handlers require canonical dispatch", async () => {
+  const media = require("../src/tools/families/media");
+  const context = toolContext.createAgentExecutionContext({ authIdentity: { principal_id: owner.principal_id, principal_type: "human" }, project: "memory_a" });
+  const calls = [
+    () => media.sidekick_ocr({ path: "synthetic-image.png" }),
+    () => media.sidekick_media({ action: "info", input: "synthetic-media.mp4" }),
+    () => media.sidekick_transcribe({ action: "cancel", job_id: "synthetic-job" }),
+    () => media.sidekick_analytics({ query: "synthetic analysis" }),
+  ];
+  const results = await toolContext.runWithContext(context, () => Promise.all(calls.map(invoke => invoke())));
+  for (const result of results) {
+    assert.equal(result.isError, true);
+    assert.equal(result.code, "canonical_dispatch_required");
+  }
+});
+
+test("database metadata inspection uses its dedicated scoped permission", async () => {
+  for (const name of ["db_schema", "db_stats"]) {
+    const descriptor = tools.getBuiltinRegistry().get(name);
+    assert.equal(descriptor.authorizationPermission, "database.inspect");
+    const denied = await dispatcher.callAgentTool(name, {}, {
+      authIdentity: { principal_id: operator.principal_id, principal_type: "human", scopes: ["tools.execute"] },
+    });
+    assert.equal(denied.isError, true);
+    assert.equal(denied.code, "authorization_denied", `${name} must require the database.inspect scope`);
+  }
+
+  const operatorRead = await dispatcher.callAgentTool("db_schema", {}, {
+    authIdentity: { principal_id: operator.principal_id, principal_type: "human" },
+  });
+  assert.equal(operatorRead.isError, undefined, "the existing operator workflow retains explicit database.inspect access");
+
+  const directDenied = await toolContext.runWithContext(
+    toolContext.createAgentExecutionContext({ authIdentity: { principal_id: operator.principal_id, scopes: ["tools.execute"] } }),
+    () => require("../src/tools/families/database-inspection").sidekick_db_stats({}),
+  );
+  assert.equal(directDenied.isError, true);
+  assert.equal(directDenied.code, "forbidden", "direct family calls enforce the dedicated grant too");
+});
+
+test("direct handoff handler calls require canonical dispatch", async () => {
+  const result = await toolContext.runWithContext(
+    toolContext.createMcpExecutionContext(),
+    () => handoffTool.sidekick_handoff({ action: "list", project: "memory_a" }),
+  );
+  assert.equal(result.isError, true);
+  assert.equal(result.code, "canonical_dispatch_required");
+  assert.match(result.content[0].text, /canonical dispatch/);
+
+  const ownerContext = toolContext.createMcpExecutionContext({
+    authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+    project: "memory_a",
+  });
+  const ownerDirect = await toolContext.runWithContext(ownerContext, () => handoffTool.sidekick_handoff({ action: "list", project: "memory_a" }));
+  assert.equal(ownerDirect.isError, true);
+  assert.equal(ownerDirect.code, "canonical_dispatch_required", "an authorized Owner must not bypass dispatcher policy or audit through a direct handoff call");
+});
+
+test("direct project registry handler calls require an attributable principal", async () => {
+  const result = await toolContext.runWithContext(
+    toolContext.createMcpExecutionContext(),
+    () => projectRegistryTool.sidekick_project_registry({ action: "list" }),
+  );
+  assert.equal(result.isError, true);
+  assert.equal(result.code, "canonical_dispatch_required");
+});
+
+test("direct infrastructure handler calls enforce their dispatcher privilege level", async () => {
+  const calls = [
+    [networkingTools.sidekick_tunnel, { action: "invalid" }],
+    [networkingTools.sidekick_wireguard, { action: "invalid" }],
+    [networkingTools.sidekick_nginx, { action: "invalid" }],
+    [processManagementTools.sidekick_process, { action: "invalid" }],
+    [processManagementTools.sidekick_service, { action: "invalid" }],
+    [processManagementTools.sidekick_archive, { action: "invalid" }],
+    [operationsTools.sidekick_ops, { action: "invalid" }],
+  ];
+  for (const [handler, args] of calls) {
+    const result = await handler(args);
+    assert.equal(result.code, "unauthenticated");
+  }
+  const insufficient = await toolContext.runWithContext(
+    toolContext.createMcpExecutionContext({ authIdentity: { principal_id: denied.principal_id, principal_type: "human" } }),
+    () => processManagementTools.sidekick_process({ action: "list" }),
+  );
+  assert.equal(insufficient.code, "forbidden", "an authenticated caller without tools.execute_high must not enumerate processes directly");
+});
+
+test("direct secret handler calls enforce metadata, value-read, and mutation grants", async () => {
+  for (const action of ["list", "get", "store", "delete", "rotate"]) {
+    const result = await secretTools.sidekick_secret({ action, key: "synthetic_secret", value: "synthetic-value", generate: "32" });
+    assert.equal(result.isError, true);
+    assert.equal(result.code, "unauthenticated");
+  }
+  for (const action of ["list", "get", "store", "delete", "rotate"]) {
+    const result = await toolContext.runWithContext(
+      toolContext.createMcpExecutionContext({ authIdentity: { principal_id: denied.principal_id, principal_type: "human" } }),
+      () => secretTools.sidekick_secret({ action, key: "synthetic_secret", value: "synthetic-value", generate: "32" }),
+    );
+    assert.equal(result.code, "forbidden", `${action} requires its matching secrets grant`);
+  }
+});
+
+test("webhook payload read and clear require distinct current grants", async () => {
+  const payloads = [{ id: "synthetic_webhook_1", source: "test", timestamp: new Date().toISOString(), payload: { message: "synthetic private webhook body" } }];
+  db.setDocument("webhooks", payloads);
+
+  const unauthenticated = await dispatcher.callMcpTool("webhook", { action: "list" });
+  assert.equal(unauthenticated.isError, true);
+  assert.equal(unauthenticated.code, "unauthenticated");
+
+  const noReadGrant = await dispatcher.callAgentTool("webhook", { action: "get", id: payloads[0].id }, {
+    authIdentity: { principal_id: denied.principal_id, principal_type: "human" },
+  });
+  assert.equal(noReadGrant.isError, true);
+  assert.equal(noReadGrant.code, "authorization_denied");
+  assert.deepEqual(db.loadDocument("webhooks", []), payloads, "denied reads and clears do not alter retained data");
+
+  const ownerRead = await dispatcher.callAgentTool("webhook", { action: "get", id: payloads[0].id }, {
+    authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+  });
+  assert.equal(ownerRead.isError, undefined);
+  assert.match(ownerRead.content[0].text, /synthetic private webhook body/);
+
+  const noManageGrant = await dispatcher.callAgentTool("webhook", { action: "clear" }, {
+    authIdentity: { principal_id: operator.principal_id, principal_type: "human" },
+  });
+  assert.equal(noManageGrant.isError, true);
+  assert.equal(noManageGrant.code, "authorization_denied");
+  assert.deepEqual(db.loadDocument("webhooks", []), payloads, "read authority cannot clear webhook data");
+
+  const ownerClear = await dispatcher.callAgentTool("webhook", { action: "clear" }, {
+    authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+  });
+  assert.equal(ownerClear.isError, undefined);
+  assert.deepEqual(db.loadDocument("webhooks", []), []);
+});
+
+test("direct webhook clear and anonymize-pattern mutation fail before persistent effects", async () => {
+  const payloads = [{ id: "synthetic_direct_webhook", source: "test", timestamp: new Date().toISOString(), payload: { message: "retained" } }];
+  db.setDocument("webhooks", payloads);
+  const comms = require("../src/tools/families/comms");
+  const security = require("../src/tools/families/security");
+  const ownerContext = toolContext.createMcpExecutionContext({ authIdentity: { principal_id: owner.principal_id, principal_type: "human" } });
+  const directClear = await toolContext.runWithContext(ownerContext, () => comms.sidekick_webhook({ action: "clear" }));
+  assert.equal(directClear.code, "canonical_dispatch_required");
+  assert.deepEqual(db.loadDocument("webhooks", []), payloads, "direct clear must not remove received webhook data");
+
+  const uniquePattern = "DIRECT_GUARD_PATTERN_20261021";
+  const directMutation = await toolContext.runWithContext(ownerContext, () => security.sidekick_anonymize({
+    action: "add_pattern",
+    custom_patterns: [{ pattern: uniquePattern, replacement: "[REDACTED]" }],
+  }));
+  assert.equal(directMutation.code, "canonical_dispatch_required");
+  const visiblePatterns = await dispatcher.callAgentTool("anonymize", { action: "patterns" }, {
+    authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+  });
+  assert.equal(visiblePatterns.isError, undefined);
+  assert.ok(!visiblePatterns.content[0].text.includes(uniquePattern), "direct pattern mutation must not persist");
+});
+
+test("metrics reads and Ollama model operations reject identityless dispatch before service access", async () => {
+  for (const [name, args] of [
+    ["metrics", { action: "query", query: "from(bucket: \"synthetic\") |> range(start: -1h)" }],
+    ["metrics", { action: "write", measurement: "synthetic", fields: { value: 1 } }],
+    ["ollama", { action: "list" }],
+    ["ollama", { action: "pull", model: "synthetic-test-model" }],
+  ]) {
+    const result = await dispatcher.callMcpTool(name, args);
+    assert.equal(result.isError, true, `${name}.${args.action} must be denied without identity`);
+    assert.equal(result.code, "unauthenticated", `${name}.${args.action} must fail before touching the service`);
+  }
+});
+
+test("anonymize pattern inspection and mutation reject identityless dispatch", async () => {
+  for (const args of [
+    { action: "patterns" },
+    { action: "add_pattern", custom_patterns: [{ pattern: "synthetic", replacement: "redacted" }] },
+    { action: "remove_pattern", custom_patterns: [{ pattern: "synthetic", replacement: "redacted" }] },
+  ]) {
+    const result = await dispatcher.callMcpTool("anonymize", args);
+    assert.equal(result.isError, true);
+    assert.equal(result.code, "unauthenticated");
+  }
+  const transform = await dispatcher.callMcpTool("anonymize", { action: "anonymize", input: "synthetic text" });
+  assert.notEqual(transform.code, "unauthenticated", "pure caller-provided text transform remains usable without persistent authority");
+});
+
+test("GitHub CI status requires canonical dispatch and the dedicated current repository-read grant", async () => {
+  const githubTools = require("../src/tools/families/github");
+  const direct = await githubTools.sidekick_ci_status({ repo: "private/example", sha: "synthetic-sha" });
+  assert.equal(direct.isError, true);
+  assert.equal(direct.code, "canonical_dispatch_required");
+
+  const unauthenticated = await dispatcher.callMcpTool("ci_status", { repo: "private/example", sha: "synthetic-sha" });
+  assert.equal(unauthenticated.isError, true);
+  assert.equal(unauthenticated.code, "unauthenticated");
+
+  const noGrant = await dispatcher.callAgentTool("ci_status", { repo: "private/example", sha: "synthetic-sha" }, {
+    authIdentity: { principal_id: operator.principal_id, principal_type: "human" },
+  });
+  assert.equal(noGrant.isError, true);
+  assert.equal(noGrant.code, "authorization_denied");
+});
+
+test("resume pointers are project-scoped and require an authenticated identity", async () => {
+  projectAccess.grantProjectAccess({ actorPrincipalId: owner.principal_id, principalId: operator.principal_id, project: "memory_a", accessLevel: "read" });
+  db.setDocument("resume", { items: {
+    memory_a: { project: "memory_a", status: "active", summary: "Visible project resume", next_step: "Continue" },
+    memory_b: { project: "memory_b", status: "active", summary: "Synthetic private project resume", next_step: "Do not expose" },
+  } });
+  const unauthenticated = await dispatcher.callMcpTool("resume", { action: "list", format: "json" });
+  assert.equal(unauthenticated.isError, true);
+  assert.equal(unauthenticated.code, "unauthenticated");
+
+  const listed = await dispatcher.callAgentTool("resume", { action: "list", format: "json" }, {
+    authIdentity: { principal_id: operator.principal_id, principal_type: "human" },
+  });
+  assert.notEqual(listed.isError, true, listed.content?.[0]?.text);
+  const items = JSON.parse(listed.content[0].text).items;
+  assert.ok(items.some(item => item.project === "memory_a"));
+  assert.ok(items.every(item => item.project === "memory_a"), "unbound list filters every project by current read access");
+
+  const foreignCheck = await dispatcher.callAgentTool("resume", { action: "check", project: "memory_b" }, {
+    authIdentity: { principal_id: operator.principal_id, principal_type: "human" },
+  });
+  assert.equal(foreignCheck.isError, true);
+  assert.equal(foreignCheck.code, "project_access_denied");
+  assert.equal(db.loadDocument("resume").items.memory_b.summary, "Synthetic private project resume", "denied actions do not mutate the foreign pointer");
+});
+
+test("signed Dashboard proxy keeps role authority distinct from empty credential scopes", () => {
+  const { createAgentProxyHeaders, verifyAgentProxyRequest } = require("../src/security/agent-proxy-auth");
+  const authorization = require("../src/core/authorization");
+  const secret = "synthetic-dashboard-proxy-scope-test-secret";
+  const method = "GET";
+  const requestPath = "/api/agent/tasks";
+  const now = Date.now();
+  const roleHeaders = createAgentProxyHeaders({ secret, method, path: requestPath, principalId: operator.principal_id, scopes: null, now });
+  const roleIdentity = verifyAgentProxyRequest({ secret, method, path: requestPath, headers: roleHeaders, now, usedNonces: new Map() });
+  assert.equal(roleIdentity.scopes, null);
+  assert.equal(authorization.authorize({ principalId: operator.principal_id, permission: "predictions.read", credentialScopes: roleIdentity.scopes }).ok, true);
+
+  const emptyCredentialHeaders = createAgentProxyHeaders({ secret, method, path: requestPath, principalId: operator.principal_id, scopes: [], now });
+  const emptyCredentialIdentity = verifyAgentProxyRequest({ secret, method, path: requestPath, headers: emptyCredentialHeaders, now, usedNonces: new Map() });
+  assert.deepEqual(emptyCredentialIdentity.scopes, []);
+  assert.equal(authorization.authorize({ principalId: operator.principal_id, permission: "predictions.read", credentialScopes: emptyCredentialIdentity.scopes }).ok, false);
+});
+
+test("prediction SQL project-list filtering excludes unrelated and unscoped rows", () => {
+  const dbh = db.getDb();
+  const now = new Date().toISOString();
+  const insert = dbh.prepare(`INSERT INTO predictions (id,type,subject,explanation,project,status,created_at,updated_at)
+    VALUES (?, 'likely_failure', ?, 'synthetic explanation', ?, 'active', ?, ?)`);
+  insert.run("security-pred-a", "scoped A", "memory_a", now, now);
+  insert.run("security-pred-b", "private B", "memory_b", now, now);
+  insert.run("security-pred-global", "unscoped global", null, now, now);
+  const visible = predictEngine.listPredictions({ projects: ["memory_a"] });
+  assert.deepEqual(visible.map(prediction => prediction.id), ["security-pred-a"]);
+  assert.deepEqual(predictEngine.listPredictions({ projects: [] }), []);
+});
+
+test("canonical Predict dispatcher enforces identity, project filtering, and resource concealment", async () => {
+  const context = { authIdentity: { principal_id: operator.principal_id, principal_type: "human" } };
+  const unauthenticated = await dispatcher.callMcpTool("predict", { action: "list" });
+  assert.equal(unauthenticated.code, "unauthenticated");
+
+  projectAccess.grantProjectAccess({ actorPrincipalId: owner.principal_id, principalId: operator.principal_id, project: "memory_a", accessLevel: "read" });
+  const listed = await dispatcher.callAgentTool("predict", { action: "list" }, context);
+  assert.equal(listed.isError, undefined);
+  const predictions = JSON.parse(listed.content[0].text).predictions;
+  assert.ok(predictions.some(prediction => prediction.id === "security-pred-a"));
+  assert.ok(predictions.every(prediction => prediction.project === "memory_a"));
+
+  const hidden = await dispatcher.callMcpTool("predict", { action: "get", id: "security-pred-b" }, context);
+  assert.equal(hidden.isError, true);
+  assert.equal(hidden.code, "not_found");
+  assert.doesNotMatch(hidden.content[0].text, /private B/);
+
+  const mutation = await dispatcher.callAgentTool("predict", { action: "dismiss", id: "security-pred-b" }, context);
+  assert.equal(mutation.isError, true);
+  assert.equal(mutation.code, "not_found");
+  assert.equal(predictEngine.getPrediction("security-pred-b").status, "active", "cross-project mutation is rejected before persistence");
+});
+
+test("Predict revalidates delegated permission and project membership on each call", async () => {
+  const delegate = identity.createPrincipal({ type: "agent", displayName: "prediction reader agent", actorPrincipalId: owner.principal_id });
+  projectAccess.grantProjectAccess({ actorPrincipalId: owner.principal_id, principalId: delegate.principal_id, project: "memory_a", accessLevel: "read" });
+  const delegation = require("../src/core/authorization").createDelegation({
+    delegatorPrincipalId: operator.principal_id,
+    delegatePrincipalId: delegate.principal_id,
+    permissions: ["predictions.read"],
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    actorPrincipalId: operator.principal_id,
+  });
+  const context = { authIdentity: { principal_id: delegate.principal_id, principal_type: "agent", delegation_id: delegation.delegation_id } };
+  const allowed = await dispatcher.callAgentTool("predict", { action: "list" }, context);
+  assert.equal(allowed.isError, undefined);
+  assert.ok(JSON.parse(allowed.content[0].text).predictions.every(prediction => prediction.project === "memory_a"));
+
+  require("../src/core/authorization").revokeDelegation(delegation.delegation_id, operator.principal_id);
+  const revoked = await dispatcher.callAgentTool("predict", { action: "list" }, context);
+  assert.equal(revoked.isError, true);
+  assert.equal(revoked.code, "authorization_denied", "revoked authority is reevaluated at dispatch");
+});
+
+test("dispatcher requires an attributable principal for every non-low-risk operation", async () => {
+  const denied = await dispatcher.callMcpTool("bash", { command: "echo should-not-run" });
+  assert.equal(denied.code, "unauthenticated");
+  assert.match(denied.content[0].text, /Authentication required/);
+
+  const lowRiskRead = await dispatcher.callMcpTool("capability", { action: "list" });
+  assert.equal(lowRiskRead.isError, undefined, "explicitly low-risk inventory remains available under transport policy");
+  const lowRiskCatalog = await dispatcher.callMcpTool("capability", { action: "catalog", limit: 1 });
+  assert.equal(lowRiskCatalog.isError, undefined, "read-only capability catalog remains available without Core mutation authority");
+
+  const authorized = await dispatcher.callMcpTool("db_query", { sql: "SELECT 1 AS identity_ok" }, {
+    authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+  });
+  assert.equal(authorized.isError, undefined, "the authenticated owner reaches the authorized handler");
+  assert.match(authorized.content[0].text, /identity_ok/);
+});
+
+test("canonical memory dispatcher blocks cross-project reads before returning content", async () => {
+  const result = await dispatcher.callMcpTool("memory", { action: "get", id: secretB.id, project: "memory_b" }, {
+    authIdentity: { principal_id: operator.principal_id, principal_type: "human" },
+  });
+  assert.equal(result.isError, true);
+  assert.match(result.content?.[0]?.text || "", /project|scope/i);
+  assert.doesNotMatch(result.content?.[0]?.text || "", /Project B private fact/);
+});
+
+test("authenticated users cannot query memories without an authorized explicit project", async () => {
+  const result = await dispatcher.callMcpTool("memory", { action: "query" }, {
+    authIdentity: { principal_id: operator.principal_id, principal_type: "human" },
+  });
+  assert.equal(result.isError, true);
+  assert.match(result.content?.[0]?.text || "", /project scope/i);
+});
+
+test("memory export is project-bound and import requires write membership", async () => {
+  projectAccess.grantProjectAccess({ actorPrincipalId: owner.principal_id, principalId: operator.principal_id, project: "memory_a", accessLevel: "read" });
+  const omitted = await dispatcher.callMcpTool("memory_export", {}, {
+    authIdentity: { principal_id: operator.principal_id, principal_type: "human" },
+  });
+  assert.equal(omitted.isError, true, "non-manager export must name an authorized project");
+
+  const scoped = await dispatcher.callMcpTool("memory_export", { project: "memory_a" }, {
+    authIdentity: { principal_id: operator.principal_id, principal_type: "human" },
+  });
+  assert.equal(scoped.isError, undefined);
+  const exported = JSON.parse(scoped.content[0].text);
+  assert.ok(exported.memories.some(memory => memory.project === "memory_a"));
+  assert.ok(exported.memories.every(memory => memory.project === "memory_a"));
+  assert.ok(!scoped.content[0].text.includes("Project B private fact"));
+
+  const imported = await dispatcher.callMcpTool("memory_import", {
+    project: "memory_a", data: JSON.stringify({ memories: [] }),
+  }, { authIdentity: { principal_id: operator.principal_id, principal_type: "human" } });
+  assert.equal(imported.isError, true, "read-only membership cannot import memories");
+});
+
+test("sync diff and import preserve memory project boundaries", async () => {
+  projectAccess.grantProjectAccess({ actorPrincipalId: owner.principal_id, principalId: operator.principal_id, project: "memory_a", accessLevel: "write" });
+  const identityContext = { authIdentity: { principal_id: operator.principal_id, principal_type: "human" } };
+  const unscopedDiff = await dispatcher.callMcpTool("sync_diff", { since: "2000-01-01T00:00:00.000Z" }, identityContext);
+  assert.equal(unscopedDiff.isError, true, "non-global diff must name an authorized project");
+  const scopedDiff = await dispatcher.callMcpTool("sync_diff", { project: "memory_a", since: "2000-01-01T00:00:00.000Z" }, identityContext);
+  assert.equal(scopedDiff.isError, undefined);
+  const changes = JSON.parse(scopedDiff.content[0].text).changes;
+  assert.ok(changes.every(change => change.project === "memory_a"));
+  assert.doesNotMatch(scopedDiff.content[0].text, /Project B private fact/);
+
+  const imported = await dispatcher.callMcpTool("sync_import", {
+    project: "memory_a",
+    data: JSON.stringify({ memories: [
+      { type: "fact", project: "memory_a", content: "sync imported scoped A", confidence: 0.8 },
+      { type: "fact", project: "memory_b", content: "sync imported forbidden B", confidence: 0.8 },
+    ] }),
+  }, identityContext);
+  assert.equal(imported.isError, undefined);
+  assert.ok(db.searchMemories({ project: "memory_a", query: "sync imported scoped A" }).length > 0);
+  assert.equal(db.searchMemories({ project: "memory_b", query: "sync imported forbidden B" }).length, 0);
+});
+
+test("Dashboard handoff ownership does not survive project-access revocation", () => {
+  projectAccess.grantProjectAccess({ actorPrincipalId: owner.principal_id, principalId: operator.principal_id, project: "memory_a", accessLevel: "read" });
+  const handoff = db.saveHandoff({
+    project: "memory_a", title: "Access revocation", source: "test",
+    content: "Decision: current project access is required even for the creator.",
+    owner_principal_id: operator.principal_id,
+    created_by_principal_id: operator.principal_id,
+  });
+  const handlers = new Map();
+  const app = { get: (route, handler) => handlers.set(route, handler) };
+  registerHandoffReadRoutes({ app, dbStore: db, errorResponse: () => {} });
+  function invoke(route) {
+    const res = {
+      statusCode: 200,
+      status(code) { this.statusCode = code; return this; },
+      json(body) { this.body = body; return this; },
+    };
+    handlers.get(route)({ params: { id: handoff.id }, query: {}, authPrincipal: { principal_id: operator.principal_id, scopes: null } }, res);
+    return res;
+  }
+
+  assert.equal(invoke("/api/handoffs/:id").statusCode, 200, "active project grant permits the handoff owner");
+  assert.equal(projectAccess.revokeProjectAccess({ actorPrincipalId: owner.principal_id, principalId: operator.principal_id, project: "memory_a" }), true);
+  const revoked = invoke("/api/handoffs/:id");
+  assert.equal(revoked.statusCode, 404);
+  assert.equal(revoked.body.error, "Handoff not found");
+  assert.equal(invoke("/api/handoffs/:id/readiness").statusCode, 404);
+});
+
+test("Dashboard memory evidence requires memory permission and project scope", () => {
+  projectAccess.grantProjectAccess({ actorPrincipalId: owner.principal_id, principalId: operator.principal_id, project: "memory_a", accessLevel: "read" });
+  const handlers = new Map();
+  registerHandoffReadRoutes({ app: { get: (route, handler) => handlers.set(route, handler) }, dbStore: db, errorResponse: () => {} });
+  function invoke(memoryId, principalId, scopes) {
+    const res = {
+      statusCode: 200,
+      status(code) { this.statusCode = code; return this; },
+      json(body) { this.body = body; return this; },
+    };
+    handlers.get("/api/memories/:id/evidence")({
+      params: { id: memoryId },
+      authPrincipal: { principal_id: principalId, scopes },
+    }, res);
+    return res;
+  }
+
+  const principalAdminOnly = invoke(secretB.id, operator.principal_id, ["principals.manage"]);
+  assert.equal(principalAdminOnly.statusCode, 404, "principal administration scope must not grant memory evidence access");
+  const wrongProject = invoke(secretB.id, operator.principal_id, ["memory.read"]);
+  assert.equal(wrongProject.statusCode, 404, "memory read permission does not replace project membership");
+  const scopedRead = invoke(memoryA.id, operator.principal_id, ["memory.read"]);
+  assert.equal(scopedRead.statusCode, 200);
+  assert.equal(scopedRead.body.memory.id, memoryA.id);
+});
+
+test("handoff extraction cannot write memories into an ungranted project", async () => {
+  const context = tools.context.createMcpExecutionContext({
+    authIdentity: { principal_id: operator.principal_id, principal_type: "human" },
+  });
+  const before = db.searchMemories({ project: "memory_b", includeDisabled: true, limit: 100 }).length;
+  const result = await dispatcher.dispatchTool({ name: "handoff", context, args: {
+    action: "create", project: "memory_b", title: "Unauthorized handoff",
+    content: "Decision: this must not be stored in another project.",
+  } });
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /write access denied|project access denied/i);
+  assert.equal(db.searchMemories({ project: "memory_b", includeDisabled: true, limit: 100 }).length, before);
+});
+
+test("revoked and disabled principals cannot retain project access", () => {
+  projectAccess.grantProjectAccess({ actorPrincipalId: owner.principal_id, principalId: operator.principal_id, project: "memory_a", accessLevel: "write" });
+  identity.setPrincipalEnabled(operator.principal_id, false, owner.principal_id);
+  assert.equal(projectAccess.hasProjectAccess(operator.principal_id, "memory_a", "write"), false);
+});
+
+test.after(() => {
+  try { db.close(); } catch {}
+  try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch {}
+});

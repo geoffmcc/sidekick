@@ -5,9 +5,13 @@ const path = require("path");
 
 const testDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-health-"));
 process.env.SIDEKICK_DATA_DIR = testDataDir;
+process.env.SIDEKICK_TEST_TOOL_POLICY = "open";
+process.env.SIDEKICK_TEST_APPROVAL_MODE = "off";
 
 delete require.cache[require.resolve("../src/tools")];
-const { TOOLS, setSource, checkNetwork } = require("../src/tools");
+const { TOOLS: rawTools, setSource, checkNetwork } = require("../src/tools");
+const rawObservability = require("../src/tools/families/observability");
+const TOOLS = require('./helpers/authorized-context').withOwnerToolContext(rawTools, { source: 'test' });
 
 function cleanup() {
   try { require("../src/db").closeDatabase?.(); } catch {}
@@ -18,8 +22,12 @@ function cleanup() {
   try {
     setSource("test");
 
+    assert.strictEqual((await rawObservability.sidekick_status({})).code, "canonical_dispatch_required");
+    assert.strictEqual((await rawObservability.sidekick_health({ check: "services" })).code, "unauthenticated");
+    assert.strictEqual((await rawObservability.sidekick_netdiag({ action: "listeners" })).code, "unauthenticated");
+
     const all = await TOOLS.health({ check: "all" });
-    assert.ok(!all.isError);
+    assert.ok(!all.isError, all.content?.[0]?.text);
     assert.ok(all.content[0].text.includes("Health Check Report"));
     assert.ok(all.content[0].text.includes("## Services"));
     assert.ok(all.content[0].text.includes("## Processes"));

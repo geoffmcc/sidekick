@@ -145,6 +145,15 @@ try {
   assert.ok(state.calls.includes('npm ci --omit=dev'), 'lockfile deploy should use npm ci');
 
   resetApp();
+  fs.rmSync(path.join(appDir, 'package-lock.json'), { force: true });
+  state = makeMock({ head: 'bbb222', origin: 'bbb222', behind: '0' });
+  result = gitDeploy.deploy();
+  assert.strictEqual(result.status, 'failed', 'deployment without a lockfile should fail closed');
+  assert.ok(result.error.includes('missing package-lock.json'), 'lockfile failure should be explicit');
+  assert.ok(!state.calls.some(command => command.startsWith('npm ')), 'lockfile failure must not invoke an unpinned install');
+  assert.ok(!state.calls.some(command => command.startsWith('sudo systemctl stop')), 'lockfile failure must happen before service interruption');
+
+  resetApp();
   state = makeMock();
   result = gitDeploy.deploy();
   assert.strictEqual(result.status, 'ok', 'fast-forward deploy should succeed');

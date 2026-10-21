@@ -69,8 +69,11 @@ function inspect(sourcePath, options = {}) {
  * A newly installed pack is left DISABLED (state `installed`). Installing code
  * and activating code are separate operator decisions.
  */
-function install(sourcePath, { config, provenance = "third_party", source = {}, enable: enableAfterInstall = false } = {}) {
+function install(sourcePath, { config, provenance = "third_party", source = {}, enable: enableAfterInstall = false, expectedPackageHash } = {}) {
   const inspection = inspectPackPackage(sourcePath, { sourceKind: source.kind });
+  if (expectedPackageHash && inspection.package_hash !== String(expectedPackageHash).toLowerCase()) {
+    throw Object.assign(new Error("Capability pack changed after inspection; inspect it again before installing"), { code: "package_hash_mismatch" });
+  }
   if (!inspection.installable) {
     throw new Error(`Capability pack cannot be installed: ${inspection.problems.join("; ")}`);
   }
@@ -134,7 +137,7 @@ function installComponents(record, inspection, installPath, installed) {
       config: moduleConfig,
       source: "pack",
       entryPoint: reference.entry_point,
-      provenance: { pack: record.name, pack_version: record.version, source_kind: "capability_pack" },
+      provenance: moduleProvenance(record),
     });
     installed.modules.push(reference.name);
     repository.recordComponent(record.name, record.version, "module", reference.name, {
@@ -293,6 +296,16 @@ function enable(name) {
       try { moduleLifecycle.disable(module.name); } catch {}
       repository.setComponentState(name, "module", module.name, "installed");
     }
+    if (failures.every(failure => failure.code === "isolation_unavailable")) {
+      // This is an unavailable security prerequisite, not a defect in the
+      // package. Keep the installed pack retryable and do not persist a false
+      // module/pack fault while mandatory isolation is absent.
+      for (const failure of failures) repository.setComponentState(name, "module", failure.ref, "installed");
+      const error = new Error(`Capability pack "${name}" cannot be enabled: ${failures.map(f => `${f.kind} ${f.ref}: ${f.error}`).join("; ")}`);
+      error.code = "isolation_unavailable";
+      error.failures = failures;
+      throw error;
+    }
     repository.setPackState(name, "error", { error: failures.map(f => `${f.kind} ${f.ref}: ${f.error}`).join("; ") });
     const error = new Error(`Capability pack "${name}" could not be enabled: ${failures.map(f => `${f.kind} ${f.ref}: ${f.error}`).join("; ")}`);
     error.failures = failures;
@@ -404,12 +417,15 @@ function disable(name) {
  * an upgrade never leaves two owners for one component or an orphan claiming
  * to belong to a version that no longer ships it.
  */
-function upgrade(name, sourcePath, { allowSameVersion = false, allowDowngrade = false, config } = {}) {
+function upgrade(name, sourcePath, { allowSameVersion = false, allowDowngrade = false, config, expectedPackageHash } = {}) {
   const record = repository.getPack(name);
   if (!record) throw new Error(`Capability pack "${name}" is not installed`);
   const wasEnabled = record.state === "enabled";
 
   const inspection = inspectPackPackage(sourcePath, { replacingPack: name, installedModules: [] });
+  if (expectedPackageHash && inspection.package_hash !== String(expectedPackageHash).toLowerCase()) {
+    throw Object.assign(new Error("Capability pack changed after inspection; inspect it again before upgrading"), { code: "package_hash_mismatch" });
+  }
   if (inspection.name !== name) {
     throw new Error(`Pack upgrade identity mismatch: expected "${name}", package declares "${inspection.name}"`);
   }
@@ -517,14 +533,14 @@ function upgradeComponents(record, inspection, installPath, previousVersion) {
         allowSameVersion: same,
         allowDowngrade: true,
         config: moduleConfig,
-        provenance: { pack: record.name, pack_version: record.version },
+        provenance: moduleProvenance(record),
       });
     } else {
       moduleLifecycle.install(moduleRoot, {
         config: moduleConfig,
         source: "pack",
         entryPoint: reference.entry_point,
-        provenance: { pack: record.name, pack_version: record.version, source_kind: "capability_pack" },
+        provenance: moduleProvenance(record),
       });
     }
     const current = moduleRepository.getModule(reference.name);
@@ -560,6 +576,16 @@ function upgradeComponents(record, inspection, installPath, previousVersion) {
       detail: { knowledge_id: asset.id, category: reference.category, path: reference.path, bytes: asset.bytes },
     });
   }
+}
+
+function moduleProvenance(record) {
+  return {
+    pack: record.name,
+    pack_version: record.version,
+    pack_package_hash: record.package_hash,
+    pack_provenance: record.provenance,
+    source_kind: "capability_pack",
+  };
 }
 
 /**

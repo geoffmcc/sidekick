@@ -134,7 +134,7 @@ useful for focused work but are not part of the primary reading path above:
 | `capability-result-contract.md` | Current canonical capability-pack and workflow result semantics. |
 | `platform-roadmap.md` | Residual convergence roadmap (tracks A–D) and current next work. |
 | `platform-target-architecture.md` | Accepted converged runtime boundaries and dependency directions. |
-| `module-system-design.md` | Module contract and complete first-party/third-party lifecycle; installation remains trusted in-process code execution. |
+| `module-system-design.md` | Module lifecycle; untrusted activation is blocked until an OS-enforced backend exists, while first-party code uses a provenance-checked in-process exception. |
 | `security-research-pack.md` | The first-party Security Research capability pack: governed research orchestration over the kernel record layer, with an enforced public/private workspace boundary. |
 | `security-research-capability.md` | Earlier design note for the security-research capability (kernel record foundations); superseded in part by the shipped pack in `security-research-pack.md`. |
 | `security-research-scope-guard.md` | Scope snapshot and fail-closed target evaluation contract (foundation). |

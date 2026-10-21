@@ -410,7 +410,7 @@
       "id": "pack-proving.container-operations",
       "version": 1,
       "pack": "container-operations",
-      "supported_versions": "=1.0.2",
+      "supported_versions": "=1.0.3",
       "preconditions": [
         "pack package hash is inspectable",
         "pack configuration validates",

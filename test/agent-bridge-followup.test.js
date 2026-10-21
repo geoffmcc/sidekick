@@ -14,17 +14,32 @@ const http = require("http");
 
 const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "sk-followup-"));
 process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
+process.env.SIDEKICK_DB_FILE = path.join(TEST_DATA_DIR, "sidekick-test.db");
 process.env.NODE_ENV = "test";
 process.env.SIDEKICK_TOOL_POLICY = "open";
 process.env.SIDEKICK_APPROVAL_MODE = "off";
 process.env.SIDEKICK_ENVIRONMENT = "test";
+process.env.SIDEKICK_API_KEY = "agent-bridge-followup-test-api-key";
+process.env.SIDEKICK_AGENT_PROXY_KEY = "agent-bridge-followup-dedicated-proxy-key";
 // Set a fake Groq key so the module-load ollama warmup path is skipped.
 process.env.GROQ_API_KEY = "test-fake-key";
 
+const dbStore = require("../src/db");
+assert.strictEqual(path.dirname(dbStore.DB_FILE), TEST_DATA_DIR, "Agent Bridge tests must use their fresh temporary database");
 let port;
 
 delete require.cache[require.resolve("../src/agent")];
 const agent = require("../src/agent");
+const { createAgentProxyHeaders } = require("../src/security/agent-proxy-auth");
+const authenticatedTestPrincipal = require("./helpers/authorized-context").createOwnerContext({
+  source: "agent",
+  scopes: ["agent.tasks.read", "tools.execute", "tools.execute_high", "memory.read", "memory.write", "workflows.execute"],
+  project: "agent_test_project",
+});
+const authenticatedTestHeaders = {
+  "X-Sidekick-Principal-ID": authenticatedTestPrincipal.authIdentity.principal_id,
+  "X-Sidekick-Principal-Scopes": JSON.stringify(authenticatedTestPrincipal.authIdentity.scopes),
+};
 
 console.log("Running Agent Bridge follow-up API/security tests...\n");
 
@@ -41,16 +56,20 @@ async function ok(name, fn) {
   }
 }
 
-function request(method, urlPath, body, extraHeaders = {}) {
+function request(method, urlPath, body, extraHeaders = {}, signed = true, signingSecret = process.env.SIDEKICK_AGENT_PROXY_KEY, service = "dashboard-proxy") {
   return new Promise((resolve, reject) => {
     const data = body != null ? JSON.stringify(body) : null;
+    const principalId = extraHeaders["X-Sidekick-Principal-ID"] || "";
+    const scopes = extraHeaders["X-Sidekick-Principal-Scopes"] ? JSON.parse(extraHeaders["X-Sidekick-Principal-Scopes"]) : [];
+    const delegationId = extraHeaders["X-Sidekick-Delegation-ID"] || "";
+    const proxyHeaders = signed ? createAgentProxyHeaders({ secret: signingSecret, method, path: urlPath, body: data || "", principalId, scopes, delegationId, service }) : {};
     const req = http.request({
       hostname: "127.0.0.1", port, path: urlPath, method,
       // These scenarios can spend many seconds waiting for durable Agent work.
       // Avoid reusing an idle keep-alive socket that the test server may have
       // closed during that wait.
       agent: false,
-      headers: { "Content-Type": "application/json", ...(data ? { "Content-Length": Buffer.byteLength(data) } : {}), ...extraHeaders },
+      headers: { "Content-Type": "application/json", ...proxyHeaders, ...(data ? { "Content-Length": Buffer.byteLength(data) } : {}), ...extraHeaders },
     }, (res) => {
       let out = "";
       res.on("data", (c) => (out += c));
@@ -131,6 +150,68 @@ let server;
     await waitForTranscript(res.data.taskId);
   });
 
+  await ok("1c) project-scoped tasks require active project membership at creation", async () => {
+    fake = fakeDirect("project task completed");
+    const denied = await request("POST", "/api/agent/run", { goal: "must not create an out-of-project task", project: "agent_test_project" }, { "X-Sidekick-Principal-ID": "principal_without_project_membership", "X-Sidekick-Principal-Scopes": JSON.stringify(["agent.tasks.read"]) });
+    assert.strictEqual(denied.status, 403, "a signed principal without a real project grant cannot create a project-scoped task");
+    const created = await request("POST", "/api/agent/run", { goal: "create a task within the owned project", project: "agent_test_project" }, authenticatedTestHeaders);
+    assert.strictEqual(created.status, 200);
+    const detail = await request("GET", "/api/agent/tasks/" + created.data.taskId, null, authenticatedTestHeaders);
+    assert.strictEqual(detail.status, 200, "the authorized task owner can read its project task");
+    await waitForTranscript(created.data.taskId);
+  });
+
+  await ok("1c-service) Certification task submission stays read-only when the caller omits its envelope", async () => {
+    fake = fakeDirect("certification read only");
+    const created = await request("POST", "/api/agent/run", { goal: "Certification task without caller envelope" }, {}, true, process.env.SIDEKICK_AGENT_PROXY_KEY, "certification");
+    assert.strictEqual(created.status, 200);
+    const detail = await request("GET", "/api/agent/tasks/" + created.data.taskId);
+    assert.strictEqual(detail.status, 200);
+    assert.deepStrictEqual(detail.data.task.authority_envelope.allowed_effects, ["read_only"]);
+    assert.strictEqual(detail.data.task.authority_envelope.changes_allowed, false);
+    assert.strictEqual(detail.data.task.authority_envelope.external_effects_allowed, false);
+    assert.strictEqual(detail.data.task.authority_envelope.production_allowed, false);
+    assert.strictEqual(detail.data.task.authority_envelope.child_task_count, 0);
+    await waitForTranscript(created.data.taskId);
+  });
+
+  await ok("1c-handoff) task handoff attachment rechecks current project and memory-write authority", async () => {
+    const principalId = authenticatedTestPrincipal.authIdentity.principal_id;
+    const handoff = dbStore.saveHandoff({
+      project: "agent_test_project",
+      title: "Scoped Agent handoff fixture",
+      content: "Synthetic continuity data for authorization regression",
+      source: "test",
+      owner_principal_id: principalId,
+      created_by_principal_id: principalId,
+    });
+    const missingProject = await request("POST", "/api/agent/run", { goal: "must not attach another project's handoff", handoff_id: handoff.id }, authenticatedTestHeaders);
+    assert.notStrictEqual(missingProject.status, 200, "project handoff cannot attach to an unscoped task");
+
+    const readOnlyHeaders = {
+      "X-Sidekick-Principal-ID": principalId,
+      "X-Sidekick-Principal-Scopes": JSON.stringify(["agent.tasks.read"]),
+    };
+    const noMemoryWrite = await request("POST", "/api/agent/run", { goal: "must not mutate a handoff without memory write", project: "agent_test_project", handoff_id: handoff.id }, readOnlyHeaders);
+    assert.notStrictEqual(noMemoryWrite.status, 200, "task creation read authority cannot authorize handoff continuity writes");
+    assert.strictEqual(dbStore.getHandoff(handoff.id).version, handoff.version, "denied attempts leave the handoff unchanged");
+  });
+
+  await ok("1c-handoff-identity) identical task continuity records remain task-specific", async () => {
+    fake = fakeDirect("same continuity result");
+    const first = await request("POST", "/api/agent/run", { goal: "Same continuity goal", project: "agent_test_project" }, authenticatedTestHeaders);
+    assert.strictEqual(first.status, 200);
+    await waitForTranscript(first.data.taskId);
+    const second = await request("POST", "/api/agent/run", { goal: "Same continuity goal", project: "agent_test_project" }, authenticatedTestHeaders);
+    assert.strictEqual(second.status, 200);
+    await waitForTranscript(second.data.taskId);
+    const firstTask = await request("GET", "/api/agent/tasks/" + first.data.taskId, null, authenticatedTestHeaders);
+    const secondTask = await request("GET", "/api/agent/tasks/" + second.data.taskId, null, authenticatedTestHeaders);
+    assert.notStrictEqual(firstTask.data.task.handoff_id, secondTask.data.task.handoff_id, "deduplicated continuity content must not merge distinct task ownership");
+    assert.strictEqual(dbStore.getHandoff(firstTask.data.task.handoff_id).task_id, first.data.taskId);
+    assert.strictEqual(dbStore.getHandoff(secondTask.data.task.handoff_id).task_id, second.data.taskId);
+  });
+
   await ok("1b) POST /api/agent/run rejects a missing/blank goal", async () => {
     const a = await request("POST", "/api/agent/run", {});
     assert.strictEqual(a.status, 400);
@@ -158,6 +239,12 @@ let server;
     await waitForTranscript(created.data.taskId);
     const allowed = await request("GET", "/api/agent/tasks/" + created.data.taskId, null, { "X-Sidekick-Principal-ID": "principal_alpha" });
     assert.strictEqual(allowed.status, 200);
+    const forged = await request("GET", "/api/agent/tasks/" + created.data.taskId, null, { "X-Sidekick-Principal-ID": "principal_alpha" }, false);
+    assert.strictEqual(forged.status, 401, "loopback caller cannot forge a Dashboard principal header");
+    const unsignedList = await request("GET", "/api/agent/tasks", null, {}, false);
+    assert.strictEqual(unsignedList.status, 401, "unsigned loopback callers cannot enumerate durable tasks");
+    const mcpKeySpoof = await request("GET", "/api/agent/tasks/" + created.data.taskId, null, { "X-Sidekick-Principal-ID": "principal_alpha" }, true, process.env.SIDEKICK_API_KEY);
+    assert.strictEqual(mcpKeySpoof.status, 401, "the shared MCP client key cannot forge Dashboard proxy identity");
     const denied = await request("GET", "/api/agent/tasks/" + created.data.taskId, null, { "X-Sidekick-Principal-ID": "principal_beta" });
     assert.strictEqual(denied.status, 404);
     const legacyDenied = await request("GET", "/api/agent/run/" + created.data.taskId, null, { "X-Sidekick-Principal-ID": "principal_beta" });
@@ -356,7 +443,7 @@ let server;
     const allowed = await request("POST", "/api/agent/run", {
       goal: "Inspect the tool catalog through the registered workflow and summarize it",
       goal_spec: { read_only: true, success_criteria: ["the registered workflow returned catalog evidence"] },
-    });
+    }, authenticatedTestHeaders);
     assert.equal(allowed.status, 200);
     const readTranscript = await waitForTranscript(allowed.data.taskId);
     const workflowCall = readTranscript.steps.find(step => step.type === "tool" && step.tool === "workflow");
@@ -419,7 +506,8 @@ let server;
         clearTimeout(timer);
         resolve(value);
       };
-      const req = http.request({ hostname: "127.0.0.1", port, path: "/api/agent/stream/" + childTaskId, method: "GET" }, (r) => {
+      const streamPath = "/api/agent/stream/" + childTaskId;
+      const req = http.request({ hostname: "127.0.0.1", port, path: streamPath, method: "GET", headers: createAgentProxyHeaders({ secret: process.env.SIDEKICK_AGENT_PROXY_KEY, method: "GET", path: streamPath }) }, (r) => {
         r.on("data", (c) => {
           chunks.push(c.toString());
           const output = chunks.join("");
@@ -449,6 +537,35 @@ let server;
     assert.match(events, /data:/, "SSE data frames were streamed");
     assert.match(events, /"type":"done"/, "SSE delivered the terminal done event");
     await waitForTranscript(childTaskId);
+  });
+
+  await ok("19b) SSE closes when project membership is revoked", async () => {
+    const identity = require("../src/core/identity");
+    const projectAccess = require("../src/core/project-access");
+    const principal = identity.createHumanUser({ username: "sse_revocation_reader", password: "a sufficiently long sse reader password" });
+    identity.assignRole(principal.principal_id, "operator", authenticatedTestPrincipal.authIdentity.principal_id);
+    projectAccess.grantProjectAccess({ actorPrincipalId: authenticatedTestPrincipal.authIdentity.principal_id, principalId: principal.principal_id, project: "agent_test_project", accessLevel: "read" });
+    const headers = { "X-Sidekick-Principal-ID": principal.principal_id, "X-Sidekick-Principal-Scopes": JSON.stringify(["agent.tasks.read"]) };
+    fake = () => new Promise((resolve) => setTimeout(() => resolve({ response: "must not reach a revoked stream", provider: "test", model: "test-model" }), 4000));
+    const created = await request("POST", "/api/agent/run", { goal: "verify stream membership revocation", project: "agent_test_project" }, headers);
+    assert.strictEqual(created.status, 200);
+    const streamPath = "/api/agent/stream/" + created.data.taskId;
+    let connected;
+    const attached = new Promise(resolve => { connected = resolve; });
+    const ended = new Promise((resolve, reject) => {
+      let body = "";
+      const req = http.request({ hostname: "127.0.0.1", port, path: streamPath, method: "GET", headers: createAgentProxyHeaders({ secret: process.env.SIDEKICK_AGENT_PROXY_KEY, method: "GET", path: streamPath, principalId: principal.principal_id, scopes: ["agent.tasks.read"] }) }, (res) => {
+        res.on("data", chunk => { body += chunk.toString(); connected(); });
+        res.on("end", () => resolve(body));
+      });
+      req.on("error", reject);
+      req.end();
+    });
+    await attached;
+    assert.equal(projectAccess.revokeProjectAccess({ actorPrincipalId: authenticatedTestPrincipal.authIdentity.principal_id, principalId: principal.principal_id, project: "agent_test_project" }), true);
+    const body = await Promise.race([ended, new Promise((_, reject) => setTimeout(() => reject(new Error("revoked SSE connection remained open")), 1500))]);
+    assert.doesNotMatch(body, /data:/, "revoked stream emits no task content after admission");
+    await waitForTranscript(created.data.taskId);
   });
 
   // 20) History and task detail expose lineage without breaking old tasks.
@@ -505,6 +622,43 @@ let server;
     const res = await request("POST", "/api/agent/run/" + deepId + "/follow-up", { goal: "go deeper" });
     assert.strictEqual(res.status, 422);
     assert.match(JSON.stringify(res.data), /depth/i);
+  });
+
+  await ok("security) restart recovery blocks a revoked task identity before invoking the Agent loop", async () => {
+    const identity = require("../src/core/identity");
+    const authentication = require("../src/core/authentication");
+    const taskStore = require("../src/agent/task-store");
+    const { createTask } = require("../src/agent/task-model");
+    const principal = identity.createPrincipal({ type: "human", displayName: "Synthetic recovered-task principal" });
+    const issued = authentication.createCredential({
+      principalId: principal.principal_id,
+      displayName: "Synthetic recovered-task credential",
+      scopes: ["agent.tasks.read", "tools.execute"],
+    });
+    const taskId = "agt_security_recovery_launch01";
+    taskStore.insertTask(createTask({
+      task_id: taskId,
+      objective: "synthetic recovery must not reach the runner",
+      actor_principal_id: principal.principal_id,
+      requested_by_principal_id: principal.principal_id,
+      principal_context: { credential_id: issued.credential.credential_id, credential_scopes: issued.credential.scopes },
+    }));
+    taskStore.updateTask(taskId, { state: "planning" });
+    taskStore.updateTask(taskId, { state: "ready" });
+    taskStore.updateTask(taskId, { state: "running" });
+    taskStore.updateTask(taskId, { state: "interrupted" });
+    assert.strictEqual(authentication.revokeCredential(issued.credential.credential_id), true);
+
+    let runnerCalls = 0;
+    const launched = agent.__launchRecoveredDurableTaskForTests(taskId, {
+      runAgentImpl: async () => { runnerCalls++; },
+    });
+    assert.strictEqual(launched, false);
+    assert.strictEqual(runnerCalls, 0, "revoked authority must be rejected before the Agent loop can run");
+    const blocked = taskStore.getTask(taskId);
+    assert.strictEqual(blocked.state, "blocked");
+    assert.strictEqual(blocked.phase, "recovery");
+    assert.strictEqual(blocked.last_error_code, "recovery_authorization_denied");
   });
 
   console.log("\nAll " + passed + " follow-up API/security tests passed.\n");

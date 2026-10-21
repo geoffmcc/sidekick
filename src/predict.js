@@ -40,6 +40,7 @@ const MAX_EVIDENCE_PER_PREDICTION = 20;
 const MAX_PREDICTIONS_PER_ANALYZE = 50;
 const MAX_ACTIVE_PREDICTIONS_SCANNED = 200;
 const MAX_TOOL_LOGS_SCANNED = 500;
+const MAX_PREDICTION_OFFSET = 10000;
 
 // --- Valid enums ---
 
@@ -136,6 +137,12 @@ function clampLimit(value, defaultVal, max) {
   const n = Number(value);
   if (!Number.isFinite(n) || n < 1) return defaultVal;
   return Math.min(Math.floor(n), max);
+}
+
+function clampOffset(value, max = MAX_PREDICTION_OFFSET) {
+  const n = Number(value);
+  if (!Number.isSafeInteger(n) || n < 0) return 0;
+  return Math.min(n, max);
 }
 
 function hoursFromNow(hours) {
@@ -1228,12 +1235,20 @@ function listPredictions(filters) {
   else { where.push("status = 'active'"); }
   if (f.type) { where.push("type = ?"); params.push(f.type); }
   if (f.project) { where.push("project = ?"); params.push(f.project); }
+  if (Array.isArray(f.projects)) {
+    if (f.projects.length === 0) where.push("1 = 0");
+    else {
+      const projects = [...new Set(f.projects.filter(value => typeof value === "string" && value.trim()))];
+      if (projects.length === 0) where.push("1 = 0");
+      else { where.push(`project IN (${projects.map(() => "?").join(",")})`); params.push(...projects); }
+    }
+  }
   if (f.session_id) { where.push("session_id = ?"); params.push(f.session_id); }
   if (f.task_id) { where.push("task_id = ?"); params.push(f.task_id); }
   if (f.confidence) { where.push("confidence = ?"); params.push(f.confidence); }
 
   const limit = clampLimit(f.limit, 20, 100);
-  const offset = Number.isFinite(Number(f.offset)) && Number(f.offset) > 0 ? Math.floor(Number(f.offset)) : 0;
+  const offset = clampOffset(f.offset);
 
   const rows = db.prepare(
     `SELECT * FROM predictions WHERE ${where.join(" AND ")} ORDER BY probability DESC, created_at DESC LIMIT ? OFFSET ?`
@@ -1763,6 +1778,7 @@ module.exports = {
   purge,
   diagnose,
   // Exported for testing
+  clampOffset,
   calculateScore,
   calculateConfidence,
   calculateBaseRate,

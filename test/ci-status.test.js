@@ -7,15 +7,23 @@ const https = require('https');
 
 const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sidekick-ci-status-'));
 process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
-process.env.GITHUB_TOKEN = 'ghp_test_token_secret';
+process.env.GITHUB_TOKEN_FILE = path.join(TEST_DATA_DIR, 'github-token');
+const TEST_GITHUB_TOKEN = 'ghp_test_token_secret';
+fs.writeFileSync(process.env.GITHUB_TOKEN_FILE, TEST_GITHUB_TOKEN);
 process.on('exit', () => {
   try { require('../src/db').closeDatabase?.(); } catch {}
   fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
 });
 
 delete require.cache[require.resolve('../src/tools')];
-const { TOOLS, TOOL_DEFS, getToolRisk } = require('../src/tools');
-const { ci_status } = TOOLS;
+const { TOOLS: rawTools, TOOL_DEFS, getToolRisk } = require('../src/tools');
+const githubFamily = require('../src/tools/families/github');
+const executionContext = require('../src/tools/context');
+const TOOLS = require('./helpers/authorized-context').withOwnerToolContext(rawTools, { source: 'test' });
+const ci_status = args => executionContext.runWithContext(
+  require('./helpers/authorized-context').createOwnerContext({ source: 'test' }),
+  () => TOOLS.ci_status(args),
+);
 
 function installGithubMock(routes) {
   const original = https.request;
@@ -95,6 +103,11 @@ console.log('Running CI Status Tests...\n');
 
 (async () => {
   try {
+    const directStatus = await githubFamily.sidekick_ci_status({ repo: 'geoffmcc/sidekick', sha: 'abc123' });
+    assert.strictEqual(directStatus.code, 'canonical_dispatch_required');
+    const directGithub = await githubFamily.sidekick_github({ action: 'repositories', repo: 'geoffmcc/sidekick' });
+    assert.strictEqual(directGithub.code, 'unauthenticated');
+
     console.log('Test 1: PR number resolves to head.sha');
     await withMock({
       'GET /repos/geoffmcc/sidekick/pulls/12': { body: { head: { sha: 'headsha123' } } },
@@ -232,16 +245,16 @@ console.log('Running CI Status Tests...\n');
 
     console.log('Test 18: token redaction from errors');
     await withMock({
-      'GET /repos/geoffmcc/sidekick/commits/abc123/check-runs?per_page=100': { status: 500, body: { message: `token ${process.env.GITHUB_TOKEN} leaked` } }
+      'GET /repos/geoffmcc/sidekick/commits/abc123/check-runs?per_page=100': { status: 500, body: { message: `token ${TEST_GITHUB_TOKEN} leaked` } }
     }, async () => {
       const redacted = await ci_status({ repo: 'geoffmcc/sidekick', sha: 'abc123' });
       assert.ok(redacted.isError);
-      assert.ok(!redacted.content[0].text.includes(process.env.GITHUB_TOKEN));
+      assert.ok(!redacted.content[0].text.includes(TEST_GITHUB_TOKEN));
     });
 
-    console.log('Test 19: tool registration and low risk');
+    console.log('Test 19: tool registration and medium risk');
     assert.ok(TOOL_DEFS.some(def => def.name === 'ci_status'));
-    assert.strictEqual(getToolRisk('ci_status'), 'low');
+    assert.strictEqual(getToolRisk('ci_status'), 'medium');
 
     console.log('\n✓ CI Status Tests Passed');
   } catch (err) {

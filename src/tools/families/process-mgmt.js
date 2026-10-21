@@ -17,6 +17,7 @@ const { childProcessEnv } = require("../../security/child-process");
 const { z } = require("zod");
 const { redactSensitive } = require("../../redact");
 const { enforcePathPolicy } = require("../path-policy");
+const { requireToolExecution } = require("../read-authorization");
 
 function validateArchiveEntryNames(entries) {
   for (const entry of entries) {
@@ -33,6 +34,8 @@ function validateArchiveEntryNames(entries) {
 }
 
 async function sidekick_process({ action, filter, pid, name, signal }) {
+  const denied = requireToolExecution({ tool: "process" }, "tools.execute_high", "process");
+  if (denied) return denied;
   const allowedActions = ["list", "top", "kill", "tree"];
   if (!allowedActions.includes(action)) {
     return { content: [{ type: "text", text: "Invalid action. Allowed: " + allowedActions.join(", ") }], isError: true };
@@ -75,6 +78,8 @@ async function sidekick_process({ action, filter, pid, name, signal }) {
 }
 
 async function sidekick_service({ action, service, lines }) {
+  const denied = requireToolExecution({ tool: "service" }, "tools.execute_high", "service");
+  if (denied) return denied;
   const allowedActions = ["start", "stop", "restart", "status", "enable", "disable", "logs"];
   if (!allowedActions.includes(action)) {
     return { content: [{ type: "text", text: "Invalid action. Allowed: " + allowedActions.join(", ") }], isError: true };
@@ -103,6 +108,8 @@ async function sidekick_service({ action, service, lines }) {
 }
 
 async function sidekick_archive({ action, path: sourcePath, output, format }) {
+  const denied = requireToolExecution({ tool: "archive" }, "tools.execute", "archive");
+  if (denied) return denied;
   const allowedActions = ["create", "extract", "list"];
   if (!allowedActions.includes(action)) {
     return { content: [{ type: "text", text: "Invalid action. Allowed: " + allowedActions.join(", ") }], isError: true };

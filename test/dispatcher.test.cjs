@@ -70,7 +70,7 @@ console.log('Running Dispatcher Tests...');
     process.env.SIDEKICK_APPROVAL_REQUIRED_TOOLS = 'sidekick_respond';
     result = await dispatchTool({ name: 'sidekick_respond', args: { text: 'needs approval', token: 'secret-token-value' }, context: { source: 'mcp', requestId: 'req_approval' } });
     assert.ok(result.isError, 'approval-required tool should not execute immediately');
-    assert.strictEqual(result.code, 'approval_required');
+    assert.strictEqual(result.code, 'approval_required', result.content?.[0]?.text);
     assert.ok(result.approvalRequired);
     assert.ok(result.approvalId);
     const approval = tools.listApprovals({ status: 'pending' })[0];

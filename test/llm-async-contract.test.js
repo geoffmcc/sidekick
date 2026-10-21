@@ -6,21 +6,31 @@
 
 const assert = require("assert");
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
+const { after } = require("node:test");
 
-const dataDir = path.join(__dirname, "test-data-llm-async");
-fs.rmSync(dataDir, { recursive: true, force: true });
-fs.mkdirSync(dataDir, { recursive: true });
+const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-test-llm-async-"));
 process.env.SIDEKICK_DATA_DIR = dataDir;
 process.env.SIDEKICK_TOOL_POLICY = "open";
 process.env.SIDEKICK_APPROVAL_MODE = "off";
 
 const compute = require("../src/compute");
 const { callMcpTool } = require("../src/tools");
+const inference = require("../src/tools/families/inference");
+const { createOwnerContext } = require("./helpers/authorized-context");
+const authContext = createOwnerContext({ project: "async-llm-test" });
+after(() => {
+  try { require("../src/db").getDb().close(); } catch {}
+  fs.rmSync(dataDir, { recursive: true, force: true });
+});
 
 async function main() {
   compute.initialize();
   compute.stopReconciliation();
+  assert.strictEqual((await inference.sidekick_llm({ prompt: "unauthorized direct call" })).code, "canonical_dispatch_required");
+  assert.strictEqual((await inference.sidekick_embed({ text: "unauthorized direct call" })).code, "canonical_dispatch_required");
+  assert.strictEqual((await inference.sidekick_ollama({ action: "list" })).code, "unauthenticated");
 
   const response = await callMcpTool("sidekick_llm", {
     prompt: "Explain how a durable job differs from a synchronous request.",
@@ -28,7 +38,7 @@ async function main() {
     async: true,
     timeout_ms: 120000,
   }, {
-    project: "async-llm-test",
+    ...authContext,
     actor: "focused-test",
     task_id: "task-async-llm",
   });
@@ -48,8 +58,6 @@ async function main() {
   assert.strictEqual(job.timeoutMs, 120000);
 
   console.log("✓ async LLM request persists a project-scoped durable compute job");
-  try { require("../src/db").getDb().close(); } catch {}
-  fs.rmSync(dataDir, { recursive: true, force: true });
 }
 
 main().catch(error => {

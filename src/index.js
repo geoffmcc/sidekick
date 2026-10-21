@@ -11,16 +11,20 @@ const { readSecret } = require("./core/runtime-secrets");
 const { DATA_DIR, syncToolRegistry } = require("./tools");
 const dbStore = require("./db");
 const authentication = require("./core/authentication");
+const identity = require("./core/identity");
+const authorization = require("./core/authorization");
+const { projectStartupFailures } = require("./security/health-disclosure");
 const packageJson = require("../package.json");
 const { createMcpServer } = require("./mcp/server");
 const { createSessionManager } = require("./mcp/session-manager");
 const { registerStreamableHttpRoutes } = require("./mcp/streamable-http");
 const { registerLegacySseRoutes } = require("./mcp/legacy-sse");
+const { MAX_MCP_REQUEST_BODY_BYTES } = require("./mcp/limits");
 const executionNode = require("./node/manager");
-const executionNodeWorkspace = require("./node/workspace");
 executionNode.ensureSchema();
 const executionNodeRecoveryTimer = setInterval(() => {
-  try { executionNode.recoverExpired(); } catch {}
+  try { executionNode.recoverExpired(); }
+  catch (error) { console.error(`[ExecutionNode] Expired lease recovery failed: ${String(error?.message || "unknown error").slice(0, 300)}`); }
 }, 30000);
 if (executionNodeRecoveryTimer.unref) executionNodeRecoveryTimer.unref();
 
@@ -104,7 +108,13 @@ app.get("/health", (req, res) => {
   const seconds = uptimeSeconds % 60;
   const uptimeStr = `${hours}h ${minutes}m ${seconds}s`;
 
-  const includeDetails = timingSafeCompare(getBearerToken(req), API_KEY);
+  const token = getBearerToken(req);
+  const credential = authentication.authenticateCredential(token);
+  const includeDetails = timingSafeCompare(token, API_KEY) || Boolean(credential && authorization.authorize({
+    principalId: credential.principal_id,
+    permission: "system.configure",
+    credentialScopes: credential.scopes,
+  }).ok);
 
   const payload = {
     // Keep this endpoint live even when a critical startup dependency failed;
@@ -122,7 +132,7 @@ app.get("/health", (req, res) => {
   };
   payload.readiness = {
     ready: Object.keys(startupFailures).length === 0,
-    failures: { ...startupFailures },
+    failures: projectStartupFailures(startupFailures, includeDetails),
   };
 
   if (includeDetails) {
@@ -140,10 +150,17 @@ app.get("/privacy", (req, res) => {
 
 app.get("/readiness", (req, res) => {
   const ready = Object.keys(startupFailures).length === 0;
+  const token = getBearerToken(req);
+  const credential = authentication.authenticateCredential(token);
+  const includeDetails = timingSafeCompare(token, API_KEY) || Boolean(credential && authorization.authorize({
+    principalId: credential.principal_id,
+    permission: "system.configure",
+    credentialScopes: credential.scopes,
+  }).ok);
   res.status(ready ? 200 : 503).json({
     status: ready ? "ready" : "not_ready",
     ready,
-    failures: { ...startupFailures },
+    failures: projectStartupFailures(startupFailures, includeDetails),
   });
 });
 
@@ -175,7 +192,7 @@ app.use((req, res, next) => {
   }
 });
 
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({ limit: MAX_MCP_REQUEST_BODY_BYTES }));
 
 registerLegacySseRoutes({ app, sessionManager, createMcpServer });
 registerStreamableHttpRoutes({ app, sessionManager, createMcpServer, logDebug });
@@ -340,14 +357,6 @@ function requireComputeJsonContent(req, res, next) {
   next();
 }
 
-function requireAdmin(req, res, next) {
-  const auth = req.headers.authorization || "";
-  const bearer = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-  const key = req.headers["x-api-key"] || bearer;
-  if (!key || !timingSafeCompare(String(key), API_KEY)) return res.status(401).json({ ok: false, error: "admin authentication required" });
-  next();
-}
-
 function parseWorkerAuth(req) {
   const auth = req.headers.authorization || "";
   if (auth.startsWith("Bearer ")) {
@@ -394,10 +403,10 @@ function createEnrollmentTokenHandler(req, res) {
       allowedDataClassifications: body.allowedDataClassifications || body.allowed_data_classifications || ["public", "internal", "private"],
       maxConcurrentJobs: body.maxConcurrentJobs || body.max_concurrent_jobs || 2,
       expiresInMs: body.expiresInMs || body.expires_in_ms || 3600000,
-      createdBy: "admin-http",
+      createdBy: req.authIdentity.principal_id,
       reEnrollmentOf: body.reEnrollmentOf || body.re_enrollment_of || null,
     });
-    auditComputeEvent("compute.enrollment_token.created", { actor: "admin-http", subjectType: "compute_enrollment_token", subjectId: token.tokenId, payload: { display_name: body.displayName || body.display_name || null, re_enrollment_of: token.reEnrollmentOf || null } });
+    auditComputeEvent("compute.enrollment_token.created", { actor: req.authIdentity.principal_id, subjectType: "compute_enrollment_token", subjectId: token.tokenId, payload: { display_name: body.displayName || body.display_name || null, re_enrollment_of: token.reEnrollmentOf || null } });
     res.json({ ok: true, ...token, message: "Token created. The token value is returned only once." });
   } catch (e) { sendComputeError(res, e, 400); }
 }
@@ -490,7 +499,7 @@ function createJobHandler(req, res) {
       project: body.project,
       taskId: body.taskId || body.task_id,
       sessionId: body.sessionId || body.session_id,
-      requestingActor: "admin",
+      requestingActor: req.authIdentity.principal_id,
       dataClassification: body.dataClassification || body.data_classification || "private",
       protocolVersion: body.protocolVersion || body.protocol_version || "1",
       capabilityRequirements: body.capabilityRequirements || body.capability_requirements || {},
@@ -512,27 +521,28 @@ function createJobHandler(req, res) {
 
 function listJobsHandler(req, res) {
   try {
+    const project = req.authorizedComputeProject || null;
     const jobs = compute.jobManager.listJobs({
       status: req.query?.status,
       jobType: req.query?.jobType || req.query?.job_type,
-      project: req.query?.project,
+      project: project || undefined,
       providerId: req.query?.providerId || req.query?.provider_id,
       workerId: req.query?.workerId || req.query?.worker_id,
       capability: req.query?.capability,
       limit: req.query?.limit ? Math.min(200, Math.max(1, Number(req.query.limit) || 50)) : 50,
     });
-    res.json({ ok: true, jobs, stats: compute.jobManager.getJobStats() });
+    res.json({ ok: true, jobs, stats: project ? compute.jobManager.getJobStats({ project }) : compute.jobManager.getJobStats() });
   } catch (e) { sendComputeError(res, e, 400); }
 }
 
 function getJobHandler(req, res) {
-  const job = compute.jobManager.getJob(req.params.jobId);
+  const job = req.authorizedComputeJob || compute.jobManager.getJob(req.params.jobId);
   if (!job) return res.status(404).json({ ok: false, error: "job not found" });
   res.json({ ok: true, job, attempts: compute.jobManager.listAttempts(req.params.jobId), artifacts: compute.jobManager.listArtifacts(req.params.jobId) });
 }
 
 function cancelJobHandler(req, res) {
-  try { const job = compute.jobManager.cancelJob(req.params.jobId, { actor: "admin", reason: req.body?.reason || "cancelled" }); auditComputeEvent("compute.job.cancelled", { actor: "admin", subjectType: "compute_job", subjectId: req.params.jobId, payload: { reason: req.body?.reason || "cancelled" }, severity: "warning" }); res.json({ ok: true, job }); }
+  try { const job = compute.jobManager.cancelJob(req.params.jobId, { actor: req.authIdentity.principal_id, reason: req.body?.reason || "cancelled" }); auditComputeEvent("compute.job.cancelled", { actor: req.authIdentity.principal_id, subjectType: "compute_job", subjectId: req.params.jobId, payload: { reason: req.body?.reason || "cancelled" }, severity: "warning" }); res.json({ ok: true, job }); }
   catch (e) { sendComputeError(res, e, 400); }
 }
 
@@ -594,12 +604,22 @@ function failJobHandler(req, res) {
 }
 
 function recoverJobsHandler(req, res) {
-  try { res.json({ ok: true, recovered: compute.jobManager.recoverExpiredLeases() }); }
+  try {
+    const recovered = compute.jobManager.recoverExpiredLeases({
+      onRecovered: job => identity.recordAuditEvent("compute.admin.mutation", req.authIdentity.principal_id, req.authIdentity.principal_id, {
+        action: "recover_expired_lease",
+        resource_id: job.jobId,
+        prior_status: job.priorStatus,
+        status: job.status,
+      }),
+    });
+    res.json({ ok: true, recovered });
+  }
   catch (e) { sendComputeError(res, e, 500); }
 }
 
 function retryJobHandler(req, res) {
-  try { const job = compute.jobManager.retryJob(req.params.jobId, { actor: "admin", reason: req.body?.reason || "retry_requested" }); auditComputeEvent("compute.job.retry_requested", { actor: "admin", subjectType: "compute_job", subjectId: req.params.jobId, payload: { reason: req.body?.reason || "retry_requested" } }); res.json({ ok: true, job }); }
+  try { const job = compute.jobManager.retryJob(req.params.jobId, { actor: req.authIdentity.principal_id, reason: req.body?.reason || "retry_requested" }); auditComputeEvent("compute.job.retry_requested", { actor: req.authIdentity.principal_id, subjectType: "compute_job", subjectId: req.params.jobId, payload: { reason: req.body?.reason || "retry_requested" } }); res.json({ ok: true, job }); }
   catch (e) { sendComputeError(res, e, 400); }
 }
 
@@ -618,7 +638,7 @@ function disableWorkerHandler(req, res) {
   try {
     const worker = compute.workerManager.updateWorker(req.params.workerId, { adminState: "maintenance" });
     if (!worker) return res.status(404).json({ ok: false, error: "worker not found" });
-    auditComputeEvent("compute.worker.disabled", { actor: "admin", subjectType: "compute_worker", subjectId: req.params.workerId, payload: { reason: req.body?.reason || null }, severity: "warning" });
+    auditComputeEvent("compute.worker.disabled", { actor: req.authIdentity.principal_id, subjectType: "compute_worker", subjectId: req.params.workerId, payload: { reason: req.body?.reason || null }, severity: "warning" });
     res.json({ ok: true, worker });
   } catch (e) { sendComputeError(res, e, 400); }
 }
@@ -627,7 +647,7 @@ function enableWorkerHandler(req, res) {
   try {
     const worker = compute.workerManager.updateWorker(req.params.workerId, { adminState: "enabled" });
     if (!worker) return res.status(404).json({ ok: false, error: "worker not found" });
-    auditComputeEvent("compute.worker.enabled", { actor: "admin", subjectType: "compute_worker", subjectId: req.params.workerId, payload: { reason: req.body?.reason || null } });
+    auditComputeEvent("compute.worker.enabled", { actor: req.authIdentity.principal_id, subjectType: "compute_worker", subjectId: req.params.workerId, payload: { reason: req.body?.reason || null } });
     res.json({ ok: true, worker });
   } catch (e) { sendComputeError(res, e, 400); }
 }
@@ -636,7 +656,7 @@ function revokeWorkerHandler(req, res) {
   try {
     const worker = compute.workerManager.revokeWorker(req.params.workerId, req.body?.reason || "admin_revoked");
     if (!worker) return res.status(404).json({ ok: false, error: "worker not found" });
-    auditComputeEvent("compute.worker.revoked", { actor: "admin", subjectType: "compute_worker", subjectId: req.params.workerId, payload: { reason: req.body?.reason || "admin_revoked" }, severity: "warning" });
+    auditComputeEvent("compute.worker.revoked", { actor: req.authIdentity.principal_id, subjectType: "compute_worker", subjectId: req.params.workerId, payload: { reason: req.body?.reason || "admin_revoked" }, severity: "warning" });
     res.json({ ok: true, worker });
   } catch (e) { sendComputeError(res, e, 400); }
 }
@@ -645,7 +665,7 @@ function adminRotateWorkerCredentialHandler(req, res) {
   try {
     const result = compute.workerManager.rotateCredential(req.params.workerId);
     if (!result) return res.status(404).json({ ok: false, error: "worker not found" });
-    auditComputeEvent("compute.worker.credential_rotated", { actor: "admin", subjectType: "compute_worker", subjectId: req.params.workerId });
+    auditComputeEvent("compute.worker.credential_rotated", { actor: req.authIdentity.principal_id, subjectType: "compute_worker", subjectId: req.params.workerId });
     res.json({ ok: true, worker: result.worker, credential: result.credential, credentialType: "worker-bearer-v1" });
   } catch (e) { sendComputeError(res, e, 400); }
 }
@@ -658,11 +678,10 @@ function computeHealthHandler(req, res) {
   }
 }
 
-// Canonical compute route groups. Enrollment exchange is public but validates a one-time token;
-// worker routes require scoped worker credentials; admin routes require the Sidekick API key.
+// Canonical Compute routes. Enrollment exchange is public but validates a one-time token;
+// worker routes use separate worker credentials; administrative routes use scoped Core identity.
 app.use("/compute", requireComputeJsonContent);
 const computeEnrollmentRouter = express.Router();
-computeEnrollmentRouter.post("/tokens", express.json({ limit: "16kb" }), requireAdmin, createEnrollmentTokenHandler);
 computeEnrollmentRouter.post("/exchange", express.json({ limit: "64kb" }), enforceEnrollmentRateLimit, enrollWorkerHandler);
 app.use("/compute/enrollment", computeEnrollmentRouter);
 
@@ -684,22 +703,28 @@ computeWorkerRouter.post("/jobs/:jobId/complete", express.json({ limit: "512kb" 
 computeWorkerRouter.post("/jobs/:jobId/fail", express.json({ limit: "64kb" }), failJobHandler);
 app.use("/compute/worker", computeWorkerRouter);
 
-const computeAdminRouter = express.Router();
-computeAdminRouter.use(requireAdmin);
-computeAdminRouter.get("/workers", listWorkersHandler);
-computeAdminRouter.get("/workers/:workerId", getWorkerHandler);
-computeAdminRouter.post("/workers/:workerId/disable", express.json({ limit: "8kb" }), disableWorkerHandler);
-computeAdminRouter.post("/workers/:workerId/enable", express.json({ limit: "8kb" }), enableWorkerHandler);
-computeAdminRouter.post("/workers/:workerId/revoke", express.json({ limit: "8kb" }), revokeWorkerHandler);
-computeAdminRouter.post("/workers/:workerId/credentials/rotate", express.json({ limit: "8kb" }), adminRotateWorkerCredentialHandler);
-computeAdminRouter.post("/jobs", express.json({ limit: "256kb" }), createJobHandler);
-computeAdminRouter.get("/jobs", listJobsHandler);
-computeAdminRouter.get("/jobs/:jobId", getJobHandler);
-computeAdminRouter.post("/jobs/:jobId/cancel", express.json({ limit: "8kb" }), cancelJobHandler);
-computeAdminRouter.post("/jobs/:jobId/retry", express.json({ limit: "8kb" }), retryJobHandler);
-computeAdminRouter.post("/recover", express.json({ limit: "8kb" }), recoverJobsHandler);
-computeAdminRouter.get("/health", computeHealthHandler);
-app.use("/compute/admin", computeAdminRouter);
+require("./compute/admin-api").registerComputeAdminRoutes({
+  app, express, authentication, authorization, identity, dbStore,
+  projectAccess: require("./core/project-access"),
+  platformKernel: require("./platform/kernel"),
+  compute,
+  handlers: {
+    listWorkers: listWorkersHandler,
+    getWorker: getWorkerHandler,
+    disableWorker: disableWorkerHandler,
+    enableWorker: enableWorkerHandler,
+    revokeWorker: revokeWorkerHandler,
+    rotateWorkerCredential: adminRotateWorkerCredentialHandler,
+    createJob: createJobHandler,
+    listJobs: listJobsHandler,
+    getJob: getJobHandler,
+    cancelJob: cancelJobHandler,
+    retryJob: retryJobHandler,
+    recoverJobs: recoverJobsHandler,
+    health: computeHealthHandler,
+    createEnrollmentToken: createEnrollmentTokenHandler,
+  },
+});
 
 // General execution-node protocol. It deliberately has its own job table and
 // poll surface: compute inference jobs and canonical tool calls have different
@@ -785,44 +810,16 @@ executionNodeRouter.post("/jobs/:jobId/complete", express.json({ limit: "1mb" })
 executionNodeRouter.post("/jobs/:jobId/fail", express.json({ limit: "16kb" }), nodeFailHandler);
 app.use("/execution-node/node", executionNodeRouter);
 
-const executionNodeAdminRouter = express.Router();
-executionNodeAdminRouter.use(requireAdmin);
-executionNodeAdminRouter.get("/nodes", (req, res) => res.json({ ok: true, nodes: executionNode.list() }));
-executionNodeAdminRouter.post("/nodes/:workerId/workspaces", express.json({ limit: "16kb" }), (req, res) => {
-  try {
-    const body = req.body || {};
-    if (!body.name || !body.rootIdentity) return res.status(400).json({ ok: false, error: "name and rootIdentity are required" });
-    const workspaceId = executionNodeWorkspace.stableId("ws", `${body.name}:${body.rootIdentity}`);
-    const workspace = executionNode.authorizeWorkspace(req.params.workerId, {
-      workspaceId, name: String(body.name).slice(0, 64), rootIdentity: String(body.rootIdentity).slice(0, 128),
-      permissions: body.permissions || { read: true, write: false, execute: false }, limits: body.limits || {},
-    });
-    res.json({ ok: true, workspace });
-  } catch (e) { sendComputeError(res, e, 400); }
+require("./node/admin-api").registerExecutionNodeAdminRoutes({
+  app, express, authentication, authorization, identity, dbStore, executionNode, compute,
 });
-executionNodeAdminRouter.post("/nodes/:workerId/revoke", express.json({ limit: "8kb" }), (req, res) => {
-  const worker = compute.workerManager.revokeWorker(req.params.workerId, req.body?.reason || "execution_node_revoked");
-  if (!worker) return res.status(404).json({ ok: false, error: "node not found" });
-  res.json({ ok: true, worker });
-});
-executionNodeAdminRouter.post("/jobs/:jobId/cancel", express.json({ limit: "8kb" }), (req, res) => {
-  const job = executionNode.requestCancel(req.params.jobId);
-  if (!job) return res.status(404).json({ ok: false, error: "job not found" });
-  res.json({ ok: true, job });
-});
-app.use("/execution-node/admin", executionNodeAdminRouter);
 
 // Compatibility aliases for the initial compute HTTP protocol. These remain explicitly authenticated
 // and are covered by the narrow global-auth bypass above only where worker/enrollment credentials differ.
-app.post("/compute/enrollment-tokens", express.json({ limit: "16kb" }), requireAdmin, createEnrollmentTokenHandler);
 app.post("/compute/enroll", express.json({ limit: "64kb" }), enforceEnrollmentRateLimit, enrollWorkerHandler);
 app.post("/compute/heartbeat", express.json({ limit: "32kb" }), requireWorker, heartbeatHandler);
 app.post("/compute/capabilities", express.json({ limit: "64kb" }), requireWorker, capabilitiesHandler);
 app.post("/compute/credentials/rotate", express.json({ limit: "8kb" }), requireWorker, rotateCredentialHandler);
-app.post("/compute/jobs", express.json({ limit: "256kb" }), requireAdmin, createJobHandler);
-app.get("/compute/jobs", requireAdmin, listJobsHandler);
-app.get("/compute/jobs/:jobId", requireAdmin, getJobHandler);
-app.post("/compute/jobs/:jobId/cancel", express.json({ limit: "8kb" }), requireAdmin, cancelJobHandler);
 app.post("/compute/jobs/claim", express.json({ limit: "16kb" }), requireWorker, claimJobHandler);
 app.post("/compute/jobs/:jobId/start", express.json({ limit: "16kb" }), requireWorker, startJobHandler);
 app.post("/compute/jobs/:jobId/renew", express.json({ limit: "16kb" }), requireWorker, renewJobHandler);
@@ -833,8 +830,6 @@ app.post("/compute/jobs/:jobId/artifacts/upload", express.json({ limit: "512kb" 
 app.post("/compute/jobs/:jobId/artifacts/:artifactId/finalize", express.json({ limit: "64kb" }), requireWorker, finalizeArtifactHandler);
 app.post("/compute/jobs/:jobId/complete", express.json({ limit: "512kb" }), requireWorker, completeJobHandler);
 app.post("/compute/jobs/:jobId/fail", express.json({ limit: "64kb" }), requireWorker, failJobHandler);
-app.post("/compute/recover", express.json({ limit: "8kb" }), requireAdmin, recoverJobsHandler);
-app.get("/compute/health", requireAdmin, computeHealthHandler);
 
 if (require.main === module && !IS_LOCAL) {
   httpServer = app.listen(PORT, BIND_HOST, () => {

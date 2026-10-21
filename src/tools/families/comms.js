@@ -6,14 +6,17 @@
 // SMTP/webhook env vars; `webhook` reads/clears the received-webhook document
 // through the database store via its own private helpers. Neither depends on
 // tools-legacy.js. The dashboard keeps its own separate webhook receiver
-// (dashboard.js loadWebhooks/saveWebhooks), which is unaffected. Risk is
-// preserved from src/tools/metadata.js (notify medium, webhook low) and gated
-// by the dispatcher.
+// (dashboard.js loadWebhooks/saveWebhooks), which is unaffected. Webhook is
+// high risk by default; reviewed list/get action overrides reduce reads to
+// medium risk, while clear remains high.
 
 const { z } = require("zod");
 const dbStore = require("../../db");
 const { resolveOutboundUrl } = require("../../security/outbound-url");
 const { readSecret } = require("../../core/runtime-secrets");
+const toolContext = require("../context");
+const authorization = require("../../core/authorization");
+const { requireCanonicalInvocation, requireToolExecution } = require("../read-authorization");
 
 function loadWebhooks() {
   return dbStore.loadDocument("webhooks", []);
@@ -24,6 +27,8 @@ function saveWebhooks(webhooks) {
 }
 
 async function sidekick_notify({ channel, webhook_url, recipient, message, title }) {
+  const authorizationError = requireToolExecution({ tool: "notify", channel: channel || null }, "tools.execute_high", "notify");
+  if (authorizationError) return authorizationError;
   const https = require("https");
   const http = require("http");
 
@@ -129,9 +134,26 @@ async function sidekick_notify({ channel, webhook_url, recipient, message, title
 }
 
 async function sidekick_webhook({ action, id, limit }) {
+  const dispatchError = requireCanonicalInvocation("webhook");
+  if (dispatchError) return dispatchError;
   const allowedActions = ["list", "get", "clear"];
   if (!allowedActions.includes(action)) {
     return { content: [{ type: "text", text: "Invalid action. Allowed: " + allowedActions.join(", ") }], isError: true };
+  }
+
+  const execution = toolContext.getExecutionContext();
+  const permission = action === "clear" ? "webhooks.manage" : "webhooks.read";
+  if (!execution.authIdentity?.principal_id) {
+    if (execution.source !== "test") return { content: [{ type: "text", text: "Authenticated principal required for webhook access" }], isError: true, code: "unauthenticated" };
+  } else {
+    const decision = authorization.authorize({
+      principalId: execution.authIdentity.principal_id,
+      permission,
+      credentialScopes: execution.authIdentity.scopes,
+      delegationId: execution.authIdentity.delegation_id || execution.authIdentity.delegationId || null,
+      resource: { tool: "webhook", action },
+    });
+    if (!decision.ok) return { content: [{ type: "text", text: `Webhook access denied: ${decision.code}` }], isError: true, code: "authorization_denied" };
   }
 
   const webhooks = loadWebhooks();
@@ -192,7 +214,7 @@ const descriptors = Object.freeze([
       limit: z.number().optional().describe("Number of webhooks to list (default: 20)"),
     }),
     args: { action: "string", id: "string (optional)", limit: "number (optional)" },
-    risk: "low",
+    risk: "high",
     category: "Communication",
     source: "builtin",
     family: "comms",

@@ -293,6 +293,7 @@ console.log('Running Approval Tests...\n');
     assert.strictEqual(result.content[0].text, 'legacy queued');
     console.log('Passed\n');
 
+    db.closeDatabase?.();
     fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
     console.log('All Approval Tests Passed!');
   } catch (e) {

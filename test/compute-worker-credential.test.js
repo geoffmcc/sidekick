@@ -5,6 +5,7 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { execFileSync } = require('child_process');
 
 const cred = require('../src/compute/worker-credential');
 
@@ -47,6 +48,15 @@ test('save rejects a malformed record', () => {
   assert.throws(() => cred.save({ workerId: 'wk_ok', credential: 'nope' }, freshPath()), /malformed/);
 });
 
+test('Windows ACL helper children receive only a minimal system environment', () => {
+  const env = cred.windowsSystemEnv('D:\\Windows');
+  assert.strictEqual(env.SystemRoot, 'D:\\Windows');
+  assert.strictEqual(env.WINDIR, 'D:\\Windows');
+  assert.strictEqual(env.PATH, 'D:\\Windows\\System32');
+  assert.strictEqual(env.SIDEKICK_NODE_ENROLL_TOKEN, undefined);
+  assert.strictEqual(env.SIDEKICK_API_KEY, undefined);
+});
+
 test('load returns null for an absent file', () => {
   assert.strictEqual(cred.load(path.join(TMP, 'missing.json')), null);
 });
@@ -82,6 +92,21 @@ test('applyWindowsAcl is best-effort (returns false without throwing off-Windows
   const p = freshPath();
   cred.save(record, p);
   assert.strictEqual(cred.applyWindowsAcl(p), false);
+});
+
+test('Windows credential ACL grants the effective process SID and remains readable by that token', function () {
+  if (!isWin) { console.log('    (skipped on win32)'); return; }
+  const p = freshPath();
+  cred.save(record, p);
+  const whoami = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'whoami.exe');
+  const icacls = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'icacls.exe');
+  const identity = execFileSync(whoami, ['/user', '/fo', 'csv', '/nh'], { encoding: 'utf8', windowsHide: true }).trim();
+  const account = identity.match(/^"([^"]+)"/)?.[1];
+  const sid = identity.match(/,\s*"(S-1-[0-9-]+)"\s*$/)?.[1];
+  assert.ok(account && sid, 'whoami must return the effective process identity');
+  const acl = execFileSync(icacls, [p], { encoding: 'utf8', windowsHide: true });
+  assert.ok(acl.toLowerCase().includes(account.toLowerCase()), 'ACL explicitly grants the effective process account');
+  assert.strictEqual(cred.load(p).credential, record.credential, 'current process token can read the ACL-protected credential');
 });
 
 // --- remove / park / restore / discard (re-enrollment support) ---

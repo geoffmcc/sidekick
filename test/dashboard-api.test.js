@@ -18,6 +18,7 @@ process.env.SIDEKICK_DASHBOARD_PASS = 'test-pass';
 // The test harness represents a deployment behind a trusted HTTPS proxy.
 process.env.SIDEKICK_DASHBOARD_TRUST_PROXY = 'true';
 process.env.SIDEKICK_API_KEY = 'test-sidekick-api-key';
+process.env.SIDEKICK_AGENT_PROXY_KEY = 'test-dashboard-agent-proxy-key';
 process.env.SIDEKICK_TOOL_POLICY = 'open';
 process.env.SIDEKICK_APPROVAL_MODE = 'off';
 const dbStore = require('../src/db');
@@ -159,6 +160,9 @@ setTimeout(async () => {
 
     console.log('Test 3.0ae: scope snapshots and guard stay authenticated and digest-only');
     {
+      const owner = dbStore.getDb().prepare("SELECT principal_id FROM principals WHERE json_extract(metadata_json, '$.legacy_dashboard_username') = 'test-user' LIMIT 1").get();
+      assert.ok(owner?.principal_id, 'Dashboard test identity should be established before project setup');
+      require('../src/platform/kernel').registerProject({ project_id: 'dashboard-test', owner_actor_id: owner.principal_id, source: 'test' });
       const created = await makeRequest('POST', '/api/scope-snapshots', { project_id: 'dashboard-test', targets: [{ kind: 'host', value: 'example.test' }], rules: { allowed_operations: ['observe'] }, expires_at: new Date(Date.now() + 3600000).toISOString() });
       assert.strictEqual(created.status, 200, 'Authenticated users should create scope snapshots');
       const snapshot = created.data.snapshot;
@@ -193,14 +197,40 @@ setTimeout(async () => {
       console.log('Passed\n');
     }
 
-    console.log('Test 3.0aa2: HTTPS legacy login sessions set Secure cookies');
+    console.log('Test 3.0aa2: HTTPS Basic authentication establishes a revocable identity session');
     {
       const response = await makeRequest('GET', '/', null, {
         headers: { 'X-Forwarded-Proto': 'https' }
       });
       assert.strictEqual(response.status, 200, 'Configured Basic Auth should succeed in the test harness');
       const cookies = Array.isArray(response.headers['set-cookie']) ? response.headers['set-cookie'].join(';') : String(response.headers['set-cookie'] || '');
-      assert.match(cookies, /sidekick_sid=.*Secure/, 'HTTPS legacy sessions must set Secure cookies');
+      assert.match(cookies, /sidekick_identity=.*Secure/, 'HTTPS authentication must set a Secure server-side session cookie');
+      assert.doesNotMatch(cookies, /sidekick_sid=/, 'New authentication must not issue stateless legacy cookies');
+
+      const identityCookie = String(response.headers['set-cookie']).match(/sidekick_identity=([^;]+)/)?.[1];
+      assert.ok(identityCookie, 'The response should contain an opaque identity session token');
+      const logout = await makeRequest('POST', '/api/auth/logout', {}, {
+        headers: {
+          Cookie: `sidekick_identity=${identityCookie}`,
+          Origin: 'https://127.0.0.1:4100',
+          Host: '127.0.0.1:4100',
+          'X-Forwarded-Proto': 'https'
+        }
+      });
+      assert.strictEqual(logout.status, 204, 'Logout should invalidate the server-side session');
+      const cleared = Array.isArray(logout.headers['set-cookie']) ? logout.headers['set-cookie'].join(';') : String(logout.headers['set-cookie'] || '');
+      assert.match(cleared, /sidekick_sid=;.*Max-Age=0.*Secure/, 'Logout should also expire any legacy cookie');
+      const replay = await makeRequest('GET', '/', null, {
+        auth: false,
+        headers: { Cookie: `sidekick_identity=${identityCookie}` }
+      });
+      assert.strictEqual(replay.status, 401, 'A copied identity cookie must fail after logout');
+
+      const legacyReplay = await makeRequest('GET', '/', null, {
+        auth: false,
+        headers: { Cookie: 'sidekick_sid=valid-looking-session' }
+      });
+      assert.strictEqual(legacyReplay.status, 401, 'Old stateless cookies must not authenticate');
       console.log('Passed\n');
     }
 
@@ -975,12 +1005,14 @@ setTimeout(async () => {
       console.log('✓ Passed\n');
     }
 
+    dbStore.closeDatabase?.();
     fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
     
     console.log('All Dashboard API Tests Passed! ✓');
     process.exit(0);
   } catch (e) {
     console.error('Test failed:', e);
+    dbStore.closeDatabase?.();
     fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
     process.exit(1);
   }

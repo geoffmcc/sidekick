@@ -392,7 +392,7 @@ function transitionModule(name, toState, options = {}) {
 }
 
 /**
- * Apply the module's declared migrations (data-only, enforced by the runner)
+ * Apply trusted-builtin declared migrations (data-only, enforced by the runner)
  * and record progress — applied_migrations_json + migration_version — plus an
  * optional lifecycle transition, all inside the runner's single transaction.
  * If persistence fails the data migrations roll back with it; if a migration
@@ -417,6 +417,10 @@ function applyModuleMigrations(name, { transitionTo = null, error = null, config
   }
 
   const result = runModuleMigrations(db, record.name, migrations, alreadyApplied, {
+    // Only source-pinned first-party builtins may supply SQL against Core's
+    // database. Managed/discovered module SQL runs with Core's DB connection
+    // and cannot be safely constrained by string inspection.
+    trustedBuiltin: record.source === "builtin",
     recordProgress(progress) {
       const toState = transitionTo !== null ? transitionTo : record.state;
       const { sets, params } =

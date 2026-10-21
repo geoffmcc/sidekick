@@ -9,8 +9,8 @@ const toolContext = require("./context");
 // invocation may touch a given path, based on the allow/deny lists configured
 // for the current execution source.
 //
-// Policy is open by default. A deny match always wins. When any allow entry is
-// configured, a path must match one to be permitted. Environment variables are
+// Policy denies when no allow entry is configured. A deny match always wins,
+// and every path must match an operator-configured allow root. Environment variables are
 // read on every call so configuration changes take effect without a restart,
 // and the execution source is resolved per call from the request-scoped
 // context.
@@ -250,12 +250,6 @@ function getPathPolicyDecision(filePath, operation = "access", source = toolCont
   const allowedEntries = pathPolicyEntries(source, "ALLOWED_PATHS");
   const deniedEntries = pathPolicyEntries(source, "DENIED_PATHS");
 
-  // An open policy has no roots to compare against, so there is nothing a
-  // symlink could subvert; skip resolution and keep today's behavior.
-  if (deniedEntries.length === 0 && allowedEntries.length === 0) {
-    return { allowed: true, source, operation, path: target, reason: "path policy is open" };
-  }
-
   // Lexical deny before anything else. It is the pre-change comparison exactly,
   // so deny can only have grown; it reports the ordinary deny decision, so a
   // caller probing a deny root gets one uniform answer and the denial is still
@@ -263,6 +257,26 @@ function getPathPolicyDecision(filePath, operation = "access", source = toolCont
   const lexicalDeniedMatch = findLexicalDeniedMatch(deniedEntries, target);
   if (lexicalDeniedMatch) {
     return { allowed: false, source, operation, path: target, reason: "path denied by policy", matched: lexicalDeniedMatch, list: "denied" };
+  }
+
+  // An absent allow-list is not an implicit grant. Requiring an operator-owned
+  // root keeps an authenticated caller from reading every path available to
+  // the Sidekick service account. Deny before resolving to avoid a filesystem
+  // oracle for paths that are not within an explicitly allowed root.
+  if (allowedEntries.length === 0) {
+    const resolvedDenied = resolvePolicyEntries(deniedEntries);
+    if (resolvedDenied.error) {
+      return { allowed: false, source, operation, path: target, reason: resolvedDenied.error, matched: null };
+    }
+    return {
+      allowed: false,
+      source,
+      operation,
+      path: target,
+      reason: "no allowed filesystem paths are configured",
+      matched: null,
+      list: "allowed",
+    };
   }
 
   // Canonicalize the path as requested, not the lexically collapsed form: a
@@ -273,11 +287,10 @@ function getPathPolicyDecision(filePath, operation = "access", source = toolCont
     // but unreadable" from "dangling symlink", which is a filesystem oracle for
     // anywhere the caller can name. Say so only inside an allow root, where the
     // caller is entitled to look and an operator needs the diagnosis; elsewhere
-    // answer exactly as an ordinary out-of-policy path would. With no allow list
-    // there is no confinement to leak against, so the diagnosis is kept.
+    // answer exactly as an ordinary out-of-policy path would.
     const insideAllowRoot = allowedEntries
       .some(entry => pathContainedLexically(target, normalizePolicyPath(entry)));
-    const reason = insideAllowRoot || allowedEntries.length === 0
+    const reason = insideAllowRoot
       ? canonicalTarget.error
       : "path not in allowed paths";
     return { allowed: false, source, operation, path: target, reason, matched: null };
@@ -293,24 +306,20 @@ function getPathPolicyDecision(filePath, operation = "access", source = toolCont
     return { allowed: false, source, operation, path: target, reason: "path denied by policy", matched: deniedMatch, list: "denied" };
   }
 
-  if (allowedEntries.length > 0) {
-    const resolvedAllowed = resolvePolicyEntries(allowedEntries);
-    if (resolvedAllowed.error) {
-      return { allowed: false, source, operation, path: target, reason: resolvedAllowed.error, matched: null };
-    }
-    const allowedMatch = findCanonicalMatch(resolvedAllowed.resolved, canonicalTarget.path);
-    return {
-      allowed: Boolean(allowedMatch),
-      source,
-      operation,
-      path: target,
-      reason: allowedMatch ? "path allowed by policy" : "path not in allowed paths",
-      matched: allowedMatch || null,
-      list: "allowed"
-    };
+  const resolvedAllowed = resolvePolicyEntries(allowedEntries);
+  if (resolvedAllowed.error) {
+    return { allowed: false, source, operation, path: target, reason: resolvedAllowed.error, matched: null };
   }
-
-  return { allowed: true, source, operation, path: target, reason: "path policy is open" };
+  const allowedMatch = findCanonicalMatch(resolvedAllowed.resolved, canonicalTarget.path);
+  return {
+    allowed: Boolean(allowedMatch),
+    source,
+    operation,
+    path: target,
+    reason: allowedMatch ? "path allowed by policy" : "path not in allowed paths",
+    matched: allowedMatch || null,
+    list: "allowed"
+  };
 }
 
 function enforcePathPolicy(filePath, operation = "access") {

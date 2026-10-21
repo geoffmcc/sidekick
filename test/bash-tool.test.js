@@ -2,16 +2,22 @@
 
 const assert = require('assert');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const http = require('http');
 
-const TEST_DATA_DIR = path.join(__dirname, 'test-data');
-if (!fs.existsSync(TEST_DATA_DIR)) fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
+const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sidekick-bash-test-'));
 process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
+process.env.SIDEKICK_TOOL_POLICY = 'open';
+process.env.SIDEKICK_APPROVAL_MODE = 'off';
 
 const dispatcher = require('../src/tools/dispatcher');
+const { createOwnerContext } = require('./helpers/authorized-context');
+const toolContext = require('../src/tools/context');
 const bashHandler = dispatcher.getBuiltinRegistry().get('bash').handler;
 assert.ok(bashHandler, 'bash tool handler should be registered');
+const ownerContext = createOwnerContext({ source: 'internal' });
+const runBash = (command) => dispatcher.callInternalTool('bash', { command }, ownerContext);
 
 console.log('Running Bash Tool Tests...\n');
 
@@ -19,14 +25,24 @@ const nodeExecutable = process.platform === 'win32' ? `"${process.execPath}"` : 
 
 (async () => {
   try {
+    console.log('Test 0: direct handler invocation cannot execute a command');
+    const directCanary = path.join(TEST_DATA_DIR, 'direct-handler-executed.txt').replace(/\\/g, '/');
+    const direct = await toolContext.runWithContext(ownerContext, () => bashHandler({
+      command: `${nodeExecutable} -e "require('fs').writeFileSync('${directCanary}', 'executed')"`,
+    }));
+    assert.strictEqual(direct.isError, true, 'direct handler execution should be rejected');
+    assert.strictEqual(direct.code, 'canonical_dispatch_required', 'even an authorized owner needs the dispatcher-issued capability');
+    assert.strictEqual(fs.existsSync(directCanary), false, 'rejected direct call must not start a process');
+    console.log('✓ Passed\n');
+
     console.log('Test 1: returns stdout on success');
-    const ok = await bashHandler({ command: `${nodeExecutable} -e "process.stdout.write('hello-from-bash')"` });
+    const ok = await runBash(`${nodeExecutable} -e "process.stdout.write('hello-from-bash')"`);
     assert.strictEqual(ok.isError, undefined, 'should not be an error');
     assert.ok(ok.content[0].text.includes('hello-from-bash'), 'stdout should be returned');
     console.log('✓ Passed\n');
 
     console.log('Test 2: reports non-zero exit code with output');
-    const err = await bashHandler({ command: `${nodeExecutable} -e "process.stdout.write('out'); process.stderr.write('err'); process.exit(7)"` });
+    const err = await runBash(`${nodeExecutable} -e "process.stdout.write('out'); process.stderr.write('err'); process.exit(7)"`);
     assert.strictEqual(err.isError, true, 'should be an error');
     assert.ok(err.content[0].text.includes('Exit code: 7'), 'should report exit code');
     assert.ok(err.content[0].text.includes('out'), 'should include stdout');
@@ -34,7 +50,7 @@ const nodeExecutable = process.platform === 'win32' ? `"${process.execPath}"` : 
     console.log('✓ Passed\n');
 
     console.log('Test 3: blocks dangerous patterns');
-    const blocked = await bashHandler({ command: 'rm -rf /' });
+    const blocked = await runBash('rm -rf /');
     assert.strictEqual(blocked.isError, true, 'should be blocked');
     assert.ok(blocked.content[0].text.includes('Blocked'), 'should report blocked');
     console.log('✓ Passed\n');
@@ -45,9 +61,7 @@ const nodeExecutable = process.platform === 'win32' ? `"${process.execPath}"` : 
     const port = server.address().port;
     try {
       const started = Date.now();
-      const result = await bashHandler({
-        command: `${nodeExecutable} -e "require('http').get('http://127.0.0.1:${port}/ping', r => { let b=''; r.on('data', c => b += c); r.on('end', () => console.log(b)); })"`,
-      });
+      const result = await runBash(`${nodeExecutable} -e "require('http').get('http://127.0.0.1:${port}/ping', r => { let b=''; r.on('data', c => b += c); r.on('end', () => console.log(b)); })"`);
       const elapsed = Date.now() - started;
       assert.ok(!result.isError, `expected success, got: ${result.content[0].text}`);
       assert.ok(result.content[0].text.includes('pong'), `expected pong, got: ${result.content[0].text}`);

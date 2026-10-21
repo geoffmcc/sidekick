@@ -6,11 +6,10 @@
 
 const assert = require('assert');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
-const TEST_DATA_DIR = path.join(__dirname, 'test-queue-recover-data');
-fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
-fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
+const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sidekick-queue-recover-'));
 
 process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
 process.env.SIDEKICK_APPROVAL_MODE = 'off';
@@ -20,7 +19,7 @@ delete require.cache[require.resolve('../src/tools')];
 delete require.cache[require.resolve('../src/db')];
 const tools = require('../src/tools');
 
-const { TOOLS } = tools;
+const TOOLS = require('./helpers/authorized-context').withOwnerToolContext(tools.TOOLS, { source: 'test' });
 const QUEUE_FILE = path.join(TEST_DATA_DIR, 'queue.json');
 
 function readQueue() {
@@ -100,6 +99,7 @@ console.log('Running Queue Recover Tests...\n');
     assert.strictEqual(readQueue().tasks.find(t => t.id === 999).status, 'pending');
     console.log('Passed\n');
 
+    require('../src/db').closeDatabase();
     fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
     console.log('All Queue Recover Tests Passed!');
   } catch (e) {

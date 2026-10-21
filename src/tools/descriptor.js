@@ -145,6 +145,7 @@ function normalizeDescriptor(input) {
     version: input.version || null,
     provenance: input.provenance || null,
     authorizationPermission: input.authorizationPermission || null,
+    trustedBuiltin: input.trustedBuiltin === true,
     approval: input.approval || null,
     // Capability labels are declarative prompt metadata. Bound and sanitize
     // them at the canonical descriptor boundary so an untrusted module

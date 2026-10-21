@@ -14,6 +14,8 @@ NC='\033[0m'
 USERNAME="sidekick"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+source "$SCRIPT_DIR/lib/apt-repository.sh"
+source "$SCRIPT_DIR/lib/install-ollama.sh"
 
 PASS=0
 FAIL=0
@@ -45,6 +47,7 @@ echo ""
 log "Phase 1: Installing foundation packages..."
 
 apt-get update -qq
+apt-get install -y -qq ca-certificates curl gnupg
 
 # pip3
 if command -v pip3 &>/dev/null; then
@@ -90,7 +93,29 @@ log "Phase 2: Installing Docker..."
 if command -v docker &>/dev/null; then
   skip "Docker $(docker --version | awk '{print $3}')"
 else
-  curl -fsSL https://get.docker.com | sh
+  . /etc/os-release
+  case "$ID" in
+    ubuntu|debian) DOCKER_DISTRO="$ID" ;;
+    *) err "Docker repository setup supports Ubuntu and Debian only (found: $ID)"; exit 1 ;;
+  esac
+  DOCKER_CODENAME="${UBUNTU_CODENAME:-${VERSION_CODENAME:-}}"
+  if [[ ! "$DOCKER_CODENAME" =~ ^[a-z0-9][a-z0-9.-]*$ ]]; then
+    err "Could not determine a safe Docker repository codename"; exit 1
+  fi
+  install_verified_apt_key \
+    "https://download.docker.com/linux/${DOCKER_DISTRO}/gpg" \
+    "/etc/apt/keyrings/docker.gpg" \
+    "9DC858229FC7DD38854AE2D88D81803C0EBFCD88"
+  cat > /etc/apt/sources.list.d/docker.sources <<EOF
+Types: deb
+URIs: https://download.docker.com/linux/${DOCKER_DISTRO}
+Suites: ${DOCKER_CODENAME}
+Components: stable
+Architectures: $(dpkg --print-architecture)
+Signed-By: /etc/apt/keyrings/docker.gpg
+EOF
+  apt-get update -qq
+  apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
   pass "Docker installed"
 fi
 
@@ -197,8 +222,23 @@ log "Phase 5: Installing networking tools..."
 if command -v cloudflared &>/dev/null; then
   skip "cloudflared $(cloudflared --version 2>&1 | awk '{print $2}')"
 else
-  curl -sL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o /usr/local/bin/cloudflared
-  chmod +x /usr/local/bin/cloudflared
+  CLOUDFLARED_VERSION="2026.10.1"
+  CLOUDFLARED_SHA256="3bfc539f45d2620c71debb7a86be0efa737ed5ccbad9eb85c787116900e5c586"
+  CLOUDFLARED_TMP="$(mktemp "${TMPDIR:-/tmp}/sidekick-cloudflared.XXXXXX")"
+  if ! curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+    "https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-amd64" \
+    --output "$CLOUDFLARED_TMP"; then
+    rm -f -- "$CLOUDFLARED_TMP"
+    err "Failed to download the pinned cloudflared release"
+    exit 1
+  fi
+  if ! printf '%s  %s\n' "$CLOUDFLARED_SHA256" "$CLOUDFLARED_TMP" | sha256sum --check --status; then
+    rm -f -- "$CLOUDFLARED_TMP"
+    err "Pinned cloudflared release checksum mismatch"
+    exit 1
+  fi
+  install -o root -g root -m 0755 -- "$CLOUDFLARED_TMP" /usr/local/bin/cloudflared
+  rm -f -- "$CLOUDFLARED_TMP"
   pass "cloudflared installed"
 fi
 
@@ -369,8 +409,7 @@ log "Phase 8: Installing Ollama and pulling models..."
 if command -v ollama &>/dev/null; then
   skip "Ollama $(ollama --version 2>/dev/null | head -1)"
 else
-  curl -fsSL https://ollama.com/install.sh | sh
-  pass "Ollama installed"
+  install_ollama_verified
 fi
 
 if command -v ollama &>/dev/null; then

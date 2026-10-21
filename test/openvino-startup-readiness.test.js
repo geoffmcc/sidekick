@@ -219,7 +219,8 @@ const ovExecutor = require("../src/compute/openvino-executor");
 function makeConfig(modelsDir, overrides = {}) {
   return {
     enabled: true,
-    pythonPath: path.join(__dirname, "helpers", "mock-python.sh"),
+    pythonPath: process.platform === "win32" ? process.execPath : path.join(__dirname, "helpers", "mock-python.sh"),
+    pythonUnbuffered: process.platform !== "win32",
     modelsDir,
     cacheDir: path.join(modelsDir, "cache"),
     stateDir: path.join(modelsDir, "state"),

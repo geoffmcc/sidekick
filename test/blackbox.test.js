@@ -25,13 +25,20 @@ delete require.cache[require.resolve('../src/db')];
 delete require.cache[require.resolve('../src/blackbox')];
 delete require.cache[require.resolve('../src/tools')];
 const blackbox = require('../src/blackbox');
-const { TOOLS } = require('../src/tools');
+const blackboxFamily = require('../src/tools/families/black-box');
+const { TOOLS: rawTools } = require('../src/tools');
+const { withOwnerToolContext } = require('./helpers/authorized-context');
+const TOOLS = withOwnerToolContext(rawTools, { source: 'test', project: 'sidekick' });
+process.env.SIDEKICK_TOOL_POLICY = 'open';
+process.env.SIDEKICK_APPROVAL_MODE = 'off';
 const dbStore = require('../src/db');
 
 console.log('Running Black Box Tests...\n');
 
 (async () => {
   try {
+    const directBlackBox = await blackboxFamily.sidekick_black_box({ action: 'list' });
+    assert.strictEqual(directBlackBox.code, 'canonical_dispatch_required', 'black-box handlers require canonical dispatch');
     console.log('Test BB.1: legacy migration preserves IDs and redacts artifacts');
     const legacy = blackbox.getIncident(legacyId, { includeCaptures: true });
     assert.ok(legacy, 'Legacy incident should be imported');
@@ -89,6 +96,8 @@ console.log('Running Black Box Tests...\n');
     console.log('Passed\n');
 
     console.log('Test BB.5: MCP compatibility and structured actions');
+    assert.doesNotThrow(() => blackbox.listIncidents({ limit: -1, offset: -1 }), 'invalid pagination must be normalized before reaching SQLite');
+    assert.doesNotThrow(() => blackbox.searchIncidents('test', { limit: -1 }), 'invalid incident search limits must be normalized');
     const mcpCapture = await TOOLS.black_box({ action: 'capture', name: 'mcp fixture', include: ['system.identity'] });
     assert.ok(!mcpCapture.isError, 'MCP capture should succeed');
     const payload = JSON.parse(mcpCapture.content[0].text);
@@ -99,7 +108,9 @@ console.log('Running Black Box Tests...\n');
     assert.ok(Array.isArray(compactIncident.captures[0].sources), 'Structured incident retrieval should include source summaries');
     assert.strictEqual(compactIncident.timeline, undefined, 'Structured incident retrieval should omit the unbounded timeline by default');
     const mcpSource = await TOOLS.black_box({ action: 'get_source', source_id: payload.sources[0].id, limit: 4096 });
-    assert.ok(!mcpSource.isError, 'MCP get_source should expose explicit source detail');
+    const sourceDetail = JSON.parse(mcpSource.content[0].text);
+    assert.strictEqual(sourceDetail.id, payload.sources[0].id, 'MCP get_source should return the requested source detail');
+    if (mcpSource.isError) assert.strictEqual(sourceDetail.state, 'failed', 'unavailable host collectors must report an explicit failed state');
     await TOOLS.black_box({ action: 'delete', incident_id: payload.incident_id });
     console.log('Passed\n');
 

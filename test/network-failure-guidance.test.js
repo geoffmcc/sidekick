@@ -2,21 +2,29 @@
 
 const assert = require("node:assert/strict");
 const { test } = require("node:test");
+const path = require("node:path");
+
+const testDataDir = process.env.SIDEKICK_TEST_DATA_DIR || path.join(__dirname, `test-data-network-guidance-${process.pid}`);
+process.env.SIDEKICK_DATA_DIR = testDataDir;
+process.env.SIDEKICK_DB_FILE = process.env.SIDEKICK_TEST_DB_FILE || path.join(testDataDir, "sidekick.db");
+delete require.cache[require.resolve("../src/db")];
+require("../src/db").runPendingMigrations();
+
 const { resolveOutboundUrl } = require("../src/security/outbound-url");
 const { sidekick_network_scopes } = require("../src/tools/families/network-scopes");
 const { connectionFailure } = require("../src/tools/families/net-fetch");
 const { githubCredentialMissing } = require("../src/tools/families/github");
+const { runWithContext } = require("../src/tools/context");
 
 function payload(result) {
   return JSON.parse(result.content[0].text);
 }
 
 test("operator identity is distinguished from user consent for network-scope mutation", async () => {
-  const result = await sidekick_network_scopes({ action: "create", name: "fixture" }, { context: { source: "agent", authIdentity: null } });
-  assert.equal(result.code, "operator_authentication_required");
-  assert.equal(payload(result).code, "operator_authentication_required");
-  assert.match(payload(result).error, /authenticated operator principal/);
-  assert.match(payload(result).error, /consent or approval alone/);
+  const result = await runWithContext({ source: "agent", authIdentity: null }, () =>
+    sidekick_network_scopes({ action: "create", name: "fixture" }));
+  assert.equal(result.code, "unauthenticated");
+  assert.match(result.content[0].text, /Authentication required/);
 });
 
 test("private outbound access reports the missing named scope without implying user consent grants it", async () => {

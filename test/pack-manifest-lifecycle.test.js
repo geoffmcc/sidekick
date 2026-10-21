@@ -46,5 +46,6 @@ try {
   }
   console.log("Pack manifest lifecycle tests passed.");
 } finally {
+  try { require('../src/db').closeDatabase(); } catch {}
   fs.rmSync(dataDir, { recursive: true, force: true });
 }

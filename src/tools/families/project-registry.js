@@ -11,9 +11,10 @@
 // Never imports tools-legacy.js.
 
 const { z } = require("zod");
+const { requireCanonicalInvocation } = require("../read-authorization");
 const platformKernel = require("../../platform/kernel");
 const { canonicalizeProjectName } = require("../../core/project-identity");
-const { getExecutionSource } = require("../context");
+const toolContext = require("../context");
 
 function textResult(text) {
   return { content: [{ type: "text", text }] };
@@ -24,6 +25,12 @@ function errorResult(text) {
 }
 
 async function sidekick_project_registry({ action, project, state, limit, display_name, description, reason, confirm, dry_run }) {
+  const authorizationError = requireCanonicalInvocation("project_registry");
+  if (authorizationError) return authorizationError;
+  const execution = toolContext.getExecutionContext();
+  if (!execution.authIdentity?.principal_id && execution.source !== "test") {
+    return { content: [{ type: "text", text: "Authenticated principal required for project registry access" }], isError: true, code: "unauthenticated" };
+  }
   try {
     switch (action) {
       case "list": {
@@ -38,17 +45,19 @@ async function sidekick_project_registry({ action, project, state, limit, displa
       }
       case "register": {
         if (!project) return errorResult("project required for register");
+        const context = toolContext.getExecutionContext();
         const row = platformKernel.registerProject({
           project_id: project,
           display_name,
           description,
-          source: getExecutionSource(),
+          owner_actor_id: context.authIdentity?.principal_id || null,
+          source: context.source,
         });
         return textResult(JSON.stringify(row, null, 2));
       }
       case "archive": {
         if (!project) return errorResult("project required for archive");
-        const row = platformKernel.archiveProject(project, { source: getExecutionSource(), reason });
+        const row = platformKernel.archiveProject(project, { source: toolContext.getExecutionSource(), reason });
         return textResult(JSON.stringify(row, null, 2));
       }
       case "sources": {
@@ -65,7 +74,7 @@ async function sidekick_project_registry({ action, project, state, limit, displa
         if (!dryRun && confirm !== true) {
           return errorResult("backfill with dry_run=false requires confirm:true (run the default dry_run first and review the counts)");
         }
-        const result = platformKernel.backfillProjectSources({ source: getExecutionSource(), dry_run: dryRun });
+        const result = platformKernel.backfillProjectSources({ source: toolContext.getExecutionSource(), dry_run: dryRun });
         const label = dryRun ? "Dry run (no writes)" : "Backfill complete";
         return textResult(`${label}: ${result.written} project-source rows${dryRun ? " would be" : ""} written\n${JSON.stringify(result, null, 2)}`);
       }

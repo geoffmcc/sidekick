@@ -1,15 +1,20 @@
 const assert = require('assert');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
-const TEST_DATA_DIR = path.join(__dirname, 'test-scheduler-platform-data');
+const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sidekick-scheduler-platform-'));
 const RB_FILE = path.join(TEST_DATA_DIR, 'runbooks.json');
-fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
-fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
 
 process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
+process.env.SIDEKICK_ALLOWED_PATHS = TEST_DATA_DIR;
 process.env.SIDEKICK_APPROVAL_MODE = 'off';
 process.env.SIDEKICK_TOOL_POLICY = 'open';
+process.env.NODE_ENV = 'test';
+process.env.SIDEKICK_SECRET_KEY = 'synthetic-scheduler-platform-authority-key';
+process.env.SIDEKICK_API_KEY = 'synthetic-scheduler-platform-mcp-api-key';
+process.env.SIDEKICK_AGENT_PROXY_KEY = 'synthetic-scheduler-platform-agent-proxy-key';
+process.env.SIDEKICK_AGENT_SCHEDULER_KEY = 'synthetic-scheduler-platform-agent-scheduler-key';
 
 delete require.cache[require.resolve('../src/tools')];
 delete require.cache[require.resolve('../src/db')];
@@ -18,7 +23,7 @@ const db = require('../src/db');
 const scheduledExecution = require('../src/tools/scheduled-execution');
 const { createDelayScheduler } = require('../src/agent/delay-scheduler');
 
-const { TOOLS } = tools;
+const TOOLS = require('./helpers/authorized-context').withOwnerToolContext(tools.TOOLS, { source: 'mcp' });
 
 function latestExecution(whereSql, params = []) {
   return db.getDb().prepare(`
@@ -72,6 +77,9 @@ console.log('Passed\n');
 
 (async () => {
   try {
+    const directRunbook = await tools.getBuiltinRegistry().get('runbook').handler({ action: 'create', name: 'direct-handler-blocked', steps: [] });
+    assert.strictEqual(directRunbook.code, 'unauthenticated', 'runbook handler calls outside authenticated execution must be denied');
+
     tools.setSource('mcp');
 
     console.log('Test SP.0: scheduled executions inherit project context and register it');
@@ -90,7 +98,7 @@ console.log('Passed\n');
     console.log('Passed\n');
 
     console.log('Test SP.1: cron add/run mirrors platform executions');
-    let result = await TOOLS.cron({ action: 'add', name: 'platform cron', schedule: '* * * * *', command: 'printf cron-ok' });
+    let result = await TOOLS.cron({ action: 'add', name: 'platform cron', schedule: '* * * * *', command: process.platform === 'win32' ? 'echo cron-ok' : 'printf cron-ok' });
     assert.strictEqual(result.isError, undefined);
     const cronJob = db.loadDocument('cron', [])[0];
     assert.ok(cronJob.platform_execution_id);
@@ -127,7 +135,7 @@ console.log('Passed\n');
     const watchedFile = path.join(TEST_DATA_DIR, 'watched.txt');
     fs.writeFileSync(watchedFile, 'trigger me', 'utf-8');
     result = await TOOLS.watch({ action: 'add', name: 'platform watch', source: 'file', target: watchedFile, condition: 'exists', action_tool: 'sidekick_respond', action_args: { text: 'watch-ok' } });
-    assert.strictEqual(result.isError, undefined);
+    assert.strictEqual(result.isError, undefined, result.content?.[0]?.text || "watch add should succeed");
     const watch = tools.loadWatches()[0];
     assert.ok(watch.platform_execution_id);
     const watchMonitor = db.getDb().prepare('SELECT * FROM platform_executions WHERE execution_id = ?').get(watch.platform_execution_id);
@@ -305,7 +313,7 @@ console.log('Passed\n');
     console.log('Passed\n');
 
     console.log('Test SP.9: watch check backs off while another runner holds the claim');
-    result = await TOOLS.watch({ action: 'add', name: 'claimed watch', source: 'file', target: __filename, condition: 'exists', interval: '1h', action_tool: 'sidekick_respond', action_args: { text: 'watch-hit' } });
+    result = await TOOLS.watch({ action: 'add', name: 'claimed watch', source: 'file', target: path.join(TEST_DATA_DIR, 'watched.txt'), condition: 'exists', interval: '1h', action_tool: 'sidekick_respond', action_args: { text: 'watch-hit' } });
     assert.strictEqual(result.isError, undefined);
     const claimWatch = tools.loadWatches()[tools.loadWatches().length - 1];
     assert.ok(claimWatch.platform_execution_id);
@@ -322,7 +330,7 @@ console.log('Passed\n');
     console.log('Passed\n');
 
     console.log('Test SP.10: cancel request pauses the watch instead of checking');
-    result = await TOOLS.watch({ action: 'add', name: 'cancel watch', source: 'file', target: __filename, condition: 'exists', interval: '1h', action_tool: 'sidekick_respond', action_args: { text: 'never' } });
+    result = await TOOLS.watch({ action: 'add', name: 'cancel watch', source: 'file', target: path.join(TEST_DATA_DIR, 'watched.txt'), condition: 'exists', interval: '1h', action_tool: 'sidekick_respond', action_args: { text: 'never' } });
     assert.strictEqual(result.isError, undefined);
     const cancelWatch = tools.loadWatches()[tools.loadWatches().length - 1];
     platformKernel.requestExecutionCancel(cancelWatch.platform_execution_id, { reason: 'operator stop' });
@@ -335,7 +343,7 @@ console.log('Passed\n');
     console.log('Passed\n');
 
     console.log('Test SP.11: a mid-check failure releases the watch claim');
-    result = await TOOLS.watch({ action: 'add', name: 'throwing watch', source: 'file', target: __filename, condition: 'exists', interval: '1h', action_tool: 'sidekick_respond', action_args: { text: 'x' } });
+    result = await TOOLS.watch({ action: 'add', name: 'throwing watch', source: 'file', target: path.join(TEST_DATA_DIR, 'watched.txt'), condition: 'exists', interval: '1h', action_tool: 'sidekick_respond', action_args: { text: 'x' } });
     assert.strictEqual(result.isError, undefined);
     const throwWatch = tools.loadWatches()[tools.loadWatches().length - 1];
     const origTransition = platformKernel.transitionExecution;
@@ -417,13 +425,13 @@ console.log('Passed\n');
       "testDb.getDb().close();",
     ].join('\n'));
     result = await TOOLS.runbook({ action: 'create', name: 'mid-run cancel runbook', steps: [
-      { name: 'request cancel', command: `node ${JSON.stringify(cancelScript)}` },
-      { name: 'never runs', command: `printf cancelled-step-ran > ${JSON.stringify(cancelMarker)}` },
+      { name: 'request cancel', command: process.platform === 'win32' ? `node ${cancelScript}` : `node ${JSON.stringify(cancelScript)}` },
+      { name: 'never runs', command: process.platform === 'win32' ? `echo cancelled-step-ran > ${JSON.stringify(cancelMarker)}` : `printf cancelled-step-ran > ${JSON.stringify(cancelMarker)}` },
     ] });
     assert.strictEqual(result.isError, undefined);
     const cancelRbId = result.content[0].text.match(/Runbook created: (\S+)/)[1];
     result = await TOOLS.runbook({ action: 'start', runbook_id: cancelRbId, mode: 'autonomous' });
-    assert.strictEqual(result.isError, undefined);
+    assert.strictEqual(result.isError, undefined, result.content?.[0]?.text || "autonomous runbook should start");
     assert.ok(result.content[0].text.includes('Cancel requested'));
     assert.ok(!fs.existsSync(cancelMarker));
     const cancelledRun = latestExecution("operation_type = 'runbook_execution' AND state = 'cancelled'");
@@ -435,8 +443,8 @@ console.log('Passed\n');
     assert.strictEqual(cancelledInstance.currentStep, 1);
     console.log('Passed\n');
 
-    fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
     db.getDb().close();
+    fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
     console.log('All Scheduler Platform Tests Passed!');
     process.exit(0);
   } catch (e) {

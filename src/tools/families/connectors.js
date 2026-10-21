@@ -14,6 +14,7 @@
 // `hasAuth`.
 
 const { z } = require("zod");
+const { requireCanonicalInvocation } = require("../read-authorization");
 const platformKernel = require("../../platform/kernel");
 const { probeConnector } = require("../../connectors/health");
 
@@ -31,6 +32,8 @@ function safeConnector(connector) {
 }
 
 async function sidekick_connector({ action = "list", connector_id, type, state, limit }) {
+  const denied = requireCanonicalInvocation("connector");
+  if (denied) return denied;
   if (!kernel || typeof kernel.listConnectors !== "function") {
     return { content: [{ type: "text", text: "Connector authority unavailable" }], isError: true };
   }

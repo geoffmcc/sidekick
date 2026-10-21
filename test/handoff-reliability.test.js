@@ -13,11 +13,25 @@ process.env.SIDEKICK_DB_FILE = path.join(root, "data", "sidekick.db");
 process.env.SIDEKICK_EMBEDDINGS = "0";
 const store = require("../src/db");
 const identity = require("../src/core/identity");
-const { sidekick_resume } = require("../src/tools/families/resume");
-const { sidekick_session } = require("../src/tools/families/memory-session");
+const resumeFamily = require("../src/tools/families/resume");
+const sessionFamily = require("../src/tools/families/memory-session");
+const { dispatchTestTool } = require("../src/tools/dispatcher");
+const resumeDescriptor = resumeFamily.descriptors.find(descriptor => descriptor.name === "resume");
+const sessionDescriptor = sessionFamily.descriptors.find(descriptor => descriptor.name === "session");
+const invokeResume = args => dispatchTestTool({ descriptor: resumeDescriptor, args, context: { source: "test" } });
+const invokeSession = args => dispatchTestTool({ descriptor: sessionDescriptor, args, context: { source: "test" } });
 const { extractHandoffMemories } = require("../src/tools/families/memory-handoff");
 const { callMcpTool } = require("../src/tools/dispatcher");
+const toolContext = require("../src/tools/context");
+const platformKernel = require("../src/platform/kernel");
+const projectAccess = require("../src/core/project-access");
+toolContext.setExecutionSource("test");
 store.runPendingMigrations();
+const resumeOwner = identity.bootstrapOwner({ username: "resume_scope_admin", password: "a sufficiently long resume scope password" });
+function grantResumeRead(principalId, project) {
+  if (!platformKernel.getProject(project)) platformKernel.registerProject({ project_id: project, owner_actor_id: resumeOwner.principal_id });
+  projectAccess.grantProjectAccess({ actorPrincipalId: resumeOwner.principal_id, principalId, project, accessLevel: "read" });
+}
 const repo = path.join(root, "repo");
 fs.mkdirSync(repo);
 const git = (...args) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -134,11 +148,12 @@ test("session updates and linked handoff versions roll back together", async () 
   const before = store.getTaskSession(session.id);
   store.getDb().exec("CREATE TEMP TRIGGER reject_session_handoff_update BEFORE INSERT ON memory_handoff_events WHEN NEW.handoff_id = 'handoff_session_handoff_atomic' AND NEW.event_type = 'updated' BEGIN SELECT RAISE(ABORT, 'injected linked handoff failure'); END");
   try {
-    await assert.rejects(sidekick_session({ action: "update", id: session.id, current_plan: "Changed plan", next_step: "Changed next step" }), /injected linked handoff failure/);
+    const failedUpdate = await invokeSession({ action: "update", id: session.id, current_plan: "Changed plan", next_step: "Changed next step" });
+    assert.equal(failedUpdate.isError, true, "linked handoff failure must be reported by governed dispatch");
     assert.deepEqual(store.getTaskSession(session.id), before, "a failed linked handoff update must roll back the task session update");
     assert.equal(store.getHandoff(handoff.id).version, handoff.version, "a failed update must preserve the prior handoff version");
   } finally { store.getDb().exec("DROP TRIGGER reject_session_handoff_update"); }
-  const result = await sidekick_session({ action: "update", id: session.id, current_plan: "Changed plan", next_step: "Changed next step" });
+  const result = await invokeSession({ action: "update", id: session.id, current_plan: "Changed plan", next_step: "Changed next step" });
   assert.equal(result.isError, undefined);
   assert.equal(store.getTaskSession(session.id).current_plan, "Changed plan");
   const updated = store.getHandoff(handoff.id);
@@ -157,13 +172,13 @@ test("resuming a partial task session does not leave its linked handoff complete
   store.transitionHandoff(handoff.id, "completed");
   store.getDb().exec("CREATE TEMP TRIGGER reject_resumed_checkpoint BEFORE INSERT ON memory_handoff_events WHEN NEW.event_type = 'checkpoint_captured' BEGIN SELECT RAISE(ABORT, 'injected resumed checkpoint failure'); END");
   try {
-    const interrupted = await sidekick_session({ action: "resume", id: session.id });
+    const interrupted = await invokeSession({ action: "resume", id: session.id });
     assert.equal(interrupted.isError, true, "checkpoint failure must not be reported as a successful resume");
     assert.equal(store.getTaskSession(session.id).state, "completed", "session must remain completed until its resumed checkpoint is verified");
   } finally { store.getDb().exec("DROP TRIGGER reject_resumed_checkpoint"); }
   const pending = store.getHandoffByTaskId(session.id);
   assert.equal(pending.lifecycle_state, "draft", "an interrupted checkpoint remains visibly non-authoritative");
-  const result = await sidekick_session({ action: "resume", id: session.id });
+  const result = await invokeSession({ action: "resume", id: session.id });
   assert.equal(result.isError, undefined);
   const resumed = store.getTaskSession(session.id);
   assert.equal(resumed.state, "active");
@@ -174,9 +189,9 @@ test("resuming a partial task session does not leave its linked handoff complete
   assert.equal(linked.id, pending.id, "retry must complete the same resumable checkpoint rather than creating a duplicate");
   assert.equal(store.getDb().prepare("SELECT COUNT(*) AS count FROM memory_handoffs WHERE task_id = ?").get(session.id).count, 2, "the completed source and one resumed checkpoint are retained");
 
-  const completed = await sidekick_session({ action: "end", id: session.id, outcome: "partial", acceptance_state: "blocked", final_summary: "A remaining blocker prevents completion." });
+  const completed = await invokeSession({ action: "end", id: session.id, outcome: "partial", acceptance_state: "blocked", final_summary: "A remaining blocker prevents completion." });
   assert.equal(completed.isError, undefined);
-  const secondResume = await sidekick_session({ action: "resume", id: session.id });
+  const secondResume = await invokeSession({ action: "resume", id: session.id });
   assert.equal(secondResume.isError, undefined);
   const secondHandoff = store.getHandoffByTaskId(session.id);
   assert.ok(["active", "ready"].includes(secondHandoff.lifecycle_state));
@@ -439,7 +454,7 @@ test("future-dated evidence cannot establish receiver readiness", () => {
 test("resume check blocks a persisted link whose project no longer matches", async () => {
   const h = create();
   store.setDocument("resume", { items: { other_project: { project: "other_project", status: "active", handoff_id: h.id, summary: "Fixture pointer" } } });
-  const result = await sidekick_resume({ action: "check", project: "other_project", format: "json" });
+  const result = await invokeResume({ action: "check", project: "other_project", format: "json" });
   const item = JSON.parse(result.content[0].text);
   assert.equal(result.isError, true);
   assert.equal(item.resume_blocked, true);
@@ -450,7 +465,7 @@ test("cross-project completion cannot silently clear a pending resume pointer", 
   const h = create();
   store.transitionHandoff(h.id, "completed");
   store.setDocument("resume", { items: { other_project: { project: "other_project", status: "active", handoff_id: h.id } } });
-  const result = await sidekick_resume({ action: "check", project: "other_project", format: "json" });
+  const result = await invokeResume({ action: "check", project: "other_project", format: "json" });
   assert.equal(result.isError, true);
   assert.equal(store.loadDocument("resume").items.other_project.status, "active");
 });
@@ -477,7 +492,7 @@ test("same-status untracked edits cannot appear verified", () => {
 
 test("a fresh receiver recovers persisted objectives and decisions without conversation history", () => {
   const h = ready();
-  const script = `const s=require('./src/db'); const {sidekick_handoff}=require('./src/tools/families/memory-handoff'); sidekick_handoff({action:'start_here',id:process.argv[1],project:'continuity'}).then(r=>{console.log(r.content[0].text);s.closeDatabase();});`;
+  const script = `const s=require('./src/db'); const d=require('./src/tools/dispatcher'); const c=require('./test/helpers/authorized-context').createOwnerContext({source:'internal'}); d.callInternalTool('handoff',{action:'start_here',id:process.argv[1],project:'continuity'},c).then(r=>{console.log(r.content[0].text);s.closeDatabase();});`;
   const output = execFileSync(process.execPath, ["-e", script, h.id], { cwd: path.resolve(__dirname, ".."), encoding: "utf8", env: process.env });
   const result = JSON.parse(output);
   assert.equal(result.projection.start_here.objective, "Continue the fixture task");
@@ -498,9 +513,10 @@ test("an independent receiver discovers by project, reconciles, and verifies a s
   const workFile = path.join(receiverRepo, "tracked.txt");
   const script = `
     const s = require('./src/db');
-    const { sidekick_handoff } = require('./src/tools/families/memory-handoff');
+    const { callInternalTool } = require('./src/tools/dispatcher');
+    const context = require('./test/helpers/authorized-context').createOwnerContext({ source: 'internal' });
     const parse = async args => {
-      const result = await sidekick_handoff(args);
+      const result = await callInternalTool('handoff', args, context);
       if (result.isError) throw new Error(result.content?.[0]?.text || 'handoff operation failed');
       return JSON.parse(result.content[0].text);
     };
@@ -593,6 +609,7 @@ test("concurrent resume updates for different projects do not overwrite each oth
   const script = `
     const fs = require('node:fs');
     const s = require('./src/db');
+    require('./src/tools/context').setExecutionSource('test');
     const original = s.loadDocument;
     let paused = false;
     s.loadDocument = (name, fallback) => {
@@ -607,8 +624,10 @@ test("concurrent resume updates for different projects do not overwrite each oth
       }
       return doc;
     };
-    const { sidekick_resume } = require('./src/tools/families/resume');
-    sidekick_resume({ action: 'set', project: process.argv[3], summary: 'independent concurrent fixture', next_step: 'verify retained pointer' })
+    const resume = require('./src/tools/families/resume');
+    const { dispatchTestTool } = require('./src/tools/dispatcher');
+    const descriptor = resume.descriptors.find(item => item.name === 'resume');
+    dispatchTestTool({ descriptor, args: { action: 'set', project: process.argv[3], summary: 'independent concurrent fixture', next_step: 'verify retained pointer' }, context: { source: 'test' } })
       .then(result => { if (result.isError) throw new Error(result.content?.[0]?.text || 'resume set failed'); process.stdout.write('saved'); })
       .catch(error => { process.stderr.write(String(error.stack || error)); process.exitCode = 1; })
       .finally(() => s.closeDatabase());
@@ -678,6 +697,7 @@ test("handoff list stays within trusted project scope across MCP dispatch", asyn
 test("resume list inherits trusted project scope across MCP dispatch", async () => {
   const principal = identity.createPrincipal({ type: "service", displayName: "Resume scope fixture" });
   identity.assignRole(principal.principal_id, "operator");
+  grantResumeRead(principal.principal_id, "continuity");
   store.setDocument("resume", { items: {
     continuity: { project: "continuity", status: "active", summary: "Visible scoped item", next_step: "Continue safely" },
     other_project: { project: "other_project", status: "active", summary: "Must remain private to its scope", next_step: "Do not expose" },
@@ -710,6 +730,7 @@ test("resume mutations cannot override a trusted project scope", async () => {
 test("scoped resume reads do not synchronize foreign project pointers", async () => {
   const principal = identity.createPrincipal({ type: "service", displayName: "Resume sync scope fixture" });
   identity.assignRole(principal.principal_id, "operator");
+  grantResumeRead(principal.principal_id, "continuity");
   const foreignHandoff = create(undefined, { project: "other_project" });
   store.transitionHandoff(foreignHandoff.id, "completed");
   store.setDocument("resume", { items: {

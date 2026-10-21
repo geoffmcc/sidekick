@@ -10,6 +10,7 @@ const { ResearchError } = require("./errors");
 const { requireText } = require("./identity");
 const { requireSidekickSrc } = require("./deps");
 const { canonicalizeProjectName } = requireSidekickSrc("src/core/project-identity.js");
+const { childProcessEnv } = requireSidekickSrc("src/security/child-process.js");
 
 const DEFAULT_LIMITS = Object.freeze({ max_files: 10000, max_bytes: 100 * 1024 * 1024, max_depth: 32, max_path_bytes: 4096 });
 
@@ -49,7 +50,12 @@ function sourceAuthority(sourceRoot, workspaceRoot, metadata = {}) {
 
 function sourceRevision(sourceRoot, metadata = {}) {
   if (metadata.resolved_ref) return metadata.resolved_ref;
-  try { return execFileSync("git", ["-C", sourceRoot, "rev-parse", "HEAD"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() || null; } catch { return null; }
+  try {
+    return execFileSync("git", ["-C", sourceRoot, "-c", "core.fsmonitor=false", "rev-parse", "HEAD"], {
+      encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], env: childProcessEnv(),
+      timeout: 5000, maxBuffer: 64 * 1024,
+    }).trim() || null;
+  } catch { return null; }
 }
 
 function canonicalSource(sourcePath, workspaceRoot) {
@@ -361,11 +367,47 @@ function authority(services, args, actor) {
   fail("invalid_input", "authority_action must be declare, get, or list");
 }
 
-function execute(services, args, actor) {
+function sourceProject(args, runtimeProject) {
+  const store = kernel();
+  const candidates = [runtimeProject, args.project_id];
+  if (args.campaign_id) candidates.push(store.getResearchCampaign(args.campaign_id)?.project_id);
+  if (args.repository_id) candidates.push(store.getResearchSourceRepository(args.repository_id)?.project_id);
+  if (args.snapshot_id) candidates.push(store.getResearchSourceSnapshot(args.snapshot_id)?.project_id);
+  if (args.baseline_snapshot_id) candidates.push(store.getResearchSourceSnapshot(args.baseline_snapshot_id)?.project_id);
+  if (args.candidate_snapshot_id) candidates.push(store.getResearchSourceSnapshot(args.candidate_snapshot_id)?.project_id);
+  if (args.claim_id) candidates.push(store.getResearchSourceAuthorityClaim(args.claim_id)?.project_id);
+  const projects = candidates.filter(value => typeof value === "string" && value.trim());
+  const project = projects[0] || null;
+  if (project && projects.some(candidate => !sameProject(candidate, project))) fail("not_found", "source repository not found");
+  return project;
+}
+
+function authorizeSourceProject(args, runtimeProject, authIdentity) {
+  const principalId = authIdentity?.principal_id;
+  if (!principalId) fail("authorization_failed", "an authenticated principal is required for source repository access");
+  const project = sourceProject(args, runtimeProject);
+  const projectAccess = requireSidekickSrc("src/core/project-access.js");
+  const scopes = authIdentity.scopes;
+  const delegationId = authIdentity.delegation_id || authIdentity.delegationId || null;
+  const readOnly = args.action === "list" || args.action === "get" || args.action === "verify" || args.action === "compare" ||
+    (args.action === "authority" && ["get", "list"].includes(args.authority_action));
+  if (!project) {
+    if (projectAccess.hasGlobalProjectAccess(principalId, scopes, delegationId)) return null;
+    fail("invalid_input", "project scope is required for source repository access");
+  }
+  if (!projectAccess.hasProjectPermission(principalId, project, "tools.execute_high", readOnly ? "read" : "write", scopes, delegationId)) {
+    fail("not_found", "source repository not found");
+  }
+  return project;
+}
+
+function execute(services, args, actor, authIdentity = null) {
+  const runtimeProject = args._runtime_project || null;
+  if (runtimeProject && args.project_id && !sameProject(runtimeProject, args.project_id)) fail("not_found", "source repository not found");
+  const authorizedProject = authorizeSourceProject(args, runtimeProject, authIdentity);
+  if (authorizedProject) args = { ...args, project_id: authorizedProject };
   const root = workspace.resolveWorkspace(services.config || {}, { requireExists: false }).root;
   if (args.action === "recover" && !args.campaign_id) fail("invalid_input", "recover requires an explicit campaign_id scope");
-  if (args._runtime_project && args.project_id && !sameProject(args._runtime_project, args.project_id)) fail("not_found", "source repository not found");
-  if (args._runtime_project) args = { ...args, project_id: String(args._runtime_project) };
   switch (args.action) {
     case "list": return { repositories: kernel().listResearchSourceRepositories({ campaign_id: args.campaign_id, project_id: args.project_id, state: args.state, limit: args.limit }), snapshots: args.repository_id ? kernel().listResearchSourceSnapshots({ repository_id: safeId(args.repository_id, "repository_id"), state: args.snapshot_state, limit: args.limit }) : undefined };
     case "get": { const owned = getOwned(args.repository_id, args.snapshot_id, args.campaign_id, args.project_id); return owned.snapshot ? { repository: owned.repository, snapshot: owned.snapshot } : { repository: owned.repository, snapshots: kernel().listResearchSourceSnapshots({ repository_id: owned.repository.repository_id, limit: args.limit }) }; }
@@ -384,4 +426,4 @@ function execute(services, args, actor) {
   }
 }
 
-module.exports = { execute, inspectTree, verifySnapshot };
+module.exports = { execute, inspectTree, sourceRevision, verifySnapshot };

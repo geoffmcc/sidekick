@@ -78,6 +78,23 @@ function modernRequest(port, id, method, params, headers = {}) {
     assert.ok(!call.error, JSON.stringify(call));
     assert.ok(Array.isArray(call.result.content));
 
+    console.log("MCP v2 test: oversized tool input rejected before dispatch");
+    const oversizedInputResponse = await modernRequest(port, 6, "tools/call", {
+      name: "memory",
+      arguments: { action: "remember", project: "mcp_v2_runtime", content: "bounded test", tags: Array.from({ length: 10_001 }, () => "synthetic") }
+    }, { name: "memory" });
+    assert.strictEqual(oversizedInputResponse.status, 200);
+    const oversizedInput = await oversizedInputResponse.json();
+    assert.strictEqual(oversizedInput.result?.isError, true, "MCP must reject inputs over the configured element limit");
+    assert.match(oversizedInput.result?.content?.[0]?.text || "", /maximum of 10000 elements/);
+
+    console.log("MCP v2 test: oversized HTTP body rejected");
+    const oversizedBodyResponse = await modernRequest(port, 7, "tools/call", {
+      name: "memory",
+      arguments: { action: "remember", project: "mcp_v2_runtime", content: "x".repeat(1024 * 1024) }
+    }, { name: "memory" });
+    assert.strictEqual(oversizedBodyResponse.status, 413, "MCP HTTP body must remain bounded at 1 MiB");
+
     console.log("MCP v2 test: legacy handoff fields rejected at protocol boundary");
     const legacyHandoffResponse = await modernRequest(port, 4, "tools/call", {
       name: "handoff",

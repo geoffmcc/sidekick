@@ -135,7 +135,15 @@ function parse(result) {
     site = createFixtureSite();
     ({ base } = await site.listen());
     const { callMcpTool } = require("../src/tools");
-    const call = (name, args) => callMcpTool(name, args, { source: "mcp", actor: "pack-test", project: "ba-pack" });
+    const { createOwnerContext } = require("./helpers/authorized-context");
+    const ownerContext = createOwnerContext({ source: "mcp", project: "ba-pack" });
+    const call = (name, args) => callMcpTool(name, args, { ...ownerContext, actor: "pack-test" });
+    const toolContext = require("../src/tools/context");
+    const { runWorkflowDefinition } = require("../src/workflows/runner");
+    const runWorkflowAsOwner = (name, inputs) => toolContext.runWithContext(
+      toolContext.createMcpExecutionContext({ ...ownerContext, actor: "pack-test" }),
+      () => runWorkflowDefinition(name, inputs),
+    );
 
     await t("configured host ceiling cannot be widened by a per-call allowlist", async () => {
       const result = parse(await call("web_capture", {
@@ -198,24 +206,23 @@ function parse(result) {
     });
 
     await t("ui-smoke workflow runs end-to-end against the fixture", async () => {
-      const { runWorkflowDefinition } = require("../src/workflows/runner");
-      const run = await runWorkflowDefinition("browser-automation/ui-smoke", {
+      const run = await runWorkflowAsOwner("browser-automation/ui-smoke", {
         url: `${base}/`,
         expect_text: "js-rendered-content",
         network_scope: "browser-fixture",
         allowed_hosts: ["127.0.0.1"],
-      }, { source: "mcp", actor: "pack-test", project: "ba-pack" });
+      });
       assert.ok(["completed", "succeeded", "ok"].includes(run.status) || run.result, `workflow did not complete: ${JSON.stringify(run.status)}`);
       assert.strictEqual(run.result.passed, true, `ui-smoke did not pass: ${JSON.stringify(run.result)}`);
       assert.ok(run.result.evidence && run.result.evidence.artifact_id, "no evidence artifact from ui-smoke");
     });
 
     await t("Agent authority permits bounded screenshot evidence without permitting target mutation", async () => {
-      const { runWorkflowDefinition } = require("../src/workflows/runner");
-      const toolContext = require("../src/tools/context");
       const { createAuthorityEnvelope } = require("../src/agent/authority");
+      const evidenceOwnerContext = createOwnerContext({ source: "agent", project: "ba-pack-evidence" });
       const context = toolContext.createAgentExecutionContext({
         project: "ba-pack-evidence",
+        authIdentity: evidenceOwnerContext.authIdentity,
         agentAuthorityContext: {
           envelope: createAuthorityEnvelope({ allowed_effects: ["read_only", "artifact", "local_process"], changes_allowed: true, approval_threshold: "critical" }),
           principal_ref: null,
@@ -236,24 +243,23 @@ function parse(result) {
     });
 
     await t("download-verification workflow captures a real download artifact and closes on failure", async () => {
-      const { runWorkflowDefinition } = require("../src/workflows/runner");
-      const run = await runWorkflowDefinition("browser-automation/download-verification", {
+      const run = await runWorkflowAsOwner("browser-automation/download-verification", {
         url: `${base}/`,
         trigger_selector: "#dl",
         network_scope: "browser-fixture",
         allowed_hosts: ["127.0.0.1"],
-      }, { source: "mcp", actor: "pack-test", project: "ba-pack" });
+      });
       assert.ok(["completed", "succeeded", "ok"].includes(run.status) || run.result, `workflow did not complete: ${JSON.stringify(run.status)}`);
       assert.ok(run.result.download && run.result.download.artifact_id, `download artifact missing: ${JSON.stringify(run.result)}`);
       assert.strictEqual(run.result.download.custody.status, "registered", JSON.stringify(run.result.download));
       assert.strictEqual(run.result.download.byte_size, Buffer.byteLength("sidekick-fixture-download-payload"));
 
-      const failed = await runWorkflowDefinition("browser-automation/download-verification", {
+      const failed = await runWorkflowAsOwner("browser-automation/download-verification", {
         url: `${base}/`,
         trigger_selector: "#missing-download-control",
         network_scope: "browser-fixture",
         allowed_hosts: ["127.0.0.1"],
-      }, { source: "mcp", actor: "pack-test", project: "ba-pack" });
+      });
       assert.strictEqual(failed.status, "failed", `missing download must fail: ${JSON.stringify(failed)}`);
       const health = await browserSubsystem.health({ deep: false });
       assert.strictEqual(health.sessions.open, 0, "failed download workflow leaked its browser session");
@@ -264,8 +270,7 @@ function parse(result) {
       const all = secretsStore.loadSecrets();
       all["ba_fixture_pw"] = encryptSecret("s3cr3t-fixture-pw");
       secretsStore.saveSecrets(all);
-      const { runWorkflowDefinition } = require("../src/workflows/runner");
-      const run = await runWorkflowDefinition("browser-automation/authenticated-ui-check", {
+      const run = await runWorkflowAsOwner("browser-automation/authenticated-ui-check", {
         login_url: `${base}/login`,
         expected_host: "127.0.0.1",
         username: "demo-user",
@@ -276,7 +281,7 @@ function parse(result) {
         success_text: "Welcome, demo-user",
         network_scope: "browser-fixture",
         allowed_hosts: ["127.0.0.1"],
-      }, { source: "mcp", actor: "pack-test", project: "ba-pack" });
+      });
       assert.strictEqual(run.result.passed, true, `authenticated-ui-check did not pass: ${JSON.stringify(run.result)}`);
       // The secret plaintext must not appear anywhere in the run result.
       assert.ok(!JSON.stringify(run).includes("s3cr3t-fixture-pw"), "secret plaintext leaked into workflow result");

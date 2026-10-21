@@ -11,9 +11,12 @@ process.env.SIDEKICK_APPROVAL_MODE = 'off';
 
 const db = require('../src/db');
 const tools = require('../src/tools');
+tools.setSource('test');
 const legacy = require('../src/tools-legacy');
 const family = require('../src/tools/families/memory-core');
 db.runPendingMigrations();
+const authorizedContext = require('./helpers/authorized-context').createOwnerContext({ source: 'test', project: 'sidekick' });
+const invokeMemory = args => tools.dispatchTool({ name: 'sidekick_memory', args, context: authorizedContext });
 
 const text = result => result.content[0].text;
 
@@ -31,42 +34,42 @@ console.log('Running Memory Core Family Tests...');
     assert.ok(!Object.prototype.hasOwnProperty.call(require('../src/tools/schemas').TOOL_SCHEMAS, 'memory'));
     assert.strictEqual(family.descriptors.length, 1);
 
-    let result = await family.sidekick_memory({ action: 'remember', project: 'sidekick', type: 'fact', content: 'Dashboard runs on port 4098', evidence: 'test evidence', tags: 'runtime,verified' });
+    let result = await invokeMemory({ action: 'remember', project: 'sidekick', type: 'fact', content: 'Dashboard runs on port 4098', evidence: 'test evidence', tags: 'runtime,verified' });
     const remembered = JSON.parse(text(result));
     assert.ok(remembered.memory.id);
     assert.ok(!JSON.stringify(remembered).includes('secret-value'));
     assert.deepStrictEqual(remembered.memory.tags, ['runtime', 'verified']);
 
-    result = await tools.dispatchTool({ name: 'sidekick_memory', args: { action: 'list', project: 'sidekick' }, context: { source: 'mcp' } });
+    result = await tools.dispatchTool({ name: 'sidekick_memory', args: { action: 'list', project: 'sidekick' }, context: authorizedContext });
     const query = JSON.parse(text(result));
     assert.strictEqual(query.count, 1);
     assert.strictEqual(query.fresh_eyes, false);
 
-    result = await family.sidekick_memory({ action: 'remember', project: 'sidekick', type: 'fact', content: 'Dashboard password=secret-value' });
+    result = await invokeMemory({ action: 'remember', project: 'sidekick', type: 'fact', content: 'Dashboard password=secret-value' });
     const redacted = JSON.parse(text(result));
     assert.ok(!JSON.stringify(redacted).includes('secret-value'));
 
-    result = await family.sidekick_memory({ action: 'query', query: 'Dashboard', project: 'sidekick', fresh_eyes: true });
+    result = await invokeMemory({ action: 'query', query: 'Dashboard', project: 'sidekick', fresh_eyes: true });
     assert.deepStrictEqual(JSON.parse(text(result)).memories, []);
 
-    result = await family.sidekick_memory({ action: 'get', id: remembered.memory.id });
+    result = await invokeMemory({ action: 'get', id: remembered.memory.id });
     assert.strictEqual(JSON.parse(text(result)).memory.id, remembered.memory.id);
-    result = await family.sidekick_memory({ action: 'explain', id: remembered.memory.id });
+    result = await invokeMemory({ action: 'explain', id: remembered.memory.id });
     assert.ok(JSON.parse(text(result)).evidence.length >= 1);
 
-    result = await family.sidekick_memory({ action: 'pin', id: remembered.memory.id, reason: 'test' });
+    result = await invokeMemory({ action: 'pin', id: remembered.memory.id, reason: 'test' });
     assert.strictEqual(text(result), `Memory ${remembered.memory.id} pinned`);
     assert.strictEqual(db.getMemoryById(remembered.memory.id, { includeDisabled: true }).pinned, true);
 
-    result = await family.sidekick_memory({ action: 'health' });
+    result = await invokeMemory({ action: 'health' });
     assert.ok(JSON.parse(text(result)).stats.durable_active >= 1);
-    result = await family.sidekick_memory({ action: 'conflicts', project: 'sidekick' });
+    result = await invokeMemory({ action: 'conflicts', project: 'sidekick' });
     assert.deepStrictEqual(JSON.parse(text(result)).memories, []);
 
-    result = await family.sidekick_memory({ action: 'remember' });
+    result = await invokeMemory({ action: 'remember' });
     assert.strictEqual(result.isError, true);
     assert.strictEqual(text(result), 'content or summary required');
-    result = await family.sidekick_memory({ action: 'get', id: 'missing-memory' });
+    result = await invokeMemory({ action: 'get', id: 'missing-memory' });
     assert.strictEqual(result.isError, true);
     assert.strictEqual(text(result), 'Memory not found: missing-memory');
 

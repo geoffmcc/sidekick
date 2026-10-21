@@ -1,10 +1,9 @@
 const assert = require('assert');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
-const TEST_DATA_DIR = path.join(__dirname, 'test-data-kernel-migration-parity');
-fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
-fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
+const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sidekick-kernel-migration-parity-'));
 
 const MIGRATION_DB = path.join(TEST_DATA_DIR, 'migrations.sqlite');
 const RUNTIME_DB = path.join(TEST_DATA_DIR, 'runtime.sqlite');
@@ -186,21 +185,18 @@ console.log('Running Platform Kernel Migration Parity Tests...\n');
     assert.strictEqual(
       migratedSchema.length,
       runtimeSchema.length,
-      'Platform object counts must match'
+      `Platform object counts must match; migration-only: ${migratedSchema.filter(a => !runtimeSchema.some(b => b.name === a.name && b.type === a.type)).map(a => a.name).join(', ')}; runtime-only: ${runtimeSchema.filter(a => !migratedSchema.some(b => b.name === a.name && b.type === a.type)).map(a => a.name).join(', ')}`
     );
-    // Capability Packs v1 (migration 036) adds platform_capability_packs,
-    // platform_capability_pack_components and platform_workflow_definitions
-    // (31 -> 34 tables) with 11 more explicit indexes (66 -> 77), including
-    // the identity owner/actor indexes added by migration 048. Migration 080
-    // adds idx_platform_events_type_subject for module health history (90 -> 91).
-    const expectedTables = 40;
-    const expectedIndexes = 91;
+    // Capability packs, project access grants, and later platform migrations
+    // are represented identically by migration and runtime boot paths.
+    const expectedTables = 41;
+    const expectedIndexes = 92;
     const migratedTables = migratedSchema.filter(o => o.type === 'table').length;
     const migratedIndexes = migratedSchema.filter(o => o.type === 'index' && o.sql).length;
     const migratedAutoindexes = migratedSchema.filter(o => o.type === 'index' && !o.sql).length;
     assert.strictEqual(migratedTables, expectedTables, `Expected ${expectedTables} platform tables`);
     assert.strictEqual(migratedIndexes, expectedIndexes, `Expected ${expectedIndexes} platform indexes`);
-    assert.strictEqual(migratedAutoindexes, expectedTables, 'Network scope tables add primary-key autoindexes');
+    assert.strictEqual(migratedAutoindexes, expectedTables, 'Platform tables add primary-key autoindexes');
     for (let i = 0; i < migratedSchema.length; i++) {
       const a = migratedSchema[i];
       const b = runtimeSchema[i];

@@ -14,9 +14,10 @@ fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
 fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
 process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
 process.env.SIDEKICK_API_KEY = "sk-sidekick-test-key";
-// The approval queue encrypts reason/args at rest, so queueing needs a key. Without
-// it the queue fails and a required-approval case reports as unavailable instead.
-process.env.SIDEKICK_SECRET_KEY = "per-action-risk-test-key";
+// The approval queue encrypts reason/args at rest. Supply its synthetic key
+// through the supported file-backed secret reference, never a plaintext env var.
+process.env.SIDEKICK_SECRET_KEY_FILE = path.join(TEST_DATA_DIR, "secret-key");
+fs.writeFileSync(process.env.SIDEKICK_SECRET_KEY_FILE, "per-action-risk-test-key");
 // This suite tests approval decisions for explicitly reachable capability
 // actions. The production default is restricted/strict; opt into the legacy
 // tool policy so policy does not preempt the approval assertions.
@@ -64,6 +65,24 @@ test("inspect is deliberately not downgraded", () => {
   assert.strictEqual(legacy.getToolRisk("capability", { action: "inspect", path: "/tmp/pack" }), "critical");
 });
 
+test("core read-only network actions are downgraded while mutations and unknown module tools keep risk", () => {
+  assert.strictEqual(legacy.getToolRisk("network_scopes", { action: "list" }), "medium");
+  assert.strictEqual(legacy.getToolRisk("network_scopes", { action: "create" }), "critical");
+  assert.strictEqual(legacy.getToolRisk("dev_verify", { dry_run: true }), "critical", "unresolved module tools fail closed to critical");
+});
+
+test("module per-action risk applies only to server-marked first-party descriptors", () => {
+  const loader = require("../src/modules/loader");
+  const original = loader.resolveActiveDescriptor;
+  try {
+    loader.resolveActiveDescriptor = () => ({ risk: "high", trustedBuiltin: false });
+    assert.strictEqual(legacy.getToolRisk("research_run", { action: "list" }), "high", "third-party code keeps its full descriptor risk");
+    loader.resolveActiveDescriptor = () => ({ risk: "high", trustedBuiltin: true });
+    assert.strictEqual(legacy.getToolRisk("research_run", { action: "list" }), "medium", "server-verified built-in may use reviewed action risk");
+    assert.strictEqual(legacy.getToolRisk("research_run", { action: "plan" }), "high", "mutating execution keeps descriptor risk");
+  } finally { loader.resolveActiveDescriptor = original; }
+});
+
 test("an unknown or malformed action fails closed to the tool risk", () => {
   assert.strictEqual(legacy.getToolRisk("capability", { action: "frobnicate" }), "critical");
   assert.strictEqual(legacy.getToolRisk("capability", {}), "critical", "a missing action cannot downgrade");
@@ -87,6 +106,65 @@ test("a tool with no action overrides is unaffected by an action argument", () =
   // reach into another tool's overrides.
   assert.strictEqual(legacy.getToolRisk("bash", { action: "list" }), legacy.getToolRisk("bash"));
   assert.strictEqual(legacy.getToolRisk("knowledge", { action: "list" }), legacy.getToolRisk("knowledge"));
+});
+
+test("webhook reads require identity while clearing retains high risk", () => {
+  assert.strictEqual(TOOL_RISK.webhook, "high");
+  assert.strictEqual(legacy.getToolRisk("webhook", { action: "list" }), "medium");
+  assert.strictEqual(legacy.getToolRisk("webhook", { action: "get" }), "medium");
+  assert.strictEqual(legacy.getToolRisk("webhook", { action: "clear" }), "high");
+});
+
+test("metrics and Ollama reads require identity while writes and model pulls remain high risk", () => {
+  assert.strictEqual(TOOL_RISK.metrics, "high");
+  for (const action of ["query", "list_measurements", "list_fields"]) {
+    assert.strictEqual(legacy.getToolRisk("metrics", { action }), "medium", `metrics ${action} must require identity`);
+  }
+  assert.strictEqual(legacy.getToolRisk("metrics", { action: "write" }), "high");
+  assert.strictEqual(TOOL_RISK.ollama, "high");
+  for (const action of ["list", "ps", "show"]) {
+    assert.strictEqual(legacy.getToolRisk("ollama", { action }), "medium", `ollama ${action} must require identity`);
+  }
+  assert.strictEqual(legacy.getToolRisk("ollama", { action: "pull" }), "high");
+});
+
+test("anonymization transform remains low risk while pattern reads and changes are governed", () => {
+  assert.strictEqual(TOOL_RISK.anonymize, "high");
+  assert.strictEqual(legacy.getToolRisk("anonymize", { action: "anonymize" }), "low");
+  assert.strictEqual(legacy.getToolRisk("anonymize", { action: "patterns" }), "medium");
+  assert.strictEqual(legacy.getToolRisk("anonymize", { action: "add_pattern" }), "high");
+  assert.strictEqual(legacy.getToolRisk("anonymize", { action: "remove_pattern" }), "high");
+});
+
+test("GitHub CI status is medium risk because it can disclose private repository data", () => {
+  assert.strictEqual(TOOL_RISK.ci_status, "medium");
+  assert.strictEqual(legacy.getToolRisk("ci_status"), "medium");
+});
+
+test("filesystem content and directory metadata reads require an authenticated execution context", () => {
+  for (const name of ["list", "search", "summarize", "filter", "diff_files"]) {
+    assert.equal(legacy.getToolRisk(name), "medium", `${name} must require an authenticated identity`);
+  }
+});
+
+test("database metadata, file hashes, and host configuration scans require identity", () => {
+  for (const name of ["db_schema", "db_stats", "security_scan", "insight_report"]) {
+    assert.equal(legacy.getToolRisk(name), "medium", `${name} must require an authenticated identity`);
+  }
+  assert.equal(legacy.getToolRisk("hash", { path: "C:\\synthetic\\fixture.txt" }), "medium");
+  assert.equal(legacy.getToolRisk("hash", { input: "caller supplied" }), "low", "pure text hashing remains usable without ambient read authority");
+  assert.equal(legacy.getToolRisk("hash", {}), "medium", "malformed hash input cannot downgrade the baseline");
+});
+
+test("knowledge and sync identity mutations retain high risk", () => {
+  assert.strictEqual(TOOL_RISK.knowledge, "medium");
+  for (const action of ["add", "update", "delete", "purge", "promote"]) {
+    assert.strictEqual(legacy.getToolRisk("knowledge", { action }), "high", `knowledge ${action} must require high-risk governance`);
+  }
+  assert.strictEqual(legacy.getToolRisk("knowledge", { action: "search" }), "medium");
+  assert.strictEqual(TOOL_RISK.sync_identity, "medium");
+  assert.strictEqual(legacy.getToolRisk("sync_identity", { action: "set_user" }), "high");
+  assert.strictEqual(legacy.getToolRisk("sync_identity", { action: "get" }), "medium");
 });
 
 test("workflow reads resolve low while run and resume stay high", () => {
@@ -160,6 +238,9 @@ test("tool policy sees the same effective risk as approval", () => {
 
 (async () => {
   const { callDashboardTool } = require("../src/tools");
+  require("../src/db").runPendingMigrations();
+  const owner = require("../src/core/identity").bootstrapOwner({ username: "risk-test-owner", password: "risk-test-owner-password-123" });
+  const authenticatedDashboard = { actor: "dashboard", authIdentity: { principal_id: owner.principal_id, principal_type: "human", scopes: null } };
 
   await (async function seam(name, fn) {
     try { await fn(); passed++; console.log(`  \x1b[32m✓\x1b[0m ${name}`); }
@@ -176,7 +257,7 @@ test("tool policy sees the same effective risk as approval", () => {
     catch (e) { failed++; console.log(`  \x1b[31m✗\x1b[0m ${name}\n    ${e.message}`); }
   })("a dispatched capability install still queues an approval in risky mode", async () => {
     process.env.SIDEKICK_APPROVAL_MODE = "risky";
-    const result = await callDashboardTool("capability", { action: "install", name: "developer" }, { actor: "dashboard" });
+    const result = await callDashboardTool("capability", { action: "install", name: "developer" }, authenticatedDashboard);
     const text = result?.content?.[0]?.text || "";
     assert.ok(/Approval required/.test(text), `installing a pack no longer demanded approval: ${text.slice(0, 160)}`);
   });

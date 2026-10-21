@@ -20,11 +20,11 @@ context.runWithContext(bound, () => {
 
 const portability = fs.readFileSync(path.resolve(__dirname, "..", "src", "tools", "families", "memory-portability.js"), "utf8");
 const sync = fs.readFileSync(path.resolve(__dirname, "..", "src", "tools", "families", "memory-sync.js"), "utf8");
-assert.match(portability, /options\.projectScope\s*=\s*scopedProject\(\)/);
-assert.match(sync, /options\.projectScope\s*=\s*scopedProject\(\)/);
-assert.match(memoryCore, /assertInScope\(memory\)/);
+assert.match(portability, /options\.projectScope\s*=\s*scopedProject\(project,\s*"write"\)/);
+assert.match(sync, /options\.projectScope\s*=\s*scopedProject\([^,]*,\s*"write"\)/);
+assert.match(memoryCore, /assertInScope\(memory,\s*"(?:read|write)"/);
 assert.match(memoryCore, /project:\s*effectiveProject/);
-assert.match(lifecycle, /assertInScope\(memory\)/);
+assert.match(lifecycle, /assertInScope\(memory,\s*"write"/);
 assert.match(db, /raw\.project !== options\.projectScope/);
 assert.match(db, /getPendingConfirmations\(options = \{\}\)/);
 assert.match(db, /processAutoExpirations\(options = \{\}\)/);

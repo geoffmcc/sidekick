@@ -14,7 +14,7 @@ delete process.env.SIDEKICK_BLOCKED_TOOLS;
 
 function freshRequire() {
   for (const key of Object.keys(require.cache)) {
-    if (/[\\/]src[\\/](db\.js|tools-legacy\.js|modules[\\/]|tools[\\/])/.test(key)) {
+    if (/[\\/]src[\\/](db\.js|tools(?:-legacy\.js|\.js)|modules[\\/]|tools[\\/])/.test(key)) {
       delete require.cache[key];
     }
   }
@@ -37,6 +37,7 @@ console.log('Running Builtin Module Provisioning Tests...\n');
   try {
     console.log('Test MB.1: first boot registers, installs and enables data-utilities');
     dbStore.runPendingMigrations();
+    const ownerContext = require('./helpers/authorized-context').createOwnerContext({ source: 'internal' });
     for (const name of DATA_UTILITY_TOOLS) {
       assert.strictEqual(tools.getBuiltinRegistry().get(name), undefined, `${name} should be absent before provisioning`);
     }
@@ -47,6 +48,13 @@ console.log('Running Builtin Module Provisioning Tests...\n');
     assert.strictEqual(record.state, 'enabled', 'Module should be enabled');
     assert.strictEqual(record.type, 'builtin', 'Module type should be builtin');
     assert.strictEqual(record.source, 'builtin', 'Module source should be builtin');
+    const moduleHealth = require('../src/modules/lifecycle').health('data-utilities', { runCheck: false });
+    assert.deepStrictEqual(moduleHealth.isolation, {
+      enforced: false,
+      boundary: 'same_process',
+      status: 'trusted_in_process',
+      mechanism: null,
+    }, 'trusted first-party code is labeled separately without claiming OS isolation');
     for (const name of DATA_UTILITY_TOOLS) {
       const descriptor = tools.getBuiltinRegistry().get(name);
       assert.ok(descriptor, `${name} should resolve after provisioning`);
@@ -134,8 +142,11 @@ console.log('Running Builtin Module Provisioning Tests...\n');
     console.log('Passed\n');
 
     console.log('Test MB.5: provisioning never overrides operator intent');
-    const disabledByTool = await tools.callInternalTool('module', { action: 'disable', name: 'data-utilities' });
-    assert.ok(!disabledByTool.isError, 'Operator disable should dispatch through the module tool');
+    const moduleHandler = tools.getBuiltinRegistry().get('module').handler;
+    const directDisable = await require('../src/tools/context').runWithContext(ownerContext, () => moduleHandler({ action: 'disable', name: 'data-utilities' }));
+    assert.strictEqual(directDisable.code, 'canonical_dispatch_required', 'module mutations cannot bypass canonical policy through a direct handler call');
+    const disabledByTool = await tools.callInternalTool('module', { action: 'disable', name: 'data-utilities' }, ownerContext);
+    assert.ok(!disabledByTool.isError, `Operator disable should dispatch through the module tool: ${JSON.stringify(disabledByTool)}`);
     assert.strictEqual(repository.getModule('data-utilities').state, 'disabled', 'Module should be disabled');
     const third = builtinModules.provisionBuiltinModules();
     assert.deepStrictEqual(third.provisioned, [], 'Disabled module should not be provisioned');
@@ -147,7 +158,7 @@ console.log('Running Builtin Module Provisioning Tests...\n');
     console.log('Passed\n');
 
     console.log('Test MB.6: operator re-enable brings the tools back');
-    const enabledByTool = await tools.callInternalTool('module', { action: 'enable', name: 'data-utilities' });
+    const enabledByTool = await tools.callInternalTool('module', { action: 'enable', name: 'data-utilities' }, ownerContext);
     assert.ok(!enabledByTool.isError, 'Operator enable should dispatch through the module tool');
     assert.strictEqual(repository.getModule('data-utilities').state, 'enabled', 'Module should be enabled again');
     const back = await tools.callInternalTool('validate', { data: '{"a":1}', schema: '{"type":"object"}' });

@@ -1,11 +1,11 @@
 const assert = require('assert');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
-const TEST_DATA_DIR = path.join(__dirname, 'test-data-filesystem');
+const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sidekick-tool-filesystem-'));
 const ROOT = path.join(TEST_DATA_DIR, 'root');
 const OUTSIDE = path.join(TEST_DATA_DIR, 'outside.txt');
-fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
 fs.mkdirSync(ROOT, { recursive: true });
 fs.writeFileSync(path.join(ROOT, 'one.txt'), 'safe value\nsecret=token', 'utf8');
 fs.writeFileSync(path.join(ROOT, 'two.js'), 'const marker = true;\n', 'utf8');
@@ -19,12 +19,23 @@ process.env.SIDEKICK_APPROVAL_MODE = 'off';
 process.env.SIDEKICK_SECRET_KEY = 'filesystem-test-secret-key';
 delete process.env.SIDEKICK_ALLOWED_PATHS;
 delete process.env.SIDEKICK_DENIED_PATHS;
+process.env.SIDEKICK_ALLOWED_PATHS = TEST_DATA_DIR;
 
 delete require.cache[require.resolve('../src/tools')];
 
 const tools = require('../src/tools');
 const legacy = require('../src/tools-legacy');
-const family = require('../src/tools/families/filesystem');
+const rawFamily = require('../src/tools/families/filesystem');
+const authorizedContext = require('./helpers/authorized-context').createServiceContext({ role: 'operator', source: 'mcp' });
+const family = new Proxy(rawFamily, {
+  get(target, property, receiver) {
+    const value = Reflect.get(target, property, receiver);
+    if (typeof value !== 'function' || !String(property).startsWith('sidekick_')) return value;
+    const name = String(property).replace(/^sidekick_/, '');
+    return (...args) => tools.dispatchTool({ name, args: args[0] || {}, context: authorizedContext });
+  },
+});
+const dispatchLocal = (name, args) => tools.dispatchTool({ name, args, context: { ...authorizedContext, allowNodeExecution: false } });
 
 const text = result => result.content[0].text;
 const names = ['read', 'list', 'search', 'summarize', 'filter', 'write', 'diff_files', 'find'];
@@ -80,7 +91,7 @@ console.log('Running Filesystem Family Tests...');
     assert.strictEqual(text(result), 'pattern required for grep strategy');
     result = await family.sidekick_summarize({ path: summaryPath, strategy: 'invalid' });
     assert.strictEqual(result.isError, true);
-    assert.strictEqual(text(result), 'Invalid strategy. Use: head, tail, grep, stats');
+    assert.ok(text(result).startsWith('Invalid arguments for summarize: strategy:'), text(result));
 
     result = await family.sidekick_filter({ path: summaryPath, pattern: 'needle' });
     assert.deepStrictEqual(JSON.parse(text(result)), [{ line: 3, text: 'needle' }]);
@@ -105,17 +116,17 @@ console.log('Running Filesystem Family Tests...');
     result = await family.sidekick_find({ path: ROOT, size_min: '1KB' });
     assert.deepStrictEqual(JSON.parse(text(result)), []);
 
-    result = await tools.dispatchTool({ name: 'sidekick_read', args: { path: path.join(ROOT, 'two.js') }, context: { source: 'mcp' } });
+    result = await tools.dispatchTool({ name: 'sidekick_read', args: { path: path.join(ROOT, 'two.js') }, context: authorizedContext });
     assert.ok(text(result).includes('marker'));
-    result = await tools.dispatchTool({ name: 'sidekick_list', args: { path: ROOT }, context: { source: 'mcp' } });
+    result = await tools.dispatchTool({ name: 'sidekick_list', args: { path: ROOT }, context: authorizedContext });
     assert.ok(text(result).includes('one.txt'));
-    result = await tools.dispatchTool({ name: 'sidekick_search', args: { pattern: 'marker', path: ROOT }, context: { source: 'mcp' } });
+    result = await tools.dispatchTool({ name: 'sidekick_search', args: { pattern: 'marker', path: ROOT }, context: authorizedContext });
     assert.ok(text(result).includes('two.js'));
-    result = await tools.dispatchTool({ name: 'sidekick_summarize', args: { path: path.join(ROOT, 'summary.txt'), max_lines: 1 }, context: { source: 'mcp' } });
+    result = await tools.dispatchTool({ name: 'sidekick_summarize', args: { path: path.join(ROOT, 'summary.txt'), max_lines: 1 }, context: authorizedContext });
     assert.ok(text(result).includes('strategy=head'));
-    result = await tools.dispatchTool({ name: 'summarize', args: { path: path.join(ROOT, 'summary.txt'), max_lines: 1 }, context: { source: 'mcp' } });
+    result = await tools.dispatchTool({ name: 'summarize', args: { path: path.join(ROOT, 'summary.txt'), max_lines: 1 }, context: authorizedContext });
     assert.ok(text(result).includes('strategy=head'));
-    result = await tools.dispatchTool({ name: 'sidekick_find', args: { path: ROOT, name: '*.js' }, context: { source: 'mcp' } });
+    result = await tools.dispatchTool({ name: 'sidekick_find', args: { path: ROOT, name: '*.js' }, context: authorizedContext });
     assert.strictEqual(JSON.parse(text(result)).length, 1);
 
     process.env.SIDEKICK_ALLOWED_PATHS = ROOT;
@@ -135,16 +146,16 @@ console.log('Running Filesystem Family Tests...');
     assert.strictEqual(result.isError, true);
     assert.ok(text(result).includes('Path blocked by policy'));
 
-    result = await family.sidekick_read({ path: path.join(ROOT, 'missing.txt') });
+    result = await dispatchLocal('read', { path: path.join(ROOT, 'missing.txt') });
     assert.strictEqual(result.isError, true);
     assert.strictEqual(text(result), 'File not found: ' + path.join(ROOT, 'missing.txt'));
-    result = await family.sidekick_list({ path: path.join(ROOT, 'missing') });
+    result = await dispatchLocal('list', { path: path.join(ROOT, 'missing') });
     assert.strictEqual(result.isError, true);
     assert.strictEqual(text(result), 'Path not found: ' + path.join(ROOT, 'missing'));
-    result = await family.sidekick_search({ pattern: 'outside', path: path.join(ROOT, 'missing') });
+    result = await dispatchLocal('search', { pattern: 'outside', path: path.join(ROOT, 'missing') });
     assert.strictEqual(result.isError, true);
     assert.strictEqual(text(result), 'Path not found: ' + path.join(ROOT, 'missing'));
-    result = await family.sidekick_summarize({ path: path.join(ROOT, 'missing.txt') });
+    result = await dispatchLocal('summarize', { path: path.join(ROOT, 'missing.txt') });
     assert.strictEqual(result.isError, true);
     assert.strictEqual(text(result), 'File not found: ' + path.join(ROOT, 'missing.txt'));
     const largePath = path.join(ROOT, 'large.bin');
@@ -158,6 +169,7 @@ console.log('Running Filesystem Family Tests...');
   } finally {
     delete process.env.SIDEKICK_ALLOWED_PATHS;
     delete process.env.SIDEKICK_DENIED_PATHS;
+    try { require('../src/db').closeDatabase(); } catch {}
     fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
   }
 })().catch(error => {
