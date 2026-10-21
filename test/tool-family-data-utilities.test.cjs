@@ -1,9 +1,9 @@
 const assert = require('assert');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
-const TEST_DATA_DIR = path.join(__dirname, 'test-data-data-utilities');
-fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sidekick-tool-data-utilities-'));
 fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
 fs.writeFileSync(path.join(TEST_DATA_DIR, 'data.json'), JSON.stringify({ database: { host: 'localhost', password: 'secret', clientSecret: 'client-secret' }, items: [{ name: 'first' }] }), 'utf8');
 fs.writeFileSync(path.join(TEST_DATA_DIR, 'data.yaml'), 'database:\n  host: localhost\nitems:\n  - name: first\n', 'utf8');
@@ -14,7 +14,9 @@ fs.writeFileSync(path.join(TEST_DATA_DIR, 'data.txt'), '{"fallback":true}', 'utf
 process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
 process.env.SIDEKICK_TOOL_POLICY = 'open';
 process.env.SIDEKICK_APPROVAL_MODE = 'off';
-process.env.SIDEKICK_SECRET_KEY = 'data-utilities-test-secret-key';
+process.env.SIDEKICK_SECRET_KEY_FILE = path.join(TEST_DATA_DIR, 'secret-key');
+fs.writeFileSync(process.env.SIDEKICK_SECRET_KEY_FILE, 'data-utilities-test-secret-key');
+process.env.SIDEKICK_MCP_ALLOWED_PATHS = TEST_DATA_DIR;
 delete process.env.SIDEKICK_BLOCKED_TOOLS;
 
 delete require.cache[require.resolve('../src/tools')];
@@ -24,6 +26,7 @@ const legacy = require('../src/tools-legacy');
 const family = require('../src/tools/families/data-utilities');
 const { detectFormat, parseCSV } = require('../src/core/format');
 const { dispatchTool } = tools;
+const authorizedContext = require('./helpers/authorized-context').createServiceContext({ role: 'operator', source: 'mcp' });
 
 console.log('Running Data Utilities Family Tests...');
 
@@ -228,7 +231,7 @@ const text = result => result.content[0].text;
     result = await dispatchTool({ name: 'sidekick_parse', args: {}, context: { source: 'mcp', requestId: 'req_du_invalid' } });
     assert.ok(result.isError, 'dispatcher should reject args that fail the descriptor schema');
     assert.strictEqual(result.code, 'validation_failed', 'schema validation should happen before the handler runs');
-    result = await dispatchTool({ name: 'sidekick_extract', args: { path: path.join(TEST_DATA_DIR, 'data.json'), fields: 'database.host' }, context: { source: 'mcp', requestId: 'req_du_extract' } });
+    result = await dispatchTool({ name: 'sidekick_extract', args: { path: path.join(TEST_DATA_DIR, 'data.json'), fields: 'database.host' }, context: { ...authorizedContext, requestId: 'req_du_extract' } });
     assert.deepStrictEqual(JSON.parse(text(result)), { 'database.host': 'localhost' });
     result = await dispatchTool({ name: 'sidekick_transform', args: { action: 'sort', input: '[2,1]' }, context: { source: 'mcp', requestId: 'req_du_transform' } });
     assert.deepStrictEqual(JSON.parse(text(result)), [1, 2]);
@@ -237,15 +240,17 @@ const text = result => result.content[0].text;
     result = await dispatchTool({ name: 'sidekick_transform', args: { action: 'format', input: '[1]', format: 'invalid' }, context: { source: 'mcp', requestId: 'req_du_transform_invalid_format' } });
     assert.ok(result.isError);
     assert.strictEqual(text(result), 'Unknown format. Use: json, csv, table, text');
-    result = await dispatchTool({ name: 'extract', args: { path: path.join(TEST_DATA_DIR, 'data.json'), fields: 'database.host' }, context: { source: 'mcp', requestId: 'req_du_extract_alias' } });
+    result = await dispatchTool({ name: 'extract', args: { path: path.join(TEST_DATA_DIR, 'data.json'), fields: 'database.host' }, context: { ...authorizedContext, requestId: 'req_du_extract_alias' } });
     assert.deepStrictEqual(JSON.parse(text(result)), { 'database.host': 'localhost' });
     const allowedPath = path.join(TEST_DATA_DIR, 'allowed');
     fs.mkdirSync(allowedPath, { recursive: true });
     process.env.SIDEKICK_ALLOWED_PATHS = allowedPath;
+    process.env.SIDEKICK_MCP_ALLOWED_PATHS = allowedPath;
     result = await family.sidekick_extract({ path: path.join(TEST_DATA_DIR, 'data.json') });
     assert.ok(result.isError, 'extract should enforce path policy');
     assert.ok(text(result).includes('Path blocked by policy'));
     delete process.env.SIDEKICK_ALLOWED_PATHS;
+    process.env.SIDEKICK_MCP_ALLOWED_PATHS = TEST_DATA_DIR;
 
     process.env.SIDEKICK_BLOCKED_TOOLS = 'sidekick_template';
     result = await dispatchTool({ name: 'sidekick_template', args: { template: 'x' }, context: { source: 'mcp', requestId: 'req_du_policy' } });
@@ -255,6 +260,7 @@ const text = result => result.content[0].text;
 
     process.env.SIDEKICK_APPROVAL_MODE = 'risky';
     process.env.SIDEKICK_APPROVAL_REQUIRED_TOOLS = 'sidekick_parse';
+    process.env.SIDEKICK_APPROVALS_FILE = path.join(TEST_DATA_DIR, 'approvals.json');
     result = await dispatchTool({ name: 'sidekick_parse', args: { input: '{"a":1}' }, context: { source: 'mcp', requestId: 'req_du_approval' } });
     assert.ok(result.isError, 'approval-gated family tool should not execute directly');
     assert.strictEqual(result.code, 'approval_required', 'approval must be enforced at the dispatcher for extracted families');
@@ -263,6 +269,7 @@ const text = result => result.content[0].text;
     assert.ok(tools.listApprovals({ status: 'pending' }).some(a => a.tool === 'sidekick_parse'), 'a pending approval should exist for the extracted tool');
     process.env.SIDEKICK_APPROVAL_MODE = 'off';
     process.env.SIDEKICK_APPROVAL_REQUIRED_TOOLS = '';
+    delete process.env.SIDEKICK_APPROVALS_FILE;
 
     // Regression: batch resolves builtin names from TOOL_DEFS, so tools whose
     // handlers moved into a family stay reachable. Before the data-utilities
@@ -270,7 +277,7 @@ const text = result => result.content[0].text;
     // "Unknown tool" for every extracted tool.
     // batch moved to families/flow-control.js in B-6; the registry-derived
     // facade TOOLS map is the current owner (legacy.TOOLS no longer carries it).
-    const batchResult = await tools.TOOLS.batch({
+    const batchResult = await dispatchTool({ name: 'batch', context: authorizedContext, args: {
       calls: [
         { tool: 'parse', args: { input: '{"a":1}' } },
         { tool: 'sidekick_template', args: { template: 'hi {{n}}', data: '{"n":"x"}' } },
@@ -279,7 +286,7 @@ const text = result => result.content[0].text;
         { tool: 'constructor', args: {} },
         { tool: 'nope_not_real', args: {} },
       ],
-    });
+    } });
     const batched = JSON.parse(text(batchResult));
     assert.ok(!batched[0].error, 'batch should reach an extracted family tool');
     assert.strictEqual(batched[0].result, '{\n  "a": 1\n}', 'batch should return the extracted tool result');
@@ -301,5 +308,9 @@ const text = result => result.content[0].text;
     console.error('Data Utilities Family Tests FAILED');
     console.error(e);
     process.exit(1);
+  } finally {
+    delete process.env.SIDEKICK_MCP_ALLOWED_PATHS;
+    try { require('../src/db').closeDatabase(); } catch {}
+    fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
   }
 })();
