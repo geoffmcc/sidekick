@@ -14,6 +14,10 @@ function parsePage(value, fallback, max) {
   return Number.isInteger(n) && n > 0 ? Math.min(n, max) : fallback;
 }
 
+function clampHistoryOffset(value) {
+  return parsePage(value, 1, HISTORY_LIMITS.MAX_SCAN_FILES + 1) - 1;
+}
+
 function canonicalTime(record, stat) {
   const parsed = Date.parse(record && record.t);
   if (Number.isFinite(parsed)) return { ms: parsed, iso: new Date(parsed).toISOString(), source: "transcript" };
@@ -102,7 +106,9 @@ function assembleSessions(convDir, options = {}, deps = {}) {
     return (bt - at) || b.summary.id.localeCompare(a.summary.id);
   });
   const pageSize = parsePage(options.pageSize, HISTORY_LIMITS.DEFAULT_PAGE_SIZE, HISTORY_LIMITS.MAX_PAGE_SIZE);
-  const offset = parsePage(options.offset, 1, Number.MAX_SAFE_INTEGER) - 1;
+  // The directory scan itself is capped at MAX_SCAN_FILES, so offsets beyond
+  // that cannot return additional entries and only create misleading cursors.
+  const offset = clampHistoryOffset(options.offset);
   const page = sessions.slice(offset, offset + pageSize);
   const runs = entries.slice(offset, offset + pageSize).map(entry => ({
     id: entry.id, goal: entry.norm.goal.slice(0, 400), status: entry.norm.status,
@@ -157,4 +163,4 @@ function buildTask(convDir, taskId, deps = {}) {
   };
 }
 
-module.exports = { HISTORY_LIMITS, canonicalTime, safeWorkProjection, loadEntries, assembleSessions, buildSession, buildTask };
+module.exports = { HISTORY_LIMITS, clampHistoryOffset, canonicalTime, safeWorkProjection, loadEntries, assembleSessions, buildSession, buildTask };
