@@ -6,13 +6,15 @@ const { resolveOutboundUrl } = require("../src/security/outbound-url");
 const { sidekick_network_scopes } = require("../src/tools/families/network-scopes");
 const { connectionFailure } = require("../src/tools/families/net-fetch");
 const { githubCredentialMissing } = require("../src/tools/families/github");
+const { runWithContext } = require("../src/tools/context");
 
 function payload(result) {
   return JSON.parse(result.content[0].text);
 }
 
 test("operator identity is distinguished from user consent for network-scope mutation", async () => {
-  const result = await sidekick_network_scopes({ action: "create", name: "fixture" }, { context: { source: "agent", authIdentity: null } });
+  const result = await runWithContext({ source: "agent", authIdentity: null }, () =>
+    sidekick_network_scopes({ action: "create", name: "fixture" }));
   assert.equal(result.code, "unauthenticated");
   assert.match(result.content[0].text, /Authentication required/);
 });

@@ -260,7 +260,12 @@ const { loadSecrets, saveSecrets } = require("../src/core/secrets-store");
 const { encryptSecret } = require("../src/core/secret-cipher");
 const bundled = require("../src/packs/bundled");
 const packLifecycle = require("../src/packs/lifecycle");
-const { callInternalTool } = require("../src/tools/dispatcher");
+const { callInternalTool: dispatchInternalTool } = require("../src/tools/dispatcher");
+const { createOwnerContext } = require("./helpers/authorized-context");
+const testOwnerContext = createOwnerContext({ source: "internal" });
+function callInternalTool(name, args) {
+  return dispatchInternalTool(name, args, testOwnerContext);
+}
 const LIB = path.resolve(__dirname, "..", "packs", "proxmox", "modules", "proxmox-tools", "lib");
 const provenance = require(path.join(LIB, "provenance.js"));
 

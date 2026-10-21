@@ -116,7 +116,9 @@ function countChromeProcesses() {
   // it so session operations stay inside the session's project scope.
   const PROJECT = "browser-e2e";
   const { callMcpTool } = require("../src/tools");
-  const dispatch = (args, context = {}) => callMcpTool("browser", args, { source: "mcp", actor: "e2e", project: PROJECT, ...context });
+  const { createOwnerContext } = require("./helpers/authorized-context");
+  const ownerContext = createOwnerContext({ source: "mcp", project: PROJECT });
+  const dispatch = (args, context = {}) => callMcpTool("browser", args, { ...ownerContext, actor: "e2e", ...context });
 
   let sessionId = null;
   let screenshotArtifactId = null;
@@ -357,9 +359,10 @@ function countChromeProcesses() {
   });
 
   await test("cross-project session access is refused", async () => {
+    const crossProjectOwnerContext = createOwnerContext({ source: "mcp", project: "a-different-project" });
     const result = parse(await callMcpTool("browser",
       { action: "snapshot", session: sessionId },
-      { source: "mcp", actor: "e2e", project: "a-different-project" }));
+      { ...crossProjectOwnerContext, source: "mcp", actor: "e2e" }));
     assert.strictEqual(result.ok, false, "a differently-scoped project should not reach this session");
     assert.ok(/project/i.test(result.error), result.error);
   });
@@ -391,7 +394,7 @@ function countChromeProcesses() {
     const hangPort = hang.address().port;
     const pending = callMcpTool("browser",
       { action: "navigate", session: sessionId, url: `http://127.0.0.1:${hangPort}/`, timeout_ms: 20000 },
-      { source: "mcp", actor: "e2e", project: PROJECT, signal: controller.signal });
+      { ...ownerContext, source: "mcp", actor: "e2e", project: PROJECT, signal: controller.signal });
     setTimeout(() => controller.abort(), 300);
     const raw = await pending;
     // The dispatcher intercepts the abort and returns its own cancellation
