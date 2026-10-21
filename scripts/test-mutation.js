@@ -26,7 +26,7 @@ const targetedSpecs = [
     { id: "separator-validation-removal", name: "separator-validation-removal", category: "normalization", kind: "region", expression: ".replace(/[^a-z0-9_]+/g, \"_\")", contains: ".replace(/[^a-z0-9_]+/g, \"_\")", within: "\"_\"", replacement: "\"\"", security: true },
   ] },
   { id: "path-policy", group: "path-policy", file: "src/tools/path-policy.js", tests: ["test/path-policy.test.cjs"], pattern: [
-    { id: "allowlist-gate-removal", name: "allowlist-gate-removal", category: "authorization", kind: "condition", expression: "allowedEntries.length > 0", replacement: "false", security: true },
+    { id: "allowlist-gate-removal", name: "allowlist-gate-removal", category: "authorization", kind: "condition", expression: "allowedEntries.length === 0", replacement: "false", security: true },
   ] },
   { id: "result-contract", group: "result-contract", file: "src/tools/result.js", tests: ["test/tool-result-structure.test.js", "test/sensitive-result-boundary.test.js"], pattern: [
     { id: "partial-status-removal", name: "partial-status-removal", category: "boolean", kind: "operator", expression: "status === \"succeeded\" || status === \"partial\"", operator: "||", replacement: "&&", security: true },
