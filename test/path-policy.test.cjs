@@ -633,6 +633,16 @@ function setupSymlinkFixtures() {
       false,
       'A broken symlink in a parent component must be denied'
     );
+    assert.strictEqual(
+      getPathPolicyDecision(rawAt('safe', 'broken', '..', 'plain.txt'), 'read').reason,
+      'path contains an unresolvable symlink',
+      'A broken symlink before a parent segment must fail closed before resolving ..'
+    );
+    assert.strictEqual(
+      getPathPolicyDecision(rawAt('safe', 'new-parent', '..', 'plain.txt'), 'read').allowed,
+      true,
+      'A missing component before a parent segment is resolved against its safe ancestor'
+    );
     // Outside every configured root, a resolution failure must be indis-
     // tinguishable from an ordinary denial, or the reason string becomes an
     // existence-and-permission oracle for arbitrary paths.
@@ -704,6 +714,24 @@ function setupSymlinkFixtures() {
       true,
       'An absent allow root still matches its own descendants'
     );
+
+    // Exercise the Windows drive-relative guard even when the suite runs on
+    // another platform. The guard returns before platform-specific path
+    // resolution, so changing this property is safe within this synchronous
+    // assertion and is always restored.
+    resetPathEnv();
+    process.env.SIDEKICK_ALLOWED_PATHS = path.dirname(normalizePolicyPath('C:relative'));
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+    try {
+      Object.defineProperty(process, 'platform', { ...platformDescriptor, value: 'win32' });
+      assert.strictEqual(
+        getPathPolicyDecision('C:relative', 'read').reason,
+        'path could not be resolved',
+        'Windows drive-relative paths are rejected instead of being resolved against an unknown drive directory'
+      );
+    } finally {
+      Object.defineProperty(process, 'platform', platformDescriptor);
+    }
 
     // Operation labels do not select different roots in this policy, and the
     // escape is blocked identically whichever label is used.
