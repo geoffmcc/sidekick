@@ -1245,6 +1245,7 @@ registerSystemRoutes({
   grafanaPort: GRAFANA_PORT,
   grafanaConfigured: Boolean(GRAFANA_USER),
   influxConfigured: Boolean(hasSecret("SIDEKICK_INFLUX_TOKEN") && readSecret("SIDEKICK_INFLUX_TOKEN") !== "sidekick-influx-token"),
+  requireIdentityPermission,
   errorResponse: dashboardErrors.respond,
 });
 
@@ -1274,7 +1275,7 @@ registerKvRoutes({
 });
 registerProjectRoutes({ app, platformKernel, errorResponse: dashboardErrors.respond });
 
-registerStatsToolsRoutes({ app, dbStore, getToolDefsForSource, errorResponse: dashboardErrors.respond });
+registerStatsToolsRoutes({ app, dbStore, getToolDefsForSource, requireIdentityPermission, errorResponse: dashboardErrors.respond });
 
 app.get("/api/tool-policy", (req, res) => {
   const sources = String(req.query.source || "mcp,dashboard,agent").split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
