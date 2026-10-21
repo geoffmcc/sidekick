@@ -7,15 +7,19 @@
 
 const assert = require('assert');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
-const TEST_DATA_DIR = path.join(__dirname, 'test-scheduling-cancel-data');
-fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
-fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
+const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sidekick-scheduling-cancel-'));
 
+process.env.NODE_ENV = 'test';
 process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
+process.env.SIDEKICK_ALLOWED_PATHS = TEST_DATA_DIR;
 process.env.SIDEKICK_APPROVAL_MODE = 'off';
 process.env.SIDEKICK_TOOL_POLICY = 'open';
+process.env.SIDEKICK_API_KEY = 'synthetic-scheduling-cancel-mcp-api-key';
+process.env.SIDEKICK_AGENT_PROXY_KEY = 'synthetic-scheduling-cancel-agent-proxy-key';
+process.env.SIDEKICK_AGENT_SCHEDULER_KEY = 'synthetic-scheduling-cancel-agent-scheduler-key';
 
 delete require.cache[require.resolve('../src/tools')];
 delete require.cache[require.resolve('../src/db')];
@@ -23,7 +27,7 @@ const tools = require('../src/tools');
 const db = require('../src/db');
 const platformKernel = require('../src/platform/kernel');
 
-const { TOOLS } = tools;
+const TOOLS = require('./helpers/authorized-context').withOwnerToolContext(tools.TOOLS, { source: 'mcp' });
 
 function claimOf(executionId) {
   return platformKernel.getExecutionClaim(executionId);
@@ -64,7 +68,7 @@ console.log('Running Scheduling Cancel Tests...\n');
     const watchedFile = path.join(TEST_DATA_DIR, 'watched.txt');
     fs.writeFileSync(watchedFile, 'x', 'utf-8');
     result = await TOOLS.watch({ action: 'add', name: 'cancel watch', source: 'file', target: watchedFile, condition: 'exists', action_tool: 'respond', action_args: { text: 'w' } });
-    assert.strictEqual(result.isError, undefined);
+    assert.strictEqual(result.isError, undefined, result.content?.[0]?.text || "watch add should succeed");
     const watch = tools.loadWatches()[0];
     assert.ok(watch.platform_execution_id);
     const watchClaim = platformKernel.claimExecution({ execution_id: watch.platform_execution_id, claimed_by: 'test-runner-watch' });
@@ -116,8 +120,8 @@ console.log('Running Scheduling Cancel Tests...\n');
 
     platformKernel.releaseExecutionClaim({ execution_id: watch2.platform_execution_id, claimed_by: 'test-runner-watch2', claim_epoch: resumeClaim.claim.claim_epoch });
     await TOOLS.watch({ action: 'remove', id: watch2.id });
-    fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
     db.closeDatabase();
+    fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
     console.log('All Scheduling Cancel Tests Passed!');
     process.exit(0);
   } catch (e) {
