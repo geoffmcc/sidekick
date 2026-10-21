@@ -78,18 +78,24 @@ test("normalization cannot be bypassed with unicode spellings", () => {
   assert.ok(isSensitiveKey("pwd"), "pwd matches");
   assert.ok(isSensitiveKey("bearer_token"), "bearer matches");
   assert.ok(isSensitiveKey("aws_access_key"), "access_key matches");
+  assert.ok(!isSensitiveKey("credential_id"), "credential record identifiers are references, not authenticators");
+  assert.ok(!isSensitiveKey("credential_scopes"), "permission scope labels are authorization metadata, not authenticators");
 });
 
 test("deep sanitizer redacts nested and array-borne credentials", () => {
   const out = redactSensitiveKeysDeep({
     config: { password: FAKE_PASSWORD, host: "db.local" },
     list: [{ api_key: FAKE_API_KEY }],
+    credential_id: "cred_synthetic-reference",
+    credential_scopes: ["memory.read"],
     command: "echo hi"
   });
   assert.equal(out.config.password, "[REDACTED]");
   assert.equal(out.config.host, "db.local", "benign nested values survive");
   assert.equal(out.list[0].api_key, "[REDACTED]");
   assert.equal(out.command, "echo hi");
+  assert.equal(out.credential_id, "cred_synthetic-reference", "a record reference remains available for revocation checks");
+  assert.deepEqual(out.credential_scopes, ["memory.read"], "permission scope metadata remains available for recovery checks");
 });
 
 console.log("\nTLR.2: args under sensitive key names never reach tool_logs");

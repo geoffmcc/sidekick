@@ -19,6 +19,12 @@ const SENSITIVE_KEY_RE = /(password|passwd|passphrase|pwd|secret|token|bearer|ap
  */
 function isSensitiveKey(key) {
   const normalized = String(key || "").normalize("NFKC").toLowerCase().replace(/[^a-z0-9]/g, "");
+  // A governed credential record ID is a non-secret lookup reference needed
+  // to revalidate durable authority; raw credential material remains denied.
+  if (normalized === "credentialid" || normalized === "credentialscopes") return false;
+  // Workspace APIs deliberately expose credential names for administration;
+  // the corresponding values never leave the encrypted store.
+  if (normalized === "secretnames") return false;
   return SENSITIVE_KEY_RE.test(normalized);
 }
 
