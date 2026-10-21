@@ -8,12 +8,15 @@ const dbStore = require("../../db");
 const { redactSensitive } = require("../../redact");
 const { enforcePathPolicy } = require("../path-policy");
 const { childProcessEnv } = require("../../security/child-process");
+const { requireToolExecution } = require("../read-authorization");
 
 function safeExecFileSync(program, args, options = {}) {
   return execFileSync(program, args, { ...options, env: childProcessEnv(options.env) });
 }
 
 async function sidekick_tail({ source, pattern, lines, since }) {
+  const denied = requireToolExecution({ tool: "tail" }, "tools.execute", "tail");
+  if (denied) return denied;
   const maxLines = lines || 50;
   const re = pattern ? new RegExp(pattern, "i") : null;
   let content;
@@ -168,6 +171,8 @@ function captureNetwork() {
 }
 
 async function sidekick_snapshot({ action, name, capture, compare }) {
+  const denied = requireToolExecution({ tool: "snapshot" }, "tools.execute", "snapshot");
+  if (denied) return denied;
   const now = new Date().toISOString();
 
   if (action === "capture") {
@@ -395,6 +400,8 @@ function findRecentFiles(root, startTime, limit = 50) {
 }
 
 async function sidekick_timeline({ action, since, until, sources, pattern, severity, format, max_events, project, session_id, task_id, correlation_id, after_id }) {
+  const denied = requireToolExecution({ tool: "timeline" }, "tools.execute", "timeline");
+  if (denied) return denied;
   const maxEvents = max_events || MAX_TIMELINE_EVENTS;
   const startTime = parseRelativeTime(since);
   const endTime = parseRelativeTime(until || "now");
@@ -563,6 +570,8 @@ function calculateStats(values) {
 }
 
 async function sidekick_baseline({ action, metric_name, value, source, command, window, sensitivity }) {
+  const denied = requireToolExecution({ tool: "baseline" }, "tools.execute_high", "baseline");
+  if (denied) return denied;
   const data = loadBaselines();
   const sens = sensitivity || "medium";
   const sigmaMultiplier = { low: 3, medium: 2, high: 1.5 }[sens] || 2;
