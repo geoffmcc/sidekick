@@ -2,6 +2,14 @@
 
 const assert = require("node:assert/strict");
 const { test } = require("node:test");
+const path = require("node:path");
+
+const testDataDir = process.env.SIDEKICK_TEST_DATA_DIR || path.join(__dirname, `test-data-network-guidance-${process.pid}`);
+process.env.SIDEKICK_DATA_DIR = testDataDir;
+process.env.SIDEKICK_DB_FILE = process.env.SIDEKICK_TEST_DB_FILE || path.join(testDataDir, "sidekick.db");
+delete require.cache[require.resolve("../src/db")];
+require("../src/db").runPendingMigrations();
+
 const { resolveOutboundUrl } = require("../src/security/outbound-url");
 const { sidekick_network_scopes } = require("../src/tools/families/network-scopes");
 const { connectionFailure } = require("../src/tools/families/net-fetch");

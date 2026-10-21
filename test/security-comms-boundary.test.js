@@ -2,6 +2,14 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const path = require("node:path");
+
+const testDataDir = process.env.SIDEKICK_TEST_DATA_DIR || path.join(__dirname, `test-data-comms-boundary-${process.pid}`);
+process.env.SIDEKICK_DATA_DIR = testDataDir;
+process.env.SIDEKICK_DB_FILE = process.env.SIDEKICK_TEST_DB_FILE || path.join(testDataDir, "sidekick.db");
+delete require.cache[require.resolve("../src/db")];
+require("../src/db").runPendingMigrations();
+
 const { sidekick_notify, sidekick_webhook, descriptors } = require("../src/tools/families/comms");
 const { runWithContext } = require("../src/tools/context");
 
