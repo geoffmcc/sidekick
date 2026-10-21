@@ -306,24 +306,20 @@ function getPathPolicyDecision(filePath, operation = "access", source = toolCont
     return { allowed: false, source, operation, path: target, reason: "path denied by policy", matched: deniedMatch, list: "denied" };
   }
 
-  if (allowedEntries.length > 0) {
-    const resolvedAllowed = resolvePolicyEntries(allowedEntries);
-    if (resolvedAllowed.error) {
-      return { allowed: false, source, operation, path: target, reason: resolvedAllowed.error, matched: null };
-    }
-    const allowedMatch = findCanonicalMatch(resolvedAllowed.resolved, canonicalTarget.path);
-    return {
-      allowed: Boolean(allowedMatch),
-      source,
-      operation,
-      path: target,
-      reason: allowedMatch ? "path allowed by policy" : "path not in allowed paths",
-      matched: allowedMatch || null,
-      list: "allowed"
-    };
+  const resolvedAllowed = resolvePolicyEntries(allowedEntries);
+  if (resolvedAllowed.error) {
+    return { allowed: false, source, operation, path: target, reason: resolvedAllowed.error, matched: null };
   }
-
-  return { allowed: false, source, operation, path: target, reason: "no allowed filesystem paths are configured", matched: null, list: "allowed" };
+  const allowedMatch = findCanonicalMatch(resolvedAllowed.resolved, canonicalTarget.path);
+  return {
+    allowed: Boolean(allowedMatch),
+    source,
+    operation,
+    path: target,
+    reason: allowedMatch ? "path allowed by policy" : "path not in allowed paths",
+    matched: allowedMatch || null,
+    list: "allowed"
+  };
 }
 
 function enforcePathPolicy(filePath, operation = "access") {

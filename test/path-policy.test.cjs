@@ -661,6 +661,16 @@ function setupSymlinkFixtures() {
     console.log('✓ Passed\n');
 
     console.log('Test 17: policy roots and operations');
+    // When a valid allow root exists, an unresolvable deny root must still
+    // fail closed instead of being silently dropped from the comparison.
+    resetPathEnv();
+    process.env.SIDEKICK_ALLOWED_PATHS = safeRoot;
+    process.env.SIDEKICK_DENIED_PATHS = at('safe', 'broken');
+    const badDenyRootWithAllow = getPathPolicyDecision(at('safe', 'plain.txt'), 'read');
+    assert.strictEqual(badDenyRootWithAllow.allowed, false, 'An unresolvable deny root must reject an otherwise allowed path');
+    assert.strictEqual(badDenyRootWithAllow.reason, 'policy configuration could not be resolved', 'An unresolvable deny root gets a controlled reason');
+    assert.ok(!badDenyRootWithAllow.reason.includes(LINK_ROOT), 'An unresolvable deny root must not reveal its configured path');
+
     // An unresolvable configured root fails closed rather than being skipped.
     resetPathEnv();
     process.env.SIDEKICK_DENIED_PATHS = at('safe', 'broken');
