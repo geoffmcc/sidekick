@@ -17,6 +17,11 @@ const { execFileSync } = require("child_process");
 // Absolute path: resolving "icacls" by name would let a non-admin who controls
 // a PATH entry run code inside the elevated `enroll` the installer performs.
 const ICACLS = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "icacls.exe");
+const WHOAMI = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "whoami.exe");
+function windowsSystemEnv(systemRoot = process.env.SystemRoot || process.env.SYSTEMROOT || "C:\\Windows") {
+  const root = path.win32.resolve(systemRoot);
+  return { SystemRoot: root, WINDIR: root, PATH: path.win32.join(root, "System32") };
+}
 
 const WORKER_ID_RE = /^wk_[A-Za-z0-9_-]+$/;
 const CREDENTIAL_RE = /^wksec_[A-Za-z0-9_-]+$/;
@@ -34,15 +39,23 @@ function defaultCredentialPath() {
 // enrollment token" restart loop). It is not a privilege widening either —
 // LocalSystem can already take ownership of any file on the machine.
 //
-// Best-effort — a failure is reported to the caller but never throws.
+// A failure is reported to the caller. save() fails closed and removes the
+// credential rather than reporting success with an unprotected secret.
 function applyWindowsAcl(filePath) {
   try {
-    execFileSync(ICACLS, [filePath, "/inheritance:r"], { stdio: "ignore" });
-    const user = process.env.USERNAME
-      ? `${process.env.USERDOMAIN || os.hostname()}\\${process.env.USERNAME}`
-      : null;
-    if (user) execFileSync(ICACLS, [filePath, "/grant:r", `${user}:F`], { stdio: "ignore" });
-    execFileSync(ICACLS, [filePath, "/grant:r", "*S-1-5-18:(R)"], { stdio: "ignore" });
+    // Environment username values are caller-controlled and may not identify
+    // the effective service token (for example, elevated installers or task
+    // sandboxes). Resolve the SID from the current process token instead.
+    const identity = execFileSync(WHOAMI, ["/user", "/fo", "csv", "/nh"], { encoding: "utf8", windowsHide: true, env: windowsSystemEnv() }).trim();
+    const sid = identity.match(/,\s*"(S-1-[0-9-]+)"\s*$/)?.[1];
+    if (!sid) return false;
+    // Add explicit access before removing inherited ACEs so the current token
+    // retains the ability to finish the operation and clean up on failure.
+    execFileSync(ICACLS, [filePath, "/grant:r", `*${sid}:F`], { stdio: "ignore", windowsHide: true, env: windowsSystemEnv() });
+    // If the current token is LocalSystem, it already has full control; a
+    // second /grant:r for the same SID would replace F with read-only access.
+    if (sid !== "S-1-5-18") execFileSync(ICACLS, [filePath, "/grant:r", "*S-1-5-18:(R)"], { stdio: "ignore", windowsHide: true, env: windowsSystemEnv() });
+    execFileSync(ICACLS, [filePath, "/inheritance:r"], { stdio: "ignore", windowsHide: true, env: windowsSystemEnv() });
     return true;
   } catch {
     return false;
@@ -69,7 +82,11 @@ function save(record, pathOverride) {
   fs.writeFileSync(tempPath, JSON.stringify(payload, null, 2), { mode: 0o600 });
   if (process.platform !== "win32") { try { fs.chmodSync(tempPath, 0o600); } catch {} }
   fs.renameSync(tempPath, credPath);
-  if (process.platform === "win32") applyWindowsAcl(credPath);
+  if (process.platform === "win32" && !applyWindowsAcl(credPath)) {
+    let cleanupFailed = false;
+    try { fs.unlinkSync(credPath); } catch { cleanupFailed = true; }
+    throw new Error(`Unable to apply the current process ACL to the worker credential file; credential persistence was refused${cleanupFailed ? " and cleanup failed" : ""}`);
+  }
   return credPath;
 }
 
@@ -144,4 +161,4 @@ function discard(parkedPath) {
   try { fs.unlinkSync(parkedPath); return true; } catch { return false; }
 }
 
-module.exports = { defaultCredentialPath, applyWindowsAcl, save, load, remove, park, restore, discard, WORKER_ID_RE, CREDENTIAL_RE };
+module.exports = { defaultCredentialPath, applyWindowsAcl, windowsSystemEnv, save, load, remove, park, restore, discard, WORKER_ID_RE, CREDENTIAL_RE };
