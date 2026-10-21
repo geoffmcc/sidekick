@@ -18,12 +18,14 @@ const { redactSensitive } = require("../../redact");
 const { enforcePathPolicy } = require("../path-policy");
 const { resolveOutboundUrl } = require("../../security/outbound-url");
 const { validIdentifier } = require("../../core/command-validation");
-const { sidekick_llm } = require("./inference");
+const { runLlm } = require("./inference");
 const { childProcessEnv } = require("../../security/child-process");
+const { requireToolExecution, requireCanonicalInvocation } = require("../read-authorization");
 
 const GIT_EXTERNAL_EXECUTION_OPTIONS = /^(?:-c(?:$|=)|--config(?:=|-env(?:=|$))|--(?:exec-path|upload-pack|receive-pack|git-dir|work-tree)(?:=|$)|--(?:ext-diff|paginate)(?:=|$))/;
 const GIT_CLONE_TIMEOUT_MS = 120000;
 const GIT_CLONE_MAX_OUTPUT = 2 * 1024 * 1024;
+const GIT_FILTER_EXECUTION_ACTIONS = new Set(["add", "commit", "checkout", "pull", "stash"]);
 
 function cloneError(message) {
   return { content: [{ type: "text", text: message }], isError: true };
@@ -164,14 +166,144 @@ function parseGitExtraArgs(extraArgs) {
   return parsed;
 }
 
-function windowsPathToWslPath(value) {
-  const text = String(value || "");
-  const match = text.match(/^([A-Za-z]):[\\/](.*)$/);
-  if (!match) return text;
-  return "/mnt/" + match[1].toLowerCase() + "/" + match[2].replace(/\\/g, "/");
+function readGitMetadataFile(filePath, maxBytes = 4096) {
+  let before;
+  try { before = fs.lstatSync(filePath); } catch (error) {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  }
+  if (!before.isFile() || before.isSymbolicLink() || before.size > maxBytes) {
+    throw new Error("Git metadata file is not a bounded regular file");
+  }
+  const noFollow = fs.constants.O_NOFOLLOW || 0;
+  const fd = fs.openSync(filePath, fs.constants.O_RDONLY | noFollow);
+  try {
+    const opened = fs.fstatSync(fd);
+    if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino || opened.size > maxBytes) {
+      throw new Error("Git metadata file changed while being opened");
+    }
+    return fs.readFileSync(fd, "utf8");
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function checkGitMetadataReferences(gitDir, operation) {
+  let commonDir = gitDir;
+  const commonDirFile = path.join(gitDir, "commondir");
+  const commonDirPolicyError = enforcePathPolicy(commonDirFile, operation);
+  if (commonDirPolicyError) return commonDirPolicyError;
+  let commonDirText;
+  try { commonDirText = readGitMetadataFile(commonDirFile); } catch {
+    return { content: [{ type: "text", text: "Git common-directory metadata is invalid." }], isError: true };
+  }
+  if (commonDirText !== null) {
+    const target = commonDirText.trim();
+    if (!target || target.includes("\n") || target.includes("\r")) {
+      return { content: [{ type: "text", text: "Git common-directory metadata is invalid." }], isError: true };
+    }
+    try {
+      commonDir = fs.realpathSync(path.resolve(gitDir, target));
+      if (!fs.statSync(commonDir).isDirectory()) throw new Error("not a directory");
+    } catch {
+      return { content: [{ type: "text", text: "Git common directory is unavailable or invalid." }], isError: true };
+    }
+    const policyError = enforcePathPolicy(commonDir, operation);
+    if (policyError) return policyError;
+  }
+
+  const alternatesFile = path.join(commonDir, "objects", "info", "alternates");
+  const alternatesPolicyError = enforcePathPolicy(alternatesFile, operation);
+  if (alternatesPolicyError) return alternatesPolicyError;
+  let alternates;
+  try { alternates = readGitMetadataFile(alternatesFile, 64 * 1024); } catch {
+    return { content: [{ type: "text", text: "Git alternate-object metadata is invalid." }], isError: true };
+  }
+  if (alternates === null) return null;
+  for (const entry of alternates.split(/\r?\n/).map((value) => value.trim()).filter(Boolean)) {
+    let target;
+    try {
+      target = fs.realpathSync(path.resolve(commonDir, "objects", entry));
+      if (!fs.statSync(target).isDirectory()) throw new Error("not a directory");
+    } catch {
+      return { content: [{ type: "text", text: "Git alternate object directory is unavailable or invalid." }], isError: true };
+    }
+    const policyError = enforcePathPolicy(target, operation);
+    if (policyError) return policyError;
+  }
+  return null;
+}
+
+function getActiveGitFilterDrivers(repo, gitEnv, safeGitConfig) {
+  const files = execFileSync("git", [...safeGitConfig, "-C", repo, "ls-files", "--cached", "--others", "-z"], {
+    cwd: repo, env: gitEnv, timeout: 10000, encoding: "buffer", maxBuffer: 32 * 1024 * 1024,
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (files.length === 0) return [];
+  const attributes = execFileSync("git", [...safeGitConfig, "-C", repo, "check-attr", "-z", "--stdin", "filter"], {
+    cwd: repo, env: gitEnv, timeout: 10000, input: files, encoding: "buffer", maxBuffer: 32 * 1024 * 1024,
+    stdio: ["pipe", "pipe", "ignore"],
+  }).toString("utf8").split("\0");
+  if (attributes.length % 3 !== 1) throw new Error("unexpected Git attribute response");
+  const drivers = new Set();
+  for (let index = 0; index + 2 < attributes.length; index += 3) {
+    if (attributes[index + 1] !== "filter") continue;
+    const value = attributes[index + 2];
+    if (value && value !== "unspecified" && value !== "unset") drivers.add(value);
+  }
+  return [...drivers];
+}
+
+function getTreeGitFilterDrivers(repo, source, gitEnv, safeGitConfig) {
+  const tree = execFileSync("git", [...safeGitConfig, "-C", repo, "ls-tree", "-r", "-z", source], {
+    cwd: repo, env: gitEnv, timeout: 10000, encoding: "buffer", maxBuffer: 32 * 1024 * 1024,
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  const files = [];
+  for (const entry of tree.toString("utf8").split("\0")) {
+    if (!entry) continue;
+    const tab = entry.indexOf("\t");
+    if (tab < 0) throw new Error("unexpected Git tree response");
+    files.push(entry.slice(tab + 1));
+  }
+  if (!files.length) return [];
+  const input = Buffer.from(files.join("\0") + "\0");
+  const attributes = execFileSync("git", [...safeGitConfig, "-C", repo, "check-attr", "-z", `--source=${source}`, "--stdin", "filter"], {
+    cwd: repo, env: gitEnv, timeout: 10000, input, encoding: "buffer", maxBuffer: 32 * 1024 * 1024,
+    stdio: ["pipe", "pipe", "ignore"],
+  }).toString("utf8").split("\0");
+  if (attributes.length % 3 !== 1) throw new Error("unexpected Git attribute response");
+  const drivers = new Set();
+  for (let index = 0; index + 2 < attributes.length; index += 3) {
+    if (attributes[index + 1] !== "filter") continue;
+    const value = attributes[index + 2];
+    if (value && value !== "unspecified" && value !== "unset") drivers.add(value);
+  }
+  return [...drivers];
+}
+
+function getUnsafeGitPushConfig(repo, gitEnv, safeGitConfig) {
+  const config = execFileSync("git", [...safeGitConfig, "-C", repo, "config", "--local", "--null", "--list"], {
+    cwd: repo, env: gitEnv, timeout: 10000, encoding: "buffer", maxBuffer: 4 * 1024 * 1024,
+    stdio: ["ignore", "pipe", "ignore"],
+  }).toString("utf8");
+  const unsafe = new Set();
+  for (const record of config.split("\0")) {
+    const separator = record.indexOf("\n");
+    if (separator < 0) continue;
+    const key = record.slice(0, separator).toLowerCase();
+    const value = record.slice(separator + 1).trim();
+    if (!value) continue;
+    if (key === "core.sshcommand" || key === "core.askpass" ||
+      key === "credential.helper" || key.startsWith("credential.") && key.endsWith(".helper") ||
+      /^remote\..+\.(?:vcs|uploadpack|receivepack)$/.test(key)) unsafe.add(key);
+  }
+  return [...unsafe];
 }
 
 async function sidekick_git({ action, path: repoPath, args: extraArgs, source_url: sourceUrl, destination, ref, allowed_hosts: allowedHosts }) {
+  const authorizationError = requireToolExecution({ tool: "git", action: action || null, path: repoPath || null }, "tools.execute", "git");
+  if (authorizationError) return authorizationError;
   if (action === "clone") return cloneGit({ source_url: sourceUrl, destination, ref, allowed_hosts: allowedHosts });
   const repo = repoPath || ".";
   const allowedActions = ["status", "diff", "log", "show", "ls-tree", "ls-files", "add", "commit", "push", "pull", "branch", "checkout", "stash"];
@@ -187,17 +319,55 @@ async function sidekick_git({ action, path: repoPath, args: extraArgs, source_ur
   }
 
   const gitFile = path.join(repo, ".git");
+  const metadataPolicyError = enforcePathPolicy(gitFile, writeActions.has(action) ? "write" : "read");
+  if (metadataPolicyError) return metadataPolicyError;
   let gitEnv = childProcessEnv();
-  let cmdArgs = ["-C", repo, action];
-  if (fs.existsSync(gitFile) && fs.statSync(gitFile).isFile()) {
-    const content = fs.readFileSync(gitFile, "utf-8").trim();
+  // Repository-local fsmonitor config executes helpers during ordinary reads.
+  // External diff is disabled per subcommand below. These targeted controls do
+  // not sandbox Git as a process.
+  const safeGitConfig = ["-c", "core.fsmonitor=false"];
+  let cmdArgs = [...safeGitConfig, "-C", repo, action];
+  let gitMetadataStat;
+  try { gitMetadataStat = fs.lstatSync(gitFile); } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  if (gitMetadataStat?.isSymbolicLink()) {
+    return { content: [{ type: "text", text: "Git metadata symlinks are not permitted." }], isError: true };
+  }
+  if (gitMetadataStat?.isFile()) {
+    let content;
+    try { content = readGitMetadataFile(gitFile).trim(); } catch {
+      return { content: [{ type: "text", text: "Git metadata file is invalid." }], isError: true };
+    }
     const match = content.match(/^gitdir:\s*(.+)$/i);
     if (match) {
-      const gitDir = windowsPathToWslPath(match[1].trim());
-      gitEnv = childProcessEnv({ GIT_DIR: gitDir, GIT_WORK_TREE: repo });
-      cmdArgs = [action];
+      const gitDirPath = path.resolve(repo, match[1].trim());
+      let canonicalGitDir;
+      try {
+        canonicalGitDir = fs.realpathSync(gitDirPath);
+        if (!fs.statSync(canonicalGitDir).isDirectory()) throw new Error("not a directory");
+      } catch {
+        return { content: [{ type: "text", text: "Git metadata target is unavailable or invalid." }], isError: true };
+      }
+      const gitDirPolicyError = enforcePathPolicy(canonicalGitDir, writeActions.has(action) ? "write" : "read");
+      if (gitDirPolicyError) return gitDirPolicyError;
+      const referencesError = checkGitMetadataReferences(canonicalGitDir, writeActions.has(action) ? "write" : "read");
+      if (referencesError) return referencesError;
+      // Let Git discover the checked .git file from the checked worktree. Do
+      // not convey repository-selection authority through GIT_DIR variables.
+      cmdArgs = [...safeGitConfig, "-C", repo, action];
     }
+  } else if (gitMetadataStat?.isDirectory()) {
+    let canonicalGitDir;
+    try { canonicalGitDir = fs.realpathSync(gitFile); } catch {
+      return { content: [{ type: "text", text: "Git metadata directory is unavailable." }], isError: true };
+    }
+    const gitDirPolicyError = enforcePathPolicy(canonicalGitDir, writeActions.has(action) ? "write" : "read");
+    if (gitDirPolicyError) return gitDirPolicyError;
+    const referencesError = checkGitMetadataReferences(canonicalGitDir, writeActions.has(action) ? "write" : "read");
+    if (referencesError) return referencesError;
   }
+  if (["diff", "show", "log"].includes(action)) cmdArgs.push("--no-ext-diff", "--no-textconv");
   if (extraArgs) {
     try {
       cmdArgs.push(...parseGitExtraArgs(extraArgs));
@@ -206,11 +376,62 @@ async function sidekick_git({ action, path: repoPath, args: extraArgs, source_ur
     }
   }
 
+  if (GIT_FILTER_EXECUTION_ACTIONS.has(action)) {
+    // A pull can introduce attributes we cannot know until after the fetch,
+    // so it must not reach Git's merge/checkout filter path. A safe fetch and
+    // inspect flow needs a separate explicit tool contract.
+    if (action === "pull") {
+      return { content: [{ type: "text", text: "Git pull is blocked because incoming attributes may invoke executable filters before they can be inspected. Fetch and inspect changes through an isolated Git workflow." }], isError: true };
+    }
+    let filterDrivers;
+    try { filterDrivers = getActiveGitFilterDrivers(repo, gitEnv, safeGitConfig); } catch {
+      return { content: [{ type: "text", text: "Git filter attributes could not be checked; operation denied." }], isError: true };
+    }
+    if (action === "checkout") {
+      const candidates = cmdArgs.slice(cmdArgs.indexOf("checkout") + 1).filter(arg => !arg.startsWith("-"));
+      try {
+        for (const candidate of candidates) {
+          try {
+            execFileSync("git", [...safeGitConfig, "-C", repo, "rev-parse", "--verify", `${candidate}^{tree}`], {
+              cwd: repo, env: gitEnv, timeout: 10000, stdio: "ignore",
+            });
+          } catch { continue; } // Pathspecs and newly created branch names are not tree sources.
+          filterDrivers.push(...getTreeGitFilterDrivers(repo, candidate, gitEnv, safeGitConfig));
+        }
+      } catch {
+        return { content: [{ type: "text", text: "Git checkout target filter attributes could not be checked; operation denied." }], isError: true };
+      }
+    }
+    if (filterDrivers.length > 0) {
+      return { content: [{ type: "text", text: `Git operation blocked: active filter attributes (${filterDrivers.join(", ")}) require executable filters, which cannot run without OS-enforced isolation.` }], isError: true };
+    }
+  }
+
+  if (action === "push") {
+    const protocolPolicy = ["-c", "protocol.allow=never", "-c", "protocol.https.allow=always", "-c", "protocol.ssh.allow=always"];
+    safeGitConfig.push(...protocolPolicy);
+    cmdArgs.unshift(...protocolPolicy);
+    let unsafeConfig;
+    try { unsafeConfig = getUnsafeGitPushConfig(repo, gitEnv, safeGitConfig); } catch {
+      return { content: [{ type: "text", text: "Git push configuration could not be checked; operation denied." }], isError: true };
+    }
+    if (unsafeConfig.length > 0) {
+      return { content: [{ type: "text", text: `Git push blocked: repository-local executable transport or credential settings require isolation (${unsafeConfig.join(", ")}).` }], isError: true };
+    }
+  }
+
+  let hooksPath;
   try {
+    hooksPath = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-git-hooks-"));
+    cmdArgs.unshift("-c", `core.hooksPath=${hooksPath}`);
     const stdout = execFileSync("git", cmdArgs, { cwd: repo, env: gitEnv, timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 });
     return { content: [{ type: "text", text: redactSensitive(stdout || "(empty output)") }] };
   } catch (e) {
     return { content: [{ type: "text", text: redactSensitive("Exit code: " + e.status + "\n" + (e.stderr || e.stdout || "")) }], isError: true };
+  } finally {
+    if (hooksPath) {
+      try { fs.rmSync(hooksPath, { recursive: true, force: true }); } catch {}
+    }
   }
 }
 
@@ -243,6 +464,8 @@ function parseConventionalCommit(message) {
 }
 
 async function sidekick_changelog({ action, from, to, format, group_by, use_llm, include, path: repoPath }) {
+  const denied = requireCanonicalInvocation("changelog");
+  if (denied) return denied;
   if (!from) {
     return { content: [{ type: "text", text: "from parameter required (starting ref: tag, commit, or branch)" }], isError: true };
   }
@@ -345,7 +568,7 @@ async function sidekick_changelog({ action, from, to, format, group_by, use_llm,
   if (use_llm && fmt === "markdown") {
     try {
       const summaryPrompt = `Summarize these ${filtered.length} git commits in 2-3 sentences for release notes. Focus on what changed and why it matters:\n\n${filtered.map(c => `- ${c.message}`).join("\n")}`;
-      const llmResult = await sidekick_llm({
+      const llmResult = await runLlm({
         prompt: summaryPrompt,
         system: "You are a technical writer creating release notes. Be concise and focus on user-facing changes.",
         temperature: 0.3
@@ -396,6 +619,8 @@ const MAX_DEPEND_DEPTH = 10;
 const MAX_DEPEND_RESULTS = 100;
 
 async function sidekick_depend({ action, type, target, depth, format }) {
+  const denied = requireCanonicalInvocation("depend");
+  if (denied) return denied;
   const maxDepth = Math.min(depth || 5, MAX_DEPEND_DEPTH);
   const fmt = format || "tree";
 
