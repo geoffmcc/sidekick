@@ -1,4 +1,5 @@
 const { WebStandardStreamableHTTPServerTransport } = require("@modelcontextprotocol/server");
+const { MAX_MCP_REQUEST_BODY_BYTES } = require("./limits");
 
 function createSessionManager({ createMcpServer, logDebug, now = () => Date.now(), sessionIdGenerator } = {}) {
   const sessions = new Map();
@@ -61,7 +62,7 @@ function createSessionManager({ createMcpServer, logDebug, now = () => Date.now(
     const newSessionId = generateSessionId();
     const authState = { current: metadata.authIdentity || null };
     const server = createMcpServer(() => authState.current);
-    const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: () => newSessionId, enableJsonResponse: true });
+    const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: () => newSessionId, enableJsonResponse: true, maxRequestBodySize: MAX_MCP_REQUEST_BODY_BYTES });
     registerSession(newSessionId, server, transport, { ...metadata, authState });
     await server.connect(transport);
     logDebug("CREATED_NEW_TRANSPORT", { newSessionId });

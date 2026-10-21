@@ -6,6 +6,7 @@ const { getBuiltinRegistry } = require("../tools/index");
 const dynamicTools = require("../dynamic-tools");
 const { stripSidekickPrefix } = require("../core/tool-name");
 const { CORRELATION_ID_PATTERN } = require("../tools/context");
+const { MAX_MCP_TOOL_INPUT_ELEMENTS } = require("./limits");
 
 const correlationInput = z.string().regex(CORRELATION_ID_PATTERN, "correlation_id must be 1-128 safe identifier characters").optional()
   .describe("Client-neutral correlation identifier propagated across related work");
@@ -85,7 +86,8 @@ function createMcpServer(authIdentityProvider = () => null, options = {}) {
     name: "sidekick-mcp-server",
     version: options.appVersion || packageJson.version || "0.0.0"
   }, {
-    capabilities: { tools: {} }
+    capabilities: { tools: {} },
+    maxToolInputElements: MAX_MCP_TOOL_INPUT_ELEMENTS
   });
 
   const builtinRegistry = getBuiltinRegistry();
