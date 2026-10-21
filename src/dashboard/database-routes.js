@@ -46,12 +46,17 @@ function registerDatabaseRoutes({ app, dbStore, dataDir, path, fs, callDashboard
     } catch (error) { return errorResponse(req, res, error, { status: 500, code: "service_unavailable", component: "database" }); }
   });
 
-  app.post("/api/db/backup", (req, res) => {
+  app.post("/api/db/backup", async (req, res) => {
     if (!requireDashboardTool(req, res, "sidekick_db_backup")) return;
     try {
       const backupDir = path.join(dataDir, "backups"); fs.mkdirSync(backupDir, { recursive: true });
       const backupPath = path.join(backupDir, `sidekick-${new Date().toISOString().replace(/[:.]/g, "-")}.db`);
-      dbStore.getDb().backup(backupPath).then(() => { auditLog(req, "db.backup", { path: backupPath }); res.json({ ok: true, path: backupPath }); }).catch(error => errorResponse(req, res, error, { status: 500, code: "service_unavailable", component: "database" }));
+      // Persist an actor-attributed record before exporting the database. If
+      // audit storage is unavailable, do not create a sensitive backup.
+      auditLog(req, "db.backup.requested", { path: backupPath });
+      await dbStore.getDb().backup(backupPath);
+      auditLog(req, "db.backup.completed", { path: backupPath });
+      res.json({ ok: true, path: backupPath });
     } catch (error) { return errorResponse(req, res, error, { status: 500, code: "service_unavailable", component: "database" }); }
   });
 
@@ -59,6 +64,7 @@ function registerDatabaseRoutes({ app, dbStore, dataDir, path, fs, callDashboard
     if (!requireDashboardTool(req, res, "sidekick_db_search")) return;
     try {
       if (!req.query.q) return errorResponse(req, res, null, { status: 400, code: "invalid_request", component: "database" });
+      if (String(req.query.q).length > 500) return errorResponse(req, res, null, { status: 400, code: "invalid_request", component: "database" });
       const parsedLimit = Number.parseInt(req.query.limit, 10);
       const result = await callDashboardTool("db_search", { query: String(req.query.q), limit: Number.isFinite(parsedLimit) ? Math.min(Math.max(parsedLimit, 1), 500) : 50 }, dashboardExecutionMetadata(req, authenticatedUser(req) || "dashboard"));
       const text = result?.content?.[0]?.text || "";
