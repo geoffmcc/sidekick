@@ -22,6 +22,7 @@ const { validateInfluxUrl } = require("../../influx-endpoint-policy");
 const { readSecret } = require("../../core/runtime-secrets");
 const { childProcessEnv } = require("../../security/child-process");
 const { runBoundedShell } = require("../../security/command-execution");
+const { requireToolExecution, requireCanonicalInvocation } = require("../read-authorization");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "..", "..", "data");
 fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -333,6 +334,8 @@ function checkPlatformModules() {
 }
 
 async function sidekick_health({ check, services, commands, threshold }) {
+  const authorizationError = requireToolExecution({ tool: "health", check: check || null }, "tools.execute_high", "health");
+  if (authorizationError) return authorizationError;
   const now = new Date().toISOString();
   const checks = check === "all" ? ["services", "processes", "disk", "network", "modules"] : [check];
   const results = {};
@@ -470,7 +473,7 @@ async function sidekick_health({ check, services, commands, threshold }) {
   return { content: [{ type: "text", text: output }] };
 }
 
-async function sidekick_status({ include, services }) {
+async function runStatus({ include, services }) {
   const sections = (include || "services,disk").split(",").map(s => s.trim());
   const output = {};
   if (sections.includes("services")) {
@@ -550,6 +553,12 @@ async function sidekick_status({ include, services }) {
   return { content: [{ type: "text", text: JSON.stringify(output, null, 2) }] };
 }
 
+async function sidekick_status(args = {}) {
+  const denied = requireCanonicalInvocation("status");
+  if (denied) return denied;
+  return runStatus(args);
+}
+
 const MAX_NETDIAG_COMMANDS = 15;
 const COMMON_PORTS = [22, 80, 443, 3000, 3001, 4000, 5000, 8080, 8443, 9090];
 const MAX_NETDIAG_TARGET_LENGTH = 2048;
@@ -578,6 +587,8 @@ function runNetDiagCommand(program, args, timeout = 5000) {
 }
 
 async function sidekick_netdiag({ action, target, port_range, timeout, format }) {
+  const authorizationError = requireToolExecution({ tool: "netdiag", action: action || null, target: target || null }, "tools.execute_high", "netdiag");
+  if (authorizationError) return authorizationError;
   if (!target && action !== "listeners") {
     return { content: [{ type: "text", text: "target required (host, URL, or IP)" }], isError: true };
   }
@@ -775,6 +786,8 @@ function cacheMetricsMetadata(key, value) {
 }
 
 async function sidekick_metrics({ action, measurement, fields, tags, timestamp, query, time_range }) {
+  const authorizationError = requireToolExecution({ tool: "metrics", action: action || null, measurement: measurement || null }, "tools.execute_high", "metrics");
+  if (authorizationError) return authorizationError;
   try {
     const INFLUX_URL = process.env.SIDEKICK_INFLUX_URL || 'http://localhost:8086';
     const INFLUX_TOKEN = readSecret('SIDEKICK_INFLUX_TOKEN');
@@ -993,7 +1006,7 @@ const descriptors = Object.freeze([
       time_range: z.string().optional().describe("Time range for list_fields (e.g. -30d)"),
     }),
     args: { action: "string (write|query|list_measurements|list_fields)", measurement: "string (measurement name for write/list_fields)", fields: "object (field values for write)", tags: "object (optional, tags for write)", timestamp: "number (optional, nanosecond timestamp for write)", query: "string (Flux query for query action)", time_range: "string (optional, time range for list_fields, e.g. -30d)" },
-    risk: "low",
+    risk: "high",
     category: "Monitoring",
     source: "builtin",
     family: "observability",
