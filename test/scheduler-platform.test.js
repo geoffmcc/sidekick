@@ -77,6 +77,9 @@ console.log('Passed\n');
 
 (async () => {
   try {
+    const directRunbook = await tools.getBuiltinRegistry().get('runbook').handler({ action: 'create', name: 'direct-handler-blocked', steps: [] });
+    assert.strictEqual(directRunbook.code, 'unauthenticated', 'runbook handler calls outside authenticated execution must be denied');
+
     tools.setSource('mcp');
 
     console.log('Test SP.0: scheduled executions inherit project context and register it');

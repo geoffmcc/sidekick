@@ -17,6 +17,7 @@ const { z } = require("zod");
 const evolveCommon = require("../../evolve/common");
 const platformKernel = require("../../platform/kernel");
 const toolContext = require("../context");
+const { requireToolExecution } = require("../read-authorization");
 const {
   createScheduledPlatformExecution,
   transitionScheduledPlatformExecution,
@@ -161,6 +162,8 @@ function generateRunbookId() {
 }
 
 async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_index }) {
+  const authorizationError = requireToolExecution({ tool: "runbook", action: action || null }, "tools.execute_critical", "runbook");
+  if (authorizationError) return authorizationError;
   const data = loadRunbooks();
   const actorId = toolContext.getExecutionContext().actor;
   const execMode = mode || "autonomous";
