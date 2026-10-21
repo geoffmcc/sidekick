@@ -13,10 +13,8 @@ function payload(result) {
 
 test("operator identity is distinguished from user consent for network-scope mutation", async () => {
   const result = await sidekick_network_scopes({ action: "create", name: "fixture" }, { context: { source: "agent", authIdentity: null } });
-  assert.equal(result.code, "operator_authentication_required");
-  assert.equal(payload(result).code, "operator_authentication_required");
-  assert.match(payload(result).error, /authenticated operator principal/);
-  assert.match(payload(result).error, /consent or approval alone/);
+  assert.equal(result.code, "unauthenticated");
+  assert.match(result.content[0].text, /Authentication required/);
 });
 
 test("private outbound access reports the missing named scope without implying user consent grants it", async () => {

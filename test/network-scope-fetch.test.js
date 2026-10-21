@@ -17,8 +17,10 @@ process.env.SIDEKICK_APPROVAL_MODE = "off";
 require("../src/db").runPendingMigrations();
 const scopes = require("../src/security/network-scopes");
 const { callInternalTool } = require("../src/tools/dispatcher");
+const { createOwnerContext } = require("./helpers/authorized-context");
 const { sidekick_web_fetch } = require("../src/tools/families/net-fetch");
 const scopePolicy = require("../src/security/network-scope");
+const authContext = createOwnerContext({ project: "network-fetch-test" });
 
 (async () => {
   const server = http.createServer((_req, res) => res.end("scoped-fetch"));
@@ -26,9 +28,11 @@ const scopePolicy = require("../src/security/network-scope");
   const port = server.address().port;
   const scope = scopes.create({ name: "fetch_fixture", allowed_cidrs: ["127.0.0.0/8"], allowed_protocols: ["http"], allowed_ports: [port], allow_private_addresses: true }, "test-operator");
   try {
-    const allowed = await callInternalTool("web_fetch", { url: `http://127.0.0.1:${port}/`, network_scope: "fetch_fixture", network_scope_revision: scope.revision });
+    const directCall = await require("../src/tools/context").runWithContext(authContext, () => sidekick_web_fetch({ url: `http://127.0.0.1:${port}/` }));
+    assert.strictEqual(directCall.code, "canonical_dispatch_required", "raw handler calls must not bypass outbound policy or audit");
+    const allowed = await callInternalTool("web_fetch", { url: `http://127.0.0.1:${port}/`, network_scope: "fetch_fixture", network_scope_revision: scope.revision }, authContext);
     assert.match(allowed.content[0].text, /scoped-fetch/);
-    const denied = await callInternalTool("web_fetch", { url: "http://169.254.169.254/", network_scope: "fetch_fixture", network_scope_revision: scope.revision });
+    const denied = await callInternalTool("web_fetch", { url: "http://169.254.169.254/", network_scope: "fetch_fixture", network_scope_revision: scope.revision }, authContext);
     assert.strictEqual(denied.isError, true);
     assert.match(denied.content[0].text, /network scope|permanent|denied/i);
 
@@ -62,7 +66,7 @@ const scopePolicy = require("../src/security/network-scope");
     const closedPort = closedPortServer.address().port;
     await new Promise(resolve => closedPortServer.close(resolve));
     const closedScope = scopes.create({ name: "fetch_closed_fixture", allowed_cidrs: ["127.0.0.0/8"], allowed_protocols: ["http"], allowed_ports: [closedPort], allow_private_addresses: true }, "test-operator");
-    const unreachable = await callInternalTool("web_fetch", { url: `http://127.0.0.1:${closedPort}/`, network_scope: "fetch_closed_fixture", network_scope_revision: closedScope.revision });
+    const unreachable = await callInternalTool("web_fetch", { url: `http://127.0.0.1:${closedPort}/`, network_scope: "fetch_closed_fixture", network_scope_revision: closedScope.revision }, authContext);
     assert.ok(["service_unreachable", "network_unreachable"].includes(unreachable.code), `expected a bounded reachability classification, got ${unreachable.code}`);
     assert.ok(JSON.parse(unreachable.content[0].text).guidance, "unreachable fixture returns actionable guidance");
 
@@ -72,8 +76,8 @@ const scopePolicy = require("../src/security/network-scope");
       await new Promise(resolve => slowServer.listen(0, "127.0.0.1", resolve));
       const slowPort = slowServer.address().port;
       const slowScope = scopes.create({ name: "fetch_timeout_fixture", allowed_cidrs: ["127.0.0.0/8"], allowed_protocols: ["http"], allowed_ports: [slowPort], allow_private_addresses: true }, "test-operator");
-      const timeout = await sidekick_web_fetch({ url: `http://127.0.0.1:${slowPort}/`, network_scope: "fetch_timeout_fixture", network_scope_revision: slowScope.revision }, { context: { timeoutMs: 50 } });
-      assert.strictEqual(timeout.code, "network_timeout");
+      const timeout = await callInternalTool("web_fetch", { url: `http://127.0.0.1:${slowPort}/`, network_scope: "fetch_timeout_fixture", network_scope_revision: slowScope.revision }, { ...authContext, timeoutMs: 50 });
+      assert.strictEqual(timeout.code, "timed_out_operation_may_continue", "dispatcher owns the deadline and reports if a timed-out operation may still be settling");
     } finally {
       if (slowServer?.listening) await new Promise(resolve => slowServer.close(resolve));
     }

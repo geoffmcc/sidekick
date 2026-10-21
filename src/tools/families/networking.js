@@ -16,12 +16,15 @@ const { z } = require("zod");
 const { validIdentifier, validPort, validDomainName, validAllowedIps, validWireGuardEndpoint, validWireGuardPublicKey } = require("../../core/command-validation");
 const { DATA_DIR } = require("../../db");
 const { childProcessEnv } = require("../../security/child-process");
+const { requireToolExecution } = require("../read-authorization");
 
 function safeExecFileSync(program, args, options = {}) {
   return execFileSync(program, args, { ...options, env: childProcessEnv(options.env) });
 }
 
 async function sidekick_tunnel({ action, url, port, name }) {
+  const denied = requireToolExecution({ tool: "tunnel" }, "tools.execute_high", "tunnel");
+  if (denied) return denied;
   try {
     if (action === "start") {
       if (!port) {
@@ -100,6 +103,8 @@ async function sidekick_tunnel({ action, url, port, name }) {
 }
 
 async function sidekick_wireguard({ action, interface_name, peer_name, public_key, endpoint, allowed_ips }) {
+  const denied = requireToolExecution({ tool: "wireguard" }, "tools.execute_high", "wireguard");
+  if (denied) return denied;
   try {
     if (action === "status") {
       const result = safeExecFileSync("sudo", ["/usr/local/sbin/sidekick-wg", "show", "all"], { timeout: 5000, encoding: "utf-8" });
@@ -167,6 +172,8 @@ async function sidekick_wireguard({ action, interface_name, peer_name, public_ke
 }
 
 async function sidekick_nginx({ action, site_name, domain, upstream_port, ssl_email }) {
+  const denied = requireToolExecution({ tool: "nginx" }, "tools.execute_high", "nginx");
+  if (denied) return denied;
   try {
     if (action === "status") {
       const result = safeExecFileSync("sudo", ["systemctl", "status", "nginx", "--no-pager"], { timeout: 5000, encoding: "utf-8" });
