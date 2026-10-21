@@ -21,6 +21,7 @@ const https = require("https");
 const { z } = require("zod");
 const { redactSensitive } = require("../../redact");
 const { resolveOutboundUrl } = require("../../security/outbound-url");
+const { requireToolExecution, requireCanonicalInvocation } = require("../read-authorization");
 const { loadSecrets } = require("../../core/secrets-store");
 const { decryptSecret } = require("../../core/secret-cipher");
 const { readSecret } = require("../../core/runtime-secrets");
@@ -372,6 +373,22 @@ function formatCiStatusText(result) {
 }
 
 async function sidekick_ci_status(args = {}) {
+  const denied = requireCanonicalInvocation("ci_status");
+  if (denied) return denied;
+  const execution = require("../context").getExecutionContext();
+  if (!execution.authIdentity?.principal_id) {
+    if (execution.source !== "test") return { content: [{ type: "text", text: "Authenticated principal required for GitHub CI status" }], isError: true, code: "unauthenticated" };
+  } else {
+    const decision = require("../../core/authorization").authorize({
+      principalId: execution.authIdentity.principal_id,
+      permission: "github.read",
+      credentialScopes: execution.authIdentity.scopes,
+      delegationId: execution.authIdentity.delegation_id || execution.authIdentity.delegationId || null,
+      resource: { tool: "ci_status", repository: args.repo || null },
+    });
+    if (!decision.ok) return { content: [{ type: "text", text: `GitHub CI access denied: ${decision.code}` }], isError: true, code: "authorization_denied" };
+  }
+
   const format = args.format || "text";
   if (!args.repo) return { content: [{ type: "text", text: "repo is required in owner/repository format" }], isError: true };
   if (!validateRepoName(args.repo)) return { content: [{ type: "text", text: "Invalid repository. Expected owner/repository format" }], isError: true };
@@ -417,6 +434,8 @@ async function sidekick_ci_status(args = {}) {
 }
 
 async function sidekick_github({ action, repo, args: extraArgs }) {
+  const authorizationError = requireToolExecution({ tool: "github", action: action || null, repo: repo || null }, "tools.execute_high", "github");
+  if (authorizationError) return authorizationError;
   const parsedArgs = parseGithubArgs(extraArgs);
   const token = resolveGithubToken();
 
@@ -589,7 +608,7 @@ const descriptors = Object.freeze([
     description: "Read-only GitHub CI/check-run inspection for a PR head, commit SHA, ref, or branch",
     schema: SCHEMAS.ci_status,
     args: { repo: "string (owner/repository)", pr: "number|string (optional, PR number)", pull_number: "number|string (optional, PR number)", sha: "string (optional, commit SHA)", commit: "string (optional, commit SHA)", ref: "string (optional, branch/ref/SHA)", branch: "string (optional, branch name)", format: "string (optional, text|json - default text)" },
-    risk: "low",
+    risk: "medium",
     category: "Git & GitHub",
     source: "builtin",
     family: "github",
