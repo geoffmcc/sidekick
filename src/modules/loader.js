@@ -211,6 +211,10 @@ function buildModuleDescriptors(record, entry) {
       source: `module:${record.name}`,
       family: null,
       authorizationPermission: declaredTool?.permission || null,
+      // This bit comes from the server-side repository provenance, never the
+      // module manifest or entry. Managed third-party packs cannot self-assert
+      // first-party trust.
+      trustedBuiltin: record.source === "builtin",
     })
   });
 }
@@ -258,6 +262,10 @@ function enableModule(name, entry) {
   repository.ensureModuleStorage();
   const record = repository.getModule(name);
   if (!record) throw new Error(`Module "${name}" is not registered`);
+  // Defence in depth: callers may pass an entry object directly and bypass
+  // entries.resolveModuleEntry. No non-builtin executable source may reach
+  // descriptor construction in Core without an OS-enforced isolation backend.
+  entryLoader.assertExecutionIsolation(record);
   if (isModuleActive(record.name)) {
     return { module: record, descriptors: activeModules.get(record.name), alreadyActive: true };
   }
@@ -354,8 +362,11 @@ function disableModule(name) {
  * are never left registered alongside the new version's.
  */
 function upgradeModule(name, manifest, entryOrOptions) {
+  const currentRecord = repository.getModule(name);
+  if (!currentRecord) throw new Error(`Module "${name}" is not registered`);
   const suppliedEntry = entryOrOptions && typeof entryOrOptions.buildDescriptors === "function" ? entryOrOptions : null;
   const options = suppliedEntry ? { entryPoint: suppliedEntry.entryPoint, entryHash: suppliedEntry.entryHash } : (entryOrOptions || {});
+  entryLoader.assertExecutionIsolation(currentRecord, options.provenance);
   const { resolveEntry, ...repositoryOptions } = options;
 
   if (isModuleActive(name)) disableModule(name);

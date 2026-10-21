@@ -21,10 +21,16 @@ function freshRequire() {
       delete require.cache[key];
     }
   }
+  const repository = require('../src/modules/repository');
+  // These cases exercise registry/descriptor mechanics with test-owned
+  // in-memory entries; isolation of untrusted persisted modules has separate
+  // negative coverage in modules-third-party-lifecycle.test.js.
+  const registerModule = repository.registerModule.bind(repository);
+  repository.registerModule = (manifest, options = {}) => registerModule(manifest, { ...options, source: 'builtin' });
   return {
     dbStore: require('../src/db'),
     tools: require('../src/tools'),
-    repository: require('../src/modules/repository'),
+    repository,
     loader: require('../src/modules/loader'),
   };
 }

@@ -10,9 +10,9 @@
  *
  *   - builtin modules  -> the in-repo entry object (trusted, ships with the
  *                         signed release, hash-attested in builtin-modules.js)
- *   - managed modules  -> loaded from the managed store through the verified
- *                         entry loader, which refuses to require anything that
- *                         fails integrity, compatibility or configuration
+ *   - managed modules  -> first-party bundled pack entries are loaded only
+ *                         after parent provenance validation; untrusted
+ *                         managed entries fail closed until OS isolation exists
  *
  * Resolution is deliberately best-effort per module: one module that cannot be
  * loaded must not stop every other module from being restored, and a load
