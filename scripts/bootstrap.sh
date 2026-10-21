@@ -261,6 +261,8 @@ generate_secret_file() {
 }
 for secret_name in \
   sidekick_api_key \
+  sidekick_agent_proxy_key \
+  sidekick_agent_scheduler_key \
   sidekick_dashboard_pass \
   sidekick_grafana_admin_password \
   sidekick_influx_token \
