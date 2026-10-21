@@ -19,6 +19,7 @@
 // Never imports tools-legacy.js.
 
 const { z } = require("zod");
+const { requireToolExecution } = require("../read-authorization");
 const platformKernel = require("../../platform/kernel");
 const { getExecutionContext, getExecutionSource } = require("../context");
 
@@ -56,6 +57,8 @@ function errorResult(text) {
 }
 
 async function sidekick_workspace({ action, workspace_id, project, name, config, environment, resource_limits, metadata, secret_name, secret_value, state, limit, confirm, dry_run }) {
+  const authorizationError = requireToolExecution({ tool: "workspace", action: action || null, workspace_id: workspace_id || null }, "tools.execute_high", "workspace");
+  if (authorizationError) return authorizationError;
   try {
     switch (action) {
       case "list": {

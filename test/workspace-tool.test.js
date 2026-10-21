@@ -1,11 +1,11 @@
 const assert = require('assert');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
-const TEST_DATA_DIR = path.join(__dirname, 'test-workspace-tool-data');
-fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
-fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
+const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sidekick-workspace-tool-'));
 
+process.env.NODE_ENV = 'test';
 process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
 process.env.SIDEKICK_APPROVAL_MODE = 'off';
 process.env.SIDEKICK_TOOL_POLICY = 'open';
@@ -18,7 +18,7 @@ const db = require('../src/db');
 const platformKernel = require('../src/platform/kernel');
 const { createTestExecutionContext, runWithContext } = require('../src/tools/context');
 
-const { TOOLS } = tools;
+const { TOOLS } = { TOOLS: require('./helpers/authorized-context').withOwnerToolContext(tools.TOOLS, { source: 'mcp' }) };
 
 console.log('Running Workspace Tool Tests...\n');
 
@@ -54,7 +54,7 @@ console.log('Running Workspace Tool Tests...\n');
     await TOOLS.workspace({ action: 'create', project: 'ws_tool_other' });
     const other = platformKernel.getWorkspaceByProject('ws_tool_other');
     result = await runWithContext(createTestExecutionContext({ project: 'ws_tool_test' }), () => TOOLS.workspace({ action: 'get', project: 'ws_tool_other' }));
-    assert.ok(result.isError, 'execution project must not read another project workspace');
+    assert.ok(result.isError, `execution project must not read another project workspace: ${result.content?.[0]?.text}`);
     result = await runWithContext(createTestExecutionContext({ project: 'ws_tool_test' }), () => TOOLS.workspace({ action: 'get', workspace_id: other.workspace_id }));
     assert.ok(result.isError, 'execution project must not read another workspace by id');
     result = await TOOLS.workspace({ action: 'list' });
@@ -161,10 +161,12 @@ console.log('Running Workspace Tool Tests...\n');
     assert.ok(result.content[0].text.includes('Invalid arguments'));
     console.log('Passed\n');
 
-    fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
     console.log('All Workspace Tool Tests Passed!');
   } catch (e) {
     console.error('Workspace tool test failed:', e);
-    process.exit(1);
+    process.exitCode = 1;
+  } finally {
+    db.closeDatabase();
+    fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
   }
 })();
