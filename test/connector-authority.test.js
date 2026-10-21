@@ -9,14 +9,16 @@
 
 const assert = require("assert");
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 
-const TEST_DATA_DIR = path.join(__dirname, "test-data-connector-authority");
-fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
-fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
+const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-connector-authority-"));
 process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
+process.env.NODE_ENV = "test";
 process.env.SIDEKICK_API_KEY = "sk-sidekick-test-key";
-process.env.SIDEKICK_SECRET_KEY = "test-master-key";
+process.env.SIDEKICK_SECRET_KEY_FILE = path.join(TEST_DATA_DIR, "secret-key");
+fs.writeFileSync(process.env.SIDEKICK_SECRET_KEY_FILE, "test-master-key");
+delete process.env.SIDEKICK_SECRET_KEY;
 delete process.env.GITHUB_TOKEN;
 delete process.env.SIDEKICK_GITHUB_TOKEN;
 delete process.env.SIDEKICK_DISABLE_CONNECTOR_BOOTSTRAP;
@@ -28,7 +30,9 @@ const { encryptSecret } = require("../src/core/secret-cipher");
 const { bootstrapConnectors } = require("../src/connectors/bootstrap");
 const resolve = require("../src/connectors/resolve");
 const github = require("../src/tools/families/github");
-const { sidekick_connector } = require("../src/tools/families/connectors");
+const { dispatchTestTool } = require("../src/tools/dispatcher");
+const connectorDescriptor = require("../src/tools/canonical-registry").getCanonicalRegistry().get("connector");
+const invokeConnector = args => dispatchTestTool({ descriptor: connectorDescriptor, args, context: { source: "connector-authority-test" } });
 
 console.log("Running connector authority tests...\n");
 
@@ -136,7 +140,7 @@ test("the active connector's secret_ref outranks env GITHUB_TOKEN (connector is 
   }
 });
 
-test("env GITHUB_TOKEN is the fallback when no connector is active", () => {
+test("test-only GITHUB_TOKEN fallback is available when no connector is active", () => {
   resetConnectors(); // removes secrets.enc, no connector registered
   process.env.GITHUB_TOKEN = "ghp_fromenv_fallback2";
   try {
@@ -146,7 +150,7 @@ test("env GITHUB_TOKEN is the fallback when no connector is active", () => {
   }
 });
 
-test("env GITHUB_TOKEN is used when the active connector's secret_ref cannot resolve", () => {
+test("test-only GITHUB_TOKEN fallback is used when an active connector secret is unavailable", () => {
   resetConnectors(); // no secrets.enc: the connector's secret_ref resolves to null
   const conn = kernel.registerConnector({
     name: "GH-noref", type: "github", endpoint: "https://api.github.com",
@@ -224,27 +228,29 @@ test("connector tool lists connectors without exposing the secret reference", as
   resetConnectors();
   storeGithubSecret("ghp_toolview_6");
   bootstrapConnectors();
-  const listed = parse(await sidekick_connector({ action: "list" }));
+  const listed = parse(await invokeConnector({ action: "list" }));
   assert.ok(Array.isArray(listed.connectors) && listed.connectors.length === 1);
   const c = listed.connectors[0];
   assert.strictEqual(c.type, "github");
   assert.strictEqual(c.has_secret_ref, true, "reports credential is configured");
   assert.ok(!("secret_ref" in c), "raw secret_ref is not exposed");
 
-  const got = parse(await sidekick_connector({ action: "get", connector_id: c.connector_id }));
+  const got = parse(await invokeConnector({ action: "get", connector_id: c.connector_id }));
   assert.strictEqual(got.connector_id, c.connector_id);
   assert.ok(!("secret_ref" in got));
 
-  const events = parse(await sidekick_connector({ action: "events", connector_id: c.connector_id }));
+  const events = parse(await invokeConnector({ action: "events", connector_id: c.connector_id }));
   assert.ok(Array.isArray(events.events) && events.events.some(e => e.event_type === "connector.registered"));
 });
 
 test("connector tool rejects get/events without a connector_id and unknown actions", async () => {
-  const noId = await sidekick_connector({ action: "get" });
+  const noId = await invokeConnector({ action: "get" });
   assert.ok(noId.isError);
-  const bad = await sidekick_connector({ action: "frobnicate" });
+  const bad = await invokeConnector({ action: "frobnicate" });
   assert.ok(bad.isError);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
+try { require("../src/db").closeDatabase(); } catch {}
+fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
 process.exit(failed > 0 ? 1 : 0);
