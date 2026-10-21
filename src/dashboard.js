@@ -1228,6 +1228,7 @@ registerQuickActionsRoute({
   callDashboardTool,
   dashboardExecutionMetadata,
   authenticatedUser,
+  requireIdentityPermission,
   logError,
   fs,
   path,
