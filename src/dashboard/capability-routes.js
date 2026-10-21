@@ -35,6 +35,7 @@ function registerCapabilityRoutes({ app, capabilityAction, capabilityResult, cal
       action: "install",
       name: req.body?.name,
       path: req.body?.path,
+      expected_package_hash: req.body?.expected_package_hash,
       config: req.body?.config,
       enable: req.body?.enable === true,
     }, "install"));
@@ -53,6 +54,7 @@ function registerCapabilityRoutes({ app, capabilityAction, capabilityResult, cal
       action: "upgrade",
       name: req.params.name,
       path: req.body?.path,
+      expected_package_hash: req.body?.expected_package_hash,
       allow_same_version: req.body?.allow_same_version === true,
       allow_downgrade: req.body?.allow_downgrade === true,
     }, "upgrade"));

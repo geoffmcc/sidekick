@@ -18,6 +18,7 @@ process.env.SIDEKICK_DB_FILE = path.join(TEST_DATA_DIR, 'sidekick.db');
 process.env.SIDEKICK_TOOL_POLICY = 'open';
 process.env.SIDEKICK_APPROVAL_MODE = 'off';
 process.env.SIDEKICK_SECRET_KEY = 'capability-packs-test-secret-key';
+process.env.SIDEKICK_ALLOWED_PATHS = process.cwd();
 
 require('../src/db').runPendingMigrations();
 
@@ -32,6 +33,7 @@ const moduleStore = require('../src/modules/store');
 const workflowRepository = require('../src/workflows/repository');
 const dbStore = require('../src/db');
 const { callInternalTool } = require('../src/tools/dispatcher');
+const authorizedContext = require('./helpers/authorized-context').createOwnerContext({ source: 'internal' });
 
 const PACK = 'developer';
 const BUNDLED_PATH = path.resolve(__dirname, '..', 'packs', 'developer');
@@ -286,7 +288,7 @@ function buildUpgradeCandidate() {
     for (const definition of workflowRepository.listWorkflowDefinitions({ ownerKind: 'pack', ownerName: PACK })) {
       assert.strictEqual(definition.state, 'disabled', `${definition.name} should not be runnable`);
     }
-    const run = await callInternalTool('workflow', { action: 'run', name: 'developer/repository-recon', inputs: { path: process.cwd() } });
+    const run = await callInternalTool('workflow', { action: 'run', name: 'developer/repository-recon', inputs: { path: process.cwd() } }, authorizedContext);
     assert.ok(/is disabled/.test(run.content[0].text), run.content[0].text);
 
     const enabledKnowledge = dbStore.getDb()
@@ -414,7 +416,7 @@ function buildUpgradeCandidate() {
   // never exercised. A purpose-built fixture pack (NOT a copy of a bundled
   // pack: distinct name, one trivial self-contained tool) proves the whole
   // lifecycle under third-party provenance.
-  await asyncTest('CP.17: a third-party pack installs with third_party provenance and its full lifecycle works', async () => {
+  await asyncTest('CP.17: a third-party pack installs but cannot activate executable code', async () => {
     const fixture = path.resolve(__dirname, 'fixtures', 'third-party-pack');
     const inspectionResult = packLifecycle.inspect(fixture);
     assert.strictEqual(inspectionResult.installable, true, inspectionResult.problems.join('; '));
@@ -426,20 +428,12 @@ function buildUpgradeCandidate() {
     assert.strictEqual(pack.state, 'installed', 'install does not auto-enable');
     assert.strictEqual(registry().has('fixture_observation'), false, 'tool not active before enable');
 
-    const enabled = packLifecycle.enable('fixture-observatory');
-    assert.strictEqual(enabled.pack.state, 'enabled');
-    assert.strictEqual(packLifecycle.health('fixture-observatory').status, 'healthy');
-    assert.ok(registry().has('fixture_observation'), 'fixture tool registered after enable');
-    assert.strictEqual(registry().get('fixture_observation').source, 'module:observatory-tools');
+    assert.throws(() => packLifecycle.enable('fixture-observatory'), /OS-enforced module isolation is unavailable/);
+    assert.strictEqual(packRepository.getPack('fixture-observatory').state, 'installed');
+    assert.strictEqual(moduleLoader.isModuleActive('observatory-tools'), false);
+    assert.strictEqual(registry().has('fixture_observation'), false, 'untrusted tool never enters the Core registry');
 
-    // The tool dispatches through the real dispatcher like any other.
-    const result = await callInternalTool('fixture_observation', { value: 3 });
-    assert.strictEqual(result.isError, undefined, result.content[0].text.slice(0, 300));
-    const payload = JSON.parse(result.content[0].text);
-    assert.strictEqual(payload.result, 3);
-    assert.strictEqual(payload.provenance_fixture, true);
-
-    // Uninstall removes the capability and its managed installation.
+    // Uninstall remains available for a package that cannot be activated.
     const removed = packLifecycle.uninstall('fixture-observatory');
     assert.deepStrictEqual(removed.removed.modules, ['observatory-tools']);
     assert.strictEqual(packRepository.getPack('fixture-observatory'), null);
@@ -447,68 +441,71 @@ function buildUpgradeCandidate() {
     assert.strictEqual(registry().has('fixture_observation'), false);
   });
 
-  test('CP.18: failed module teardown does not falsely disable or uninstall a live pack', () => {
-    const fixture = path.resolve(__dirname, 'fixtures', 'third-party-pack');
-    packLifecycle.install(fixture, { enable: true });
-    assert.strictEqual(moduleLoader.isModuleActive('observatory-tools'), true);
+  test('CP.18: failed module teardown does not falsely disable or uninstall a live trusted pack', () => {
+    packLifecycle.enable(PACK);
+    assert.strictEqual(moduleLoader.isModuleActive('developer-tools'), true);
 
     const originalDisable = moduleLifecycle.disable;
     moduleLifecycle.disable = () => { throw new Error('simulated teardown failure'); };
     try {
       assert.throws(
-        () => packLifecycle.disable('fixture-observatory'),
-        /could not be disabled: observatory-tools: simulated teardown failure/
+        () => packLifecycle.disable(PACK),
+        /could not be disabled: developer-tools: simulated teardown failure/
       );
-      assert.strictEqual(packRepository.getPack('fixture-observatory').state, 'enabled');
-      assert.strictEqual(moduleLoader.isModuleActive('observatory-tools'), true);
+      assert.strictEqual(packRepository.getPack(PACK).state, 'enabled');
+      assert.strictEqual(moduleLoader.isModuleActive('developer-tools'), true);
 
       assert.throws(
-        () => packLifecycle.uninstall('fixture-observatory'),
-        /could not be disabled: observatory-tools: simulated teardown failure/
+        () => packLifecycle.uninstall(PACK),
+        /could not be disabled: developer-tools: simulated teardown failure/
       );
-      assert.ok(packRepository.getPack('fixture-observatory'), 'failed uninstall preserves the pack record');
-      assert.ok(moduleRepository.getModule('observatory-tools'), 'failed uninstall preserves the module record');
+      assert.ok(packRepository.getPack(PACK), 'failed uninstall preserves the pack record');
+      assert.ok(moduleRepository.getModule('developer-tools'), 'failed uninstall preserves the module record');
     } finally {
       moduleLifecycle.disable = originalDisable;
     }
 
-    const removed = packLifecycle.uninstall('fixture-observatory');
-    assert.deepStrictEqual(removed.removed.modules, ['observatory-tools']);
-    assert.strictEqual(packRepository.getPack('fixture-observatory'), null);
+    const removed = packLifecycle.uninstall(PACK);
+    assert.deepStrictEqual(removed.removed.modules, ['developer-tools']);
+    assert.strictEqual(packRepository.getPack(PACK), null);
   });
 
-  test('CP.19: failed removal of a dropped upgrade component restores package metadata', () => {
-    const fixture = path.resolve(__dirname, 'fixtures', 'third-party-pack');
-    copyTree(fixture, FIXTURE_UPGRADE_DIR);
-    const manifestPath = path.join(FIXTURE_UPGRADE_DIR, 'sidekick.pack.json');
+  test('CP.19: failed removal of a dropped first-party component restores pack metadata', () => {
+    bundled.installBundledPack(PACK, { enable: true });
+    copyTree(BUNDLED_PATH, UPGRADE_DIR);
+    const manifestPath = path.join(UPGRADE_DIR, 'sidekick.pack.json');
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
-    manifest.version = '1.1.0';
+    manifest.version = '1.0.2';
     manifest.modules = [];
+    manifest.workflows = [];
+    manifest.requires.tools = [];
+    manifest.requires.optional_tools = [];
+    manifest.permissions = [];
     fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-    fs.rmSync(path.join(FIXTURE_UPGRADE_DIR, 'modules'), { recursive: true, force: true });
+    fs.rmSync(path.join(UPGRADE_DIR, 'modules'), { recursive: true, force: true });
+    fs.rmSync(path.join(UPGRADE_DIR, 'workflows'), { recursive: true, force: true });
 
-    packLifecycle.install(fixture, { enable: true });
-    const before = packRepository.getPack('fixture-observatory');
+    const before = packRepository.getPack(PACK);
     const originalUninstall = moduleLifecycle.uninstall;
     moduleLifecycle.uninstall = () => { throw new Error('simulated component removal failure'); };
     try {
       assert.throws(
-        () => packLifecycle.upgrade('fixture-observatory', FIXTURE_UPGRADE_DIR),
+        () => packLifecycle.upgrade(PACK, UPGRADE_DIR),
         /simulated component removal failure/
       );
     } finally {
       moduleLifecycle.uninstall = originalUninstall;
     }
 
-    const restored = packRepository.getPack('fixture-observatory');
+    const restored = packRepository.getPack(PACK);
     assert.strictEqual(restored.version, before.version);
     assert.strictEqual(restored.install_path, before.install_path);
     assert.ok(fs.existsSync(restored.install_path), 'rollback keeps the previous package installed');
-    assert.ok(moduleRepository.getModule('observatory-tools'), 'dropped module ownership remains after failed cleanup');
-    assert.strictEqual(moduleLoader.isModuleActive('observatory-tools'), true);
+    assert.ok(moduleRepository.getModule('developer-tools'), 'dropped module ownership remains after failed cleanup');
+    assert.strictEqual(moduleLoader.isModuleActive('developer-tools'), true);
 
-    packLifecycle.uninstall('fixture-observatory');
-    fs.rmSync(FIXTURE_UPGRADE_DIR, { recursive: true, force: true });
+    packLifecycle.uninstall(PACK);
+    fs.rmSync(UPGRADE_DIR, { recursive: true, force: true });
   });
 
   console.log(`\n${failures === 0 ? 'All Capability Packs v1 tests passed.' : `${failures} capability-pack test(s) FAILED.`}`);

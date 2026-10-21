@@ -32,7 +32,10 @@ function bundledVersionIsNewer(bundledVersion, installedVersion) {
 }
 
 function bundledRoot() {
-  return process.env.SIDEKICK_BUNDLED_PACKS_DIR || path.resolve(__dirname, "..", "..", "packs");
+  // First-party trust must not be configurable through an environment path:
+  // otherwise a deployment setting could label arbitrary executable code as
+  // bundled. Alternate roots must use the normal third-party install path.
+  return path.resolve(__dirname, "..", "..", "packs");
 }
 
 /** Enumerate bundled packs on disk. Never throws for one bad directory. */
@@ -88,6 +91,7 @@ function installBundledPack(name, { config, enable = false } = {}) {
     provenance: "first_party",
     source: { kind: "bundled", path: bundled.path, release: sidekickVersion() },
     enable,
+    expectedPackageHash: lifecycle.inspect(bundled.path).package_hash,
   });
 }
 
@@ -95,7 +99,10 @@ function installBundledPack(name, { config, enable = false } = {}) {
 function upgradeBundledPack(name, options = {}) {
   const bundled = getBundledPack(name);
   if (!bundled) throw new Error(`No bundled capability pack named "${name}"`);
-  return lifecycle.upgrade(name, bundled.path, options);
+  return lifecycle.upgrade(name, bundled.path, {
+    ...options,
+    expectedPackageHash: lifecycle.inspect(bundled.path).package_hash,
+  });
 }
 
 module.exports = { bundledRoot, listBundledPacks, getBundledPack, installBundledPack, upgradeBundledPack };
