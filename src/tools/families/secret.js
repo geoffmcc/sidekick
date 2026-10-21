@@ -12,8 +12,13 @@ const crypto = require("crypto");
 const { z } = require("zod");
 const { loadSecrets, saveSecrets } = require("../../core/secrets-store");
 const { getSecretKey, encryptSecret, decryptSecret } = require("../../core/secret-cipher");
+const { requireToolExecution } = require("../read-authorization");
 
 async function sidekick_secret({ action, key, value, generate }) {
+  const permission = action === "list" ? "secrets.read_metadata"
+    : action === "get" ? "secrets.read" : "secrets.manage";
+  const denied = requireToolExecution({ tool: "secret", action, key: key || null }, permission, "secret");
+  if (denied) return denied;
   const now = new Date().toISOString();
 
   try {
