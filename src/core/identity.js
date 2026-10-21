@@ -177,6 +177,52 @@ function assignRole(principalIdValue, role, actorPrincipalId = null) {
   return getPrincipal(principal.principal_id);
 }
 
+function grantPrincipalPermission(principalIdValue, permission, actorIdentity) {
+  const principal = getPrincipal(principalIdValue);
+  if (!principal || principal.principal_type !== "service") throw new Error("service principal not found");
+  const actorPrincipalId = typeof actorIdentity === "string" ? actorIdentity : actorIdentity?.principal_id;
+  const authorization = require("./authorization");
+  const authority = { principalId: actorPrincipalId, ...(Array.isArray(actorIdentity?.scopes) ? { credentialScopes: actorIdentity.scopes } : {}), delegationId: actorIdentity?.delegation_id || null };
+  if (!actorPrincipalId || !authorization.authorize({ ...authority, permission: "roles.manage" }).ok) {
+    throw new Error("Permission grants require roles.manage");
+  }
+  if (!authorization.knownPermission(permission)) throw new Error(`Unknown permission: ${permission}`);
+  if (!authorization.authorize({ ...authority, permission }).ok) throw new Error(`Actor lacks permission: ${permission}`);
+  const db = dbStore.getDb();
+  db.transaction(() => {
+    db.prepare(`INSERT OR IGNORE INTO identity_principal_permissions (principal_id, permission, assigned_by_principal_id, assigned_at)
+      VALUES (?, ?, ?, ?)`).run(principal.principal_id, permission, actorPrincipalId, now());
+    audit("principal.permission_granted", principal.principal_id, actorPrincipalId, { permission });
+  })();
+  return getPrincipalPermissions(principal.principal_id);
+}
+
+function revokePrincipalPermission(principalIdValue, permission, actorIdentity) {
+  const principal = getPrincipal(principalIdValue);
+  if (!principal || principal.principal_type !== "service") throw new Error("service principal not found");
+  const actorPrincipalId = typeof actorIdentity === "string" ? actorIdentity : actorIdentity?.principal_id;
+  const authorization = require("./authorization");
+  if (!actorPrincipalId || !authorization.authorize({
+    principalId: actorPrincipalId,
+    permission: "roles.manage",
+    ...(Array.isArray(actorIdentity?.scopes) ? { credentialScopes: actorIdentity.scopes } : {}),
+    delegationId: actorIdentity?.delegation_id || null,
+  }).ok) {
+    throw new Error("Permission changes require roles.manage");
+  }
+  const db = dbStore.getDb();
+  db.transaction(() => {
+    db.prepare("DELETE FROM identity_principal_permissions WHERE principal_id = ? AND permission = ?").run(principal.principal_id, permission);
+    audit("principal.permission_revoked", principal.principal_id, actorPrincipalId, { permission });
+  })();
+  return getPrincipalPermissions(principal.principal_id);
+}
+
+function getPrincipalPermissions(principalIdValue) {
+  return dbStore.getDb().prepare("SELECT permission FROM identity_principal_permissions WHERE principal_id = ? ORDER BY permission")
+    .all(requiredText(principalIdValue, "principal_id")).map(row => row.permission);
+}
+
 function removeRole(principalIdValue, role, actorPrincipalId = null) {
   validateRole(role);
   const principal = getPrincipal(principalIdValue);
@@ -245,4 +291,4 @@ function verifyUserPassword(username, password) {
   return getPrincipal(row.principal_id);
 }
 
-module.exports = Object.freeze({ PRINCIPAL_TYPES, ROLE_NAMES, PASSWORD_SCHEME, MIN_PASSWORD_LENGTH, passwordHash, verifyPassword, getPrincipal, getHumanUser, listPrincipals, createPrincipal, createHumanUser, updatePrincipal, updateUsername, assignRole, removeRole, bootstrapOwner, setPrincipalEnabled, changePassword, verifyUserPassword, recordAuditEvent });
+module.exports = Object.freeze({ PRINCIPAL_TYPES, ROLE_NAMES, PASSWORD_SCHEME, MIN_PASSWORD_LENGTH, passwordHash, verifyPassword, getPrincipal, getHumanUser, listPrincipals, createPrincipal, createHumanUser, updatePrincipal, updateUsername, assignRole, removeRole, grantPrincipalPermission, revokePrincipalPermission, getPrincipalPermissions, bootstrapOwner, setPrincipalEnabled, changePassword, verifyUserPassword, recordAuditEvent });

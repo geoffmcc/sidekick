@@ -201,6 +201,11 @@ html, body { overflow-x: hidden; }
 .identity-header { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .identity-name { font-weight: 600; }
 .identity-actions { margin-top: 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.service-credential-setup { margin-bottom: 14px; }
+.service-credential-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.service-credential-details { display: grid; gap: 10px; margin-top: 10px; }
+.service-credential-warning { color: var(--sk-warning); font-weight: 600; }
+.service-credential-token { max-width: 100%; overflow-wrap: anywhere; white-space: pre-wrap; padding: 12px; border: 1px solid var(--sk-border); border-radius: 5px; background: var(--sk-surface-inset); user-select: all; }
 .research-actions { margin-top: 8px; }
 .auth-modal-form { max-width: 300px; padding: 20px; background: #161b22; border: 1px solid #30363d; border-radius: 8px; color: #c9d1d9; }
 .bootstrap-modal-form { max-width: 340px; }

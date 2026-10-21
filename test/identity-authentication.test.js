@@ -18,6 +18,9 @@ function test(name, fn) { fn(); passed++; console.log(`  ✓ ${name}`); }
 try {
   const owner = identity.bootstrapOwner({ username: "owner", password: "correct horse battery staple", displayName: "Owner" });
   const agent = identity.createPrincipal({ type: "agent", displayName: "Build Agent", createdByPrincipalId: owner.principal_id });
+  const packService = identity.createPrincipal({ type: "service", displayName: "MCP Pack Manager", createdByPrincipalId: owner.principal_id, actorPrincipalId: owner.principal_id });
+  identity.grantPrincipalPermission(packService.principal_id, "packs.read", owner.principal_id);
+  identity.grantPrincipalPermission(packService.principal_id, "packs.manage", owner.principal_id);
 
   test("server-side browser sessions are opaque, expiring, and invalidatable", () => {
     const created = authentication.createSession(owner.principal_id, { userAgent: "test", ipAddress: "127.0.0.1" });
@@ -61,6 +64,22 @@ try {
     const authenticated = authentication.authenticateCredential(created.token);
     assert.deepStrictEqual(authenticated.scopes, []);
     assert.strictEqual(authorization.authorize({ principalId: owner.principal_id, permission: "tools.execute", credentialScopes: authenticated.scopes }).code, "forbidden");
+  });
+
+  test("dedicated service principals receive only explicitly granted and credential-scoped authority", () => {
+    const credential = authentication.createCredential({
+      principalId: packService.principal_id,
+      displayName: "MCP pack management",
+      scopes: ["packs.read", "packs.manage"],
+    });
+    const authenticated = authentication.authenticateCredential(credential.token);
+    assert.strictEqual(authenticated.principal_type, "service");
+    assert.deepStrictEqual(authenticated.scopes, ["packs.read", "packs.manage"]);
+    assert.strictEqual(authorization.authorize({ principalId: packService.principal_id, permission: "packs.manage", credentialScopes: authenticated.scopes }).ok, true);
+    assert.strictEqual(authorization.authorize({ principalId: packService.principal_id, permission: "tools.execute", credentialScopes: authenticated.scopes }).code, "forbidden");
+    assert.throws(() => identity.grantPrincipalPermission(packService.principal_id, "tools.execute", packService.principal_id), /roles.manage/);
+    identity.revokePrincipalPermission(packService.principal_id, "packs.manage", owner.principal_id);
+    assert.strictEqual(authorization.authorize({ principalId: packService.principal_id, permission: "packs.manage", credentialScopes: authenticated.scopes }).code, "forbidden", "revoking the principal grant takes effect for existing credentials");
   });
 
   test("credential rotation creates a replacement and revokes the old token", () => {
