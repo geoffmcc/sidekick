@@ -9,7 +9,7 @@ const TEXT_EXTENSIONS = new Set([".js", ".json", ".md", ".yml", ".yaml", ".sh", 
 
 function isGeneratedTestDataDirectory(root, directory) {
   const relative = path.relative(root, directory).split(path.sep);
-  return relative[0] === "test" && relative.slice(1).some(segment => /^test-data(?:-|$)/.test(segment));
+  return relative[0] === "test" && relative.slice(1).some(segment => /^test-data(?:-|$)/.test(segment) || /^test-.+-data$/.test(segment));
 }
 
 function collectTextFiles(root) {
