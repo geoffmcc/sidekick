@@ -16,6 +16,7 @@ Object.assign(process.env, {
 });
 
 const agent = require("../src/agent");
+const dbStore = require("../src/db");
 
 function request(port) {
   return new Promise((resolve, reject) => {
@@ -39,6 +40,7 @@ function request(port) {
     console.log("Agent startup health passed");
   } finally {
     await new Promise(resolve => server.close(resolve));
+    dbStore.closeDatabase?.();
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
 })().catch(error => { console.error(error); process.exitCode = 1; });

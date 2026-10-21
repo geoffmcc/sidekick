@@ -40,7 +40,8 @@ const provision = provisionBuiltinModules();
 assert.deepEqual(provision.errors, [], "builtin module provisioning should succeed");
 
 const text = result => result.content[0].text;
-const context = requestId => ({ source: "mcp", requestId });
+const ownerContext = require("./helpers/authorized-context").createOwnerContext({ source: "mcp" });
+const context = requestId => ({ ...ownerContext, requestId });
 
 // Malicious AST from the GHSA-8r5x-fm3f-whwj proof of concept. The injected
 // expression is harmless: it only sets a throwaway global.

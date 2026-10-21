@@ -74,6 +74,7 @@ class HelperProcess extends EventEmitter {
     super();
     this.pythonPath = opts.pythonPath;
     this.helperScript = opts.helperScript;
+    this.pythonUnbuffered = opts.pythonUnbuffered !== false;
     this.modelsDir = opts.modelsDir;
     this.startupTimeoutMs = opts.startupTimeoutMs || 60000;
     this.instanceId = opts.instanceId || "helper";
@@ -149,7 +150,7 @@ class HelperProcess extends EventEmitter {
     // Launch using argument array; no shell, no string interpolation.
     this.child = spawn(
       this.pythonPath,
-      ["-u", this.helperScript], // -u: unbuffered
+      [...(this.pythonUnbuffered ? ["-u"] : []), this.helperScript], // -u: unbuffered Python mode
       {
         stdio: ["pipe", "pipe", "pipe"],
         env: childEnv,
@@ -680,6 +681,7 @@ class HelperManager extends EventEmitter {
     this._helper = new HelperProcess({
       pythonPath: this._config.pythonPath,
       helperScript: this._config.helperScript,
+      pythonUnbuffered: this._config.pythonUnbuffered,
       modelsDir: this._config.modelsDir,
       startupTimeoutMs: this._config.startupTimeoutMs,
       instanceId: `openvino-helper-${++this._restartCount}`,

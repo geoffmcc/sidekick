@@ -14,10 +14,28 @@
 //    code may call the extension functions.
 
 const assert = require("assert");
+const fs = require("fs");
 const path = require("path");
 const { execSync } = require("child_process");
 
 const SRC = path.join(__dirname, "..", "src");
+
+function sourceMatches(pattern) {
+  const matches = [];
+  const visit = directory => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const filename = path.join(directory, entry.name);
+      if (entry.isDirectory()) visit(filename);
+      else if (entry.isFile() && entry.name.endsWith(".js")) {
+        const contents = fs.readFileSync(filename, "utf8");
+        if (pattern.test(contents)) matches.push(`${path.relative(path.join(__dirname, ".."), filename)}: ${contents.match(pattern)?.[0]}`);
+        pattern.lastIndex = 0;
+      }
+    }
+  };
+  visit(SRC);
+  return matches;
+}
 
 console.log("Running deprecated kernel surface guards...\n");
 
@@ -28,11 +46,7 @@ function test(name, fn) {
 }
 
 test("identity-deployment has no production importer", () => {
-  const raw = execSync(
-    `grep -rnE "require\\(.*identity-deployment" ${SRC} || true`,
-    { encoding: "utf8", shell: "/bin/bash" }
-  );
-  const importers = raw.split("\n").filter(Boolean);
+  const importers = sourceMatches(/require\(.*identity-deployment/);
   assert.deepStrictEqual(importers, [],
     `identity-deployment is experimental future work and must stay import-free in src/. Found:\n${importers.join("\n")}`);
 });
@@ -75,12 +89,7 @@ test("identity-deployment production use requires the explicit compatibility opt
 });
 
 test("the deprecated platform_extensions registry has no production callers", () => {
-  const raw = execSync(
-    `grep -rnE '\\b(registerExtension|getExtensionByName|activateExtension|deactivateExtension|uninstallExtension|updateExtensionConfig|recordExtensionUsage|listExtensions)\\(' ${SRC} || true`,
-    { encoding: "utf8", shell: "/bin/bash" }
-  );
-  const callers = raw.split("\n")
-    .filter(Boolean)
+  const callers = sourceMatches(/\b(registerExtension|getExtensionByName|activateExtension|deactivateExtension|uninstallExtension|updateExtensionConfig|recordExtensionUsage|listExtensions)\(/)
     // The kernel's own definitions and export list are the deprecated surface
     // itself, not callers of it.
     .filter(line => !line.includes(`src${path.sep}platform${path.sep}kernel.js`) && !line.includes("src/platform/kernel.js"));

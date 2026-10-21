@@ -25,6 +25,9 @@ process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
 process.env.SIDEKICK_TOOL_POLICY = "open";
 process.env.SIDEKICK_APPROVAL_MODE = "off";
 process.env.SIDEKICK_ENVIRONMENT = "test";
+process.env.NODE_ENV = "test";
+process.env.SIDEKICK_API_KEY = "agent-cancel-test-api-key";
+process.env.SIDEKICK_AGENT_PROXY_KEY = "agent-cancel-dedicated-proxy-key";
 
 process.on("exit", () => {
   try { fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true }); } catch {}
@@ -34,6 +37,7 @@ let port;
 
 delete require.cache[require.resolve("../src/agent")];
 const agent = require("../src/agent");
+const { createAgentProxyHeaders } = require("../src/security/agent-proxy-auth");
 const platformKernel = require("../src/platform/kernel");
 const { createTask } = require("../src/agent/task-model");
 const durableTasks = require("../src/agent/task-store");
@@ -69,9 +73,10 @@ async function ok(name, fn) {
 function request(method, urlPath, body) {
   return new Promise((resolve, reject) => {
     const data = body != null ? JSON.stringify(body) : null;
+    const proxyHeaders = createAgentProxyHeaders({ secret: process.env.SIDEKICK_AGENT_PROXY_KEY, method, path: urlPath, body: data || "" });
     const req = http.request({
       hostname: "127.0.0.1", port, path: urlPath, method,
-      headers: { "Content-Type": "application/json", ...(data ? { "Content-Length": Buffer.byteLength(data) } : {}) },
+      headers: { "Content-Type": "application/json", ...proxyHeaders, ...(data ? { "Content-Length": Buffer.byteLength(data) } : {}) },
     }, (res) => {
       let out = "";
       res.on("data", (c) => (out += c));
@@ -91,7 +96,8 @@ function request(method, urlPath, body) {
 // itself for unknown tasks and terminal events).
 function readStream(taskId, timeoutMs = 3000) {
   return new Promise((resolve, reject) => {
-    const req = http.get({ hostname: "127.0.0.1", port, path: "/api/agent/stream/" + taskId }, (res) => {
+    const streamPath = "/api/agent/stream/" + taskId;
+    const req = http.get({ hostname: "127.0.0.1", port, path: streamPath, headers: createAgentProxyHeaders({ secret: process.env.SIDEKICK_AGENT_PROXY_KEY, method: "GET", path: streamPath }) }, (res) => {
       let out = "";
       res.on("data", (c) => (out += c));
       res.on("end", () => resolve(out));

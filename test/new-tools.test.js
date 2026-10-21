@@ -1,24 +1,30 @@
 const assert = require('assert');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
-const TEST_DATA_DIR = path.join(__dirname, 'test-data-new');
-if (!fs.existsSync(TEST_DATA_DIR)) {
-  fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
-}
+const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sidekick-new-tools-'));
+const REPO_ROOT = path.join(__dirname, '..');
+const gitHome = path.join(TEST_DATA_DIR, 'git-home');
+fs.mkdirSync(gitHome, { recursive: true });
+fs.writeFileSync(path.join(gitHome, '.gitconfig'), `[safe]\n\tdirectory = "${REPO_ROOT.replace(/\\/g, '/') }"\n`);
 
 process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
+process.env.SIDEKICK_ALLOWED_PATHS = REPO_ROOT;
+process.env.HOME = gitHome;
+process.env.USERPROFILE = gitHome;
+process.env.SIDEKICK_TOOL_POLICY = 'open';
+process.env.SIDEKICK_APPROVAL_MODE = 'off';
 
 delete require.cache[require.resolve('../src/tools')];
-const { TOOLS, setSource } = require('../src/tools');
+const { TOOLS: rawTools } = require('../src/tools');
+const TOOLS = require('./helpers/authorized-context').withOwnerToolContext(rawTools, { source: 'test', project: 'new-tools-test' });
 const { search, git, notify } = TOOLS;
 
 console.log('Running New Tools Tests...\n');
 
 (async () => {
   try {
-    setSource('test');
-
     // Test search
     console.log('Test: search - find pattern in files');
     const searchResult = await search({ 
@@ -51,7 +57,7 @@ console.log('Running New Tools Tests...\n');
       path: '/nonexistent/path/xyz'
     });
     assert.ok(invalidPathResult.isError, 'Should return error for invalid path');
-    assert.ok(invalidPathResult.content[0].text.includes('not found'), 'Should mention path not found');
+    assert.match(invalidPathResult.content[0].text, /not found|blocked by policy|not visible/i, 'Should report missing or unauthorized path');
     console.log('✓ Passed\n');
 
     // Test git - status
@@ -87,7 +93,7 @@ console.log('Running New Tools Tests...\n');
       path: path.join(__dirname, '..')
     });
     assert.ok(invalidActionResult.isError, 'Should return error for invalid action');
-    assert.ok(invalidActionResult.content[0].text.includes('Invalid action'), 'Should mention invalid action');
+    assert.match(invalidActionResult.content[0].text, /invalid action|invalid arguments/i, 'Should explain invalid action');
     console.log('✓ Passed\n');
 
     // Test git - invalid path
@@ -97,7 +103,7 @@ console.log('Running New Tools Tests...\n');
       path: '/nonexistent/repo/xyz'
     });
     assert.ok(invalidRepoResult.isError, 'Should return error for invalid repo path');
-    assert.ok(invalidRepoResult.content[0].text.includes('not found'), 'Should mention path not found');
+    assert.match(invalidRepoResult.content[0].text, /not found|blocked by policy|not visible/i, 'Should report missing or unauthorized repo path');
     console.log('✓ Passed\n');
 
     // Test notify - missing webhook
@@ -127,15 +133,17 @@ console.log('Running New Tools Tests...\n');
       message: 'test'
     });
     assert.ok(invalidChannelResult.isError, 'Should return error for invalid channel');
-    assert.ok(invalidChannelResult.content[0].text.includes('Invalid channel'), 'Should mention invalid channel');
+    assert.match(invalidChannelResult.content[0].text, /invalid channel|invalid arguments/i, 'Should explain invalid channel');
     console.log('✓ Passed\n');
 
     // Clean up
+    try { require('../src/db').getDb().close(); } catch {}
     fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
     
     console.log('All New Tools Tests Passed! ✓');
   } catch (e) {
     console.error('Test failed:', e);
+    try { require('../src/db').getDb().close(); } catch {}
     fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
     process.exit(1);
   }

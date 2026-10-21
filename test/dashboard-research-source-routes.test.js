@@ -5,6 +5,7 @@ const { registerResearchSourceRoutes } = require("../src/dashboard/research-sour
 
 const routes = {};
 const calls = [];
+let forcedResult = null;
 const app = {
   get(path, handler) { routes[`GET ${path}`] = handler; },
   post(path, handler) { routes[`POST ${path}`] = handler; },
@@ -24,6 +25,7 @@ function request(overrides = {}) {
 
 const dispatcher = async (tool, args) => {
   calls.push({ tool, args });
+  if (forcedResult) return forcedResult;
   if (tool === "research_status") return { content: [{ text: JSON.stringify({ ok: true, pack: "security-research", ready: true, workspace: { state: "configured", root: "/secret/workspace", source: "config" }, capabilities: { present_on_server: { bash: true }, dispatchable_by_pack: { bash: true } }, policy: { local_probes_enabled: false, http_allowed_hosts: 2 }, environments: ["prod-secret"] }) }] };
   if (args.action === "get") return { content: [{ text: JSON.stringify({ ok: true, repository: { repository_id: "repo_1", campaign_id: "campaign_1", project_id: "project_1", name: "Example", state: "active", metadata: { credential_url: "https://user:pass@example.test" } }, snapshot: { snapshot_id: "snap_1", repository_id: "repo_1", campaign_id: "campaign_1", state: "finalized", storage_ref: "projects/campaign_1/sources/repo_1/snap_1", authority: "derived_analysis_input", verification: { verified: true }, metadata: { content: "must not appear", commit: "0123456789abcdef" } } }) }] };
   if (args.action === "remove") return { content: [{ text: JSON.stringify({ ok: true, snapshot: { snapshot_id: "snap_1", storage_ref: "projects/campaign_1/sources/repo_1/snap_1", metadata: { content: "hidden" } }, storage_removed: true }) }] };
@@ -38,6 +40,7 @@ registerResearchSourceRoutes({
   authenticatedUser: req => req.user || null,
   auditLog: () => {},
   logError: () => {},
+  errorResponse: (_req, res, _error, options) => res.status(options.status).json({ code: options.code }),
 });
 
 (async () => {
@@ -49,7 +52,20 @@ registerResearchSourceRoutes({
   assert.ok(!JSON.stringify(res.body).includes("prod-secret"));
 
   res = response();
-  await routes["GET /api/research/source/snapshots/:snapshotId"](request({ params: { snapshotId: "snap_1" }, query: { repository_id: "repo_1" } }), res);
+  await routes["GET /api/research/source/repositories"](request({ query: { project_id: "project_1", limit: "5" } }), res);
+  assert.strictEqual(calls.at(-1).args.project_id, "project_1", "Dashboard project selection must reach the governed source handler");
+  assert.strictEqual(calls.at(-1).args.limit, 5);
+
+  forcedResult = { isError: true, content: [{ text: JSON.stringify({ ok: false, code: "not_found" }) }] };
+  res = response();
+  await routes["GET /api/research/source/repositories"](request({ query: { project_id: "other-project" } }), res);
+  assert.strictEqual(res.statusCode, 404, "inaccessible project results are concealed as not found");
+  assert.strictEqual(res.body.code, "not_found");
+  forcedResult = null;
+
+  res = response();
+  await routes["GET /api/research/source/snapshots/:snapshotId"](request({ params: { snapshotId: "snap_1" }, query: { repository_id: "repo_1", project_id: "project_1" } }), res);
+  assert.strictEqual(calls.at(-1).args.project_id, "project_1", "snapshot reads must retain selected project scope");
   assert.strictEqual(res.body.snapshot.workspace_ref, "projects/campaign_1/sources/repo_1/snap_1");
   assert.strictEqual(res.body.snapshot.metadata.content, undefined);
   assert.strictEqual(res.body.snapshot.metadata.commit, "0123456789ab");
@@ -61,8 +77,9 @@ registerResearchSourceRoutes({
   assert.strictEqual(res.body.code, "confirmation_required");
 
   res = response();
-  await routes["POST /api/research/source/actions/:action"](request({ params: { action: "index" }, user: "operator", body: { repository_id: "repo_1", snapshot_id: "snap_1" } }), res);
+  await routes["POST /api/research/source/actions/:action"](request({ params: { action: "index" }, user: "operator", body: { repository_id: "repo_1", snapshot_id: "snap_1", project_id: "project_1" } }), res);
   assert.strictEqual(res.body.indexed, true);
+  assert.strictEqual(calls.at(-1).args.project_id, "project_1", "mutations must retain selected project scope");
   assert.strictEqual(res.body.index, undefined);
   assert.ok(!JSON.stringify(res.body).includes("/secret"));
   assert.strictEqual(calls.at(-1).tool, "research_source");

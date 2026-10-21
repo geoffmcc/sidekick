@@ -2,6 +2,12 @@
 
 const assert = require("assert");
 const { listScenarios, runCertification, formatCertificationText, collectReliabilityMetrics, createLiveAgentExecutor } = require("../src/certification");
+const certificationIdentity = require("../src/certification/identity").createCertificationIdentity();
+const run = options => runCertification({ ...(options || {}), authIdentity: certificationIdentity.authIdentity });
+assert.equal(certificationIdentity.authIdentity.principal_type, "service");
+assert.deepStrictEqual([...certificationIdentity.authIdentity.scopes].sort(), ["memory.read", "memory.write", "network_scopes.read", "principals.manage", "tools.execute", "tools.execute_high"].sort());
+assert.ok(!certificationIdentity.authIdentity.scopes.includes("tools.execute_critical"));
+assert.ok(!certificationIdentity.authIdentity.scopes.includes("projects.access.manage"));
 
 (async () => {
   const all = listScenarios();
@@ -11,7 +17,7 @@ const { listScenarios, runCertification, formatCertificationText, collectReliabi
    assert.strictEqual(listScenarios({ mode: "live" }).length, 2);
    assert.strictEqual(listScenarios({ mode: "lifecycle" }).length, 6);
 
-  const report = await runCertification();
+  const report = await run();
   assert.strictEqual(report.schema, "sidekick.agent-certification.v1");
   assert.strictEqual(report.summary.total, 20);
   assert.strictEqual(report.summary.failed, 0);
@@ -22,7 +28,7 @@ const { listScenarios, runCertification, formatCertificationText, collectReliabi
   assert.ok(!JSON.stringify(report).includes("ghp_"));
   assert.match(formatCertificationText(report), /Agent certification 1: blocked/);
 
-  const hermetic = await runCertification({ mode: "hermetic" });
+  const hermetic = await run({ mode: "hermetic" });
    assert.strictEqual(hermetic.summary.total, 12);
   assert.strictEqual(hermetic.summary.skipped, 0);
   assert.strictEqual(hermetic.summary.failed, 0);
@@ -32,10 +38,10 @@ const { listScenarios, runCertification, formatCertificationText, collectReliabi
 
   const builtin = require("../src/tools").getBuiltinRegistry();
   const fabricatedRegistry = { get: name => name === "respond" ? builtin.get("respond") : {} };
-  const fabricated = await runCertification({ mode: "hermetic", registry: fabricatedRegistry });
+  const fabricated = await run({ mode: "hermetic", registry: fabricatedRegistry });
   assert.ok(fabricated.summary.blocked > 0, "fabricated descriptors must not certify required tools");
 
-  const incomplete = await runCertification({
+  const incomplete = await run({
     scenarioIds: ["agent-cert.v1.repository-profile"],
     registry: { get: name => name === "respond" ? {} : null },
   });
@@ -43,12 +49,12 @@ const { listScenarios, runCertification, formatCertificationText, collectReliabi
   assert.strictEqual(incomplete.summary.blocked, 1);
   assert.match(incomplete.results[0].reason, /expected tools unavailable/);
 
-  const noFixture = await runCertification({ scenarioIds: ["agent-cert.v1.repository-profile"] });
+  const noFixture = await run({ scenarioIds: ["agent-cert.v1.repository-profile"] });
   assert.strictEqual(noFixture.summary.blocked, 1);
   assert.match(noFixture.results[0].reason, /expected tools unavailable|deterministic hermetic fixture/);
 
   assert.throws(() => createLiveAgentExecutor({ baseUrl: "https://example.test" }), /loopback/);
-  const live = await runCertification({
+  const live = await run({
     mode: "live",
     availability: true,
     liveExecutor: { run: async scenario => ({ task_id: scenario.id, state: "failed", source: "durable_task_store", receipts: [{ capability: scenario.expected_tools[0] }], events: [{ tool_name: scenario.expected_tools[0] }], dispatch_counts: { total: 1 } }) },
@@ -98,7 +104,7 @@ const { listScenarios, runCertification, formatCertificationText, collectReliabi
   assert.deepStrictEqual(legacyMetrics.failures.classes, {});
   assert.deepStrictEqual(legacyMetrics.failures.coverage, { usage_json: true, last_error_code: false });
 
-  const lifecycle = await runCertification({
+  const lifecycle = await run({
      mode: "lifecycle",
      lifecycleExecutor: { run: async scenario => ({
        state: scenario.theme === "ambiguous-effect" ? "blocked" : "completed",
@@ -113,4 +119,11 @@ const { listScenarios, runCertification, formatCertificationText, collectReliabi
   assert.strictEqual(lifecycle.summary.passed, 6);
   assert.strictEqual(lifecycle.summary.failed, 0);
   console.log("Certification tests passed");
-})().catch(error => { console.error(error); process.exitCode = 1; });
+})().catch(error => { console.error(error); process.exitCode = 1; }).finally(() => {
+  try {
+    const principalId = certificationIdentity.authIdentity.principal_id;
+    certificationIdentity.close();
+    assert.equal(require("../src/core/identity").getPrincipal(principalId).enabled, false);
+    assert.equal(require("../src/core/project-access").listProjectAccess("agent_certification").some(row => row.principal_id === principalId), false);
+  } catch (error) { console.error(error); process.exitCode = 1; }
+});

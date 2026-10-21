@@ -1,10 +1,9 @@
 const assert = require('assert');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
-const TEST_DATA_DIR = path.join(__dirname, 'test-data-evolve');
-fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
-fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
+const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sidekick-evolve-'));
 process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
 process.env.SIDEKICK_TOOL_POLICY = 'open';
 process.env.SIDEKICK_APPROVAL_MODE = 'off';
@@ -19,7 +18,8 @@ const { substitute, validateCandidate } = require('../src/evolve/validator');
 const { candidateToCapability, validateCapability, transition, allowedActions } = require('../src/evolve/lifecycle');
 const { refreshCandidates } = require('../src/evolve');
 const dynamicTools = require('../src/dynamic-tools');
-const { TOOLS, TOOL_DEFS, callTool, setSource, loadProcedures } = require('../src/tools');
+const { TOOLS: rawTools, TOOL_DEFS, callTool, setSource, loadProcedures } = require('../src/tools');
+const TOOLS = require('./helpers/authorized-context').withOwnerToolContext(rawTools, { source: 'test' });
 
 function log({ t, n, src = 'mcp', session = 's1', task = 'task1', ok = true, shape = {}, args = null, retry = false, generated = false, summary = 'ok' }) {
   dbStore.appendToolLog({
@@ -169,10 +169,13 @@ function seedServiceDiagnosis({ session = 's1', task = 'task1', src = 'mcp', sta
     assert.ok(stored.length >= 1);
     const id = stored[0].id;
     const forgedApprove = await TOOLS.evolve({ action: 'approve', id, approver: 'test' });
-    assert.ok(forgedApprove.isError, 'unvalidated candidates cannot enter trial');
+    // Requesting approval is a non-error workflow result; the candidate must
+    // remain inactive until validation and a separately authorized approval.
     assert.strictEqual(dbStore.getGeneratedCapability(id).state, 'candidate');
     const validated = await TOOLS.evolve({ action: 'validate', id });
-    assert.ok(!validated.isError, validated.content[0].text);
+    const validationResult = JSON.parse(validated.content[0].text);
+    assert.ok(validationResult.validation?.passed, 'candidate validation should produce a positive validation record');
+    assert.strictEqual(dbStore.getGeneratedCapability(id).state, 'awaiting_approval', 'validation must park a candidate for explicit approval');
     assert.ok(allowedActions(dbStore.getGeneratedCapability(id)).approve, 'validated candidate should allow trial approval');
     const approved = await TOOLS.evolve({ action: 'approve', id, approver: 'test' });
     assert.ok(!approved.isError, approved.content[0].text);
@@ -324,10 +327,12 @@ function seedServiceDiagnosis({ session = 's1', task = 'task1', src = 'mcp', sta
     assert.ok(dashboardJs.includes('allowed.promote ?'), 'promote control should be gated by allowed_actions');
     assert.ok(!dashboardJs.includes("state === 'awaiting_approval' || state === 'validated' || state === 'candidate' ? '<button class=\"btn btn-sm\" onclick=\"approveEvolve"), 'approve button must not be shown for unvalidated candidates');
 
+    dbStore.closeDatabase();
     fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
     console.log('\nAll Evolve Tests Passed!');
   } catch (e) {
     console.error('Test failed:', e);
+    try { dbStore.closeDatabase(); } catch {}
     fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
     process.exit(1);
   }

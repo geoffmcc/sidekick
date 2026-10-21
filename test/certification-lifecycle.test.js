@@ -78,6 +78,8 @@ async function testRealLoopbackAgentProcess() {
       SIDEKICK_TOOL_POLICY: "open",
       SIDEKICK_APPROVAL_MODE: "off",
       SIDEKICK_DISABLE_OLLAMA_BOOTSTRAP: "1",
+      SIDEKICK_API_KEY: "certification-test-mcp-key",
+      SIDEKICK_AGENT_PROXY_KEY: "certification-test-proxy-key-distinct",
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -104,7 +106,7 @@ async function testRealLoopbackAgentProcess() {
         }
       });
     });
-    const executor = createLifecycleExecutor({ baseUrl: `http://127.0.0.1:${port}`, pollMs: 10, timeoutMs: 45000 });
+    const executor = createLifecycleExecutor({ baseUrl: `http://127.0.0.1:${port}`, pollMs: 10, timeoutMs: 45000, proxySecret: "certification-test-proxy-key-distinct" });
     assert.strictEqual(await executor.available(), true);
     const observed = await executor.run({
       objective: "check disk usage on the loopback Agent",

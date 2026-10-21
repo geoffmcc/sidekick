@@ -26,7 +26,7 @@ const registry = tools.getBuiltinRegistry();
 // name -> [family, risk]
 const EXPECTED = {
   github: ["github", "high"],
-  ci_status: ["github", "low"],
+  ci_status: ["github", "medium"],
   secret: ["secret", "high"],
   resume: ["resume", "low"],
   project: ["context", "low"],
@@ -87,15 +87,21 @@ const EXPECTED = {
   }
 
   // Cheap validation-error paths — run each moved body with no side effects.
-  const invalid = async (name, args) => (await registry.get(name).handler(args)).content[0].text;
-  assert.match(await invalid("teach", { action: "zzz" }), /Unknown action|Invalid action/i);
-  assert.match(await invalid("queue", { action: "zzz" }), /Unknown action|Invalid action/i);
-  assert.match(await invalid("orchestrate", { action: "zzz" }), /Unknown action|Invalid action/i);
-  assert.match(await invalid("circuit", { action: "zzz" }), /Unknown action|Invalid action/i);
-  assert.match(await invalid("secret", { action: "zzz" }), /Unknown action|Invalid action|SECRET_KEY/i);
-  assert.match(await invalid("watch", { action: "zzz" }), /Unknown action|Invalid action/i);
-  assert.match(await invalid("runbook", { action: "zzz" }), /Unknown action|Invalid action/i);
-  assert.match(await invalid("cron", { action: "zzz" }), /Unknown action|Invalid action/i);
+  const ownerContext = require("./helpers/authorized-context").createOwnerContext({ source: "test" });
+  const invalid = async (name, args) => (await tools.dispatchTool({ name, args, context: ownerContext })).content[0].text;
+  assert.match(await invalid("teach", { action: "zzz" }), /Unknown action|Invalid action|Invalid arguments/i);
+  assert.match(await invalid("queue", { action: "zzz" }), /Unknown action|Invalid action|Invalid arguments/i);
+  assert.match(await invalid("orchestrate", { action: "zzz" }), /Unknown action|Invalid action|Invalid arguments/i);
+  assert.match(await invalid("circuit", { action: "zzz" }), /Unknown action|Invalid action|Invalid arguments/i);
+  const directSecret = await require("../src/tools/context").runWithContext(
+    ownerContext,
+    () => registry.get("secret").handler({ action: "list" }),
+  );
+  assert.strictEqual(directSecret.code, "canonical_dispatch_required", "protected handlers reject direct invocation");
+  assert.match(await invalid("secret", { action: "zzz" }), /Unknown action|Invalid action|Invalid arguments|SECRET_KEY/i);
+  assert.match(await invalid("watch", { action: "zzz" }), /Unknown action|Invalid action|Invalid arguments/i);
+  assert.match(await invalid("runbook", { action: "zzz" }), /Unknown action|Invalid action|Invalid arguments/i);
+  assert.match(await invalid("cron", { action: "zzz" }), /Unknown action|Invalid action|Invalid arguments/i);
   assert.match(await invalid("retry", { tool: "" }), /required|Error/i);
   // batch's isBuiltinToolName path (moved with the handler) still recognizes builtins.
   const batchKnown = await invalid("batch", { calls: [{ tool: "hash", args: {} }] });
@@ -105,7 +111,7 @@ const EXPECTED = {
 
   // tools catalog runs through its lazily-resolved policy helpers.
   for (const a of [{ action: "overview" }, { action: "search", query: "git" }, { action: "get", name: "bash" }, { action: "policy", name: "bash" }]) {
-    const r = await registry.get("tools").handler(a);
+    const r = await tools.dispatchTool({ name: "tools", args: a, context: ownerContext });
     assert.ok(!r.isError, `tools ${a.action} should succeed`);
   }
 

@@ -18,6 +18,7 @@ const target = path.join(data, "must-not-be-written.txt");
 
 (async () => {
   try {
+    const authIdentity = require("./helpers/authorized-context").createOwnerContext({ source: "agent" }).authIdentity;
     const principal = createAuthorityEnvelope({
       allowed_effects: ["read_only", "workspace_reversible"],
       changes_allowed: true,
@@ -43,6 +44,7 @@ const target = path.join(data, "must-not-be-written.txt");
     const result = await callAgentTool("write", { path: target, content: "approval boundary" }, {
       taskId: "agt_authority_approval",
       source: "agent",
+      authIdentity,
       authorityApprovalRequired: true,
       authorityRisk: "critical",
       authorityReason: "task envelope requires explicit approval",

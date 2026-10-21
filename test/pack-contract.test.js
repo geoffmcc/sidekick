@@ -27,6 +27,7 @@ const moduleLifecycle = require('../src/modules/lifecycle');
 const bundled = require('../src/packs/bundled');
 const moduleManifestModule = require('../src/modules/manifest');
 const { callInternalTool } = require('../src/tools/dispatcher');
+const authorizedContext = require('./helpers/authorized-context').createOwnerContext({ source: 'internal' });
 
 let failures = 0;
 function test(label, fn) {
@@ -481,7 +482,7 @@ function packWithWorkflow(name, tool, requires = {}) {
   // --- PC.26 operator surface ----------------------------------------------
 
   await asyncTest('PC.26: capability action="validate" returns a structured report through the governed dispatcher', async () => {
-    const result = await callInternalTool('capability', { action: 'validate', name: 'developer' });
+    const result = await callInternalTool('capability', { action: 'validate', name: 'developer' }, authorizedContext);
     const payload = JSON.parse(result.content[0].text);
     assert.strictEqual(payload.ok, true, JSON.stringify(payload));
     assert.strictEqual(payload.report.valid, true);
@@ -491,7 +492,7 @@ function packWithWorkflow(name, tool, requires = {}) {
 
   await asyncTest('PC.27: capability validate surfaces contract problems for a broken package path', async () => {
     const dir = writePack(baseManifest('tool-broken', { pack_api: 42 }));
-    const result = await callInternalTool('capability', { action: 'validate', path: dir });
+    const result = await callInternalTool('capability', { action: 'validate', path: dir }, authorizedContext);
     const payload = JSON.parse(result.content[0].text);
     assert.strictEqual(payload.ok, false);
     assert.ok(payload.report.findings.some(f => f.area === 'compatibility' && f.problem.includes('pack_api 42')), JSON.stringify(payload.report.findings));

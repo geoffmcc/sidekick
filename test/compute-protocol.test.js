@@ -6,13 +6,11 @@ const path = require('path');
 const { spawn } = require('child_process');
 const packageJson = require('../package.json');
 
-const TEST_DIR = path.join(__dirname, 'test-data-compute-protocol');
+const TEST_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sidekick-compute-protocol-data-'));
 const SECRET_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sidekick-compute-protocol-secrets-'));
 const API_KEY = 'sk-test-compute-protocol-key';
-const PORT = 49197;
-
-fs.rmSync(TEST_DIR, { recursive: true, force: true });
-fs.mkdirSync(TEST_DIR, { recursive: true });
+const ADMIN_CREDENTIAL = require('./helpers/scoped-admin-credential').createScopedOwnerCredential(TEST_DIR, 'Compute protocol test administrator');
+const PORT = 49197 + (process.pid % 10000);
 
 function request(method, route, body, headers = {}) {
   return new Promise((resolve, reject) => {
@@ -101,7 +99,7 @@ async function main() {
   child.stderr.on('data', c => logs += c.toString());
   try {
     await waitForServer(child);
-    const admin = { Authorization: `Bearer ${API_KEY}` };
+    const admin = { Authorization: `Bearer ${ADMIN_CREDENTIAL}` };
 
     const healthRes = await request('GET', '/health');
     assert.strictEqual(healthRes.status, 200, 'health endpoint is reachable');
@@ -391,6 +389,9 @@ async function main() {
     const recover = await request('POST', '/compute/admin/recover', {}, admin);
     assert.strictEqual(recover.status, 200, 'recovery endpoint works');
     assert.ok(recover.data.recovered >= 1, 'expired lease recovered');
+    const recoveryAudit = require('../src/db').getDb().prepare("SELECT actor_principal_id, details_json FROM identity_audit_events WHERE event_type = 'compute.admin.mutation' ORDER BY created_at DESC LIMIT 1").get();
+    assert.ok(recoveryAudit?.actor_principal_id, 'recovered lease audit identifies the scoped principal');
+    assert.match(recoveryAudit.details_json, /recover_expired_lease/, 'recovery audit identifies the affected operation');
 
     // Interrupted-attempt honesty: the lease expired without the attempt ever
     // reporting an outcome, so even at attempt 1 of 1 the job requeues (with
@@ -442,6 +443,7 @@ async function main() {
       SIDEKICK_NODE_ID: 'proto-agent-node',
       SIDEKICK_NODE_NAME: 'Protocol Agent Worker',
       SIDEKICK_WORKER_CONFIG: agentConfig,
+      SIDEKICK_WORKER_CONFIG_FILE: path.join(TEST_DIR, 'no-external-worker-config.json'),
       SIDEKICK_WORKER_POLL_MS: '100',
       SIDEKICK_HEARTBEAT_MS: '1000',
       OLLAMA_URL: 'http://user:pass@127.0.0.1:11434',
@@ -486,15 +488,31 @@ async function main() {
     let restartLogs = '';
     restartedAgent.stdout.on('data', c => restartLogs += c.toString());
     restartedAgent.stderr.on('data', c => restartLogs += c.toString());
-    const gracefulJob = await request('POST', '/compute/admin/jobs', { jobType: 'chat', capability: 'chat', requestPayload: { prompt: 'graceful shutdown', provider: 'mock', delayMs: 500 } }, admin);
-    assert.strictEqual(gracefulJob.status, 200, 'graceful-shutdown job submitted');
-    await waitForJobStatus(gracefulJob.data.job.jobId, 'running', admin);
-    restartedAgent.kill('SIGTERM');
-    await waitForExit(restartedAgent, 5000);
-    const completedGracefulJob = await waitForJobStatus(gracefulJob.data.job.jobId, 'completed', admin);
-    assert.strictEqual(completedGracefulJob.result.content, 'mock:graceful shutdown', 'worker agent completed in-flight job during graceful shutdown');
-    assert.ok(restartLogs.includes('Loaded worker credential'), 'worker agent restarted from saved credential config');
-    assert.ok(!restartLogs.includes(agentToken.data.token), 'restart logs do not print enrollment token');
+    if (process.platform === 'win32') {
+      // Node's child.kill('SIGTERM') terminates Windows processes rather than
+      // delivering a catchable POSIX signal; graceful shutdown is covered on
+      // POSIX CI and cannot be asserted through this Windows process API.
+      restartedAgent.kill('SIGTERM');
+      await waitForExit(restartedAgent, 5000);
+      console.log('Graceful SIGTERM in-flight completion skipped on win32 process semantics');
+    } else {
+      const gracefulJob = await request('POST', '/compute/admin/jobs', { jobType: 'chat', capability: 'chat', requestPayload: { prompt: 'graceful shutdown', provider: 'mock', delayMs: 500 } }, admin);
+      assert.strictEqual(gracefulJob.status, 200, 'graceful-shutdown job submitted');
+      await waitForJobStatus(gracefulJob.data.job.jobId, 'running', admin);
+      restartedAgent.kill('SIGTERM');
+      await waitForExit(restartedAgent, 5000);
+      let completedGracefulJob;
+      try {
+        completedGracefulJob = await waitForJobStatus(gracefulJob.data.job.jobId, 'completed', admin);
+      } catch (error) {
+        const safeLogs = [credential, activeCredential, tokenRes.data.token, agentToken.data.token]
+          .filter(Boolean).reduce((text, secret) => text.split(secret).join('[redacted]'), restartLogs);
+        throw new Error(`${error.message}; restarted worker output: ${safeLogs.slice(-3000)}`);
+      }
+      assert.strictEqual(completedGracefulJob.result.content, 'mock:graceful shutdown', 'worker agent completed in-flight job during graceful shutdown');
+      assert.ok(restartLogs.includes('Loaded worker credential'), 'worker agent restarted from saved credential config');
+      assert.ok(!restartLogs.includes(agentToken.data.token), 'restart logs do not print enrollment token');
+    }
 
     const cancellingAgent = spawn(process.execPath, ['src/compute/worker-agent.js'], { cwd: path.join(__dirname, '..'), env: restartEnv, stdio: ['ignore', 'pipe', 'pipe'] });
     let cancellingLogs = '';
@@ -526,6 +544,10 @@ async function main() {
     console.log('Compute Protocol Integration Tests passed');
   } finally {
     child.kill('SIGTERM');
+    await waitForExit(child, 10000).catch(() => {});
+    require('../src/db').closeDatabase();
+    fs.rmSync(TEST_DIR, { recursive: true, force: true });
+    fs.rmSync(SECRET_DIR, { recursive: true, force: true });
   }
 }
 

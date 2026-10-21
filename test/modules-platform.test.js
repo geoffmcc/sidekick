@@ -33,7 +33,7 @@ try {
   const result = runModuleMigrations(db, 'example', [
     { name: '001-seed', sql: 'INSERT INTO platform_modules (module_id, name, version, state, registered_at) VALUES (\'id\', \'example\', \'1.0.0\', \'installed\', \'now\')' },
     { name: '002-update', sql: 'UPDATE platform_modules SET state = \'configured\' WHERE name = \'example\'' },
-  ]);
+  ], [], { trustedBuiltin: true });
   check(result.applied.join(',') === '001-seed,002-update', 'migrations run in declaration order');
   check(result.alreadyApplied.join(',') === '001-seed,002-update', 'migration progress includes newly applied names');
   check(db.statements[0] === 'BEGIN IMMEDIATE', 'migration batch starts one transaction');
@@ -45,6 +45,12 @@ try {
   check(skipped.applied.length === 0, 'already-applied migration is skipped');
   check(skipped.alreadyApplied[0] === '001-seed', 'skipped progress is preserved');
 
+  const untrustedDb = new RecordingDb();
+  assert.throws(() => runModuleMigrations(untrustedDb, 'hostile-fixture', [
+    { name: '001-private-table', sql: 'UPDATE [principals] SET enabled = 0' },
+  ]), /disabled for non-builtin modules/);
+  check(untrustedDb.statements.length === 0, 'untrusted module migration is denied before any Core DB statement executes');
+
   assertMigrationIsDataOnly('WITH rows AS (SELECT 1) SELECT * FROM rows');
   for (const sql of ['CREATE TABLE nope (id INTEGER)', 'ALTER TABLE platform_modules ADD COLUMN nope TEXT', 'PRAGMA user_version = 1']) {
     checkThrows(() => assertMigrationIsDataOnly(sql), `forbidden migration rejected: ${sql.split(' ')[0]}`);
@@ -54,7 +60,7 @@ try {
   assert.throws(() => runModuleMigrations(failedDb, 'example', [
     { name: '001-seed', sql: 'INSERT INTO platform_modules (module_id, name, version, state, registered_at) VALUES (\'id\', \'example\', \'1.0.0\', \'installed\', \'now\')' },
     { name: '002-fail', sql: 'UPDATE platform_modules SET state = \'broken\'' },
-  ]), /migration batch failed/);
+  ], [], { trustedBuiltin: true }), /migration batch failed/);
   check(failedDb.statements[failedDb.statements.length - 1] === 'ROLLBACK', 'failed batch rolls back');
 
   const services = createModuleServices('example', { enabled: true });

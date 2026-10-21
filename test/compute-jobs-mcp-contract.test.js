@@ -38,6 +38,7 @@ delete require.cache[require.resolve("../src/db")];
 
 const { callMcpTool } = require("../src/tools");
 const jobManager = require("../src/compute/job-manager");
+const authContext = require("./helpers/authorized-context").createServiceContext({ role: "operator", source: "mcp" });
 
 // Deterministic teardown: close the SQLite handle, remove the generated data
 // directory, and restore mutated environment variables. Runs on success AND
@@ -65,8 +66,8 @@ async function test(name, fn) {
   }
 }
 
-const create = (args, options) => callMcpTool("sidekick_compute_jobs", { action: "create", ...args }, options);
-const getJob = (job_id) => callMcpTool("sidekick_compute_jobs", { action: "get", job_id });
+const create = (args, options = {}) => callMcpTool("sidekick_compute_jobs", { action: "create", ...args }, { ...authContext, ...options });
+const getJob = (job_id, options = {}) => callMcpTool("sidekick_compute_jobs", { action: "get", job_id }, { ...authContext, ...options });
 const body = (res) => JSON.parse(res.content[0].text);
 
 const OPENVINO_PAYLOAD = {
@@ -128,9 +129,9 @@ async function main() {
   await test("identity: execution project is propagated and scopes the job", async () => {
     const j = body(await create({ job_type: "embeddings", request_payload: { input: "project scope" } }, { project: "SideKick" }));
     assert.strictEqual(j.project, "sidekick");
-    const readback = body(await callMcpTool("sidekick_compute_jobs", { action: "get", job_id: j.jobId }, { project: "sidekick" }));
+    const readback = body(await getJob(j.jobId, { project: "sidekick" }));
     assert.strictEqual(readback.project, "sidekick");
-    const denied = await callMcpTool("sidekick_compute_jobs", { action: "get", job_id: j.jobId }, { project: "other-project" });
+    const denied = await getJob(j.jobId, { project: "other-project" });
     assert.ok(denied.isError, "cross-project job access must be rejected");
   });
 

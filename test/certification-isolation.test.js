@@ -9,15 +9,18 @@ const { spawnSync } = require("child_process");
 const root = path.join(__dirname, "..");
 const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-certification-isolation-"));
 const operatorData = path.join(fixture, "operator-data");
+const gitHome = path.join(fixture, "git-home");
+fs.mkdirSync(gitHome, { recursive: true });
+fs.writeFileSync(path.join(gitHome, ".gitconfig"), `[safe]\n\tdirectory = "${root.replace(/\\/g, "/")}"\n`);
 
 try {
   const result = spawnSync(process.execPath, [path.join(root, "src/cli.js"), "certify", "--json"], {
     cwd: root,
     encoding: "utf8",
-    env: { ...process.env, SIDEKICK_DATA_DIR: operatorData, SIDEKICK_CERTIFICATION_DATA_DIR: "" },
+    env: { ...process.env, HOME: gitHome, USERPROFILE: gitHome, SIDEKICK_DATA_DIR: operatorData, SIDEKICK_CERTIFICATION_DATA_DIR: "" },
     timeout: 120000,
   });
-  assert.strictEqual(result.status, 0, result.stderr);
+  assert.strictEqual(result.status, 0, `${result.stderr}\n${result.stdout}`);
   const report = JSON.parse(result.stdout);
   assert.strictEqual(report.certification_level, "required_hermetic");
   assert.strictEqual(report.verdict, "passed");

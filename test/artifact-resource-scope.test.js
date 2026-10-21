@@ -2,11 +2,11 @@
 
 const assert = require("assert");
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
+const { after } = require("node:test");
 
-const dataDir = path.join(__dirname, "test-data-artifact-resource-scope");
-fs.rmSync(dataDir, { recursive: true, force: true });
-fs.mkdirSync(dataDir, { recursive: true });
+const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-artifact-resource-scope-"));
 process.env.SIDEKICK_DATA_DIR = dataDir;
 process.env.SIDEKICK_DISABLE_PROVIDER_BOOTSTRAP = "1";
 
@@ -43,5 +43,9 @@ assert.throws(() => kernel.registerArtifact({
   storage_ref: "artifacts/art_cross_project_derivative",
 }), /same project/, "lineage cannot cross project boundaries");
 
-fs.rmSync(dataDir, { recursive: true, force: true });
 console.log("Artifact resource scope tests passed");
+
+after(() => {
+  try { require("../src/db").closeDatabase(); } catch {}
+  fs.rmSync(dataDir, { recursive: true, force: true });
+});

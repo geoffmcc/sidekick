@@ -8,20 +8,23 @@ const http = require('http');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const net = require('net');
 const { spawn, execFileSync } = require('child_process');
 
 const ROOT = path.join(__dirname, '..');
 const AGENT = path.join(ROOT, 'src', 'compute', 'worker-agent.js');
-// Keep parallel/aborted runs from sharing a stale fixed-port server.
-const PORT = 47000 + (process.pid % 10000);
+// Ask the OS for an unused loopback port. PID-derived ports can land in a
+// reserved/excluded range on Windows hosts even when the child logs startup.
+let PORT = null;
 const API_KEY = 'sk-e2e-worker-key';
-const admin = { Authorization: `Bearer ${API_KEY}` };
 const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-srv-'));
 const WORK_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-wrk-'));
 const SECRET_DIR = path.join(WORK_DIR, 'secrets');
 fs.mkdirSync(SECRET_DIR, { recursive: true });
 const CRED = path.join(WORK_DIR, 'worker-credential.json');
 const NODE_ID = 'node_e2e_worker_01';
+const ADMIN_CREDENTIAL = require('./helpers/scoped-admin-credential').createScopedOwnerCredential(DATA_DIR, 'Compute worker E2E administrator');
+const admin = { Authorization: `Bearer ${ADMIN_CREDENTIAL}` };
 
 let passed = 0, failed = 0, skipped = 0;
 let server = null;
@@ -35,6 +38,17 @@ function skip(name) {
   console.log(`  - ${name} (skipped)`);
 }
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+function reserveAvailablePort() {
+  return new Promise((resolve, reject) => {
+    const probe = net.createServer();
+    probe.once('error', reject);
+    probe.listen(0, '127.0.0.1', () => {
+      const address = probe.address();
+      const port = address && typeof address === 'object' ? address.port : null;
+      probe.close(error => error ? reject(error) : resolve(port));
+    });
+  });
+}
 function req(method, p, body) {
   return new Promise((resolve, reject) => {
     const data = body ? JSON.stringify(body) : null;
@@ -45,7 +59,7 @@ function req(method, p, body) {
     if (data) r.write(data); r.end();
   });
 }
-const cliEnv = { ...process.env, SIDEKICK_SECRET_DIR: SECRET_DIR, SIDEKICK_URL: `http://127.0.0.1:${PORT}`, SIDEKICK_WORKER_CONFIG: CRED, SIDEKICK_NODE_ID: NODE_ID, SIDEKICK_NODE_NAME: 'e2e-worker' };
+let cliEnv;
 function writeEnrollmentToken(token) {
   fs.writeFileSync(path.join(SECRET_DIR, 'sidekick_enroll_token'), token, { mode: 0o600 });
 }
@@ -87,9 +101,12 @@ process.once('SIGINT', () => { handleSignal('SIGINT').catch(() => process.exit(1
 process.once('SIGTERM', () => { handleSignal('SIGTERM').catch(() => process.exit(143)); });
 
 async function main() {
+  PORT = await reserveAvailablePort();
+  assert.ok(Number.isInteger(PORT) && PORT > 0, 'the operating system must assign a loopback port');
+  cliEnv = { ...process.env, SIDEKICK_SECRET_DIR: SECRET_DIR, SIDEKICK_URL: `http://127.0.0.1:${PORT}`, SIDEKICK_WORKER_CONFIG: CRED, SIDEKICK_WORKER_CONFIG_FILE: path.join(WORK_DIR, 'no-external-worker-config.json'), SIDEKICK_NODE_ID: NODE_ID, SIDEKICK_NODE_NAME: 'e2e-worker' };
   console.log('Running Compute Worker E2E Acceptance Tests...\n');
   server = spawn(process.execPath, ['src/index.js'], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, NODE_ENV: 'test', SIDEKICK_DATA_DIR: DATA_DIR, SIDEKICK_PORT: String(PORT), SIDEKICK_API_KEY: API_KEY } });
+    env: { ...process.env, NODE_ENV: 'test', SIDEKICK_DATA_DIR: DATA_DIR, SIDEKICK_PORT: String(PORT), SIDEKICK_BIND_HOST: '127.0.0.1', SIDEKICK_API_KEY: API_KEY } });
   const captureServerOutput = chunk => {
     serverOutput = (serverOutput + String(chunk)).slice(-4000);
   };
@@ -97,8 +114,16 @@ async function main() {
   server.stderr.on('data', captureServerOutput);
   try {
     let healthy = false;
-    for (let i = 0; i < 240; i++) { try { if ((await req('GET', '/health')).status === 200) { healthy = true; break; } } catch {} await sleep(250); }
-    assert.ok(healthy, `worker E2E server did not become healthy${serverOutput ? `; startup output: ${serverOutput.trim()}` : ''}`);
+    let lastHealthCheck = 'no response';
+    for (let i = 0; i < 240; i++) {
+      try {
+        const result = await req('GET', '/health');
+        lastHealthCheck = `HTTP ${result.status}`;
+        if (result.status === 200) { healthy = true; break; }
+      } catch (error) { lastHealthCheck = error.code || error.message; }
+      await sleep(250);
+    }
+    assert.ok(healthy, `worker E2E server did not become healthy (${lastHealthCheck})${serverOutput ? `; startup output: ${serverOutput.trim()}` : ''}`);
 
     // status before enrollment
     check('status reports not enrolled before enroll', /Enrolled:\s+no/.test(cli(['status'])));
@@ -137,6 +162,7 @@ async function main() {
     check('recovered worker credential is active again', recovered && recovered.credentialState === 'active');
   } finally {
     await stopServer();
+    require('../src/db').closeDatabase();
     fs.rmSync(DATA_DIR, { recursive: true, force: true });
     fs.rmSync(WORK_DIR, { recursive: true, force: true });
   }

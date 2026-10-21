@@ -15,14 +15,20 @@ const tasks = require("../src/agent/task-store");
 const dbStore = require("../src/db");
 const { TOOLS } = require("../src/tools");
 const context = require("../src/tools/context");
+const identity = require("../src/core/identity");
+const platformKernel = require("../src/platform/kernel");
+
+dbStore.runPendingMigrations();
+const owner = identity.bootstrapOwner({ username: "agent_handoff_test_owner", password: "a sufficiently long synthetic test password" });
+platformKernel.registerProject({ project_id: "handoff-tool-test", owner_actor_id: owner.principal_id, source: "test" });
 
 function parse(result) { return JSON.parse(result.content[0].text); }
 
 (async () => {
   try {
-    const task = createTask({ task_id: "agt_handoff_tool01", objective: "Build a durable continuation", profile: "quick", project_id: "handoff-tool-test" });
+    const task = createTask({ task_id: "agt_handoff_tool01", objective: "Build a durable continuation", profile: "quick", project_id: "handoff-tool-test", requested_by_principal_id: owner.principal_id, actor_principal_id: owner.principal_id });
     tasks.insertTask(task);
-    const result = await context.runWithContext(context.createAgentExecutionContext({ taskId: task.task_id, project: task.project_id }), () => TOOLS.handoff({
+    const result = await context.runWithContext(context.createAgentExecutionContext({ taskId: task.task_id, project: task.project_id, authIdentity: { principal_id: owner.principal_id, principal_type: "human" } }), () => TOOLS.handoff({
       action: "create",
       project: task.project_id,
       title: "Agent continuity",

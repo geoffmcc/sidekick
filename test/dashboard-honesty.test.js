@@ -35,7 +35,7 @@ process.on("exit", () => {
 
 const dbStore = require("../src/db");
 
-function makeRequest(method, urlPath, body = null) {
+function makeRequest(method, urlPath, body = null, identityCookie = null) {
   return new Promise((resolve, reject) => {
     const data = body != null ? JSON.stringify(body) : null;
     const req = http.request({
@@ -47,6 +47,8 @@ function makeRequest(method, urlPath, body = null) {
         "Content-Type": "application/json",
         "Authorization": "Basic " + Buffer.from("test-user:test-pass").toString("base64"),
         ...(data ? { "Content-Length": Buffer.byteLength(data) } : {}),
+        ...(identityCookie ? { Cookie: identityCookie } : {}),
+        ...(identityCookie ? { Origin: "http://127.0.0.1:4101" } : {}),
       },
     }, (res) => {
       let out = "";
@@ -54,7 +56,7 @@ function makeRequest(method, urlPath, body = null) {
       res.on("end", () => {
         let parsed = out;
         try { parsed = JSON.parse(out); } catch {}
-        resolve({ status: res.statusCode, data: parsed });
+        resolve({ status: res.statusCode, data: parsed, headers: res.headers });
       });
     });
     req.on("error", reject);
@@ -142,6 +144,134 @@ async function ok(name, fn) {
       assert.strictEqual(res.data.ok, false);
       assert.ok(res.data.error, "error message should be present");
     }
+  });
+
+  await ok("memory routes enforce project grants and conceal inaccessible IDs", async () => {
+    const kernel = require("../src/platform/kernel");
+    const projectAccess = require("../src/core/project-access");
+    const owner = (await makeRequest("GET", "/api/auth/me")).data.principal;
+    kernel.registerProject({ project_id: "memory_hidden_project", owner_actor_id: owner.principal_id });
+    kernel.registerProject({ project_id: "memory_allowed_project", owner_actor_id: owner.principal_id });
+
+    async function createScopedUser(username, role, password) {
+      const created = await makeRequest("POST", "/api/auth/users", { username, password, role });
+      assert.strictEqual(created.status, 201, "owner can create a scoped test principal");
+      const login = await makeRequest("POST", "/api/auth/login", { username, password });
+      assert.strictEqual(login.status, 200);
+      const cookie = (login.headers["set-cookie"] || []).find(value => value.startsWith("sidekick_identity="))?.split(";", 1)[0];
+      assert.ok(cookie, "login must establish the identity session used by the request");
+      return { principal: created.data.principal, cookie };
+    }
+
+    const viewer = await createScopedUser("memory-project-viewer", "viewer", "a sufficiently long viewer password");
+    const operator = await createScopedUser("memory-project-operator", "operator", "a sufficiently long operator password");
+    projectAccess.grantProjectAccess({ actorPrincipalId: owner.principal_id, principalId: viewer.principal.principal_id, project: "memory_allowed_project", accessLevel: "read" });
+    projectAccess.grantProjectAccess({ actorPrincipalId: owner.principal_id, principalId: operator.principal.principal_id, project: "memory_allowed_project", accessLevel: "write" });
+
+    const allowedFact = dbStore.upsertMemory({
+      id: "mem-allowed-project-export",
+      type: "fact",
+      project: "memory_allowed_project",
+      content: "authorized project export fact",
+      summary: "authorized project export fact",
+      confidence: 0.9,
+      source: "test",
+    });
+    const secret = dbStore.upsertMemory({
+      id: "mem-hidden-project-enable",
+      type: "fact",
+      project: "memory_hidden_project",
+      content: "hidden project memory",
+      summary: "hidden project memory",
+      confidence: 0.9,
+      source: "test",
+    });
+    dbStore.disableMemory(secret.id);
+    const activeSecret = dbStore.upsertMemory({
+      id: "mem-hidden-project-mutations",
+      type: "fact",
+      project: "memory_hidden_project",
+      content: "hidden project mutation target",
+      summary: "hidden project mutation target",
+      confidence: 0.9,
+      source: "test",
+    });
+
+    const allowedExport = await makeRequest("POST", "/api/memories/export", { project: "memory_allowed_project" }, operator.cookie);
+    assert.strictEqual(allowedExport.status, 200, JSON.stringify(allowedExport.data));
+    assert.ok(allowedExport.data.data.memories.some(memory => memory.id === allowedFact.id));
+    assert.ok(allowedExport.data.data.memories.every(memory => memory.project === "memory_allowed_project"));
+    assert.doesNotMatch(JSON.stringify(allowedExport.data), /hidden project memory/);
+    const allowedEvidence = await makeRequest("GET", `/api/memories/${allowedFact.id}/evidence`, null, operator.cookie);
+    assert.strictEqual(allowedEvidence.status, 200, JSON.stringify(allowedEvidence.data));
+    const deniedEvidence = await makeRequest("GET", `/api/memories/${secret.id}/evidence`, null, operator.cookie);
+    const missingEvidence = await makeRequest("GET", "/api/memories/mem-definitely-absent/evidence", null, operator.cookie);
+    assert.strictEqual(deniedEvidence.status, 404);
+    assert.strictEqual(deniedEvidence.data.error, missingEvidence.data.error, "out-of-project evidence IDs must be indistinguishable from absent IDs");
+    const viewerExport = await makeRequest("POST", "/api/memories/export", { project: "memory_allowed_project" }, viewer.cookie);
+    assert.strictEqual(viewerExport.status, 403, JSON.stringify(viewerExport.data));
+    assert.strictEqual(viewerExport.data.code, "forbidden");
+    const deniedExport = await makeRequest("POST", "/api/memories/export", { project: "memory_hidden_project" }, viewer.cookie);
+    assert.strictEqual(deniedExport.status, 404, JSON.stringify(deniedExport.data));
+
+    const readOnlyImport = await makeRequest("POST", "/api/memories/import", {
+      project: "memory_allowed_project",
+      data: { memories: [{ type: "fact", project: "memory_allowed_project", content: "viewer cannot import", confidence: 0.8 }] },
+    }, viewer.cookie);
+    assert.strictEqual(readOnlyImport.status, 404, JSON.stringify(readOnlyImport.data));
+    const scopedImport = await makeRequest("POST", "/api/memories/import", {
+      project: "memory_allowed_project",
+      data: { memories: [
+        { type: "fact", project: "memory_allowed_project", content: "authorized project imported fact", confidence: 0.8 },
+        { type: "fact", project: "memory_hidden_project", content: "unauthorized project imported fact", confidence: 0.8 },
+      ] },
+    }, operator.cookie);
+    assert.strictEqual(scopedImport.status, 200, JSON.stringify(scopedImport.data));
+    assert.ok(dbStore.searchMemories({ project: "memory_allowed_project", query: "authorized project imported fact", limit: 10 }).length > 0);
+    assert.equal(dbStore.searchMemories({ project: "memory_hidden_project", query: "unauthorized project imported fact", limit: 10 }).length, 0);
+    const deniedImport = await makeRequest("POST", "/api/memories/import", {
+      project: "memory_hidden_project",
+      data: { memories: [{ type: "fact", project: "memory_hidden_project", content: "denied hidden import", confidence: 0.8 }] },
+    }, operator.cookie);
+    assert.strictEqual(deniedImport.status, 404, JSON.stringify(deniedImport.data));
+    assert.equal(dbStore.searchMemories({ project: "memory_hidden_project", query: "denied hidden import", limit: 10 }).length, 0);
+
+    const handoff = dbStore.saveHandoff({
+      project: "memory_allowed_project",
+      title: "Revocation boundary test",
+      source: "test",
+      content: "Decision: only the current project grant may authorize this handoff read.",
+      owner_principal_id: viewer.principal.principal_id,
+      created_by_principal_id: viewer.principal.principal_id,
+    });
+    const beforeRevocation = await makeRequest("GET", `/api/handoffs/${handoff.id}`, null, viewer.cookie);
+    assert.strictEqual(beforeRevocation.status, 200, JSON.stringify(beforeRevocation.data));
+    projectAccess.revokeProjectAccess({ actorPrincipalId: owner.principal_id, principalId: viewer.principal.principal_id, project: "memory_allowed_project" });
+    const afterRevocation = await makeRequest("GET", `/api/handoffs/${handoff.id}`, null, viewer.cookie);
+    const missingHandoff = await makeRequest("GET", "/api/handoffs/handoff-definitely-absent", null, viewer.cookie);
+    assert.strictEqual(afterRevocation.status, 404, JSON.stringify(afterRevocation.data));
+    assert.strictEqual(afterRevocation.data.error, missingHandoff.data.error, "revoked handoff and missing handoff must be indistinguishable");
+    const revokedList = await makeRequest("GET", "/api/handoffs?project=memory_allowed_project", null, viewer.cookie);
+    assert.equal(revokedList.data.handoffs.some(item => item.id === handoff.id), false);
+
+    const inaccessible = await makeRequest("POST", `/api/memories/${secret.id}/enable`, null, viewer.cookie);
+    const nonexistent = await makeRequest("POST", "/api/memories/mem-definitely-absent/enable", null, viewer.cookie);
+    assert.strictEqual(inaccessible.status, 404, JSON.stringify(inaccessible.data));
+    assert.strictEqual(nonexistent.status, 404, JSON.stringify(nonexistent.data));
+    assert.strictEqual(inaccessible.data.code, nonexistent.data.code);
+    assert.strictEqual(dbStore.getMemoryById(secret.id, { includeDisabled: true }).enabled, false, "denied enable must not mutate the memory");
+
+    const deniedDisable = await makeRequest("POST", `/api/memories/${activeSecret.id}/disable`, null, viewer.cookie);
+    const missingDisable = await makeRequest("POST", "/api/memories/mem-definitely-absent/disable", null, viewer.cookie);
+    const deniedDelete = await makeRequest("DELETE", `/api/memories/${activeSecret.id}`, null, viewer.cookie);
+    const missingDelete = await makeRequest("DELETE", "/api/memories/mem-definitely-absent", null, viewer.cookie);
+    for (const response of [deniedDisable, missingDisable, deniedDelete, missingDelete]) {
+      assert.strictEqual(response.status, 404, JSON.stringify(response.data));
+      assert.strictEqual(response.data.code, inaccessible.data.code);
+    }
+    const unchanged = dbStore.getMemoryById(activeSecret.id, { includeDisabled: true });
+    assert.strictEqual(unchanged.enabled, true, "denied disable/delete must not mutate the memory");
+    assert.strictEqual(unchanged.state, "active");
   });
 
   await ok("memory disable/enable/delete succeed through the governed tools on a real memory", async () => {

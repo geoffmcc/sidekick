@@ -27,7 +27,7 @@ const DEMO_MANIFEST = {
   name: 'demo-module',
   version: '1.2.0',
   description: 'Repository integration test module',
-  type: 'plugin',
+  type: 'builtin',
   configSchema: {
     type: 'object',
     properties: { retention_days: { type: 'number' } },
@@ -77,10 +77,10 @@ console.log('Running Module Repository Tests...\n');
     console.log('Passed\n');
 
     console.log('Test MR.2: first-time module persistence');
-    const registered = repository.registerModule(DEMO_MANIFEST, { source: 'test', entryPoint: 'modules/demo/index.js' });
+    const registered = repository.registerModule(DEMO_MANIFEST, { source: 'builtin', entryPoint: 'modules/demo/index.js' });
     assert.strictEqual(registered.state, 'validated', 'Registered module should start validated');
     assert.strictEqual(registered.version, '1.2.0', 'Version should persist');
-    assert.strictEqual(registered.source, 'test', 'Source should persist');
+    assert.strictEqual(registered.source, 'builtin', 'Trusted builtin source should persist');
     assert.strictEqual(registered.entry_point, 'modules/demo/index.js', 'Entry point should persist');
     assert.strictEqual(registered.manifest.name, 'demo-module', 'Manifest should round-trip');
     assert.strictEqual(registered.manifest.migrations.length, 2, 'Manifest migrations should round-trip');
@@ -131,7 +131,7 @@ console.log('Running Module Repository Tests...\n');
     console.log('Passed\n');
 
     console.log('Test MR.5: atomic rollback when a migration in the batch fails');
-    repository.registerModule(BROKEN_MANIFEST);
+    repository.registerModule(BROKEN_MANIFEST, { source: 'builtin' });
     assert.throws(
       () => repository.applyModuleMigrations('broken-module', { transitionTo: 'installed' }),
       /migration batch failed/,
@@ -163,7 +163,7 @@ console.log('Running Module Repository Tests...\n');
           'hook-module',
           [{ name: 'seed', sql: "INSERT INTO platform_extensions (extension_id, name, version, registered_at) VALUES ('ext_hook_seed', 'hook-module-meta', '1.0.0', '2026-08-10T00:00:00.000Z')" }],
           [],
-          { recordProgress() { throw new Error('synthetic persistence failure'); } }
+          { trustedBuiltin: true, recordProgress() { throw new Error('synthetic persistence failure'); } }
         ),
       /migration batch failed: synthetic persistence failure/,
       'Persistence hook failure should abort the batch'

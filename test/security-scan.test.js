@@ -11,6 +11,8 @@ process.env.SIDEKICK_DATA_DIR = dataDir;
 
 delete require.cache[require.resolve("../src/tools")];
 const { TOOLS, setSource } = require("../src/tools");
+const authContext = require("./helpers/authorized-context").createServiceContext({ role: "operator", source: "mcp" });
+const toolContext = require("../src/tools/context");
 
 function cleanup() {
   try { require("../src/db").closeDatabase?.(); } catch {}
@@ -55,11 +57,11 @@ function write(relative, content, mode) {
       privateKeyFooter
     ].join("\n"), 0o600);
 
-    const result = await TOOLS.security_scan({
+    const result = await toolContext.runWithContext(authContext, () => TOOLS.security_scan({
       path: testRoot,
       format: "json",
       max_files: 100
-    });
+    }));
     assert.ok(!result.isError);
     const report = JSON.parse(result.content[0].text);
     assert.ok(report.findings.some(item =>
@@ -90,13 +92,13 @@ function write(relative, content, mode) {
 
     write("denied/credentials.yml", "PASSWORD: must-not-appear");
     process.env.SIDEKICK_DENIED_PATHS = path.join(testRoot, "denied");
-    const descendantFiltered = await TOOLS.security_scan({ path: testRoot, format: "json" });
+    const descendantFiltered = await toolContext.runWithContext(authContext, () => TOOLS.security_scan({ path: testRoot, format: "json" }));
     const filteredReport = JSON.parse(descendantFiltered.content[0].text);
     assert.ok(filteredReport.skipped_by_policy > 0);
     assert.ok(!filteredReport.findings.some(item => item.path.startsWith("denied/")));
 
     process.env.SIDEKICK_DENIED_PATHS = testRoot;
-    const blocked = await TOOLS.security_scan({ path: testRoot });
+    const blocked = await toolContext.runWithContext(authContext, () => TOOLS.security_scan({ path: testRoot }));
     assert.ok(blocked.isError);
     assert.ok(blocked.content[0].text.includes("Path blocked by policy"));
     delete process.env.SIDEKICK_DENIED_PATHS;
