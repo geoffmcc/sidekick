@@ -19,6 +19,7 @@ const { createMcpServer } = require("./mcp/server");
 const { createSessionManager } = require("./mcp/session-manager");
 const { registerStreamableHttpRoutes } = require("./mcp/streamable-http");
 const { registerLegacySseRoutes } = require("./mcp/legacy-sse");
+const { MAX_MCP_REQUEST_BODY_BYTES } = require("./mcp/limits");
 const executionNode = require("./node/manager");
 executionNode.ensureSchema();
 const executionNodeRecoveryTimer = setInterval(() => {
@@ -191,7 +192,7 @@ app.use((req, res, next) => {
   }
 });
 
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({ limit: MAX_MCP_REQUEST_BODY_BYTES }));
 
 registerLegacySseRoutes({ app, sessionManager, createMcpServer });
 registerStreamableHttpRoutes({ app, sessionManager, createMcpServer, logDebug });
