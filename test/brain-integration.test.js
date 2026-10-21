@@ -42,7 +42,7 @@ function post(p, body) {
   return new Promise((resolve, reject) => {
     const data = JSON.stringify(body);
     const proxyHeaders = createAgentProxyHeaders({ secret: process.env.SIDEKICK_AGENT_PROXY_KEY, method: "POST", path: p, body: data });
-    const req = http.request({ hostname: "127.0.0.1", port, path: p, method: "POST", headers: { "Content-Type": "application/json", ...proxyHeaders, "Content-Length": Buffer.byteLength(data) } }, r => {
+    const req = http.request({ hostname: "127.0.0.1", port, path: p, method: "POST", agent: false, headers: { "Content-Type": "application/json", ...proxyHeaders, "Content-Length": Buffer.byteLength(data) } }, r => {
       let out = ""; r.on("data", c => out += c); r.on("end", () => resolve({ status: r.statusCode, body: out ? JSON.parse(out) : null }));
     });
     req.on("error", reject); req.write(data); req.end();
