@@ -317,6 +317,115 @@ function registerAuthRoutes({
     }
   });
 
+  // Provision a narrowly scoped machine identity in one atomic operation.
+  // Direct permission grants are restricted to service principals, and each
+  // grant is checked against the initiating human's current authority.
+  app.post("/api/auth/service-credentials", (req, res) => {
+    if (!requireIdentityPermission(req, res, "principals.manage")) return;
+    if (!requireIdentityPermission(req, res, "roles.manage")) return;
+    if (!requireIdentityPermission(req, res, "credentials.create")) return;
+    const permissions = req.body?.permissions;
+    const scopes = req.body?.scopes === undefined ? permissions : req.body.scopes;
+    if (!Array.isArray(permissions) || permissions.length === 0 || permissions.some(value => typeof value !== "string") ||
+        !Array.isArray(scopes) || scopes.length === 0 || scopes.some(value => typeof value !== "string")) {
+      return res.status(400).json({ error: "permissions and scopes must be non-empty permission arrays", code: "invalid_request" });
+    }
+    const uniquePermissions = [...new Set(permissions.map(value => value.trim()))];
+    const uniqueScopes = [...new Set(scopes.map(value => value.trim()))];
+    if (!uniquePermissions.every(Boolean) || !uniqueScopes.every(Boolean) || uniqueScopes.some(scope => !uniquePermissions.includes(scope))) {
+      return res.status(400).json({ error: "credential scopes must be a subset of granted permissions", code: "invalid_request" });
+    }
+    const actorId = req.authPrincipal.principal_id;
+    const actor = req.authPrincipal;
+    for (const permission of uniquePermissions) {
+      const decision = authorization.authorize({
+        principalId: actorId,
+        permission,
+        ...(Array.isArray(actor.scopes) ? { credentialScopes: actor.scopes } : {}),
+        delegationId: actor.delegation_id || null,
+      });
+      if (!decision.ok) return res.status(403).json({ error: "Cannot grant a permission the initiating identity does not hold", code: "forbidden", permission });
+    }
+    try {
+      const db = dbStore.getDb();
+      let provisioned;
+      db.transaction(() => {
+        let principal;
+        if (req.body?.principal_id) {
+          principal = identity.getPrincipal(req.body.principal_id);
+          if (!principal || principal.principal_type !== "service" || !principal.enabled || principal.metadata?.managed_for !== "scoped_machine_credential") {
+            throw new Error("enabled managed service principal not found");
+          }
+          const granted = new Set(identity.getPrincipalPermissions(principal.principal_id));
+          if (uniquePermissions.some(permission => !granted.has(permission))) throw new Error("credential permissions exceed the service principal grants");
+        } else {
+          principal = identity.createPrincipal({
+            type: "service",
+            displayName: req.body?.display_name,
+            createdByPrincipalId: actorId,
+            actorPrincipalId: actorId,
+            metadata: { managed_for: "scoped_machine_credential" },
+          });
+          for (const permission of uniquePermissions) identity.grantPrincipalPermission(principal.principal_id, permission, actor);
+        }
+        const created = authentication.createCredential({
+          principalId: principal.principal_id,
+          displayName: req.body?.credential_name || req.body?.display_name,
+          scopes: uniqueScopes,
+          expiresAt: req.body?.expires_at,
+          createdByPrincipalId: actorId,
+        });
+        provisioned = { principal, credential: created.credential, token: created.token };
+      })();
+      res.set("Cache-Control", "no-store");
+      res.status(201).json(provisioned);
+    } catch (error) {
+      return errorResponse(req, res, error, { status: 400, code: "service_credential_create_failed", component: "auth" });
+    }
+  });
+
+  app.get("/api/auth/service-credentials", (req, res) => {
+    if (!requireIdentityPermission(req, res, "principals.read")) return;
+    if (!requireIdentityPermission(req, res, "credentials.read")) return;
+    const managed = identity.listPrincipals({ type: "service" })
+      .filter(principal => principal.metadata?.managed_for === "scoped_machine_credential")
+      .map(principal => ({
+        principal_id: principal.principal_id,
+        display_name: principal.display_name,
+        enabled: principal.enabled,
+        permissions: identity.getPrincipalPermissions(principal.principal_id),
+        credentials: authentication.listCredentials(principal.principal_id),
+      }));
+    res.set("Cache-Control", "no-store");
+    res.json({ service_principals: managed });
+  });
+
+  app.post("/api/auth/service-credentials/:id/rotate", (req, res) => {
+    if (!requireIdentityPermission(req, res, "credentials.revoke")) return;
+    if (!requireIdentityPermission(req, res, "roles.manage")) return;
+    const credential = authentication.getCredential(req.params.id);
+    const principal = credential && identity.getPrincipal(credential.principal_id);
+    if (!principal || principal.principal_type !== "service" || principal.metadata?.managed_for !== "scoped_machine_credential") {
+      return res.status(404).json({ error: "Managed service credential not found", code: "not_found" });
+    }
+    for (const scope of credential.scopes) {
+      const decision = authorization.authorize({
+        principalId: req.authPrincipal.principal_id,
+        permission: scope,
+        ...(Array.isArray(req.authPrincipal.scopes) ? { credentialScopes: req.authPrincipal.scopes } : {}),
+        delegationId: req.authPrincipal.delegation_id || null,
+      });
+      if (!decision.ok) return res.status(403).json({ error: "Cannot rotate a credential beyond the initiating identity's authority", code: "forbidden", permission: scope });
+    }
+    try {
+      const replacement = authentication.rotateCredential(credential.credential_id, req.authPrincipal.principal_id);
+      res.set("Cache-Control", "no-store");
+      res.status(201).json({ principal, credential: replacement.credential, token: replacement.token });
+    } catch (error) {
+      return errorResponse(req, res, error, { status: 400, code: "service_credential_rotation_failed", component: "auth" });
+    }
+  });
+
   app.post("/api/auth/credentials/:id/revoke", (req, res) => {
     if (!requireIdentityPermission(req, res, "credentials.revoke")) return;
     res.json({ revoked: authentication.revokeCredential(req.params.id) });

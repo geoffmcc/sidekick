@@ -28,6 +28,7 @@ let evolveExecutionStreams = {};
 let allBlackboxIncidents = [];
 let selectedBlackboxIncident = null;
 let blackboxStream = null;
+let mcpServiceOneTimeToken = null;
 
 // Authentication helpers
 function getAuthHeader() {
@@ -120,6 +121,7 @@ function showBootstrapModal() {
         return;
       }
       modal.close();
+      location.hash = 'identity';
       location.reload();
     });
   }
@@ -672,26 +674,131 @@ function identityError(message) {
 async function loadIdentityAdmin() {
   identityError('');
   try {
+    await loadIdentityPrincipalsOnly();
+    await loadMcpServiceCredentialSetup();
+  } catch (error) { identityError(dashboardSafeErrorMessage(error)); }
+}
+
+function showMcpServiceCredentialToken(result) {
+  const status = $('mcpServiceSetupStatus');
+  const details = $('mcpServiceSetupDetails');
+  if (!status || !details) return;
+  status.textContent = 'Credential created';
+  status.className = 'metrics-status-pill ok';
+  details.innerHTML = '<div class="service-credential-warning">Copy this token now. Sidekick will not show it again. Store it in your MCP client’s protected credential settings.</div>' +
+    '<div class="sub">Identity: ' + esc(result.principal.display_name) + ' · Permissions: packs.read, packs.manage · No expiry</div>' +
+    '<pre class="service-credential-token" id="mcpServiceCredentialToken"></pre>' +
+    '<button class="btn btn-sm btn-outline" type="button" data-dashboard-action="copy-element" data-id="mcpServiceCredentialToken">Copy token</button>';
+  $('mcpServiceCredentialToken').textContent = result.token;
+}
+
+async function loadMcpServiceCredentialSetup() {
+  const status = $('mcpServiceSetupStatus');
+  const details = $('mcpServiceSetupDetails');
+  if (!status || !details) return;
+  if (mcpServiceOneTimeToken) {
+    showMcpServiceCredentialToken(mcpServiceOneTimeToken);
+    return;
+  }
+  status.textContent = 'Checking setup…';
+  status.className = 'metrics-status-pill';
+  try {
+    const response = await authFetch('/api/auth/service-credentials');
+    const data = await response.json();
+    if (!response.ok) {
+      status.textContent = response.status === 403 ? 'Owner access required' : 'Setup unavailable';
+      details.textContent = response.status === 403
+        ? 'Only an authorized Owner can create this service identity.'
+        : (data.error || 'Unable to inspect MCP service access.');
+      return;
+    }
+    const principals = data.service_principals || [];
+    const packPermissions = ['packs.read', 'packs.manage'];
+    const principal = principals.find(item => item.enabled && item.permissions.length === packPermissions.length && packPermissions.every(permission => item.permissions.includes(permission))) ||
+      principals.find(item => item.enabled) || null;
+    if (!principal) {
+      status.textContent = 'Not set up';
+      details.innerHTML = '<div class="sub">Create a dedicated identity limited to viewing and managing Capability Packs. This is optional and can be done later from Identity.</div>' +
+        '<button class="btn btn-sm" type="button" data-dashboard-action="identity" data-handler="createMcpServiceCredential">Set up MCP access</button>';
+      return;
+    }
+    const isNarrowPackIdentity = packPermissions.every(permission => principal.permissions.includes(permission)) &&
+      principal.permissions.length === packPermissions.length;
+    if (!isNarrowPackIdentity) {
+      status.textContent = 'Restricted setup recommended';
+      details.innerHTML = '<div class="sub">An existing service identity has broader permissions. Create a separate identity limited to Capability Packs.</div>' +
+        '<button class="btn btn-sm" type="button" data-dashboard-action="identity" data-handler="createMcpServiceCredential">Create restricted MCP access</button>';
+      return;
+    }
+    const credential = (principal.credentials || []).find(item => !item.revoked_at && (!item.expires_at || Date.parse(item.expires_at) > Date.now()));
+    if (!credential) {
+      status.textContent = 'Credential needed';
+      details.innerHTML = '<div class="sub">The dedicated service identity exists, but it has no active credential.</div>' +
+        '<button class="btn btn-sm" type="button" data-dashboard-action="identity" data-handler="createMcpServiceCredential" data-id="' + attr(principal.principal_id) + '">Create credential</button>';
+      return;
+    }
+    status.textContent = 'Configured';
+    status.className = 'metrics-status-pill ok';
+    details.innerHTML = '<div class="sub">' + esc(principal.display_name) + ' · ' + esc(principal.principal_id) + '</div>' +
+      '<div class="sub">Permissions: ' + esc((credential.scopes || []).join(', ')) + ' · ' + (credential.expires_at ? 'Expires ' + esc(credential.expires_at) : 'No expiry') + '</div>' +
+      '<button class="btn btn-sm btn-outline" type="button" data-dashboard-action="identity" data-handler="rotateMcpServiceCredential" data-id="' + attr(credential.credential_id) + '">Replace credential</button>';
+  } catch (error) {
+    status.textContent = 'Setup unavailable';
+    details.textContent = dashboardSafeErrorMessage(error);
+  }
+}
+
+async function createMcpServiceCredential(principalId) {
+  const details = $('mcpServiceSetupDetails');
+  const body = {
+    display_name: 'Sidekick MCP pack manager',
+    credential_name: 'MCP pack management',
+    permissions: ['packs.read', 'packs.manage'],
+    scopes: ['packs.read', 'packs.manage'],
+  };
+  if (principalId) body.principal_id = principalId;
+  try {
+    const response = await authFetch('/api/auth/service-credentials', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Unable to create MCP access.');
+    mcpServiceOneTimeToken = result;
+    showMcpServiceCredentialToken(result);
+    loadIdentityPrincipalsOnly();
+  } catch (error) {
+    if (details) details.insertAdjacentHTML('beforeend', '<div class="card error-card">' + esc(dashboardSafeErrorMessage(error)) + '</div>');
+  }
+}
+
+async function rotateMcpServiceCredential(credentialId) {
+  try {
+    const response = await authFetch('/api/auth/service-credentials/' + encodeURIComponent(credentialId) + '/rotate', { method: 'POST' });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Unable to replace MCP credential.');
+    mcpServiceOneTimeToken = result;
+    showMcpServiceCredentialToken(result);
+  } catch (error) {
+    identityError(dashboardSafeErrorMessage(error));
+  }
+}
+
+async function loadIdentityPrincipalsOnly() {
+  try {
     const res = await authFetch('/api/auth/principals');
     const data = await res.json();
-    if (!res.ok || data.error) { identityError(data.error || 'Identity administration is not available for this account'); return; }
-    const principals = data.principals || [];
-    $('identityCount').textContent = principals.length;
-    $('identityList').innerHTML = principals.map(principal => {
+    if (!res.ok || data.error) return;
+    $('identityCount').textContent = (data.principals || []).length;
+    $('identityList').innerHTML = (data.principals || []).map(principal => {
       const stateAction = principal.enabled ? 'disable' : 'enable';
       const stateLabel = principal.enabled ? 'Disable' : 'Enable';
       const roles = (principal.roles || []).map(role => '<span class="metrics-status-pill ' + (role === 'owner' ? 'warn' : 'ok') + '">' + esc(role) + '</span>').join(' ');
-      return '<div class="card compact-card identity-card">'
-        + '<div class="identity-header">'
-        + '<div><div class="identity-name">' + esc(principal.display_name) + '</div>'
-        + '<div class="sub">' + esc(principal.principal_id) + ' · ' + esc(principal.principal_type) + ' · ' + (principal.enabled ? 'enabled' : 'disabled') + '</div></div>'
-        + '<div>' + roles + '</div></div>'
-        + '<div class="identity-actions"><button class="btn btn-sm btn-outline" data-dashboard-action="identity" data-handler="toggleIdentityPrincipal" data-id="' + attr(principal.principal_id) + '" data-value="' + attr(stateAction) + '">' + stateLabel + '</button>'
-        + '<select id="identity-role-' + attr(principal.principal_id) + '"><option value="viewer">Viewer</option><option value="operator">Operator</option><option value="auditor">Auditor</option><option value="administrator">Administrator</option><option value="owner">Owner</option></select>'
-        + '<button class="btn btn-sm btn-outline" data-dashboard-action="identity" data-handler="assignIdentityRole" data-id="' + attr(principal.principal_id) + '">Assign role</button></div>'
-        + '</div>';
+      return '<div class="card compact-card identity-card"><div class="identity-header"><div><div class="identity-name">' + esc(principal.display_name) + '</div><div class="sub">' + esc(principal.principal_id) + ' · ' + esc(principal.principal_type) + ' · ' + (principal.enabled ? 'enabled' : 'disabled') + '</div></div><div>' + roles + '</div></div>' +
+        '<div class="identity-actions"><button class="btn btn-sm btn-outline" data-dashboard-action="identity" data-handler="toggleIdentityPrincipal" data-id="' + attr(principal.principal_id) + '" data-value="' + attr(stateAction) + '">' + stateLabel + '</button>' +
+        '<select id="identity-role-' + attr(principal.principal_id) + '"><option value="viewer">Viewer</option><option value="operator">Operator</option><option value="auditor">Auditor</option><option value="administrator">Administrator</option><option value="owner">Owner</option></select>' +
+        '<button class="btn btn-sm btn-outline" data-dashboard-action="identity" data-handler="assignIdentityRole" data-id="' + attr(principal.principal_id) + '">Assign role</button></div></div>';
     }).join('') || '<div class="sub">No principals found.</div>';
-  } catch (error) { identityError(dashboardSafeErrorMessage(error)); }
+  } catch (_) {}
 }
 
 async function createIdentityUser() {

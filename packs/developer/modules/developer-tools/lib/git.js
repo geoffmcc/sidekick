@@ -84,7 +84,10 @@ function parseLog(text) {
     .split("\n")
     .filter(Boolean)
     .map(line => {
-      const [sha, subject, author, date] = line.split(SEPARATOR);
+      // Keep untrusted commit subjects last. The dispatcher redacts sensitive
+      // looking text in tool output; a subject containing a key-like word such
+      // as "credentials" must not consume the author/date fields after it.
+      const [sha, author, date, subject] = line.split(SEPARATOR);
       return { sha: sha || null, subject: subject || null, author: author || null, date: date || null };
     })
     .filter(commit => commit.sha);
@@ -105,7 +108,7 @@ async function collectRepositoryFacts(services, repoPath) {
   facts.available = true;
   Object.assign(facts, parseStatus(status.text));
 
-  const format = ["%H", "%s", "%an", "%aI"].join(SEPARATOR);
+  const format = ["%H", "%an", "%aI", "%s"].join(SEPARATOR);
   const head = await gitRead(services, repoPath, "log", `-1 --pretty=format:${format}`);
   if (head.ok) {
     const [commit] = parseLog(head.text);

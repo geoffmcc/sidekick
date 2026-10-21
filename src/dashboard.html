@@ -7,7 +7,7 @@
 <link rel="stylesheet" href="/static/fontawesome/css/all.min.css">
 <link rel="stylesheet" href="/static/fonts/jetbrains-mono/jetbrains-mono.css">
 <link rel="stylesheet" href="/static/dashboard.css?v=dashboard-ux-preview-5">
-<link rel="stylesheet" href="/static/dashboard-theme.css?v=dashboard-redesign-1">
+<link rel="stylesheet" href="/static/dashboard-theme.css?v=dashboard-redesign-2">
 </head>
 <body>
 <div class="app-shell">
@@ -738,6 +738,19 @@
     <button class="btn btn-sm" data-dashboard-action="refresh" data-handler="loadIdentityAdmin"><i class="fas fa-sync"></i> Refresh</button>
   </div>
   <div id="identityError"></div>
+  <section class="card service-credential-setup" id="mcpServiceSetup" aria-labelledby="mcpServiceSetupTitle">
+    <div class="service-credential-heading">
+      <div>
+        <div class="section-title" id="mcpServiceSetupTitle">Connect an MCP client</div>
+        <p class="page-note">Create a dedicated service identity for this connection. It will be limited to viewing and managing Capability Packs.</p>
+      </div>
+      <span class="metrics-status-pill" id="mcpServiceSetupStatus">Checking setup…</span>
+    </div>
+    <div id="mcpServiceSetupDetails" class="service-credential-details">
+      <div class="sub">This is optional. You can set it up now or return to this page later.</div>
+      <button class="btn btn-sm" type="button" data-dashboard-action="identity" data-handler="createMcpServiceCredential">Set up MCP access</button>
+    </div>
+  </section>
   <div class="card form-card">
     <div class="section-title">Create human account</div>
     <div class="control-row form-row">
@@ -1017,7 +1030,7 @@
 </dialog>
 
 <script src="/static/dashboard-errors.js?v=dashboard-errors-1"></script>
-<script src="/static/dashboard.js?v=dashboard-ux-preview-6"></script>
+<script src="/static/dashboard.js?v=dashboard-ux-preview-7"></script>
 <script src="/static/dashboard-system.js?v=dashboard-redesign-1"></script>
 <script src="/static/dashboard-activity.js?v=dashboard-redesign-1"></script>
 <script src="/static/dashboard-controls.js?v=dashboard-redesign-1"></script>

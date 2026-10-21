@@ -34,7 +34,8 @@
     closeEditModal, saveKVEdit, closeConfirmModal, executeConfirmAction,
     closeNewEntryModal, saveNewEntry, filterKV, filterMemories, filterTools,
     loadComputeJobs, loadPredict, loadGrafanaDashboard, checkConfirmInput,
-    toggleIdentityPrincipal, assignIdentityRole, computeWorkerAction, computeJobAction
+    toggleIdentityPrincipal, assignIdentityRole, createMcpServiceCredential,
+    rotateMcpServiceCredential, computeWorkerAction, computeJobAction
   });
   const reportFailure = (message, control) => {
     console.error(message, control);

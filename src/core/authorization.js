@@ -32,7 +32,9 @@ function rolePermissions(principalId) {
     JOIN identity_role_permissions rp ON rp.role_name = pr.role_name
     WHERE pr.principal_id = ?
   `).all(text(principalId, "principal_id"));
-  return new Set(rows.map(row => row.permission));
+  const grantedRows = dbStore.getDb().prepare("SELECT permission FROM identity_principal_permissions WHERE principal_id = ?")
+    .all(text(principalId, "principal_id"));
+  return new Set([...rows, ...grantedRows].map(row => row.permission));
 }
 
 function activeDelegation(delegationId, delegatePrincipalId) {
