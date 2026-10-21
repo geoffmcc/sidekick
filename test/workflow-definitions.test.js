@@ -19,6 +19,7 @@ process.env.SIDEKICK_APPROVAL_MODE = 'off';
 process.env.SIDEKICK_SECRET_KEY = 'workflow-definitions-test-secret-key';
 
 require('../src/db').runPendingMigrations();
+const authenticatedWorkflowContext = require('./helpers/authorized-context').createOwnerContext({ source: 'internal' });
 
 const definition = require('../src/workflows/definition');
 const repository = require('../src/workflows/repository');
@@ -28,6 +29,14 @@ const dbStore = require('../src/db');
 const dispatcher = require('../src/tools/dispatcher');
 const toolContext = require('../src/tools/context');
 const { createAuthorityEnvelope } = require('../src/agent/authority');
+
+async function runWorkflowDefinition(name, inputs = {}, options = {}) {
+  const current = toolContext.getExecutionContext();
+  if (current.authIdentity || current.agentAuthorityContext || options.actorPrincipalId || options.requestedByPrincipalId || options.resumeWorkflowId) {
+    return runner.runWorkflowDefinition(name, inputs, options);
+  }
+  return toolContext.runWithContext(authenticatedWorkflowContext, () => runner.runWorkflowDefinition(name, inputs, { project: 'workflow-suite', ...options }));
+}
 
 let failures = 0;
 async function test(label, fn) {
@@ -126,7 +135,7 @@ function baseDefinition(overrides = {}) {
   // --- WD.4 the run drives the canonical subsystems ------------------------
   let firstRun;
   await test('WD.4: a run creates durable kernel workflow state and a platform execution', async () => {
-    firstRun = await runner.runWorkflowDefinition('core/test-flow', { key: 'wf-test-key' }, { project: 'workflow-suite' });
+    firstRun = await runWorkflowDefinition('core/test-flow', { key: 'wf-test-key' }, { project: 'workflow-suite' });
     assert.strictEqual(firstRun.status, 'completed', JSON.stringify(firstRun.steps));
     assert.strictEqual(firstRun.ok, true);
     assert.strictEqual(firstRun.steps.length, 2);
@@ -178,7 +187,7 @@ function baseDefinition(overrides = {}) {
       result: { first_ok: '${steps.missing_file.ok}', after: '${steps.after.text}' },
     }, { ownerKind: 'core' });
 
-    const run = await runner.runWorkflowDefinition('core/tolerant-flow', {});
+    const run = await runWorkflowDefinition('core/tolerant-flow', {});
     assert.strictEqual(run.status, 'completed');
     assert.strictEqual(run.steps[0].status, 'failed');
     assert.strictEqual(run.steps[1].status, 'ok');
@@ -205,7 +214,7 @@ function baseDefinition(overrides = {}) {
       result: {},
     }, { ownerKind: 'core' });
 
-    const run = await runner.runWorkflowDefinition('core/strict-flow', {});
+    const run = await runWorkflowDefinition('core/strict-flow', {});
     assert.strictEqual(run.status, 'failed');
     assert.strictEqual(run.ok, false);
     assert.strictEqual(run.steps.length, 1, 'the run stopped at the failing step');
@@ -243,12 +252,13 @@ function baseDefinition(overrides = {}) {
       return originalDispatch(tool, args, options);
     };
     try {
-      const run = await runner.runWorkflowDefinition('core/exception-cleanup-flow', {});
+      const run = await runWorkflowDefinition('core/exception-cleanup-flow', {});
       assert.strictEqual(run.status, 'failed', JSON.stringify(run));
       assert.strictEqual(run.steps[0].status, 'failed');
       assert.strictEqual(run.steps[1].status, 'ok', 'cleanup step must still dispatch');
       assert.ok(!JSON.stringify(run).includes('unsanitized internal failure'), 'raw thrown error leaked into the run result');
-      const stored = dbStore.getDb().prepare('SELECT value_json FROM kv_store WHERE key = ?').get('workflow-cleanup-key');
+      const scopedKey = `__sidekick_principal_v1:${encodeURIComponent(authenticatedWorkflowContext.authIdentity.principal_id)}:${encodeURIComponent('workflow_suite')}:workflow-cleanup-key`;
+      const stored = dbStore.getDb().prepare('SELECT value_json FROM kv_store WHERE key = ?').get(scopedKey);
       assert.strictEqual(JSON.parse(stored.value_json).value, 'cleanup-ran');
     } finally {
       dispatcher.callInternalTool = originalDispatch;
@@ -270,7 +280,7 @@ function baseDefinition(overrides = {}) {
       result: { skipped: '${steps.maybe.ok}' },
     }, { ownerKind: 'core' });
 
-    const run = await runner.runWorkflowDefinition('core/conditional-flow', {});
+    const run = await runWorkflowDefinition('core/conditional-flow', {});
     assert.strictEqual(run.status, 'completed');
     assert.strictEqual(run.steps[0].status, 'skipped');
     assert.strictEqual(run.steps[1].status, 'ok');
@@ -281,12 +291,12 @@ function baseDefinition(overrides = {}) {
 
   // --- WD.9 input validation ----------------------------------------------
   await test('WD.9: inputs are validated before anything executes', async () => {
-    const missing = await runner.runWorkflowDefinition('core/test-flow', {});
+    const missing = await runWorkflowDefinition('core/test-flow', {});
     assert.strictEqual(missing.ok, false);
     assert.strictEqual(missing.code, 'invalid_inputs');
     assert.ok(missing.errors.some(error => /input "key" is required/.test(error)));
 
-    const unknown = await runner.runWorkflowDefinition('core/test-flow', { key: 'x', bogus: 1 });
+    const unknown = await runWorkflowDefinition('core/test-flow', { key: 'x', bogus: 1 });
     assert.strictEqual(unknown.code, 'invalid_inputs');
     assert.ok(/unknown input/.test(unknown.error));
   });
@@ -294,12 +304,12 @@ function baseDefinition(overrides = {}) {
   // --- WD.10 disabled definitions -----------------------------------------
   await test('WD.10: a disabled definition is not runnable but is not destroyed', async () => {
     repository.setWorkflowDefinitionState('core/test-flow', 'disabled');
-    const blocked = await runner.runWorkflowDefinition('core/test-flow', { key: 'wf-test-key' });
+    const blocked = await runWorkflowDefinition('core/test-flow', { key: 'wf-test-key' });
     assert.strictEqual(blocked.ok, false);
     assert.strictEqual(blocked.code, 'workflow_unavailable');
     assert.ok(repository.getWorkflowDefinition('core/test-flow'), 'the definition is retained');
     repository.setWorkflowDefinitionState('core/test-flow', 'registered');
-    const restored = await runner.runWorkflowDefinition('core/test-flow', { key: 'wf-test-key' });
+    const restored = await runWorkflowDefinition('core/test-flow', { key: 'wf-test-key' });
     assert.strictEqual(restored.status, 'completed');
   });
 
@@ -331,7 +341,7 @@ function baseDefinition(overrides = {}) {
       return claim;
     };
     try {
-      const run = await runner.runWorkflowDefinition('core/cancellable-flow', {});
+      const run = await runWorkflowDefinition('core/cancellable-flow', {});
       assert.strictEqual(run.status, 'cancelled', JSON.stringify(run.steps));
       assert.ok(run.steps.length < 3, 'the run stopped before every step executed');
       const execution = platformKernel.getExecution(run.execution_id);
@@ -363,7 +373,7 @@ function baseDefinition(overrides = {}) {
       return originalDispatch(tool, args, options);
     };
     try {
-      const run = await runner.runWorkflowDefinition('core/cancel-with-cleanup-flow', {});
+      const run = await runWorkflowDefinition('core/cancel-with-cleanup-flow', {});
       assert.equal(run.status, 'cancelled');
       assert.deepEqual(run.steps.map(step => step.status), ['cancelled', 'ok']);
       assert.equal(cleanupCalls, 1, 'only the always-marked cleanup step dispatches');
@@ -375,7 +385,7 @@ function baseDefinition(overrides = {}) {
 
   await test('WD.11a: caller authority permits a read and denies a misleading read_only target mutation', async () => {
     const envelope = createAuthorityEnvelope({ allowed_effects: ['read_only'] });
-    const context = toolContext.createAgentExecutionContext({ agentAuthorityContext: { envelope } });
+    const context = toolContext.createAgentExecutionContext({ authIdentity: authenticatedWorkflowContext.authIdentity, project: 'workflow-suite', agentAuthorityContext: { envelope } });
     repository.registerWorkflowDefinition({
       name: 'core/misleading-readonly-flow', version: '1.0.0', title: 'Misleading workflow',
       description: 'The label must not suppress the step effect', mode: 'read_only', inputs: {},
@@ -396,17 +406,17 @@ function baseDefinition(overrides = {}) {
       result: {},
     }, { ownerKind: 'core' });
 
-    const permitted = await toolContext.runWithContext(context, () => runner.runWorkflowDefinition('core/authority-read-flow', {}));
+    const permitted = await toolContext.runWithContext(context, () => runWorkflowDefinition('core/authority-read-flow', {}));
     assert.strictEqual(permitted.status, 'completed');
     assert.strictEqual(permitted.steps[0].status, 'ok');
 
-    const denied = await toolContext.runWithContext(context, () => runner.runWorkflowDefinition('core/misleading-readonly-flow', {}));
+    const denied = await toolContext.runWithContext(context, () => runWorkflowDefinition('core/misleading-readonly-flow', {}));
     assert.strictEqual(denied.status, 'failed');
     assert.strictEqual(denied.steps[0].status, 'failed');
     assert.strictEqual(denied.steps[0].error_code, 'agent_authority_denied');
     assert.strictEqual(denied.evidence.click.code, 'agent_authority_denied');
 
-    const persistent = await toolContext.runWithContext(context, () => runner.runWorkflowDefinition('core/default-persistent-write', {}));
+    const persistent = await toolContext.runWithContext(context, () => runWorkflowDefinition('core/default-persistent-write', {}));
     assert.strictEqual(persistent.status, 'failed');
     assert.strictEqual(persistent.steps[0].error_code, 'agent_authority_denied');
     assert.strictEqual(dbStore.getKV(writeKey), null, 'a strict no-write caller cannot trigger the workflow step default write');
@@ -428,7 +438,7 @@ function baseDefinition(overrides = {}) {
     const envelope = createAuthorityEnvelope({ allowed_effects: ['read_only', 'application_state'], changes_allowed: true });
     const context = toolContext.createAgentExecutionContext({ agentAuthorityContext: { envelope } });
     const before = dbStore.getDb().prepare("SELECT COUNT(*) AS count FROM platform_workflows WHERE name = ?").get('core/nested-external-step').count;
-    const run = await toolContext.runWithContext(context, () => runner.runWorkflowDefinition('core/nested-wrapper', {}));
+    const run = await toolContext.runWithContext(context, () => runWorkflowDefinition('core/nested-wrapper', {}));
     assert.strictEqual(run.status, 'failed');
     assert.strictEqual(run.steps[0].error_code, 'agent_authority_denied');
     const after = dbStore.getDb().prepare("SELECT COUNT(*) AS count FROM platform_workflows WHERE name = ?").get('core/nested-external-step').count;
@@ -451,7 +461,7 @@ function baseDefinition(overrides = {}) {
       return { isError: true, approvalRequired: true, approvalId: 'approval_fixture', code: 'approval_required', status: 'approval_required', content: [{ type: 'text', text: 'Approval required' }] };
     };
     try {
-      const pending = await runner.runWorkflowDefinition(name, {}, { actorPrincipalId: 'actor_fixture', requestedByPrincipalId: 'requester_fixture', scopes: ['tools.execute'], delegationId: 'delegation_fixture' });
+      const pending = await runWorkflowDefinition(name, {}, { actorPrincipalId: 'actor_fixture', requestedByPrincipalId: 'requester_fixture', scopes: ['tools.execute'], delegationId: 'delegation_fixture' });
       assert.strictEqual(pending.status, 'awaiting_approval');
       assert.strictEqual(pending.ok, false);
       assert.strictEqual(pending.result_status, 'approval_required');
@@ -463,7 +473,7 @@ function baseDefinition(overrides = {}) {
         ...originalDefinition,
         steps: [{ name: 'pending', tool: 'get', args: { key: 'changed-key' }, expect: 'text' }],
       }, { ownerKind: 'core' });
-      const resumed = await runner.runWorkflowDefinition(name, {}, { resumeWorkflowId: pending.run_id });
+      const resumed = await runWorkflowDefinition(name, {}, { resumeWorkflowId: pending.run_id });
       assert.strictEqual(resumed.status, 'failed');
       assert.strictEqual(resumed.code, 'workflow_definition_changed');
       assert.strictEqual(dispatches, 1, 'a changed material argument must not be dispatched on the old approval');
@@ -480,7 +490,7 @@ function baseDefinition(overrides = {}) {
     const originalDispatch = dispatcher.callInternalTool;
     dispatcher.callInternalTool = async () => { const error = new Error('unsafe internal text'); error.code = 'fixture_dispatch_failure'; throw error; };
     try {
-      const run = await runner.runWorkflowDefinition('core/thrown-step-failure', {});
+      const run = await runWorkflowDefinition('core/thrown-step-failure', {});
       assert.strictEqual(run.status, 'failed');
       assert.strictEqual(run.steps[0].status, 'failed');
       assert.strictEqual(run.steps[0].error_code, 'fixture_dispatch_failure');
@@ -510,7 +520,7 @@ function baseDefinition(overrides = {}) {
       return originalDispatch(tool, args, options);
     };
     try {
-      const parent = await runner.runWorkflowDefinition(parentName, {});
+      const parent = await toolContext.runWithContext(authenticatedWorkflowContext, () => runWorkflowDefinition(parentName, {}));
       assert.strictEqual(parent.status, 'awaiting_approval');
       assert.strictEqual(parent.ok, false);
       assert.strictEqual(parent.steps[0].status, 'approval_required');
@@ -531,7 +541,7 @@ function baseDefinition(overrides = {}) {
     const originalAdvance = platformKernel.advanceWorkflow;
     try {
       platformKernel.advanceWorkflow = () => { const error = new Error('internal boundary detail'); error.code = 'fixture_boundary_failure'; throw error; };
-      const run = await runner.runWorkflowDefinition('core/runner-boundary-failure', {});
+      const run = await runWorkflowDefinition('core/runner-boundary-failure', {});
       assert.strictEqual(run.status, 'failed');
       assert.strictEqual(run.steps[0].status, 'failed');
       assert.strictEqual(run.steps[0].error_code, 'fixture_boundary_failure');
@@ -539,7 +549,7 @@ function baseDefinition(overrides = {}) {
       assert.ok(!JSON.stringify(run).includes('internal boundary detail'));
 
       platformKernel.advanceWorkflow = () => { throw new Error('untyped boundary detail'); };
-      const untyped = await runner.runWorkflowDefinition('core/runner-boundary-failure', {});
+      const untyped = await runWorkflowDefinition('core/runner-boundary-failure', {});
       assert.strictEqual(untyped.status, 'failed');
       assert.strictEqual(untyped.steps[0].error_code, 'workflow_step_error');
       assert.strictEqual(untyped.evidence.never_dispatched.code, 'workflow_step_error');
@@ -562,7 +572,7 @@ function baseDefinition(overrides = {}) {
       return { isError: true, approvalRequired: true, approvalId: 'approval_context_defaults', code: 'approval_required', status: 'approval_required', content: [{ type: 'text', text: 'Approval required' }] };
     };
     try {
-      const pending = await runner.runWorkflowDefinition('core/auth-context-defaults', {}, { actorPrincipalId: 'actor_fixture', requestedByPrincipalId: 'requester_fixture' });
+      const pending = await runWorkflowDefinition('core/auth-context-defaults', {}, { actorPrincipalId: 'actor_fixture', requestedByPrincipalId: 'requester_fixture' });
       assert.equal(pending.status, 'awaiting_approval');
       assert.deepEqual(observed.authIdentity, { principal_id: 'actor_fixture', requested_by_principal_id: 'requester_fixture', acting_for_principal_id: null, scopes: null, delegation_id: null });
     } finally {
@@ -592,22 +602,22 @@ function baseDefinition(overrides = {}) {
       throw new Error('untyped dispatcher failure');
     };
     try {
-      const rootApproval = await runner.runWorkflowDefinition(name, { key: 'approval-root' });
+      const rootApproval = await runWorkflowDefinition(name, { key: 'approval-root' });
       assert.equal(rootApproval.status, 'awaiting_approval');
       assert.equal(rootApproval.approval.approval_id, 'root_approval');
       assert.equal(rootApproval.approval.nested_run_id, 'root_run');
 
-      const nestedApproval = await runner.runWorkflowDefinition(name, { key: 'approval-nested' });
+      const nestedApproval = await runWorkflowDefinition(name, { key: 'approval-nested' });
       assert.equal(nestedApproval.status, 'awaiting_approval');
       assert.equal(nestedApproval.approval.approval_id, 'nested_approval');
       assert.equal(nestedApproval.approval.nested_run_id, 'nested_run');
       assert.equal(nestedApproval.evidence.call.code, 'payload_approval_code');
 
-      const resultError = await runner.runWorkflowDefinition(name, { key: 'untyped-error' });
+      const resultError = await runWorkflowDefinition(name, { key: 'untyped-error' });
       assert.equal(resultError.status, 'failed');
       assert.equal(resultError.steps[0].error_code, undefined);
 
-      const thrownError = await runner.runWorkflowDefinition(name, { key: 'throw-untyped' });
+      const thrownError = await runWorkflowDefinition(name, { key: 'throw-untyped' });
       assert.equal(thrownError.status, 'failed');
       assert.equal(thrownError.steps[0].error_code, 'tool_dispatch_error');
       assert.ok(!JSON.stringify(thrownError).includes('untyped dispatcher failure'));
@@ -624,7 +634,7 @@ function baseDefinition(overrides = {}) {
     const historical = platformKernel.getWorkflow(runId);
     assert.ok(historical, 'the historical run record survives');
     assert.strictEqual(historical.state, 'completed');
-    const unknown = await runner.runWorkflowDefinition('core/test-flow', { key: 'x' });
+    const unknown = await runWorkflowDefinition('core/test-flow', { key: 'x' });
     assert.strictEqual(unknown.code, 'unknown_workflow');
   });
 
