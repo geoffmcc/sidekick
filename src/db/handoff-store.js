@@ -770,7 +770,7 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
 
   function getHandoffByTaskId(taskId) {
     if (!hasTable("memory_handoffs") || !taskId) return null;
-    const row = db.prepare("SELECT * FROM memory_handoffs WHERE task_id = ? AND archived_at IS NULL ORDER BY updated_at DESC LIMIT 1").get(String(taskId));
+    const row = db.prepare("SELECT * FROM memory_handoffs WHERE task_id = ? AND archived_at IS NULL ORDER BY updated_at DESC, rowid DESC LIMIT 1").get(String(taskId));
     return normalizeHandoffRow(row);
   }
 
