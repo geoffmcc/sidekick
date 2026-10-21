@@ -13,6 +13,7 @@ const os = require("os");
 const path = require("path");
 const crypto = require("crypto");
 const { requireFromSidekick } = require("./deps");
+const fsutil = require("./fsutil");
 const ignore = requireFromSidekick("ignore");
 const ast = require("./ast");
 
@@ -186,10 +187,13 @@ function semanticChanges(previousFiles = [], currentFiles = []) {
   }
   return changes;
 }
-function ignoreMatcher(root) { const matcher = ignore(); try { matcher.add(fs.readFileSync(path.join(root, ".gitignore"), "utf8").split(/\r?\n/).filter(Boolean)); } catch {} return matcher; }
+function readRepositoryGitignore(root) {
+  const text = fsutil.readTextFile(path.join(root, ".gitignore"));
+  return text === null ? "" : text;
+}
+function ignoreMatcher(root) { const matcher = ignore(); matcher.add(readRepositoryGitignore(root).split(/\r?\n/).filter(Boolean)); return matcher; }
 function configurationHash(root, limits, sourceFiles, filters = {}) {
-  let ignoreBytes = "";
-  if (!sourceFiles) { try { ignoreBytes = fs.readFileSync(path.join(root, ".gitignore")); } catch {} }
+  const ignoreBytes = sourceFiles ? "" : Buffer.from(readRepositoryGitignore(root), "utf8");
   return sha256("sidekick.semantic.config.v2", stable({ limits, filters: normalizeFilters(filters), gitignore: ignoreBytes.toString("base64") }));
 }
 
