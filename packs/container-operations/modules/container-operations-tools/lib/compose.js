@@ -5,6 +5,8 @@ const path = require("path");
 const { spawn } = require("child_process");
 const profiles = require("./profiles");
 const { ContainerError } = require("./errors");
+const { requireSidekickSrc } = require("./deps");
+const { childProcessEnv } = requireSidekickSrc("src/security/child-process.js");
 
 function resolveFile(profile, configuredRoots, requested) {
   if (typeof requested !== "string" || !requested) throw new ContainerError("invalid_input", "compose file is required");
@@ -16,13 +18,13 @@ function resolveFile(profile, configuredRoots, requested) {
   return file;
 }
 
-function run(profile, file, action, timeoutMs) {
+function run(profile, file, action, timeoutMs, spawnProcess = spawn) {
   const binary = profile.compose?.binary || (profile.provider === "podman" ? "podman" : "docker");
   const implementation = profile.compose?.implementation || (profile.provider === "podman" ? "podman compose" : "docker compose");
   const args = implementation === "docker compose" || implementation === "podman compose" ? ["compose"] : [];
   args.push("-f", file, action === "validate" ? "config" : action, ...(action === "validate" ? ["--quiet"] : ["--dry-run"]));
   return new Promise((resolve, reject) => {
-    const child = spawn(binary, args, { shell: false, cwd: path.dirname(file), windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawnProcess(binary, args, { shell: false, cwd: path.dirname(file), windowsHide: true, stdio: ["ignore", "pipe", "pipe"], env: childProcessEnv() });
     const out = []; const err = []; let bytes = 0; const max = 200000;
     for (const stream of [child.stdout, child.stderr]) stream.on("data", chunk => { bytes += chunk.length; const target = stream === child.stdout ? out : err; if (Buffer.byteLength(target.join("")) < max) target.push(chunk.toString("utf8").slice(0, max)); });
     const timer = setTimeout(() => { child.kill("SIGTERM"); reject(new ContainerError("operation_timeout", "Compose operation timed out")); }, timeoutMs);
@@ -38,4 +40,4 @@ async function execute(profile, config, action, file) {
   return { profile: profile.name, provider: profile.provider, file: resolved, action, ...result };
 }
 
-module.exports = { execute, resolveFile };
+module.exports = { execute, resolveFile, run };
