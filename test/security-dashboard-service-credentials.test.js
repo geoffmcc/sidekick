@@ -105,6 +105,24 @@ test("service credential provisioning rejects scopes outside the approved grants
   assert.equal(identity.listPrincipals({ type: "service" }).length, before);
 });
 
+test("an MCP agent can receive standard tool access without pack-management authority", () => {
+  const res = response();
+  handlers.get("POST /api/auth/service-credentials")({
+    authPrincipal: owner,
+    body: {
+      display_name: "Living room assistant",
+      credential_name: "Living room assistant",
+      permissions: ["tools.execute"],
+      scopes: ["tools.execute"],
+    },
+  }, res);
+  assert.equal(res.statusCode, 201);
+  const auth = authentication.authenticateCredential(res.body.token);
+  assert.equal(authorization.authorize({ principalId: auth.principal_id, permission: "tools.execute", credentialScopes: auth.scopes }).ok, true);
+  assert.equal(authorization.authorize({ principalId: auth.principal_id, permission: "packs.manage", credentialScopes: auth.scopes }).ok, false);
+  assert.deepEqual(auth.scopes, ["tools.execute"]);
+});
+
 test.after(() => {
   try { dbStore.close(); } catch {}
   try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch {}

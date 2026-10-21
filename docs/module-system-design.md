@@ -23,6 +23,15 @@ Still unavailable: an OS sandbox and broker for third-party modules. Other
 gaps include managed module SQL migrations, package signing, remote
 distribution, and module dependency resolution beyond manifest declaration.
 
+On MCP Core startup, Sidekick repairs legacy owned-module provenance only when
+the installed pack is already recorded as `first_party`, its version matches
+the current bundled release, and its stored package digest exactly matches the
+release package. Repair uses the normal same-version pack upgrade lifecycle to
+refresh module bindings while preserving configuration and operator-disabled
+state. Third-party packs, mismatched digests, and version mismatches are not
+promoted or automatically replaced; they remain unavailable until explicitly
+upgraded through the governed pack lifecycle.
+
 ## Required Isolation Architecture (Not Yet Implemented)
 
 The current `createModuleServices()` facade is an application-level API

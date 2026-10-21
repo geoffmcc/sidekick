@@ -209,6 +209,23 @@ try {
   throw error;
 }
 
+// Release-matching first-party packs can predate the module provenance fields
+// added to their owned modules. Refresh those bindings from the exact package
+// digest shipped in this release before restoring module tools. The repair
+// preserves operator-disabled packs and never promotes third-party or changed
+// package bytes to first-party trust.
+try {
+  const result = require("./packs/bundled").reconcileBundledPackModules();
+  if (result.repaired.length) {
+    console.log(`[Packs] Repaired verified bundled module provenance: ${result.repaired.map(item => `${item.name} (${item.modules.join(", ")})`).join("; ")}`);
+  }
+  for (const failure of result.failed) {
+    console.error(`[Packs] Could not repair bundled pack "${failure.name}": ${failure.error}`);
+  }
+} catch (error) {
+  console.error(`[Packs] Bundled pack provenance reconciliation failed: ${String(error?.message || "unknown error").slice(0, 300)}`);
+}
+
 // Repair the knowledge FTS index on every server boot. This also creates the
 // index on installations that predate FTS-backed knowledge search.
 try {
