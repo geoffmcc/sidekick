@@ -23,6 +23,7 @@ const { execFileSync, spawn } = require("child_process");
 const { childProcessEnv } = require("../../security/child-process");
 const { z } = require("zod");
 const { enforcePathPolicy } = require("../path-policy");
+const { requireToolExecution, requireCanonicalInvocation } = require("../read-authorization");
 const { validateOutboundUrl, resolveOutboundUrl } = require("../../security/outbound-url");
 const { validDownloadFormat, validLangCode, validScale, validTimestamp, validWhisperModel } = require("../../core/command-validation");
 
@@ -73,13 +74,17 @@ function commandAvailable(command) {
   return path.isAbsolute(command) ? fs.existsSync(command) : false;
 }
 
-function localCudaAvailable() {
+function hardwareProbe(command, args, timeout, run = execFileSync) {
   try {
-    execFileSync("nvidia-smi", ["--query-gpu=name", "--format=csv,noheader"], { timeout: 2000, stdio: ["ignore", "pipe", "ignore"] });
+    run(command, args, { timeout, stdio: ["ignore", "pipe", "ignore"], env: childProcessEnv() });
     return true;
   } catch (_) {
     return false;
   }
+}
+
+function localCudaAvailable() {
+  return hardwareProbe("nvidia-smi", ["--query-gpu=name", "--format=csv,noheader"], 2000);
 }
 
 function localMetalAvailable() {
@@ -87,12 +92,7 @@ function localMetalAvailable() {
 }
 
 function localVulkanAvailable() {
-  try {
-    execFileSync("vulkaninfo", ["--summary"], { timeout: 3000, stdio: ["ignore", "pipe", "ignore"] });
-    return true;
-  } catch (_) {
-    return false;
-  }
+  return hardwareProbe("vulkaninfo", ["--summary"], 3000);
 }
 
 function selectTranscriptionDevice(backend, requested) {
@@ -207,7 +207,7 @@ function mediaContentType(filePath, audioOnly) {
   return types[path.extname(filePath).toLowerCase()] || "application/octet-stream";
 }
 
-async function sidekick_ocr({ path: imagePath, language, psm }) {
+async function runOcr({ path: imagePath, language, psm }) {
   try {
     const policyError = enforcePathPolicy(imagePath, "read");
     if (policyError) return policyError;
@@ -233,7 +233,15 @@ async function sidekick_ocr({ path: imagePath, language, psm }) {
   }
 }
 
+async function sidekick_ocr(args) {
+  const denied = requireCanonicalInvocation("ocr");
+  if (denied) return denied;
+  return runOcr(args);
+}
+
 async function sidekick_media({ action, input, output, options }) {
+  const denied = requireCanonicalInvocation("media");
+  if (denied) return denied;
   try {
     if (!input) {
       return { content: [{ type: "text", text: "Error: input is required" }], isError: true };
@@ -295,6 +303,8 @@ async function sidekick_media({ action, input, output, options }) {
 }
 
 async function sidekick_transcribe({ path: audioPath, model, language, async: runAsync, backend, device: requestedDevice, action = "submit", job_id: jobId }) {
+  const denied = requireCanonicalInvocation("transcribe");
+  if (denied) return denied;
   try {
     if (action === "status") {
       if (!jobId) return { content: [{ type: "text", text: "Error: job_id is required for status" }], isError: true };
@@ -350,6 +360,8 @@ async function sidekick_transcribe({ path: audioPath, model, language, async: ru
 }
 
 async function sidekick_analytics({ query, file, format }) {
+  const denied = requireCanonicalInvocation("analytics");
+  if (denied) return denied;
   try {
     const venvPath = "/home/sidekick/.sidekick-tools/bin/python3";
     const pythonCmd = fs.existsSync(venvPath) ? venvPath : "python3";
@@ -580,7 +592,7 @@ async function collectInsightEvidence(filePath) {
 
   if (type === "image") {
     evidence.findings.push(`image file, ${stat.size} bytes`);
-    const ocr = await sidekick_ocr({ path: filePath });
+    const ocr = await runOcr({ path: filePath });
     if (ocr.isError) {
       evidence.findings.push("OCR unavailable: " + ocr.content[0].text.replace(/^Error:\s*/, ""));
     } else {
@@ -677,6 +689,8 @@ function formatInsightReport(evidenceItems, title) {
 }
 
 async function sidekick_insight_report({ paths, title }) {
+  const authError = requireToolExecution({ tool: "insight_report" }, "tools.execute", "insight_report");
+  if (authError) return authError;
   try {
     const selectedPaths = normalizeInsightPaths(paths);
     if (selectedPaths.length === 0) {
@@ -694,6 +708,8 @@ async function sidekick_insight_report({ paths, title }) {
 }
 
 async function sidekick_download({ url, output, format, audio_only }) {
+  const denied = requireCanonicalInvocation("download");
+  if (denied) return denied;
   try {
     if (!url) {
       return { content: [{ type: "text", text: "Error: url required" }], isError: true };
@@ -876,7 +892,7 @@ const descriptors = Object.freeze([
     description: "Create a concise, evidence-backed report from text, data, or image file paths",
     schema: SCHEMAS.insight_report,
     args: { paths: "string|array (file path, comma-separated paths, or array of paths)", title: "string (optional report title)" },
-    risk: "low",
+    risk: "medium",
     category: "Data Pipeline",
     source: "builtin",
     family: "media",
@@ -895,4 +911,4 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_ocr, sidekick_media, sidekick_transcribe, sidekick_analytics, sidekick_insight_report, sidekick_download };
+module.exports = { descriptors, sidekick_ocr, sidekick_media, sidekick_transcribe, sidekick_analytics, sidekick_insight_report, sidekick_download, localCudaAvailable, localVulkanAvailable };

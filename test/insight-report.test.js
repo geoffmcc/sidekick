@@ -1,16 +1,19 @@
 const assert = require('assert');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
-const TEST_DATA_DIR = path.join(__dirname, 'test-data-insight-report');
-fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
-fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
+const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sidekick-insight-report-'));
 
 process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
+process.env.SIDEKICK_ALLOWED_PATHS = TEST_DATA_DIR;
 
 delete require.cache[require.resolve('../src/tools')];
 const { TOOLS, setSource } = require('../src/tools');
 const { insight_report, tools } = TOOLS;
+const toolContext = require('../src/tools/context');
+const authorizedContext = { ...require('./helpers/authorized-context').createServiceContext({ role: 'operator', source: 'mcp' }), allowNodeExecution: false };
+const runInsightReport = args => toolContext.runWithContext(authorizedContext, () => insight_report(args));
 
 console.log('Running Insight Report Tests...\n');
 
@@ -32,14 +35,14 @@ console.log('Running Insight Report Tests...\n');
     fs.writeFileSync(jsonFile, JSON.stringify([{ id: 1, status: 'ok' }, { id: 2, status: 'failed' }]), 'utf-8');
 
     console.log('Test: insight_report - combined text and data report');
-    const result = await insight_report({
+    const result = await runInsightReport({
       paths: [logFile, csvFile, jsonFile],
       title: 'Test Insight Report'
     });
     assert.ok(!result.isError, 'Insight report should succeed');
     const report = result.content[0].text;
     assert.ok(report.includes('# Test Insight Report'), 'Should use supplied title');
-    assert.ok(report.includes('Analyzed 3 file(s)'), 'Should summarize file count');
+    assert.ok(report.includes('Analyzed 3 file(s)'), `Should summarize file count; report was: ${report.slice(0, 900)}`);
     assert.ok(report.includes('error/warning-looking lines found'), 'Should report log evidence');
     assert.ok(report.includes('csv data with 2 rows'), 'Should summarize CSV shape');
     assert.ok(report.includes('json data with 2 rows'), 'Should summarize JSON array shape');
@@ -60,7 +63,7 @@ console.log('Running Insight Report Tests...\n');
       'Jun 28 16:45:26 sidekick node: INVALID_SESSION_RESPONSE sessionId=sess-old replacementId=sess-new',
       'Jun 28 16:45:59 sidekick node: REUSE_SESSION sessionId=sess-new'
     ].join('\n'), 'utf-8');
-    const incident = await insight_report({ paths: incidentFile, title: 'MCP Incident' });
+    const incident = await runInsightReport({ paths: incidentFile, title: 'MCP Incident' });
     assert.ok(!incident.isError, 'Incident report should succeed');
     const incidentReport = incident.content[0].text;
     assert.ok(incidentReport.includes('## Timeline'), 'Should include timeline for timestamped evidence');
@@ -71,16 +74,16 @@ console.log('Running Insight Report Tests...\n');
 
     console.log('Test: insight_report - comma-separated paths and missing file');
     const missing = path.join(TEST_DATA_DIR, 'missing.txt');
-    const mixed = await insight_report({ paths: `${logFile},${missing}` });
+    const mixed = await runInsightReport({ paths: `${logFile},${missing}` });
     assert.ok(!mixed.isError, 'Missing input should be captured as report evidence, not fail the whole report');
     assert.ok(mixed.content[0].text.includes('1 file(s) had errors'), 'Should count file errors');
     assert.ok(mixed.content[0].text.includes('File not found'), 'Should include missing file evidence');
     console.log('✓ Passed\n');
 
     console.log('Test: insight_report - missing paths');
-    const empty = await insight_report({});
+    const empty = await runInsightReport({});
     assert.ok(empty.isError, 'Missing paths should fail validation');
-    assert.ok(empty.content[0].text.includes('paths is required'), 'Should explain missing paths');
+    assert.ok(/paths is required|Invalid arguments/.test(empty.content[0].text), 'Should explain missing paths');
     console.log('✓ Passed\n');
 
     console.log('Test: tools catalog includes insight report');
@@ -89,13 +92,15 @@ console.log('Running Insight Report Tests...\n');
     const tool = JSON.parse(catalog.content[0].text);
     assert.strictEqual(tool.name, 'insight_report', 'Catalog should include tool name');
     assert.strictEqual(tool.category, 'Data Pipeline', 'Tool should be categorized as Data Pipeline');
-    assert.strictEqual(tool.risk, 'low', 'Tool should be low risk');
+    assert.strictEqual(tool.risk, 'medium', 'Reading caller-selected files requires identity');
     console.log('✓ Passed\n');
 
+    require('../src/db').closeDatabase();
     fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
     console.log('All Insight Report Tests Passed! ✓');
   } catch (e) {
     console.error('Test failed:', e);
+    try { require('../src/db').closeDatabase(); } catch {}
     fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
     process.exit(1);
   }
