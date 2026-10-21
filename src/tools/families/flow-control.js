@@ -14,6 +14,7 @@ const path = require("path");
 const { z } = require("zod");
 const { callTool } = require("../dispatch-seam");
 const { stripSidekickPrefix } = require("../../core/tool-name");
+const { requireToolExecution, requireCanonicalInvocation } = require("../read-authorization");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "..", "..", "data");
 fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -81,6 +82,8 @@ function recoverStuckQueueTasks(queue, olderThanMinutes) {
 }
 
 async function sidekick_queue({ action, id, tool, args, priority, status, older_than_minutes }) {
+  const authorizationError = requireToolExecution({ tool: "queue", action: action || null, id: id || null }, "tools.execute_high", "queue");
+  if (authorizationError) return authorizationError;
   const queue = loadQueue();
 
   if (action === "add") {
@@ -207,6 +210,8 @@ async function sidekick_queue({ action, id, tool, args, priority, status, older_
 
 
 async function sidekick_retry({ tool, args, max_attempts, backoff, initial_delay }) {
+  const denied = requireCanonicalInvocation("retry");
+  if (denied) return denied;
   if (!tool) {
     return { content: [{ type: "text", text: "tool required" }], isError: true };
   }
@@ -221,12 +226,16 @@ async function sidekick_retry({ tool, args, max_attempts, backoff, initial_delay
   const maxAttempts = max_attempts === undefined ? 3 : max_attempts;
   const backoffType = backoff || "exponential";
   const initialDelay = initial_delay === undefined ? 1000 : initial_delay;
+  return runRetryAttempts({ tool, args, maxAttempts, backoffType, initialDelay }, callTool);
+}
 
+async function runRetryAttempts({ tool, args, maxAttempts, backoffType, initialDelay }, invoke, sleep = ms => new Promise(resolve => setTimeout(resolve, ms))) {
+  if (typeof invoke !== "function") throw new TypeError("retry invocation callback is required");
   let lastError;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      const result = await callTool(tool, args || {});
+      const result = await invoke(tool, args || {});
 
       if (!result.isError) {
         return { content: [{ type: "text", text: `✓ Succeeded on attempt ${attempt}\n\n${result.content?.[0]?.text || ""}` }] };
@@ -249,7 +258,7 @@ async function sidekick_retry({ tool, args, max_attempts, backoff, initial_delay
         delay = initialDelay;
       }
 
-      await new Promise(resolve => setTimeout(resolve, Math.min(RETRY_MAX_DELAY_MS, delay)));
+      await sleep(Math.min(RETRY_MAX_DELAY_MS, delay));
     }
   }
 
@@ -279,6 +288,8 @@ function saveOrchestrate(orchestrate) {
 }
 
 async function sidekick_orchestrate({ action, id, task_name, subtasks, dependencies, timeout }) {
+  const authorizationError = requireToolExecution({ tool: "orchestrate", action: action || null, id: id || null }, "tools.execute_high", "orchestrate");
+  if (authorizationError) return authorizationError;
   const orchestrate = loadOrchestrate();
   const now = new Date().toISOString();
 
@@ -422,6 +433,8 @@ async function sidekick_orchestrate({ action, id, task_name, subtasks, dependenc
 
 
 async function sidekick_batch({ calls }) {
+  const denied = requireCanonicalInvocation("batch");
+  if (denied) return denied;
   if (!Array.isArray(calls) || calls.length === 0) {
     return { content: [{ type: "text", text: "calls must be a non-empty array" }], isError: true };
   }
@@ -490,6 +503,8 @@ function cleanupIdleCircuits(data) {
 }
 
 async function sidekick_circuit({ action, target, tool, args, failure_threshold, cooldown_seconds, cache_response }) {
+  const denied = requireCanonicalInvocation("circuit");
+  if (denied) return denied;
   const data = loadCircuits();
   cleanupIdleCircuits(data);
 
@@ -711,4 +726,4 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_queue, sidekick_retry, sidekick_orchestrate, sidekick_batch, sidekick_circuit };
+module.exports = { descriptors, sidekick_queue, sidekick_retry, runRetryAttempts, sidekick_orchestrate, sidekick_batch, sidekick_circuit };
