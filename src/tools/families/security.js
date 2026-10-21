@@ -6,23 +6,26 @@
 // shared non-legacy modules (security-scan, redact, path-policy) and a lazy
 // yaml require in anonymize's format path — never on tools-legacy.js. All
 // handlers and helpers move verbatim. `sandbox` is `critical` risk
-// (arbitrary command execution against sandboxed file copies); risk
+// (tracked host file changes; command execution disabled without OS isolation); risk
 // classifications are preserved from src/tools/metadata.js and gated by the
 // dispatcher. The sandboxes directory mkdir moves here with its cluster.
 
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
-const { runBoundedShell } = require("../../security/command-execution");
 const { z } = require("zod");
 const { redactSensitive } = require("../../redact");
 const { enforcePathPolicy, getPathPolicyDecision } = require("../path-policy");
 const { scanSecurityConfig } = require("../../security-scan");
-const { childProcessEnv } = require("../../security/child-process");
+const { errorResult } = require("../result");
+const toolContext = require("../context");
+const { requireCanonicalInvocation, requireToolExecution } = require("../read-authorization");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "..", "..", "data");
 
 async function sidekick_security_scan({ path: rootPath, max_files, format } = {}) {
+  const authError = requireToolExecution({ tool: "security_scan" }, "tools.execute", "security_scan");
+  if (authError) return authError;
   // Re-based on extraction: __dirname moved from src/ to src/tools/families/,
   // so the repo-root default needs three levels up, not one.
   const scanRoot = path.resolve(rootPath || process.env.SIDEKICK_REPO_DIR || path.join(__dirname, "..", "..", ".."));
@@ -186,6 +189,26 @@ function anonymizeText(text, consistency, customPatterns) {
 }
 
 async function sidekick_anonymize({ action, input, format, custom_patterns, consistency }) {
+  if (["patterns", "add_pattern", "remove_pattern"].includes(action)) {
+    const dispatchError = requireCanonicalInvocation("anonymize");
+    if (dispatchError) return dispatchError;
+    const authorization = require("../../core/authorization");
+    const execution = toolContext.getExecutionContext();
+    const permission = ["add_pattern", "remove_pattern"].includes(action) ? "tools.execute_high" : "tools.execute";
+    if (!execution.authIdentity?.principal_id) {
+      if (execution.source !== "test") return errorResult("Authenticated principal required for anonymization pattern access", "unauthenticated");
+    } else {
+      const decision = authorization.authorize({
+        principalId: execution.authIdentity.principal_id,
+        permission,
+        credentialScopes: execution.authIdentity.scopes,
+        delegationId: execution.authIdentity.delegation_id || execution.authIdentity.delegationId || null,
+        resource: { tool: "anonymize", action },
+      });
+      if (!decision.ok) return errorResult(`Anonymization pattern access denied: ${decision.code}`, "authorization_denied");
+    }
+  }
+
   if (action === "patterns") {
     const stored = loadAnonymizePatterns();
     if (stored.patterns.length === 0) {
@@ -264,9 +287,7 @@ async function sidekick_anonymize({ action, input, format, custom_patterns, cons
 const SANDBOX_FILE = path.join(DATA_DIR, "sandbox.json");
 const SANDBOX_DIR = path.join(DATA_DIR, "sandboxes");
 const MAX_ACTIVE_SANDBOXES = 5;
-const MAX_ROLLBACKS_PER_SANDBOX = 50;
 const SANDBOX_TTL_HOURS = 24;
-const MAX_BACKUP_FILE_SIZE = 10 * 1024 * 1024;
 
 fs.mkdirSync(SANDBOX_DIR, { recursive: true });
 
@@ -298,11 +319,19 @@ function purgeExpiredSandboxes(data) {
   return purged;
 }
 
-function generateSandboxId() {
-  return "sb_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-}
+async function sidekick_sandbox({ action, sandbox_name, rollback_id }) {
+  const authorizationError = requireToolExecution({ tool: "sandbox", action: action || null }, "tools.execute_critical", "sandbox");
+  if (authorizationError) return authorizationError;
+  // Backups and rollback do not isolate host commands. Refuse before reading
+  // or mutating sandbox state until an OS-enforced backend is available.
+  if (action === "exec") {
+    return errorResult(
+      "Sandbox command execution is unavailable because no OS-enforced isolation backend is configured. Use a separately governed command operation only when its host effects are intended.",
+      "isolation_unavailable",
+      { status: "unavailable", subsystem: "execution_isolation" }
+    );
+  }
 
-async function sidekick_sandbox({ action, sandbox_name, command, files, auto_backup, rollback_id }) {
   const data = loadSandboxes();
   purgeExpiredSandboxes(data);
 
@@ -316,105 +345,6 @@ async function sidekick_sandbox({ action, sandbox_name, command, files, auto_bac
       return `${id} (${sb.name || "unnamed"}): ${sb.operations.length} ops, ${age}min old, ${sb.backups.length} backups`;
     }).join("\n");
     return { content: [{ type: "text", text: `Active sandboxes (${entries.length}/${MAX_ACTIVE_SANDBOXES}):\n\n${list}` }] };
-  }
-
-  if (action === "exec") {
-    if (!command) {
-      return { content: [{ type: "text", text: "command required" }], isError: true };
-    }
-
-    const name = sandbox_name || `sandbox_${Date.now()}`;
-    let sbId = null;
-    for (const [id, sb] of Object.entries(data.sandboxes)) {
-      if (sb.name === name) { sbId = id; break; }
-    }
-
-    if (!sbId) {
-      if (Object.keys(data.sandboxes).length >= MAX_ACTIVE_SANDBOXES) {
-        return { content: [{ type: "text", text: `Max active sandboxes reached (${MAX_ACTIVE_SANDBOXES}). Clean up with action="clean" or wait for TTL expiry.` }], isError: true };
-      }
-      sbId = generateSandboxId();
-      data.sandboxes[sbId] = {
-        name,
-        created: Date.now(),
-        operations: [],
-        backups: [],
-        newFiles: []
-      };
-    }
-
-    const sb = data.sandboxes[sbId];
-    if (sb.operations.length >= MAX_ROLLBACKS_PER_SANDBOX) {
-      return { content: [{ type: "text", text: `Max operations reached for this sandbox (${MAX_ROLLBACKS_PER_SANDBOX}). Create a new sandbox or clean this one.` }], isError: true };
-    }
-
-    const sbPath = path.join(SANDBOX_DIR, sbId);
-    fs.mkdirSync(sbPath, { recursive: true });
-
-    const filesToBackup = files || [];
-    const backedUp = [];
-    const skipped = [];
-
-    if (auto_backup !== false && filesToBackup.length > 0) {
-      for (const f of filesToBackup) {
-        try {
-          const readPolicyError = enforcePathPolicy(f, "read");
-          if (readPolicyError) return readPolicyError;
-          const writePolicyError = enforcePathPolicy(f, "write");
-          if (writePolicyError) return writePolicyError;
-          const stat = fs.statSync(f);
-          if (!stat.isFile()) continue;
-          if (stat.size > MAX_BACKUP_FILE_SIZE) {
-            skipped.push({ file: f, reason: `exceeds ${MAX_BACKUP_FILE_SIZE} bytes` });
-            continue;
-          }
-          const relPath = f.replace(/^\//, "").replace(/\//g, "_");
-          const backupPath = path.join(sbPath, `backup_${sb.operations.length}_${relPath}`);
-          fs.copyFileSync(f, backupPath);
-          sb.backups.push({ original: f, backup: backupPath, size: stat.size, timestamp: Date.now() });
-          backedUp.push(f);
-        } catch (e) {
-          if (e.code === "ENOENT") {
-            sb.newFiles.push({ path: f, opIndex: sb.operations.length });
-          }
-        }
-      }
-    }
-
-    const opRecord = {
-      index: sb.operations.length,
-      command,
-      timestamp: Date.now(),
-      backedUp,
-      skipped
-    };
-
-    let output = "";
-    let exitCode = 0;
-    try {
-      output = runBoundedShell(command, { timeout: 30000, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"], maxBuffer: 10 * 1024 * 1024 });
-    } catch (e) {
-      output = (e.stdout || "") + (e.stderr || "");
-      exitCode = e.status || 1;
-    }
-
-    opRecord.exitCode = exitCode;
-    opRecord.output = output.substring(0, 5000);
-    sb.operations.push(opRecord);
-    saveSandboxes(data);
-
-    const summary = [
-      `Sandbox: ${sbId} (${sb.name})`,
-      `Command: ${command}`,
-      `Exit: ${exitCode}`,
-      `Backed up: ${backedUp.length} file(s)${backedUp.length > 0 ? " [" + backedUp.join(", ") + "]" : ""}`,
-      skipped.length > 0 ? `Skipped: ${skipped.length} file(s) ${JSON.stringify(skipped)}` : "",
-      `Operations: ${sb.operations.length}/${MAX_ROLLBACKS_PER_SANDBOX}`,
-      "",
-      output.substring(0, 2000)
-    ].filter(Boolean).join("\n");
-
-    return { content: [{ type: "text", text: summary }] };
   }
 
   if (action === "rollback") {
@@ -581,9 +511,9 @@ const SCHEMAS = {
   sandbox: z.object({
     action: z.enum(["exec", "rollback", "list", "diff", "clean"]),
     sandbox_name: z.string().optional(),
-    command: z.string().optional().describe("Command to execute in sandbox"),
-    files: z.array(z.string()).optional().describe("Files to auto-backup before exec"),
-    auto_backup: z.boolean().optional().default(true),
+    command: z.string().optional().describe("Legacy parameter; exec is unavailable until OS-enforced isolation is configured"),
+    files: z.array(z.string()).optional().describe("Legacy parameter; exec is unavailable until OS-enforced isolation is configured"),
+    auto_backup: z.boolean().optional().default(true).describe("Legacy parameter; exec is unavailable until OS-enforced isolation is configured"),
     rollback_id: z.string().optional()
   }),
 };
@@ -594,7 +524,7 @@ const descriptors = Object.freeze([
     description: "Read-only audit for tracked sensitive files, secret signatures, hardcoded credential settings, runtime .env safety, and sensitive-file permissions. Reports metadata only and never returns secret values.",
     schema: SCHEMAS.security_scan,
     args: { path: "string (optional, directory to scan - default Sidekick repo)", max_files: "number (optional, bounded 1-10000 - default 2000)", format: "string (optional, text|json - default text)" },
-    risk: "low",
+    risk: "medium",
     category: "Security",
     source: "builtin",
     family: "security",
@@ -605,7 +535,7 @@ const descriptors = Object.freeze([
     description: "Replace sensitive data with realistic but fake values. Preserves data structure while making it safe to share externally.",
     schema: SCHEMAS.anonymize,
     args: { action: "string (anonymize|patterns|add_pattern|remove_pattern)", input: "string (optional, text to anonymize)", format: "string (optional, text|json|yaml - default text)", custom_patterns: "array (optional, {pattern, replacement} objects)", consistency: "boolean (optional, same input always maps to same output - default true)" },
-    risk: "low",
+    risk: "high",
     category: "Data Pipeline",
     source: "builtin",
     family: "security",
@@ -613,9 +543,9 @@ const descriptors = Object.freeze([
   }),
   Object.freeze({
     name: "sandbox",
-    description: "Execute operations in a tracked context with automatic backup and rollback. Safe experimentation on remote systems.",
+    description: "Inspect and manage tracked backup/rollback records. Command execution is unavailable until an OS-enforced isolation backend is configured; backups are not a sandbox.",
     schema: SCHEMAS.sandbox,
-    args: { action: "string (exec|rollback|list|diff|clean)", sandbox_name: "string (optional, sandbox identifier)", command: "string (optional, command to execute)", files: "array (optional, files to auto-backup before exec)", auto_backup: "boolean (optional, default true)", rollback_id: "string (optional, sandbox to rollback)" },
+    args: { action: "string (rollback|list|diff|clean); exec returns isolation_unavailable", sandbox_name: "string (optional, sandbox identifier)", command: "string (legacy; execution unavailable)", files: "array (legacy; execution unavailable)", auto_backup: "boolean (legacy; execution unavailable)", rollback_id: "string (optional, sandbox to rollback)" },
     risk: "critical",
     category: "Security",
     source: "builtin",
