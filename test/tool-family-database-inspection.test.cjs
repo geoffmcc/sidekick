@@ -1,10 +1,9 @@
 const assert = require('assert');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
-const TEST_DATA_DIR = path.join(__dirname, 'test-data-db-family');
-fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
-fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
+const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sidekick-tool-db-family-'));
 
 process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
 process.env.SIDEKICK_TOOL_POLICY = 'open';
@@ -20,6 +19,7 @@ const tools = require('../src/tools');
 const legacy = require('../src/tools-legacy');
 const family = require('../src/tools/families/database-inspection');
 const { dispatchTool } = tools;
+const authorizedContext = require('./helpers/authorized-context').createServiceContext({ role: 'operator', source: 'mcp' });
 
 console.log('Running Database Inspection Family Tests...');
 
@@ -47,26 +47,26 @@ const names = ['db_schema', 'db_query', 'db_stats', 'log_query', 'db_search', 'd
     assert.strictEqual(registry.listInDefinitionOrder().length, 110);
     assert.deepStrictEqual(registry.listInDefinitionOrder().map(d => d.name), legacy.TOOL_DEFS.map(d => d.name));
 
-    let result = await family.sidekick_db_schema({});
+    let result = await dispatchTool({ name: 'db_schema', args: {}, context: authorizedContext });
     assert.ok(!result.isError);
     assert.ok(JSON.parse(text(result)).some(table => table.name === 'kv_store'));
 
-    result = await dispatchTool({ name: 'sidekick_db_query', args: { sql: 'SELECT 1 AS value' }, context: { source: 'mcp', requestId: 'db_family_query' } });
+    result = await dispatchTool({ name: 'sidekick_db_query', args: { sql: 'SELECT 1 AS value' }, context: { ...authorizedContext, requestId: 'db_family_query' } });
     assert.deepStrictEqual(JSON.parse(text(result)), [{ value: 1 }]);
 
-    result = await dispatchTool({ name: 'db_stats', args: {}, context: { source: 'mcp', requestId: 'db_family_stats' } });
+    result = await dispatchTool({ name: 'db_stats', args: {}, context: { ...authorizedContext, requestId: 'db_family_stats' } });
     assert.ok(JSON.parse(text(result)).totalTables > 0);
 
-    const batch = await tools.TOOLS.batch({ calls: [
+    const batch = await dispatchTool({ name: 'batch', args: { calls: [
       { tool: 'db_schema', args: { table: 'kv_store' } },
       { tool: 'sidekick_db_query', args: { sql: 'SELECT 2 AS value' } },
-    ] });
+    ] }, context: authorizedContext });
     const batchResults = JSON.parse(text(batch));
     assert.strictEqual(batchResults[0].error, false);
     assert.strictEqual(batchResults[1].error, false);
 
     process.env.SIDEKICK_ALLOWED_PATHS = TEST_DATA_DIR;
-    result = await family.sidekick_db_diff({ snapshot_a: path.join(path.dirname(TEST_DATA_DIR), 'outside.json') });
+    result = await dispatchTool({ name: 'db_diff', args: { snapshot_a: path.join(path.dirname(TEST_DATA_DIR), 'outside.json') }, context: authorizedContext });
     assert.strictEqual(result.isError, true);
     assert.ok(text(result).includes('Path blocked by policy'));
 
@@ -74,6 +74,7 @@ const names = ['db_schema', 'db_query', 'db_stats', 'log_query', 'db_search', 'd
   } finally {
     delete process.env.SIDEKICK_ALLOWED_PATHS;
     delete process.env.SIDEKICK_DENIED_PATHS;
+    try { require('../src/db').closeDatabase(); } catch {}
     fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
   }
 })().catch(error => {

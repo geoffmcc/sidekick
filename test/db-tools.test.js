@@ -1,14 +1,14 @@
 const assert = require('assert');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
-const TEST_DATA_DIR = path.join(__dirname, 'test-data-db');
-if (fs.existsSync(TEST_DATA_DIR)) {
-  fs.rmSync(TEST_DATA_DIR, { recursive: true });
-}
-fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
+const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sidekick-db-tools-'));
 
 process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
+process.env.SIDEKICK_ALLOWED_PATHS = TEST_DATA_DIR;
+process.env.SIDEKICK_TOOL_POLICY = 'open';
+process.env.SIDEKICK_APPROVAL_MODE = 'off';
 
 try { delete require.cache[require.resolve('../src/db')]; } catch (e) {}
 try { delete require.cache[require.resolve('../src/tools')]; } catch (e) {}
@@ -16,22 +16,64 @@ const { TOOLS, setSource } = require('../src/tools');
 const dbStore = require('../src/db');
 
 const {
-  db_schema,
-  db_query,
-  db_stats,
-  db_backup,
-  db_restore,
-  log_query,
-  db_export,
-  db_search,
-  db_migrate,
-  db_diff,
+  db_schema: rawDbSchema,
+  db_query: rawDbQuery,
+  db_stats: rawDbStats,
+  db_backup: rawDbBackup,
+  db_restore: rawDbRestore,
+  log_query: rawLogQuery,
+  db_export: rawDbExport,
+  db_search: rawDbSearch,
+  db_migrate: rawDbMigrate,
+  db_diff: rawDbDiff,
 } = TOOLS;
+const dbTestContext = require('./helpers/authorized-context').createServiceContext({ role: 'operator', source: 'test' });
+const runWithContext = require('../src/tools/context').runWithContext;
+const criticalTestContext = require('./helpers/authorized-context').createOwnerContext({ source: 'test' });
+const rawRestoreHandler = require('../src/tools').getBuiltinRegistry().get('db_restore').handler;
+const rawMigrateHandler = require('../src/tools').getBuiltinRegistry().get('db_migrate').handler;
+const rawBackupHandler = require('../src/tools').getBuiltinRegistry().get('db_backup').handler;
+const rawExportHandler = require('../src/tools').getBuiltinRegistry().get('db_export').handler;
+const bindDbContext = tool => (...args) => runWithContext(dbTestContext, () => tool(...args));
+const db_schema = bindDbContext(rawDbSchema);
+const db_query = bindDbContext(rawDbQuery);
+const db_stats = bindDbContext(rawDbStats);
+const db_backup = bindDbContext(rawDbBackup);
+const db_restore = bindDbContext(rawDbRestore);
+const log_query = bindDbContext(rawLogQuery);
+const db_export = bindDbContext(rawDbExport);
+const db_search = bindDbContext(rawDbSearch);
+const db_migrate = (...args) => runWithContext(criticalTestContext, () => rawDbMigrate(...args));
+const db_diff = bindDbContext(rawDbDiff);
 
 console.log('Running Database Tools Tests...\n');
 
 (async () => {
   setSource('test');
+
+  console.log('Test: direct db_restore handler cannot bypass canonical authorization');
+  const directBackupPath = path.join(TEST_DATA_DIR, 'direct-call-backup.sqlite');
+  const directBackup = await runWithContext(criticalTestContext, () => rawBackupHandler({ path: directBackupPath, compress: false }));
+  assert.strictEqual(directBackup.isError, true);
+  assert.strictEqual(directBackup.code, 'canonical_dispatch_required');
+  assert.strictEqual(fs.existsSync(directBackupPath), false, 'direct backup must be refused before creating a file');
+  const directExport = await runWithContext(criticalTestContext, () => rawExportHandler({ table: 'meta' }));
+  assert.strictEqual(directExport.isError, true);
+  assert.strictEqual(directExport.code, 'canonical_dispatch_required');
+  const directRestore = await runWithContext(criticalTestContext, () => rawRestoreHandler({ path: path.join(TEST_DATA_DIR, 'does-not-exist.sqlite') }));
+  assert.strictEqual(directRestore.isError, true);
+  assert.strictEqual(directRestore.code, 'canonical_dispatch_required');
+  const directMigration = await runWithContext(criticalTestContext, () => rawMigrateHandler({ action: 'up', name: '999_security_test.sql' }));
+  assert.strictEqual(directMigration.isError, true);
+  assert.strictEqual(directMigration.code, 'canonical_dispatch_required');
+  const canonicalRestore = await require('../src/tools/dispatcher').callInternalTool(
+    'db_restore',
+    { path: path.join(TEST_DATA_DIR, 'missing-backup.sqlite') },
+    criticalTestContext,
+  );
+  assert.strictEqual(canonicalRestore.isError, true);
+  assert.match(canonicalRestore.content[0].text, /Backup file not found/, 'authorized canonical call must reach restore validation');
+  console.log('✓ Passed\n');
 
   // --- db_schema ---
   console.log('Test: db_schema - list all tables');
@@ -203,7 +245,7 @@ console.log('Running Database Tools Tests...\n');
   // --- db_migrate ---
   console.log('Test: db_migrate - status');
   const migrateStatusResult = await db_migrate({ action: 'status' });
-  assert.ok(!migrateStatusResult.isError, 'Should succeed');
+  assert.ok(!migrateStatusResult.isError, `Should succeed: ${migrateStatusResult.content?.[0]?.text || migrateStatusResult.message || "unknown error"}`);
   const migrateStatus = JSON.parse(migrateStatusResult.content[0].text);
   assert.ok(migrateStatus.currentVersion !== undefined, 'Should have currentVersion');
   assert.ok(Array.isArray(migrateStatus.migrations), 'Should have migrations array');
@@ -245,9 +287,11 @@ console.log('Running Database Tools Tests...\n');
 
   // --- Cleanup ---
   console.log('\nAll Database Tools Tests Passed! ✓');
+  try { dbStore.closeDatabase(); } catch {}
   fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
 })().catch(err => {
   console.error('\n✗ Test failed:', err.message);
+  try { dbStore.closeDatabase(); } catch {}
   fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
   process.exit(1);
 });
