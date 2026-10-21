@@ -570,6 +570,13 @@ let selectedResearchRepository = null;
 let selectedResearchCampaign = null;
 let selectedResearchSnapshot = null;
 
+function currentResearchProject() {
+  try {
+    const selected = localStorage.getItem('sidekick_workspace');
+    return selected && selected !== 'global' ? selected : null;
+  } catch (_) { return null; }
+}
+
 async function researchJson(url, options) {
   const response = await authFetch(url, options);
   const data = await response.json();
@@ -580,9 +587,12 @@ async function researchJson(url, options) {
 async function loadResearchSources() {
   const readiness = $('researchReadiness'); const repositories = $('researchRepositories');
   try {
+    const project = currentResearchProject();
+    const repositoryQuery = new URLSearchParams({ limit: '25' });
+    if (project) repositoryQuery.set('project_id', project);
     const [status, repoData] = await Promise.all([
       researchJson('/api/research/source/readiness'),
-      researchJson('/api/research/source/repositories?limit=25')
+      researchJson('/api/research/source/repositories?' + repositoryQuery.toString())
     ]);
     const details = status.readiness || {};
     if (readiness) readiness.textContent = 'Workspace: ' + ((details.workspace || {}).state || 'unknown') + ' · Local probes: ' + ((details.policy || {}).local_probes_enabled ? 'enabled' : 'disabled') + ' · Environments: ' + (details.environment_count ?? 0);
@@ -597,7 +607,9 @@ async function selectResearchRepository(repositoryId, campaignId) {
   selectedResearchRepository = repositoryId; selectedResearchCampaign = campaignId || null; selectedResearchSnapshot = null;
   const output = $('researchSnapshots'); if (output) output.textContent = 'Loading snapshots...';
   try {
-    const data = await researchJson('/api/research/source/snapshots?repository_id=' + encodeURIComponent(repositoryId) + '&limit=25');
+    const query = new URLSearchParams({ repository_id: repositoryId, limit: '25' });
+    const project = currentResearchProject(); if (project) query.set('project_id', project);
+    const data = await researchJson('/api/research/source/snapshots?' + query.toString());
     if (output) output.innerHTML = (data.snapshots || []).map(snapshot =>
       '<div class="card compact-card research-source-card"><strong>' + esc(snapshot.snapshot_id) + '</strong> <span class="sub">' + esc(snapshot.state) + ' · integrity: ' + esc(snapshot.integrity_status) + ' · authority: ' + esc(snapshot.authority) + '</span>' +
       '<div class="research-actions"><button class="btn btn-sm btn-outline" data-dashboard-action="research-snapshot" data-id="' + attr(snapshot.snapshot_id) + '">Details</button> <button class="btn btn-sm" data-dashboard-action="research-action" data-handler="researchSelect" data-id="' + attr(snapshot.snapshot_id) + '">Select</button> <button class="btn btn-sm btn-outline" data-dashboard-action="research-action" data-handler="researchVerify" data-id="' + attr(snapshot.snapshot_id) + '">Verify</button> <button class="btn btn-sm btn-outline" data-dashboard-action="research-action" data-handler="researchIndex" data-id="' + attr(snapshot.snapshot_id) + '">Index</button> <button class="btn btn-sm btn-outline" data-dashboard-action="research-action" data-handler="researchArchive" data-id="' + attr(snapshot.snapshot_id) + '">Archive</button> <button class="btn btn-sm btn-danger" data-dashboard-action="research-action" data-handler="researchRemove" data-id="' + attr(snapshot.snapshot_id) + '">Remove</button></div></div>'
@@ -608,14 +620,18 @@ async function selectResearchRepository(repositoryId, campaignId) {
 async function showResearchSnapshot(snapshotId) {
   selectedResearchSnapshot = snapshotId;
   try {
-    const data = await researchJson('/api/research/source/snapshots/' + encodeURIComponent(snapshotId) + '?repository_id=' + encodeURIComponent(selectedResearchRepository));
+    const query = new URLSearchParams({ repository_id: selectedResearchRepository || '' });
+    const project = currentResearchProject(); if (project) query.set('project_id', project);
+    const data = await researchJson('/api/research/source/snapshots/' + encodeURIComponent(snapshotId) + '?' + query.toString());
     const snapshot = data.snapshot || {}; const verification = snapshot.verification || {};
     $('researchSnapshotDetail').innerHTML = '<div class="sub">State: ' + esc(snapshot.state) + ' · Integrity: ' + esc(snapshot.integrity_status) + ' · Stale: ' + esc(String(verification.stale)) + ' · Files: ' + esc(String(snapshot.file_count ?? 'unknown')) + ' · Ref: ' + esc(snapshot.workspace_ref || 'unavailable') + '</div>';
   } catch (error) { $('researchSnapshotDetail').textContent = dashboardSafeErrorMessage(error); }
 }
 
 async function researchAction(action, body) {
-  const data = await researchJson('/api/research/source/actions/' + encodeURIComponent(action), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+  const scopedBody = { ...(body || {}) };
+  const project = currentResearchProject(); if (project) scopedBody.project_id = project;
+  const data = await researchJson('/api/research/source/actions/' + encodeURIComponent(action), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(scopedBody) });
   $('researchActionStatus').textContent = action + ' completed.';
   return data;
 }
@@ -3186,7 +3202,8 @@ const PREDICT_CONFIDENCE_CLASS = Object.fromEntries(Object.keys(PREDICT_CONFIDEN
 // Field names below are the canonical /api/predict/status contract documented
 // in docs/predict.md. Do not read undeclared fields.
 function loadPredictStatus() {
-  authFetch('/api/predict/status').then(r => r.json()).then(d => {
+  authFetch('/api/predict/status').then(r => r.json().then(d => ({ response: r, data: d }))).then(({ response, data: d }) => {
+    if (!response.ok) throw new Error(d.error || 'Prediction diagnostics are unavailable');
     const el = $('predictStatus');
     if (!el) return;
     const detectors = d.detectors || [];
@@ -3234,6 +3251,9 @@ function loadPredictStatus() {
     }
 
     el.innerHTML = html;
+  }).catch(error => {
+    const el = $('predictStatus');
+    if (el) el.textContent = 'Prediction diagnostics unavailable: ' + dashboardSafeErrorMessage(error);
   });
 }
 

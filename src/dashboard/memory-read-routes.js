@@ -1,12 +1,24 @@
-function registerMemoryReadRoutes({ app, dbStore, memoryCategory, errorResponse }) {
+"use strict";
+
+const { canonicalizeProjectName } = require("../core/project-identity");
+
+function registerMemoryReadRoutes({ app, dbStore, memoryCategory, projectAccess, errorResponse }) {
   app.get("/api/memories", (req, res) => {
     try {
       const { project, type, include_disabled, limit, query } = req.query;
       const options = { limit: parseInt(limit) || 100, includeDisabled: include_disabled === "true" };
-      if (project) options.project = project;
+      const principalId = req.authPrincipal?.principal_id;
+      const credentialScopes = req.authPrincipal?.scopes;
+      const delegationId = req.authPrincipal?.delegation_id || req.authPrincipal?.delegationId || null;
+      if (!principalId) return res.status(401).json({ ok: false, error: "authenticated principal required", code: "unauthenticated" });
+      const globalAccess = projectAccess.hasGlobalMemoryAccess(principalId, "read", credentialScopes, delegationId);
+      if (!project && !globalAccess) return res.status(400).json({ ok: false, error: "project is required", code: "project_scope_required" });
+      if (project && !projectAccess.hasProjectAccess(principalId, project, "read", credentialScopes, delegationId)) return res.status(403).json({ ok: false, error: "project access denied", code: "project_access_denied" });
+      const normalizedProject = project ? canonicalizeProjectName(project) : null;
+      if (normalizedProject) options.project = normalizedProject;
       if (type) options.type = type;
       if (query) options.query = query;
-      const memories = dbStore.searchMemories(options);
+      const memories = dbStore.searchMemories(options).filter(memory => (globalAccess && !normalizedProject) || memory.project === normalizedProject);
       const formatted = memories.map(m => ({
         id: m.id, type: m.type, category: memoryCategory(m), project: m.project,
         content: m.content, summary: m.summary, tags: m.tags, confidence: m.confidence,
@@ -32,20 +44,30 @@ function registerMemoryReadRoutes({ app, dbStore, memoryCategory, errorResponse 
 
   app.get("/api/memories/projects", (req, res) => {
     try {
-      const rows = dbStore.getDb().prepare("SELECT DISTINCT project FROM memories WHERE project IS NOT NULL AND project != '' AND enabled = 1 ORDER BY project").all();
-      res.json({ ok: true, projects: rows.map(r => r.project) });
+      const principalId = req.authPrincipal?.principal_id;
+      if (!principalId) return res.status(401).json({ ok: false, error: "authenticated principal required", code: "unauthenticated" });
+      const credentialScopes = req.authPrincipal?.scopes;
+      const delegationId = req.authPrincipal?.delegation_id || req.authPrincipal?.delegationId || null;
+      const projects = projectAccess.hasGlobalMemoryAccess(principalId, "read", credentialScopes, delegationId)
+        ? dbStore.getDb().prepare("SELECT DISTINCT project FROM memories WHERE project IS NOT NULL AND project != '' AND enabled = 1 ORDER BY project").all().map(row => row.project)
+        : projectAccess.listAccessibleProjects(principalId, credentialScopes, delegationId).map(row => row.project_id);
+      res.json({ ok: true, projects });
     } catch (error) { errorResponse(req, res, error, { status: 500, code: "service_unavailable", component: "memories" }); }
   });
 
   app.get("/api/memories/types", (req, res) => {
     try {
+      if (!req.authPrincipal?.principal_id || !projectAccess.hasGlobalMemoryAccess(req.authPrincipal.principal_id, "read", req.authPrincipal.scopes, req.authPrincipal.delegation_id || req.authPrincipal.delegationId || null)) return res.status(403).json({ ok: false, error: "global memory access required", code: "forbidden" });
       const rows = dbStore.getDb().prepare("SELECT DISTINCT type FROM memories ORDER BY type").all();
       res.json({ ok: true, types: rows.map(r => r.type) });
     } catch (error) { errorResponse(req, res, error, { status: 500, code: "service_unavailable", component: "memories" }); }
   });
 
   app.get("/api/memories/stats", (req, res) => {
-    try { res.json({ ok: true, stats: dbStore.getMemoryIntelligenceStats() }); }
+    try {
+      if (!req.authPrincipal?.principal_id || !projectAccess.hasGlobalMemoryAccess(req.authPrincipal.principal_id, "read", req.authPrincipal.scopes, req.authPrincipal.delegation_id || req.authPrincipal.delegationId || null)) return res.status(403).json({ ok: false, error: "global memory access required", code: "forbidden" });
+      res.json({ ok: true, stats: dbStore.getMemoryIntelligenceStats() });
+    }
     catch (error) { errorResponse(req, res, error, { status: 500, code: "service_unavailable", component: "memories" }); }
   });
 }

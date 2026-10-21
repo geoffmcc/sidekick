@@ -3,15 +3,16 @@
 const scopes = require("../security/network-scopes");
 const networkPolicy = require("../security/network-scope");
 
-function registerNetworkScopeRoutes({ app, authenticatedUser, requireIdentityAdministrator, auditLog, logError, errorResponse }) {
+function registerNetworkScopeRoutes({ app, authenticatedUser, requireIdentityPermission, auditLog, logError, errorResponse }) {
   function read(req, res) {
     if (!authenticatedUser(req)) return res.status(403).json({ ok: false, error: "authentication required" });
+    if (!requireIdentityPermission(req, res, "network_scopes.read")) return;
     try { return res.json({ ok: true, scopes: scopes.list({ state: req.query.state, limit: req.query.limit }) }); }
     catch (error) { return errorResponse(req, res, error, { status: 500, code: "service_unavailable", component: "network_scope" }); }
   }
   function mutate(req, res, operation) {
     if (!authenticatedUser(req)) return res.status(403).json({ ok: false, error: "authentication required" });
-    if (!requireIdentityAdministrator(req, res)) return;
+    if (!requireIdentityPermission(req, res, "network_scopes.manage")) return;
     try {
       const actor = authenticatedUser(req); let result;
       if (operation === "validate") result = scopes.validate(req.body || {});
@@ -28,7 +29,7 @@ function registerNetworkScopeRoutes({ app, authenticatedUser, requireIdentityAdm
      } catch (error) { try { auditLog(req, `network_scope.${operation}.denied`, { scope_id: req.params.scopeId || null, reason: "invalid_request" }, authenticatedUser(req)); } catch {} return errorResponse(req, res, error, { status: 400, code: "invalid_request", component: "network_scope" }); }
   }
   app.get("/api/network-scopes", read);
-  app.get("/api/network-scopes/:scopeId", (req, res) => { if (!authenticatedUser(req)) return res.status(403).json({ ok: false, error: "authentication required" }); const scope = scopes.get(req.params.scopeId, req.query.revision); return scope ? res.json({ ok: true, scope, references: scopes.references(scope.scope_id) }) : res.status(404).json({ ok: false, error: "network scope not found" }); });
+  app.get("/api/network-scopes/:scopeId", (req, res) => { if (!authenticatedUser(req)) return res.status(403).json({ ok: false, error: "authentication required" }); if (!requireIdentityPermission(req, res, "network_scopes.read")) return; const scope = scopes.get(req.params.scopeId, req.query.revision); return scope ? res.json({ ok: true, scope, references: scopes.references(scope.scope_id) }) : res.status(404).json({ ok: false, error: "network scope not found" }); });
   app.post("/api/network-scopes/validate", (req, res) => mutate(req, res, "validate"));
   app.post("/api/network-scopes", (req, res) => mutate(req, res, "create"));
   app.put("/api/network-scopes/:scopeId", (req, res) => mutate(req, res, "update"));

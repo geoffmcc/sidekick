@@ -16,7 +16,7 @@ const TRANSITIONS = Object.freeze({
   created: ["planning", "paused", "cancelled", "failed"], planning: ["ready", "waiting", "blocked", "paused", "failed", "cancelled"],
   ready: ["running", "paused", "waiting", "cancelled", "failed"], running: ["planning", "waiting", "paused", "verifying", "blocked", "interrupted", "cancelled", "failed", "timed_out"],
   waiting: ["ready", "planning", "paused", "blocked", "cancelled", "failed", "timed_out"], paused: ["ready", "planning", "cancelled", "failed"], blocked: ["planning", "ready", "cancelled", "failed"],
-  verifying: ["completed", "partial", "blocked", "failed", "planning"], interrupted: ["ready", "failed", "cancelled"],
+  verifying: ["completed", "partial", "blocked", "failed", "planning"], interrupted: ["ready", "blocked", "failed", "cancelled"],
   completed: [], partial: [], failed: [], cancelled: [], timed_out: [],
 });
 
@@ -31,10 +31,18 @@ function normalizeWorkspaceRef(value) { if (value == null || value === "") retur
 function normalizeAuthorityEnvelope(value) { const { createAuthorityEnvelope } = require("./authority"); return createAuthorityEnvelope(value || {}); }
 function normalizePrincipalContext(value = {}) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return { version: 1, credential_scopes: [], delegation_id: null };
-  const scopes = Array.isArray(value.credential_scopes || value.scopes) ? [...new Set((value.credential_scopes || value.scopes).map(String).filter(scope => /^[A-Za-z][A-Za-z0-9_.:-]{0,120}$|^\*$/.test(scope)).slice(0, 80))] : [];
+  const rawScopes = Object.prototype.hasOwnProperty.call(value, "credential_scopes") ? value.credential_scopes : value.scopes;
+  // null means permissions are resolved from the principal's current role.
+  // An omitted or malformed value stays deny-all for legacy/fail-closed data.
+  const scopes = rawScopes === null ? null : Array.isArray(rawScopes) ? [...new Set(rawScopes.map(String).filter(scope => /^[A-Za-z][A-Za-z0-9_.:-]{0,120}$|^\*$/.test(scope)).slice(0, 80))] : [];
   const delegation = value.delegation_id == null ? null : String(value.delegation_id);
   if (delegation && !/^[A-Za-z0-9_.:-]{1,160}$/.test(delegation)) throw new Error("delegation_id must be a governed reference");
-  return { version: 1, credential_scopes: scopes, delegation_id: delegation };
+  const service = value.service_identity == null ? null : String(value.service_identity);
+  if (service && service !== "certification") throw new Error("service_identity is not an allowed Agent task identity");
+  const credentialId = value.credential_id == null ? null : String(value.credential_id);
+  if (credentialId && !/^cred_[A-Za-z0-9-]{1,100}$/.test(credentialId)) throw new Error("credential_id must be a governed credential reference");
+  if (credentialId && scopes === null) throw new Error("credential_id requires explicit credential scopes");
+  return { version: 1, credential_scopes: scopes, delegation_id: delegation, ...(credentialId ? { credential_id: credentialId } : {}), ...(service ? { service_identity: service } : {}) };
 }
 function normalizeGoal(objective, input = {}) {
   const original = boundedString(objective, 20_000, "objective");
@@ -67,4 +75,4 @@ function budgetExceeded(task, resource) { const limit = task.budget && task.budg
 function shouldSuppressEquivalentFailure(failure) { return Boolean(failure && !failure.changed_condition); }
 function assertCheckpoint(task, checkpoint) { if (!checkpoint || checkpoint.version !== 1 || !checkpoint.safe_boundary || !checkpoint.next_action) throw new Error("invalid safe checkpoint"); if (TERMINAL.has(task.state)) throw new Error("terminal task cannot checkpoint"); return { ...clone(checkpoint), updated_at: new Date().toISOString() }; }
 function validateResult(result) { if (!result || typeof result !== "object" || Array.isArray(result)) throw new Error("structured result must be an object"); const allowed = ["summary", "status", "claims", "findings", "recommendations", "deliverables", "artifacts", "evidence_refs", "verification", "proposed_actions", "unresolved_questions", "limitations", "follow_up_suggestions", "resource_usage", "provenance"]; const out = {}; for (const key of allowed) if (result[key] !== undefined) out[key] = clone(result[key]); if (out.summary !== undefined) out.summary = boundedString(out.summary, 20_000, "result summary"); if (out.status !== undefined && !["verified", "partially_verified", "incomplete", "contradicted", "unable_to_verify", "waiting_for_approval", "waiting_for_information", "budget_exhausted"].includes(out.status)) throw new Error("invalid result status"); return { version: 1, ...out }; }
-module.exports = { SCHEMA_VERSION, PROFILES, STATES, TERMINAL, normalizeGoal, normalizeProfile, normalizeWorkspaceRef, normalizeAuthorityEnvelope, createTask, transition, actionFingerprint, budgetExceeded, shouldSuppressEquivalentFailure, assertCheckpoint, validateResult };
+module.exports = { SCHEMA_VERSION, PROFILES, STATES, TERMINAL, normalizeGoal, normalizeProfile, normalizeWorkspaceRef, normalizePrincipalContext, normalizeAuthorityEnvelope, createTask, transition, actionFingerprint, budgetExceeded, shouldSuppressEquivalentFailure, assertCheckpoint, validateResult };

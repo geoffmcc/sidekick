@@ -19,7 +19,7 @@ function isExecutableDescriptor(descriptor) {
     && typeof descriptor.handler === "function");
 }
 
-async function assertScenario(scenario, registry) {
+async function assertScenario(scenario, registry, authIdentity) {
   if (scenario.bounded.max_output_chars > 10000 || scenario.bounded.max_steps > 8 || scenario.bounded.max_evidence > 16) return "metadata exceeds certification bounds";
   if (!Array.isArray(scenario.expected_tools) || !Array.isArray(scenario.forbidden_tools)) return "tool expectations are not arrays";
   if (scenario.forbidden_tools.some(tool => scenario.expected_tools.includes(tool))) return "tool is both expected and forbidden";
@@ -29,30 +29,31 @@ async function assertScenario(scenario, registry) {
   switch (scenario.assertion) {
     case "registry_tool": {
       if (!isExecutableDescriptor(registry.get("respond"))) return "canonical respond tool is unavailable";
-      return executeFixture(scenario, registry);
+      return executeFixture(scenario, registry, authIdentity);
     }
-    case "metadata_bounds": return executeFixture(scenario, registry);
+    case "metadata_bounds": return executeFixture(scenario, registry, authIdentity);
     case "expected_tools": {
       const missing = scenario.expected_tools.filter(tool => !isExecutableDescriptor(registry.get(tool))).slice(0, 16);
       if (missing.length) return `expected tools unavailable: ${missing.join(", ")}`;
-      return executeFixture(scenario, registry);
+      return executeFixture(scenario, registry, authIdentity);
     }
-    case "forbidden_tools": return registry.get("executeAuthorizedTaskStep") ? "privileged runner seam is exposed in registry" : executeFixture(scenario, registry);
-    case "approval_contract": return scenario.approval.required && !scenario.approval.bypass_allowed ? executeFixture(scenario, registry) : "approval contract is incomplete";
-    case "evidence_contract": return scenario.evidence.required && scenario.evidence.attributable ? executeFixture(scenario, registry) : "evidence contract is incomplete";
-    case "outcome_contract": return scenario.outcome.terminal ? executeFixture(scenario, registry) : "outcome is not terminal";
-    case "cleanup_contract": return scenario.cleanup.required && scenario.cleanup.idempotent ? executeFixture(scenario, registry) : "cleanup contract is incomplete";
-    case "context_scope": return scenario.mode === "hermetic" ? executeFixture(scenario, registry) : "context scenario is not hermetic";
-    case "redaction": return sanitize({ token: "Bearer ghp_abcdefghijklmnopqrstuvwxyz123456" }).token === "[REDACTED]" ? executeFixture(scenario, registry) : "redaction failed";
-    case "unknown_tool": return registry.get("definitely_missing_certification_tool") ? "unknown tool resolved" : executeFixture(scenario, registry);
-    case "schema_validation": return fixtureSchema.safeParse({}).success ? "schema accepted invalid input" : executeFixture(scenario, registry);
-    case "fault_contract": return scenario.fault_point && scenario.outcome.expected === "failed" ? executeFixture(scenario, registry) : "fault does not fail closed";
-    default: return scenario.expected_tools.length ? executeFixture(scenario, registry) : "scenario has no expected behavior";
+    case "forbidden_tools": return registry.get("executeAuthorizedTaskStep") ? "privileged runner seam is exposed in registry" : executeFixture(scenario, registry, authIdentity);
+    case "approval_contract": return scenario.approval.required && !scenario.approval.bypass_allowed ? executeFixture(scenario, registry, authIdentity) : "approval contract is incomplete";
+    case "evidence_contract": return scenario.evidence.required && scenario.evidence.attributable ? executeFixture(scenario, registry, authIdentity) : "evidence contract is incomplete";
+    case "outcome_contract": return scenario.outcome.terminal ? executeFixture(scenario, registry, authIdentity) : "outcome is not terminal";
+    case "cleanup_contract": return scenario.cleanup.required && scenario.cleanup.idempotent ? executeFixture(scenario, registry, authIdentity) : "cleanup contract is incomplete";
+    case "context_scope": return scenario.mode === "hermetic" ? executeFixture(scenario, registry, authIdentity) : "context scenario is not hermetic";
+    case "redaction": return sanitize({ token: "Bearer ghp_abcdefghijklmnopqrstuvwxyz123456" }).token === "[REDACTED]" ? executeFixture(scenario, registry, authIdentity) : "redaction failed";
+    case "unknown_tool": return registry.get("definitely_missing_certification_tool") ? "unknown tool resolved" : executeFixture(scenario, registry, authIdentity);
+    case "schema_validation": return fixtureSchema.safeParse({}).success ? "schema accepted invalid input" : executeFixture(scenario, registry, authIdentity);
+    case "fault_contract": return scenario.fault_point && scenario.outcome.expected === "failed" ? executeFixture(scenario, registry, authIdentity) : "fault does not fail closed";
+    default: return scenario.expected_tools.length ? executeFixture(scenario, registry, authIdentity) : "scenario has no expected behavior";
   }
 }
 
-async function executeFixture(scenario, registry) {
+async function executeFixture(scenario, registry, authIdentity) {
   if (!Array.isArray(scenario.fixture) || scenario.fixture.length === 0) return "no deterministic hermetic fixture is defined";
+  if (!authIdentity?.principal_id) return "bounded certification service identity is unavailable";
   if (scenario.fixture.length > scenario.bounded.max_steps) return "fixture exceeds scenario step bound";
   const expected = new Set(scenario.expected_tools);
   const observed = [];
@@ -63,7 +64,7 @@ async function executeFixture(scenario, registry) {
     const dispatched = await dispatchTool({
       name,
       args: step.args || {},
-      context: createTestExecutionContext({ project: "agent-certification", correlationId: scenario.id }),
+      context: createTestExecutionContext({ source: "certification", project: "agent_certification", authIdentity, correlationId: scenario.id }),
     });
     if (!dispatched || dispatched.isError) {
       const detail = dispatched?.content?.[0]?.text;
@@ -140,7 +141,7 @@ async function runLifecycleScenario(scenario, lifecycleExecutor) {
   }
 }
 
-async function runCertification({ scenarioIds, mode, theme, availability = false, liveExecutor = null, lifecycleExecutor = null, registry = getBuiltinRegistry() } = {}) {
+async function runCertification({ scenarioIds, mode, theme, availability = false, liveExecutor = null, lifecycleExecutor = null, registry = getBuiltinRegistry(), authIdentity = null } = {}) {
   const selected = listScenarios({ mode, theme }).filter(scenario => !scenarioIds || scenarioIds.includes(scenario.id));
   const results = [];
   for (const scenario of selected) {
@@ -153,8 +154,8 @@ async function runCertification({ scenarioIds, mode, theme, availability = false
       continue;
     }
     try {
-      const reason = await assertScenario(scenario, registry);
-      const blocked = reason && (reason.startsWith("expected tools unavailable:") || reason === "no deterministic hermetic fixture is defined" || reason.includes("Tool blocked by policy"));
+      const reason = await assertScenario(scenario, registry, authIdentity);
+      const blocked = reason && (reason.startsWith("expected tools unavailable:") || reason === "no deterministic hermetic fixture is defined" || reason.includes("Tool blocked by policy") || reason === "bounded certification service identity is unavailable");
       results.push(reason
         ? result(scenario, blocked ? "blocked" : "failed", reason)
         : result(scenario, "passed", null, { dispatcher: "canonical", fixture: true }));

@@ -13,6 +13,9 @@ const { redactSensitive } = require("../../redact");
 const { generateId } = require("../../core/ids");
 const { PROJECT_RE, canonicalizeProjectName } = require("../../core/project-identity");
 const toolContext = require("../context");
+const authorization = require("../../core/authorization");
+const projectAccess = require("../../core/project-access");
+const { requireCanonicalInvocation } = require("../read-authorization");
 
 const RESUME_DOCUMENT = "resume";
 
@@ -41,33 +44,6 @@ function updateResumeDocument(mutator) {
   // Take the SQLite writer lock before reading so cross-process updates merge
   // against the latest document instead of replacing a stale snapshot.
   return transaction.immediate();
-}
-
-function syncCompletedLinkedHandoffs(observedDoc, projectScope = null) {
-  const scopedItems = Object.entries(observedDoc?.items || {}).filter(([key, item]) => !projectScope
-    || (canonicalizeProjectName(key) === canonicalizeProjectName(projectScope)
-      && canonicalizeProjectName(item?.project || key) === canonicalizeProjectName(projectScope)));
-  const mayHaveCompletedLink = scopedItems.some(([, item]) => item?.handoff_id && !["cleared", "done", "complete"].includes(item.status));
-  if (!mayHaveCompletedLink) return false;
-  const now = new Date().toISOString();
-  return updateResumeDocument(doc => {
-    let changed = false;
-    for (const [project, item] of Object.entries(doc.items || {})) {
-      if (projectScope && (canonicalizeProjectName(project) !== canonicalizeProjectName(projectScope)
-        || canonicalizeProjectName(item?.project || project) !== canonicalizeProjectName(projectScope))) continue;
-      if (!item || !item.handoff_id || ["cleared", "done", "complete"].includes(item.status)) continue;
-      const handoff = dbStore.getHandoff(item.handoff_id);
-      if (!handoff || handoff.project !== item.project || handoff.lifecycle_state !== "completed") continue;
-      doc.items[project] = {
-        ...item,
-        status: "complete",
-        completed_at: handoff.completed_at || now,
-        updated_at: now,
-      };
-      changed = true;
-    }
-    return { save: changed, value: doc };
-  });
 }
 
 function activeResumeItems(doc, includeCleared = false, projectScope = null) {
@@ -106,6 +82,9 @@ function validateResumeItem(item) {
   validation.valid = validation.issues.length === 0;
   return {
     ...item,
+    ...(handoff?.lifecycle_state === "completed" && handoff.project === item.project
+      ? { status: "complete", completed_at: handoff.completed_at || item.completed_at }
+      : {}),
     handoff_id: handoff?.id || item.handoff_id,
     handoff_version: handoff?.version || null,
     handoff_validation: { valid: validation.valid, issues: validation.issues },
@@ -113,10 +92,33 @@ function validateResumeItem(item) {
   };
 }
 
+function hasResumeProjectAccess(authIdentity, project, access) {
+  if (!authIdentity?.principal_id) return false;
+  const permission = access === "write" ? "memory.write" : "memory.read";
+  return projectAccess.hasProjectPermission(authIdentity.principal_id, project, permission, access,
+    authIdentity.scopes, authIdentity.delegation_id || authIdentity.delegationId || null);
+}
+
+function canReadLinkedHandoff(handoff, authIdentity) {
+  if (!handoff || !hasResumeProjectAccess(authIdentity, handoff.project, "read")) return false;
+  if (handoff.owner_principal_id === (authIdentity.acting_for_principal_id || authIdentity.principal_id)
+    || handoff.created_by_principal_id === authIdentity.principal_id) return true;
+  return authorization.authorize({ principalId: authIdentity.principal_id, permission: "principals.manage",
+    credentialScopes: authIdentity.scopes, delegationId: authIdentity.delegation_id || authIdentity.delegationId || null }).ok;
+}
+
 async function sidekick_resume({ action, project, summary, next_step, status, branch, url, notes, plan_name, current_phase, handoff_id, handoff_key, include_cleared, format }) {
+  const denied = requireCanonicalInvocation("resume");
+  if (denied) return denied;
   if (handoff_key !== undefined) return { content: [{ type: "text", text: "handoff keys are no longer supported; link the structured handoff by id" }], isError: true };
   const selectedAction = action || "check";
   const selectedFormat = format || "text";
+  const execution = toolContext.getExecutionContext();
+  const authIdentity = execution.authIdentity || null;
+  const testHarness = !authIdentity?.principal_id && execution.source === "test";
+  if (!authIdentity?.principal_id && !testHarness) {
+    return { content: [{ type: "text", text: "Authenticated principal required for resume access" }], isError: true, code: "unauthenticated" };
+  }
   const boundProject = toolContext.getExecutionContext().project || null;
   if (boundProject) {
     if (project && canonicalizeProjectName(project) !== canonicalizeProjectName(boundProject)) {
@@ -124,12 +126,12 @@ async function sidekick_resume({ action, project, summary, next_step, status, br
     }
     if (!project) project = boundProject;
   }
-  const observedDoc = loadResumeDocument();
-  syncCompletedLinkedHandoffs(observedDoc, boundProject);
-  const doc = loadResumeDocument();
-
   if (selectedAction === "list") {
-    const items = activeResumeItems(doc, include_cleared === true, boundProject).map(validateResumeItem)
+    const doc = loadResumeDocument();
+    const authorized = item => testHarness || (hasResumeProjectAccess(authIdentity, item.project, "read")
+      && (!item.handoff_id || canReadLinkedHandoff(dbStore.getHandoff(item.handoff_id), authIdentity)));
+    const items = activeResumeItems(doc, true, boundProject).filter(authorized).map(validateResumeItem)
+      .filter(item => include_cleared === true || !["cleared", "done", "complete"].includes(item.status))
       .sort((a, b) => String(b.updated_at || "").localeCompare(String(a.updated_at || "")));
     const payload = { count: items.length, items };
     const text = selectedFormat === "json"
@@ -142,12 +144,21 @@ async function sidekick_resume({ action, project, summary, next_step, status, br
     return { content: [{ type: "text", text: "project required and must match /^[a-z][a-z0-9_]*$/" }], isError: true };
   }
 
+  const requiredAccess = selectedAction === "check" ? "read" : "write";
+  if (!testHarness && !hasResumeProjectAccess(authIdentity, project, requiredAccess)) {
+    return { content: [{ type: "text", text: "resume project access denied" }], isError: true, code: "project_access_denied" };
+  }
+  const doc = loadResumeDocument();
+
   if (selectedAction === "check") {
     const item = doc.items[project];
-    if (!item || ["cleared", "done", "complete"].includes(item.status)) {
+    if (!item) {
       return { content: [{ type: "text", text: `No pending resume item for project: ${project}` }] };
     }
     let enriched = validateResumeItem(item);
+    if (["cleared", "done", "complete"].includes(enriched.status)) {
+      return { content: [{ type: "text", text: `No pending resume item for project: ${project}` }] };
+    }
     if (enriched.resume_blocked) {
         const text = selectedFormat === "json"
           ? JSON.stringify({ ...enriched, resume_blocked: true }, null, 2)
@@ -187,6 +198,9 @@ async function sidekick_resume({ action, project, summary, next_step, status, br
       }
       if (handoff.project !== project) {
         return { content: [{ type: "text", text: "linked handoff belongs to a different project" }], isError: true };
+      }
+      if (!testHarness && !canReadLinkedHandoff(handoff, authIdentity)) {
+        return { content: [{ type: "text", text: "linked handoff not found" }], isError: true, code: "not_found" };
       }
       const validation = dbStore.validateHandoffPacket(handoff.packet, { requireResume: true });
       if (!validation.valid) return { content: [{ type: "text", text: `linked handoff is not resumable: ${validation.issues.join("; ")}` }], isError: true };

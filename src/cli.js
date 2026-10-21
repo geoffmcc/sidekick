@@ -8,6 +8,28 @@ const { serveStdio } = require("@modelcontextprotocol/server/stdio");
 const packageJson = require("../package.json");
 const { prepareLocalEnvironment, acquireBootstrapLock, getLocalPaths } = require("./local/paths");
 
+function localMcpIdentityProvider() {
+  // Read a file-backed credential for each call so the token is not inherited
+  // by child processes and revocation or file rotation applies to open sessions.
+  return () => {
+    try {
+      const token = require("./core/runtime-secrets").readSecret("SIDEKICK_MCP_CREDENTIAL");
+      if (!token) return null;
+      const credential = require("./core/authentication").authenticateCredential(token);
+      return credential ? {
+        principal_id: credential.principal_id,
+        principal_type: credential.principal_type,
+        scopes: credential.scopes,
+        credential_id: credential.credential_id,
+        authentication_method: "scoped_credential",
+      } : null;
+    } catch (error) {
+      console.error(`Sidekick local MCP credential unavailable: ${error.message}`);
+      return null;
+    }
+  };
+}
+
 function usage() {
    console.error("Usage: sidekick [setup|doctor|certify|status|version]");
   console.error("With no command, Sidekick starts its full governed MCP stdio runtime.");
@@ -69,25 +91,15 @@ async function run() {
       }
       if (command === "certify") {
         const db = require("./db");
+        let certificationIdentity = null;
         try {
           db.runPendingMigrations();
           provisionCertificationPacks();
+          certificationIdentity = require("./certification/identity").createCertificationIdentity();
           const { runCertification, formatCertificationText, createLifecycleExecutorFromEnv } = require("./certification");
           const live = process.argv.includes("--live");
           const liveExecutor = live ? createLifecycleExecutorFromEnv() : null;
-          const previousTestPolicy = process.env.SIDEKICK_TEST_TOOL_POLICY;
-          const previousTestApproval = process.env.SIDEKICK_TEST_APPROVAL_MODE;
-          process.env.SIDEKICK_TEST_TOOL_POLICY = "open";
-          process.env.SIDEKICK_TEST_APPROVAL_MODE = "off";
-          let report;
-          try {
-          report = await runCertification({ mode: live ? "live" : "hermetic", availability: liveExecutor ? () => liveExecutor.available() : false, liveExecutor });
-          } finally {
-            if (previousTestPolicy === undefined) delete process.env.SIDEKICK_TEST_TOOL_POLICY;
-            else process.env.SIDEKICK_TEST_TOOL_POLICY = previousTestPolicy;
-            if (previousTestApproval === undefined) delete process.env.SIDEKICK_TEST_APPROVAL_MODE;
-            else process.env.SIDEKICK_TEST_APPROVAL_MODE = previousTestApproval;
-          }
+          const report = await runCertification({ mode: live ? "live" : "hermetic", availability: liveExecutor ? () => liveExecutor.available() : false, liveExecutor, authIdentity: certificationIdentity.authIdentity });
           if (process.argv.includes("--json")) console.log(JSON.stringify(report, null, 2));
           else console.log(formatCertificationText(report));
         // Unavailability is diagnostic information, never release evidence.
@@ -96,9 +108,12 @@ async function run() {
           if (report.verdict !== "passed") process.exitCode = 1;
           return;
         } finally {
-          db.closeDatabase();
-          if (certificationEnvironment.temporary) {
-            try { fs.rmSync(certificationEnvironment.data, { recursive: true, force: true }); } catch {}
+          try { certificationIdentity?.close(); }
+          finally {
+            db.closeDatabase();
+            if (certificationEnvironment.temporary) {
+              try { fs.rmSync(certificationEnvironment.data, { recursive: true, force: true }); } catch {}
+            }
           }
         }
     }
@@ -113,8 +128,9 @@ async function run() {
     // from stdout. The MCP SDK owns stdout for framed protocol traffic.
     console.log = (...args) => console.error(...args);
     process.env.SIDEKICK_LOCAL = "1";
+    const authIdentityProvider = localMcpIdentityProvider();
     const { createMcpServer } = require("./index");
-    const handle = serveStdio(() => createMcpServer(() => null), {
+    const handle = serveStdio(() => createMcpServer(authIdentityProvider), {
       onerror: error => console.error(`Sidekick MCP stdio error: ${error.message}`)
     });
     const close = async () => {

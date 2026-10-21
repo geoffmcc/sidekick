@@ -81,7 +81,9 @@ async function recoverDurableAgentTasks({ platformKernel, taskStore, receiptStor
       if (parkedAmbiguous) failed.push(task.task_id); else recovered.push(task.task_id);
       continue;
     }
-    const checkpoint = platformKernel.getExecutionClaim(executionId)?.checkpoint || task.checkpoint;
+    const claimCheckpoint = platformKernel.getExecutionClaim(executionId)?.checkpoint;
+    const hasSafeCheckpoint = value => Boolean(value && value.version === 1 && value.safe_boundary && value.next_action);
+    const checkpoint = hasSafeCheckpoint(claimCheckpoint) ? claimCheckpoint : task.checkpoint;
     const resumable = checkpoint && checkpoint.version === 1 && checkpoint.safe_boundary && checkpoint.next_action;
     if (resumable) {
       taskStore.updateTask(task.task_id, { state: "interrupted", phase: "recovery", checkpoint, next_action: checkpoint.next_action, last_error_code: "process_restart" }, "task.recovered");

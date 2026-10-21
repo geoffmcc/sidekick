@@ -1,5 +1,10 @@
 "use strict";
 
+const { readSecret } = require("../core/runtime-secrets");
+const authentication = require("../core/authentication");
+const identity = require("../core/identity");
+const { verifyScheduledAuthority } = require("../security/scheduled-authority");
+
 function createDelayExecution({
   loadDelays,
   saveDelays,
@@ -9,6 +14,9 @@ function createDelayExecution({
   startScheduledLeaseRenewal,
   transitionScheduledPlatformExecution,
   appendScheduledPlatformEvent,
+  authorizeScheduledDelay = (_delay, context) => ({ ok: !context.agentAuthorityContext }),
+  getCredential = authentication.getCredential,
+  getPrincipal = identity.getPrincipal,
   getDelayTimers,
   processId,
 }) {
@@ -17,6 +25,40 @@ function createDelayExecution({
     const current = delays.find(d => d.id === delay.id);
     const timers = getDelayTimers();
     if (!current || current.status !== "pending") {
+      delete timers[delay.id];
+      return;
+    }
+
+    let scheduledContext = null;
+    let policy = null;
+    try {
+      scheduledContext = verifyScheduledAuthority({ delay: current, secret: readSecret("SIDEKICK_SECRET_KEY", { required: true }) });
+      if (scheduledContext?.authIdentity?.credential_id) {
+        const stored = scheduledContext.authIdentity;
+        const credential = getCredential(stored.credential_id);
+        if (!credential || credential.revoked_at || credential.principal_id !== stored.principal_id || (credential.expires_at && Date.parse(credential.expires_at) <= Date.now())) {
+          scheduledContext = null;
+        } else {
+          const originalScopes = Array.isArray(stored.scopes) ? stored.scopes : [];
+          const currentScopes = Array.isArray(credential.scopes) ? credential.scopes : [];
+          scheduledContext = { ...scheduledContext, authIdentity: { ...stored, scopes: originalScopes.filter(scope => currentScopes.includes(scope)) } };
+        }
+      }
+      if (scheduledContext?.authIdentity?.principal_id) {
+        const principal = getPrincipal(scheduledContext.authIdentity.principal_id);
+        if (!principal?.enabled) scheduledContext = null;
+      }
+      if (scheduledContext) policy = authorizeScheduledDelay(current, scheduledContext);
+    } catch {
+      scheduledContext = null;
+    }
+    if (!scheduledContext || !policy?.ok) {
+      current.status = "failed";
+      current.completedAt = new Date().toISOString();
+      current.error = "Scheduled authority could not be verified or is no longer valid";
+      saveDelays(delays);
+      transitionScheduledPlatformExecution("delay", current, "failed", { source: "agent", actor: "agent", reason: current.error, result_status: "failure", error_category: "authorization_denied", result_summary: current.error });
+      appendScheduledPlatformEvent("delay", current, "schedule.delay.failed", { error: current.error }, { source: "agent", actor: "agent", severity: "error" });
       delete timers[delay.id];
       return;
     }
@@ -54,6 +96,13 @@ function createDelayExecution({
         parentId: current.platform_execution_id || null,
         rootExecutionId: current.platform_execution_id || null,
         correlationId: delay.id,
+        project: scheduledContext.project || undefined,
+        taskId: scheduledContext.taskId || undefined,
+        authIdentity: scheduledContext.authIdentity || undefined,
+        agentAuthorityContext: scheduledContext.agentAuthorityContext || undefined,
+        authorityApprovalRequired: policy.authorityApprovalRequired === true,
+        authorityRisk: policy.authorityRisk || undefined,
+        authorityReason: policy.authorityReason || undefined,
       });
       if (renewTimer) clearInterval(renewTimer);
       const release = releaseScheduledClaim(current.platform_execution_id, runClaim);
@@ -72,7 +121,7 @@ function createDelayExecution({
         appendScheduledPlatformEvent("delay", updated, result.isError ? "schedule.delay.failed" : "schedule.delay.completed", { completed_at: updated.completedAt }, { source: "agent", actor: "agent", severity: result.isError ? "error" : "info" });
         saveDelays(delaysAfter);
       }
-      console.log(`Delay ${delay.id} completed`);
+      console.log(`Delay ${delay.id} ${result.isError ? "failed" : "completed"}`);
     } catch (error) {
       if (renewTimer) clearInterval(renewTimer);
       const release = releaseScheduledClaim(current.platform_execution_id, runClaim);

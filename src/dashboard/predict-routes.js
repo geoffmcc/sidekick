@@ -1,6 +1,8 @@
 "use strict";
 
-function registerPredictRoutes({ app, predictEngine, governedDashboardMutation, errorResponse }) {
+const PREDICTIONS_READ_PERMISSION = "predictions.read";
+
+function registerPredictRoutes({ app, predictEngine, governedDashboardMutation, projectAccess, requireIdentityPermission, errorResponse }) {
   const guarded = (handler, component) => (req, res) => {
     try {
       return handler(req, res);
@@ -9,22 +11,54 @@ function registerPredictRoutes({ app, predictEngine, governedDashboardMutation, 
     }
   };
 
+  function requirePermission(req, res, permission) {
+    if (!req.authPrincipal?.principal_id) {
+      res.status(401).json({ ok: false, error: "authenticated principal required", code: "unauthenticated" });
+      return false;
+    }
+    if (typeof requireIdentityPermission !== "function") {
+      res.status(503).json({ ok: false, error: "authorization service unavailable", code: "authorization_unavailable" });
+      return false;
+    }
+    return requireIdentityPermission(req, res, permission);
+  }
+
+  function canReadPrediction(req, prediction) {
+    const principal = req.authPrincipal;
+    return Boolean(principal?.principal_id && projectAccess?.hasProjectPermission?.(
+      principal.principal_id, prediction?.project, PREDICTIONS_READ_PERMISSION, "read", principal.scopes,
+    ));
+  }
+
   app.get("/api/predict/status", guarded((req, res) => {
+    if (!requirePermission(req, res, "dashboard.operations.read")) return;
     res.json(predictEngine.engineStatus());
   }, "predict"));
 
   app.get("/api/predict", guarded((req, res) => {
-    const { status, type, project, session_id, task_id, confidence, limit, offset } = req.query;
+    if (!requirePermission(req, res, PREDICTIONS_READ_PERMISSION)) return;
+    const { status, type, project, session_id, task_id, confidence, limit, offset } = req.query || {};
+    const principal = req.authPrincipal;
+    const globalAccess = Boolean(projectAccess?.hasGlobalProjectAccess?.(principal.principal_id, principal.scopes));
+    let accessibleProjects;
+    if (project) {
+      if (!canReadPrediction(req, { project })) return res.status(404).json({ ok: false, error: "Not found", code: "not_found" });
+    } else if (!globalAccess) {
+      accessibleProjects = projectAccess?.listAccessibleProjectsForPermission?.(principal.principal_id, PREDICTIONS_READ_PERMISSION, principal.scopes) || [];
+    }
     const predictions = predictEngine.listPredictions({
       status, type, project, session_id, task_id, confidence,
+      ...(!project && accessibleProjects ? { projects: accessibleProjects.map(row => row.project_id) } : {}),
       limit: parseInt(limit || "20", 10), offset: parseInt(offset || "0", 10),
     });
     res.json({ ok: true, count: predictions.length, predictions });
   }, "predict"));
 
   app.get("/api/predict/:id", guarded((req, res) => {
+    if (!requirePermission(req, res, PREDICTIONS_READ_PERMISSION)) return;
     const pred = predictEngine.getPrediction(req.params.id);
     if (!pred) return res.status(404).json({ ok: false, error: "Not found" });
+    if (!canReadPrediction(req, pred)) return res.status(404).json({ ok: false, error: "Not found", code: "not_found" });
     const evidence = predictEngine.getPredictionEvidence(req.params.id);
     const feedback = predictEngine.getPredictionFeedback(req.params.id);
     res.json({ ok: true, prediction: pred, evidence, feedback });
@@ -33,6 +67,7 @@ function registerPredictRoutes({ app, predictEngine, governedDashboardMutation, 
   app.post("/api/predict/analyze", (req, res) => governedDashboardMutation(req, res, "predict", { action: "analyze", ...(req.body || {}), maxAge: req.body?.maxAge || "7d" }, "predict.analyze"));
 
   app.get("/api/predict/maintenance/purge-preview", guarded((req, res) => {
+    if (!requirePermission(req, res, "dashboard.operations.read")) return;
     const retention = req.query.retention_days === undefined
       ? undefined : Number(req.query.retention_days);
     if (!predictEngine.isValidRetentionDays(retention)) {
@@ -45,14 +80,19 @@ function registerPredictRoutes({ app, predictEngine, governedDashboardMutation, 
   }, "predict"));
 
   app.post("/api/predict/maintenance/purge", (req, res) => governedDashboardMutation(req, res, "predict", { action: "purge", ...(req.body || {}) }, "predict.purge"));
-  app.get("/api/predict/maintenance/diagnose", guarded((req, res) => res.json(predictEngine.diagnose()), "predict"));
+  app.get("/api/predict/maintenance/diagnose", guarded((req, res) => {
+    if (!requirePermission(req, res, "dashboard.operations.read")) return;
+    return res.json(predictEngine.diagnose());
+  }, "predict"));
   app.post("/api/predict/:id/feedback", (req, res) => governedDashboardMutation(req, res, "predict", { action: "feedback", id: req.params.id, ...(req.body || {}) }, "predict.feedback"));
   app.post("/api/predict/:id/outcome", (req, res) => governedDashboardMutation(req, res, "predict", { action: "outcome", id: req.params.id, ...(req.body || {}) }, "predict.outcome"));
   app.post("/api/predict/:id/dismiss", (req, res) => governedDashboardMutation(req, res, "predict", { action: "dismiss", id: req.params.id }, "predict.dismiss"));
 
   app.get("/api/predict/:id/explain", guarded((req, res) => {
+    if (!requirePermission(req, res, PREDICTIONS_READ_PERMISSION)) return;
     const pred = predictEngine.getPrediction(req.params.id);
     if (!pred) return res.status(404).json({ ok: false, error: "Not found" });
+    if (!canReadPrediction(req, pred)) return res.status(404).json({ ok: false, error: "Not found", code: "not_found" });
     const evidence = predictEngine.getPredictionEvidence(req.params.id);
     res.json({
       ok: true,
@@ -75,4 +115,4 @@ function registerPredictRoutes({ app, predictEngine, governedDashboardMutation, 
   app.post("/api/predict/migrate", (req, res) => governedDashboardMutation(req, res, "predict", { action: "migrate" }, "predict.migrate"));
 }
 
-module.exports = { registerPredictRoutes };
+module.exports = { registerPredictRoutes, PREDICTIONS_READ_PERMISSION };

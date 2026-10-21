@@ -5,6 +5,8 @@ const path = require("path");
 const os = require("os");
 const { timingSafeCompare } = require("./crypto-utils");
 const { readSecret, hasSecret } = require("./core/runtime-secrets");
+const { assertDistinctProxySecret } = require("./security/agent-proxy-auth");
+const { requiresBootstrapToken } = require("./security/dashboard-bootstrap");
 const { formatKb, parseMemInfo, parseDiskRoot, runCommand, systemSnapshot, systemctlStatus } = require("./dashboard/system-snapshot");
 const { callDashboardTool, getToolDefsForSource, getToolCategoriesWithTools, buildPolicyInspection, summarizePolicyInspection, enforceToolPolicy, listApprovals, resolveApproval, renderContinuationApprovalPreview, loadWatches, syncToolRegistry } = require("./tools");
 const dynamicTools = require("./dynamic-tools");
@@ -33,7 +35,10 @@ const platformKernel = require("./platform/kernel");
 const compute = require("./compute");
 const { probeConnector } = require("./connectors/health");
 const { registerConnectorRoutes } = require("./dashboard/connectors-routes");
+const { registerScopeSnapshotRoutes } = require("./dashboard/scope-snapshot-routes");
+const { registerWebhookRoute } = require("./dashboard/webhook-route");
 const { registerKvRoutes } = require("./dashboard/kv-routes");
+const { registerDashboardConfigRoute } = require("./dashboard/config-route");
 const { registerMemoryReadRoutes } = require("./dashboard/memory-read-routes");
 const { registerSyncRoutes } = require("./dashboard/sync-routes");
 const { registerHandoffReadRoutes } = require("./dashboard/handoff-read-routes");
@@ -54,7 +59,12 @@ const { registerPredictRoutes } = require("./dashboard/predict-routes");
 const { registerCapabilityRoutes } = require("./dashboard/capability-routes");
 const { registerEvolveRoutes } = require("./dashboard/evolve-routes");
 const { registerProjectRoutes } = require("./dashboard/project-routes");
+const { registerProjectAccessRoutes } = require("./dashboard/project-access-routes");
+const projectAccess = require("./core/project-access");
+const { canonicalizeProjectName } = require("./core/project-identity");
 const { runDoctor, formatDoctorText, createSupportBundle } = require("./doctor");
+const { registerDoctorRoute } = require("./dashboard/doctor-route");
+const { registerKnowledgeRoute } = require("./dashboard/knowledge-route");
 const { inspectNetworkInterfaces, privateIPv4 } = require("./dashboard/network-info");
 const { capabilityResult, createCapabilityAction } = require("./dashboard/capability-action");
 const { addCorrelationMiddleware, createDashboardErrorBoundary, requestCorrelationId } = require("./dashboard/error-boundary");
@@ -62,15 +72,20 @@ const { addCorrelationMiddleware, createDashboardErrorBoundary, requestCorrelati
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const PORT = parseInt(process.env.SIDEKICK_DASHBOARD_PORT || "4098", 10);
 const BIND_HOST = process.env.SIDEKICK_DASHBOARD_BIND_HOST || "127.0.0.1";
+const TRUST_PROXY = process.env.SIDEKICK_DASHBOARD_TRUST_PROXY === "true";
 const ERROR_LOG = path.join(DATA_DIR, "dashboard-errors.log");
 if (["0.0.0.0", "::"].includes(BIND_HOST) && process.env.SIDEKICK_ALLOW_PUBLIC_BIND !== "1") {
   throw new Error("wildcard Dashboard bind requires SIDEKICK_ALLOW_PUBLIC_BIND=1");
 }
 const BOOTSTRAP_TOKEN = readSecret("SIDEKICK_BOOTSTRAP_TOKEN");
-const REMOTE_BOOTSTRAP_REQUIRED = !["127.0.0.1", "::1", "localhost"].includes(BIND_HOST);
+const REMOTE_BOOTSTRAP_REQUIRED = requiresBootstrapToken(BIND_HOST, TRUST_PROXY);
 const MCP_PORT = parseInt(process.env.SIDEKICK_PORT || "4097", 10);
 const GRAFANA_PORT = parseInt(process.env.SIDEKICK_GRAFANA_PORT || "3000", 10);
 const MCP_API_KEY = readSecret("SIDEKICK_API_KEY", { required: true });
+const AGENT_PROXY_KEY = process.env.NODE_ENV === "test"
+  ? (readSecret("SIDEKICK_AGENT_PROXY_KEY") || MCP_API_KEY)
+  : readSecret("SIDEKICK_AGENT_PROXY_KEY", { required: true });
+if (process.env.NODE_ENV !== "test") assertDistinctProxySecret(MCP_API_KEY, AGENT_PROXY_KEY);
 if (!MCP_API_KEY || MCP_API_KEY === "sk-sidekick-local-dev" || MCP_API_KEY === "sk-your-key-here") {
   throw new Error("SIDEKICK_API_KEY must be set to a non-placeholder value");
 }
@@ -89,7 +104,6 @@ app.use(addCorrelationMiddleware);
 // declares a trusted reverse proxy. Treating a client-supplied
 // X-Forwarded-Proto as truth can otherwise make an HTTP session look secure
 // (or make origin checks compare against attacker-controlled scheme data).
-const TRUST_PROXY = process.env.SIDEKICK_DASHBOARD_TRUST_PROXY === "true";
 app.set("trust proxy", TRUST_PROXY);
 app.disable("x-powered-by");
 
@@ -125,11 +139,6 @@ const DASHBOARD_ALLOWED_IPS = (process.env.SIDEKICK_DASHBOARD_ALLOWED_IPS || "")
 const GRAFANA_USER = process.env.SIDEKICK_GRAFANA_ADMIN_USER || "sidekick";
 const GRAFANA_PASS = readSecret("SIDEKICK_GRAFANA_ADMIN_PASSWORD");
 
-// Legacy signed-cookie compatibility remains available only for the configured
-// dashboard Basic Auth account. Identity sessions below are server-side and
-// revocable; they are the normal local-user path.
-const SESSION_SECRET = readSecret("SIDEKICK_SECRET_KEY") || crypto.randomBytes(32).toString("hex");
-const SESSION_TTL = 86400000;
 const authRateLimiter = new AuthRateLimiter();
 
 function authAttemptKeys(req, username = "") {
@@ -221,30 +230,6 @@ function promoteFirstDashboardOwner(principal) {
   return principal;
 }
 
-function makeSessionToken(user) {
-  const payload = JSON.stringify({ u: user, e: Date.now() + SESSION_TTL });
-  const b64 = Buffer.from(payload).toString("base64");
-  const sig = crypto.createHmac("sha256", SESSION_SECRET).update(b64).digest("hex");
-  return b64 + "." + sig;
-}
-
-function verifySessionToken(token) {
-  try {
-    const dot = token.indexOf(".");
-    if (dot < 0) return null;
-    const b64 = token.slice(0, dot);
-    const sig = token.slice(dot + 1);
-    const expected = crypto.createHmac("sha256", SESSION_SECRET).update(b64).digest("hex");
-    if (sig.length !== expected.length) return null;
-    if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return null;
-    const payload = JSON.parse(Buffer.from(b64, "base64").toString());
-    if (payload.e < Date.now()) return null;
-    return payload.u;
-  } catch {
-    return null;
-  }
-}
-
 function ipInRange(ip, cidr) {
   if (!cidr.includes("/")) return ip === cidr;
   const [rangeIp, bits] = cidr.split("/");
@@ -301,8 +286,12 @@ function setIdentityCookie(res, token, maxAge = Math.floor(authentication.SESSIO
   res.setHeader("Set-Cookie", `sidekick_identity=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}${secure ? "; Secure" : ""}`);
 }
 
-function clearIdentityCookie(res) {
-  res.setHeader("Set-Cookie", "sidekick_identity=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0");
+function clearIdentityCookie(res, req = null) {
+  const secureAttribute = req?.secure ? "; Secure" : "";
+  res.setHeader("Set-Cookie", [
+    `sidekick_identity=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secureAttribute}`,
+    `sidekick_sid=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secureAttribute}`,
+  ]);
 }
 
 // Audit logging
@@ -489,7 +478,7 @@ function bootstrapCompleted() {
 }
 
 const { registerAuthRoutes } = require("./dashboard/auth-routes");
-const { requireIdentityPermission, requireIdentityAdministrator } = registerAuthRoutes({
+const { requireIdentityPermission, hasIdentityPermission, requireIdentityAdministrator } = registerAuthRoutes({
   app,
   dbStore,
   identity,
@@ -507,8 +496,6 @@ const { requireIdentityPermission, requireIdentityAdministrator } = registerAuth
   setIdentityCookie,
   clearIdentityCookie,
   requestCookie,
-  verifySessionToken,
-  makeSessionToken,
   bootstrapToken: BOOTSTRAP_TOKEN,
   remoteBootstrapAllowed: REMOTE_BOOTSTRAP_REQUIRED,
   errorResponse: dashboardErrors.respond,
@@ -579,33 +566,15 @@ app.use('/grafana', (req, res) => {
 
 // --- API ---
 
-// Read-only, bounded Doctor diagnostics. Authentication is provided by the
-// dashboard middleware registered above; this route deliberately accepts no
-// targets, probes, or mutation options.
-app.get("/api/doctor", (req, res) => {
-  const format = String(req.query.format || "json").toLowerCase();
-  if (!new Set(["json", "text"]).has(format)) {
-    return res.status(400).json({ ok: false, error: "format must be json or text", code: "invalid_format" });
-  }
-  try {
-    const report = runDoctor();
-    res.set("Cache-Control", "no-store");
-    if (format === "text") return res.type("text/plain").send(formatDoctorText(report));
-    return res.json(createSupportBundle({ report }));
-  } catch (error) {
-    return dashboardErrors.respond(req, res, error, { status: 500, code: "internal_error", component: "doctor", publicMessage: "Doctor diagnostics unavailable" });
-  }
-});
-
-function readKV() {
-  return dbStore.loadKV({});
-}
+// Read-only, bounded Doctor output still contains operational details, so the
+// direct route requires the same operations grant as system diagnostics.
+registerDoctorRoute({ app, requireIdentityPermission, runDoctor, formatDoctorText, createSupportBundle, errorResponse: dashboardErrors.respond });
 
 function dashboardExecutionMetadata(req, actor, extra = {}) {
   const header = name => req?.headers?.[name] || req?.headers?.[name.toLowerCase()] || null;
   const cookie = String(header("cookie") || "");
   const sessionCookie = cookie.split(";").map(value => value.trim())
-    .find(value => value.startsWith("sidekick_sid="));
+    .find(value => value.startsWith("sidekick_identity="));
   const sessionId = header("x-sidekick-session-id") ||
     (sessionCookie ? "dashboard:" + crypto.createHash("sha256").update(sessionCookie).digest("hex").slice(0, 24) : null);
   const body = req?.body && typeof req.body === "object" ? req.body : {};
@@ -673,10 +642,6 @@ async function governedDashboardMutation(req, res, tool, args, auditAction) {
   } catch (error) {
     return dashboardErrors.respond(req, res, error, { status: 500, code: "service_unavailable", component: tool });
   }
-}
-
-function writeKV(data) {
-  dbStore.replaceKV(data || {});
 }
 
 const ACTIVITY_FALLBACK_GAP_MS = 5 * 60 * 1000;
@@ -846,8 +811,6 @@ function memoryCategory(memory) {
 }
 
 function seedKV() {
-  const kv = readKV();
-  const repoRoot = path.join(__dirname, "..");
   const now = new Date().toISOString();
 
   // Read version.json instead of running git commands
@@ -908,23 +871,14 @@ function seedKV() {
   };
 
   for (const [key, value] of Object.entries(seed)) {
-    const existing = kv[key];
-    kv[key] = {
-      value,
-      project: "system",
-      source: "dashboard",
-      created: existing?.created || now,
-      updated: now,
-    };
+    dbStore.setKV(key, value, "system", "dashboard", "system");
   }
 
-  const stale = Object.keys(kv).filter(k => k.startsWith("security:failed_logins_24h"));
-  stale.forEach(k => delete kv[k]);
-  writeKV(kv);
+  dbStore.deleteKVByPrefix("security:failed_logins_24h");
   console.log("Seed KV written with", Object.keys(seed).length, "keys");
 }
 
-registerLogsRoute({ app, dbStore, normalizeLogEntry, buildActivitySessions, summarizeActivity, fallbackGapMs: ACTIVITY_FALLBACK_GAP_MS, errorResponse: dashboardErrors.respond });
+registerLogsRoute({ app, dbStore, normalizeLogEntry, buildActivitySessions, summarizeActivity, fallbackGapMs: ACTIVITY_FALLBACK_GAP_MS, requireIdentityPermission, errorResponse: dashboardErrors.respond });
 
 async function dashboardSummaryHandler(req, res) {
   try {
@@ -976,7 +930,7 @@ async function dashboardSummaryHandler(req, res) {
     // Storage info
     let kvCount = 0;
     try {
-      kvCount = Object.keys(dbStore.loadKV({})).length;
+      kvCount = dbStore.countKV();
     } catch {}
     
     let logSize = 0;
@@ -1101,7 +1055,7 @@ registerResearchSourceRoutes({
 registerNetworkScopeRoutes({
   app,
   authenticatedUser,
-  requireIdentityAdministrator,
+  requireIdentityPermission,
   auditLog,
   logError,
   errorResponse: dashboardErrors.respond,
@@ -1112,7 +1066,7 @@ app.get("/api/artifacts", (req, res) => {
   // requests. Keep the route's authorization explicit for authenticated
   // identity principals, while allowing isolated pre-bootstrap test harnesses
   // to exercise the handler without manufacturing an Owner account.
-  if (req.authPrincipal && !requireIdentityAdministrator(req, res)) return;
+  if (!requireIdentityAdministrator(req, res)) return;
   // Artifact metadata is a project resource. An authenticated Dashboard
   // request must name its project and only sees artifacts owned or created by
   // the requesting principal; internal custody callers may remain unscoped.
@@ -1143,7 +1097,7 @@ app.get("/api/artifacts", (req, res) => {
 // through the canonical dispatcher so path policy, schema validation, audit,
 // redaction, and tool authorization are not duplicated in the Dashboard.
 app.get("/api/repository/semantic", async (req, res) => {
-  if (req.authPrincipal && !requireIdentityAdministrator(req, res)) return;
+  if (!requireIdentityAdministrator(req, res)) return;
   const limit = Number(req.query.limit || 20); const maxChars = Number(req.query.max_chars || 12000);
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200 || !Number.isSafeInteger(maxChars) || maxChars < 1000 || maxChars > 60000) return res.status(400).json({ ok: false, error: "invalid bounded semantic query limits", code: "invalid_limits" });
   try {
@@ -1152,47 +1106,24 @@ app.get("/api/repository/semantic", async (req, res) => {
    } catch (error) { return dashboardErrors.respond(req, res, error, { status: 400, code: "invalid_request", component: "semantic_repository" }); }
 });
 
-registerEventRoutes({ app, platformKernel, authenticatedUser, auditLog, errorResponse: dashboardErrors.respond });
+registerEventRoutes({ app, platformKernel, authenticatedUser, requireIdentityPermission, auditLog, errorResponse: dashboardErrors.respond });
 
 registerConnectorRoutes({
   app,
   platformKernel,
   probeConnector,
   authenticatedUser,
+  requireIdentityPermission,
   startDashboardExecution,
   finishDashboardExecution,
   auditLog,
   errorResponse: dashboardErrors.respond,
 });
 
-app.get("/api/scope-snapshots", (req, res) => {
-  try {
-    const snapshots = platformKernel.listScopeSnapshots({ project_id: req.query.project_id, state: req.query.state, limit: req.query.limit });
-    res.json({ ok: true, snapshots, total: snapshots.length });
-  } catch (error) { return dashboardErrors.respond(req, res, error, { status: 400, code: "invalid_request", component: "scope_snapshots" }); }
-});
-
-app.post("/api/scope-snapshots", (req, res) => {
-  const actor = authenticatedUser(req);
-  if (!actor) return res.status(403).json({ ok: false, error: "Scope changes require an authenticated dashboard user" });
-  try {
-    const snapshot = platformKernel.createScopeSnapshot({ ...req.body, created_by: actor, source: "dashboard" });
-    auditLog(req, "scope_snapshot.create", { snapshot_id: snapshot.snapshot_id, digest: snapshot.digest, target_count: snapshot.target_count, actor });
-    res.json({ ok: true, snapshot });
-  } catch (error) { return dashboardErrors.respond(req, res, error, { status: 400, code: "invalid_request", component: "scope_snapshots" }); }
-});
-
-app.post("/api/scope-guard/evaluate", (req, res) => {
-  const actor = authenticatedUser(req);
-  if (!actor) return res.status(403).json({ ok: false, error: "Scope evaluation requires an authenticated dashboard user" });
-  try {
-    const decision = platformKernel.evaluateScope(req.body?.snapshot_id, req.body || {});
-    auditLog(req, "scope_guard.evaluate", { snapshot_id: decision.snapshot_id, decision_digest: decision.decision_digest, ok: decision.ok, reason: decision.reason, actor });
-    res.json({ ok: true, decision });
-  } catch (error) { return dashboardErrors.respond(req, res, error, { status: 400, code: "invalid_request", component: "scope_guard" }); }
-});
+registerScopeSnapshotRoutes({ app, platformKernel, projectAccess, authenticatedUser, requireIdentityPermission, auditLog, errorResponse: dashboardErrors.respond });
 
 app.get("/api/llm", (req, res) => {
+  if (!requireIdentityPermission(req, res, "compute.nodes.read")) return;
   // Reflect the Compute provider/model registry — the inference authority — from
   // registry state rather than probing a single hardcoded Ollama endpoint. This
   // is a read-only view of what Compute will actually route to; it never becomes
@@ -1249,21 +1180,11 @@ registerSystemRoutes({
   errorResponse: dashboardErrors.respond,
 });
 
-app.get("/api/config", (req, res) => {
-  const sensitive = ["API_KEY", "PASS", "SECRET", "TOKEN", "PASSWORD"];
-  const config = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (!key.startsWith("SIDEKICK_") && !key.startsWith("GROQ_") && !key.startsWith("OLLAMA_")) continue;
-    const isSensitive = sensitive.some(s => key.includes(s));
-    config[key] = isSensitive ? "***redacted***" : (value || "");
-  }
-  res.json({ config });
-});
+registerDashboardConfigRoute({ app, requireIdentityPermission });
 
 registerKvRoutes({
   app,
-  readKV,
-  writeKV,
+  dbStore,
   safeString,
   summarizeValue,
   inferNamespace,
@@ -1271,13 +1192,16 @@ registerKvRoutes({
   valueType,
   auditLog,
   requireIdentityAdministrator,
+  requireIdentityPermission,
   errorResponse: dashboardErrors.respond,
 });
-registerProjectRoutes({ app, platformKernel, errorResponse: dashboardErrors.respond });
+registerProjectRoutes({ app, platformKernel, projectAccess, errorResponse: dashboardErrors.respond });
+registerProjectAccessRoutes({ app, projectAccess, requireIdentityPermission, errorResponse: dashboardErrors.respond });
 
 registerStatsToolsRoutes({ app, dbStore, getToolDefsForSource, requireIdentityPermission, errorResponse: dashboardErrors.respond });
 
 app.get("/api/tool-policy", (req, res) => {
+  if (!requireIdentityPermission(req, res, "dashboard.catalog.read")) return;
   const sources = String(req.query.source || "mcp,dashboard,agent").split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
   // A single-source inspection must use that source's live catalog. The
   // dashboard catalog is intentionally narrower than the agent/MCP catalogs;
@@ -1293,6 +1217,7 @@ app.get("/api/tool-policy", (req, res) => {
 });
 
 app.get("/api/tool-categories", (req, res) => {
+  if (!requireIdentityPermission(req, res, "dashboard.catalog.read")) return;
   res.json({ categories: getToolCategoriesWithTools("dashboard") });
 });
 
@@ -1333,7 +1258,7 @@ function computeInstallInfo(req, enrollmentToken) {
   };
 }
 
-registerComputeReadRoutes({ app, compute, computeInstallInfo, errorResponse: dashboardErrors.respond });
+registerComputeReadRoutes({ app, compute, computeInstallInfo, requireIdentityPermission, projectAccess, platformKernel, errorResponse: dashboardErrors.respond });
 
 app.post("/api/compute/enrollment-tokens", (req, res) => {
   const body = req.body || {};
@@ -1371,11 +1296,12 @@ app.post("/api/compute/jobs/:jobId/:action", (req, res) => {
 
 app.post("/api/compute/recover", (req, res) => governedDashboardMutation(req, res, "compute_jobs", { action: "recover" }, "compute.jobs.recover"));
 
-registerBlackboxRoutes({ app, blackbox, requireIdentityPermission, blackboxJson, governedDashboardMutation, errorResponse: dashboardErrors.respond });
+registerBlackboxRoutes({ app, blackbox, requireIdentityPermission, hasIdentityPermission, blackboxJson, governedDashboardMutation, errorResponse: dashboardErrors.respond });
 
-registerPredictRoutes({ app, predictEngine, governedDashboardMutation, errorResponse: dashboardErrors.respond });
+registerPredictRoutes({ app, predictEngine, governedDashboardMutation, projectAccess, requireIdentityPermission, errorResponse: dashboardErrors.respond });
 
 app.get("/api/evolve", (req, res) => {
+  if (!requireIdentityPermission(req, res, "dashboard.operations.read")) return;
   const capabilities = dbStore.listGeneratedCapabilities({ includeInactive: true }).map(cap => ["trial", "active"].includes(cap.state) ? (dbStore.syncGeneratedCapabilityStats(cap.id) || cap) : cap);
   res.json({
     ok: true,
@@ -1492,7 +1418,7 @@ function shapeExecution(execution) {
 
 registerEvolveRoutes({
   app, evolveDashboardAction, authenticatedUser, dbStore, shapeExecution,
-  requireAttributedActor, crypto, callDashboardTool, dashboardExecutionMetadata,
+  requireAttributedActor, requireIdentityPermission, hasIdentityPermission, crypto, callDashboardTool, dashboardExecutionMetadata,
   redactSensitive, auditLog, dynamicTools, logError, errorResponse: dashboardErrors.respond,
 });
 
@@ -1525,6 +1451,7 @@ registerApprovalRoutes({ app, listApprovals, renderContinuationApprovalPreview, 
  *     verifiable.
  */
 app.get("/api/reconciliations", (req, res) => {
+  if (!requireIdentityPermission(req, res, "approvals.read")) return;
   try {
     const store = require("./approvals/store");
     store.ensureApprovalContinuationSchema();
@@ -1570,6 +1497,7 @@ app.post("/api/reconciliations/:taskId/resolve", (req, res) => {
         error: "Reconciliation requires an authenticated human; configure dashboard authentication",
       });
     }
+    if (!requireIdentityPermission(req, res, "approvals.grant")) return;
     const decision = String(req.body?.decision || "");
     const { resolveReconciliation } = require("./approvals/continuation");
     let outcome;
@@ -1586,38 +1514,9 @@ app.post("/api/reconciliations/:taskId/resolve", (req, res) => {
   }
 });
 
-app.get("/api/knowledge", (req, res) => {
-  try {
-    const db = dbStore.getDb();
-    const category = req.query.category;
-    const limit = parseInt(req.query.limit) || 50;
-    
-    let rows;
-    if (category) {
-      rows = db.prepare(`
-        SELECT id, category, title, tags, updated_at
-        FROM knowledge
-        WHERE enabled = 1 AND category = ?
-        ORDER BY updated_at DESC
-        LIMIT ?
-      `).all(category, limit);
-    } else {
-      rows = db.prepare(`
-        SELECT id, category, title, tags, updated_at
-        FROM knowledge
-        WHERE enabled = 1
-        ORDER BY category, updated_at DESC
-        LIMIT ?
-      `).all(limit);
-    }
-    
-    res.json({ ok: true, knowledge: rows });
-  } catch (error) {
-    return dashboardErrors.respond(req, res, error, { status: 500, code: "service_unavailable", component: "knowledge" });
-  }
-});
+registerKnowledgeRoute({ app, dbStore, requireIdentityPermission, errorResponse: dashboardErrors.respond });
 
-registerMemoryReadRoutes({ app, dbStore, memoryCategory, errorResponse: dashboardErrors.respond });
+registerMemoryReadRoutes({ app, dbStore, memoryCategory, projectAccess, errorResponse: dashboardErrors.respond });
 
 /**
  * Memory mutations route through the dispatcher where a tool action exists
@@ -1629,7 +1528,16 @@ registerMemoryReadRoutes({ app, dbStore, memoryCategory, errorResponse: dashboar
  */
 async function dispatchMemoryManage(req, res, args, auditAction) {
   try {
-    if (req.authPrincipal && !requireIdentityAdministrator(req, res)) return;
+    if (!req.authPrincipal?.principal_id) return res.status(401).json({ ok: false, error: "authenticated principal required", code: "unauthenticated" });
+    if (args.id) {
+      const memory = dbStore.getMemoryById(args.id, { includeDisabled: true });
+      if (!memory || !projectAccess.hasProjectAccess(req.authPrincipal.principal_id, memory.project, "write", req.authPrincipal.scopes, req.authPrincipal.delegation_id || req.authPrincipal.delegationId || null)) {
+        auditLog(req, auditAction, { id: args.id, ok: false, denied: true });
+        // Keep inaccessible and nonexistent IDs indistinguishable to callers.
+        return dashboardErrors.respond(req, res, null, { status: 404, code: "not_found", component: "memory" });
+      }
+      if (!args.project) args = { ...args, project: memory.project || undefined };
+    }
     auditLog(req, auditAction, { id: args.id });
     const result = await callDashboardTool("memory_manage", args,
       dashboardExecutionMetadata(req, authenticatedUser(req) || "dashboard"));
@@ -1646,6 +1554,33 @@ async function dispatchMemoryManage(req, res, args, auditAction) {
   }
 }
 
+function authorizeDashboardMemoryProject(req, res, access, requestedProject, auditAction) {
+  const principalId = req.authPrincipal?.principal_id;
+  if (!principalId) {
+    res.status(401).json({ ok: false, error: "authenticated principal required", code: "unauthenticated" });
+    return null;
+  }
+  let project = null;
+  try { if (requestedProject) project = canonicalizeProjectName(requestedProject); }
+  catch {
+    dashboardErrors.respond(req, res, null, { status: 400, code: "invalid_request", component: "memory" });
+    return null;
+  }
+  const scopes = req.authPrincipal.scopes;
+  const delegationId = req.authPrincipal.delegation_id || req.authPrincipal.delegationId || null;
+  const global = projectAccess.hasGlobalMemoryAccess(principalId, access, scopes, delegationId);
+  if (!project && !global) {
+    dashboardErrors.respond(req, res, null, { status: 400, code: "invalid_request", component: "memory" });
+    return null;
+  }
+  if (project && !projectAccess.hasProjectAccess(principalId, project, access, scopes, delegationId)) {
+    auditLog(req, auditAction, { project, ok: false, denied: true });
+    dashboardErrors.respond(req, res, null, { status: 404, code: "not_found", component: "memory" });
+    return null;
+  }
+  return { project, global };
+}
+
 app.post("/api/memories/:id/disable", (req, res) =>
   dispatchMemoryManage(req, res, { action: "disable", id: req.params.id }, "memory_disable"));
 
@@ -1654,7 +1589,14 @@ app.post("/api/memories/:id/enable", (req, res) => {
   // expired records, a different semantic), so this stays on dbStore directly
   // — with audit and honest status codes.
   try {
-    if (req.authPrincipal && !requireIdentityAdministrator(req, res)) return;
+    if (!req.authPrincipal?.principal_id) return res.status(401).json({ ok: false, error: "authenticated principal required", code: "unauthenticated" });
+    const memory = dbStore.getMemoryById(req.params.id, { includeDisabled: true });
+    if (!memory) return dashboardErrors.respond(req, res, null, { status: 404, code: "not_found", component: "memory" });
+    if (!projectAccess.hasProjectAccess(req.authPrincipal.principal_id, memory.project, "write", req.authPrincipal.scopes, req.authPrincipal.delegation_id || req.authPrincipal.delegationId || null)) {
+      auditLog(req, "memory_enable", { id: req.params.id, ok: false, denied: true });
+      // Keep inaccessible and nonexistent IDs indistinguishable to callers.
+      return dashboardErrors.respond(req, res, null, { status: 404, code: "not_found", component: "memory" });
+    }
     const success = dbStore.enableMemory(req.params.id);
     auditLog(req, "memory_enable", { id: req.params.id, ok: success });
     if (!success) {
@@ -1672,13 +1614,22 @@ app.delete("/api/memories/:id", (req, res) =>
 app.post("/api/memories/export", async (req, res) => {
   try {
     const { project, type, include_disabled } = req.body || {};
+    const scope = authorizeDashboardMemoryProject(req, res, "read", project, "memory_export");
+    if (!scope) return;
     const result = await callDashboardTool("memory_export", {
-      ...(project ? { project } : {}),
+      ...(scope.project ? { project: scope.project } : {}),
       ...(type ? { type } : {}),
       ...(include_disabled === false ? { include_disabled: false } : {}),
     }, dashboardExecutionMetadata(req, authenticatedUser(req) || "dashboard"));
     const text = result?.content?.[0]?.text || "";
     if (result?.isError) {
+      const message = result?.content?.[0]?.text || "";
+      if (/authorization denied:\s*forbidden|permission denied/i.test(message)) {
+        return dashboardErrors.respond(req, res, null, { status: 403, code: "forbidden", component: "memory_export" });
+      }
+      if (/project scope|permission|access denied|not authorized/i.test(message)) {
+        return dashboardErrors.respond(req, res, null, { status: 404, code: "not_found", component: "memory_export" });
+      }
       return dashboardErrors.respond(req, res, null, { status: 502, code: "upstream_unavailable", component: "memory_export" });
     }
     let data;
@@ -1693,19 +1644,28 @@ app.post("/api/memories/export", async (req, res) => {
 
 app.post("/api/memories/import", async (req, res) => {
   try {
-    const { data, on_conflict, preserve_ids } = req.body || {};
+    const { data, on_conflict, preserve_ids, project } = req.body || {};
     if (data === undefined || data === null) {
       return dashboardErrors.respond(req, res, null, { status: 400, code: "invalid_request", component: "memory_import" });
     }
+    const scope = authorizeDashboardMemoryProject(req, res, "write", project, "memory_import");
+    if (!scope) return;
     const result = await callDashboardTool("memory_import", {
       // The tool takes the export payload as a JSON string.
       data: typeof data === "string" ? data : JSON.stringify(data),
       ...(on_conflict ? { on_conflict } : {}),
       ...(preserve_ids === true ? { preserve_ids: true } : {}),
+      ...(scope.project ? { project: scope.project } : {}),
     }, dashboardExecutionMetadata(req, authenticatedUser(req) || "dashboard"));
     const text = result?.content?.[0]?.text || "";
     if (result?.isError) {
       const httpStatus = /invalid json/i.test(text) ? 400 : 500;
+      if (/authorization denied:\s*forbidden|permission denied/i.test(text)) {
+        return dashboardErrors.respond(req, res, null, { status: 403, code: "forbidden", component: "memory_import" });
+      }
+      if (/project scope|permission|access denied|not authorized/i.test(text)) {
+        return dashboardErrors.respond(req, res, null, { status: 404, code: "not_found", component: "memory_import" });
+      }
       return dashboardErrors.respond(req, res, null, { status: httpStatus, code: httpStatus === 400 ? "invalid_request" : "upstream_unavailable", component: "memory_import" });
     }
     // Recover the structured counts from the tool's summary line so existing
@@ -1728,7 +1688,7 @@ app.post("/api/memories/expire", (req, res) => {
   // single id; `process_auto_expirations` is a different sweep), so this stays
   // on dbStore directly — with audit and honest status codes.
   try {
-    if (req.authPrincipal && !requireIdentityAdministrator(req, res)) return;
+    if (!requireIdentityAdministrator(req, res)) return;
     const { stale_days } = req.body || {};
     if (stale_days !== undefined && (!Number.isFinite(Number(stale_days)) || Number(stale_days) < 0)) {
       return dashboardErrors.respond(req, res, null, { status: 400, code: "invalid_request", component: "memory" });
@@ -1743,9 +1703,10 @@ app.post("/api/memories/expire", (req, res) => {
 
 registerHandoffReadRoutes({ app, dbStore, errorResponse: dashboardErrors.respond });
 
-registerSyncRoutes({ app, dbStore, auditLog, errorResponse: dashboardErrors.respond });
+registerSyncRoutes({ app, dbStore, requireIdentityPermission, projectAccess, auditLog, errorResponse: dashboardErrors.respond });
 
 app.get("/api/procedures", (req, res) => {
+  if (!requireIdentityPermission(req, res, "dashboard.catalog.read")) return;
   const proceduresFile = path.join(DATA_DIR, "procedures.json");
   try {
     if (!fs.existsSync(proceduresFile)) {
@@ -1809,7 +1770,10 @@ function respondToClear(req, res, auditEvent, run) {
 }
 
 function requireDashboardAdministrator(req, res) {
-  if (!req.authPrincipal || !requireIdentityAdministrator) return true;
+  if (typeof requireIdentityAdministrator !== "function") {
+    res.status(503).json({ ok: false, error: "authorization service unavailable", code: "authorization_unavailable" });
+    return false;
+  }
   return requireIdentityAdministrator(req, res);
 }
 
@@ -1844,34 +1808,9 @@ app.post('/api/internal/error-log', (req, res) => {
   res.status(204).end();
 });
 
-// Webhook receiver endpoint
-function loadWebhooks() {
-  return dbStore.loadDocument("webhooks", []);
-}
-function saveWebhooks(webhooks) {
-  dbStore.setDocument("webhooks", webhooks);
-}
+registerWebhookRoute({ app, dbStore, requireIdentityPermission, auditLog, errorResponse: dashboardErrors.respond });
 
-app.post('/api/webhook/:source', (req, res) => {
-  try {
-    const payload = req.body || {};
-    const webhooks = loadWebhooks();
-    const webhook = {
-      id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-      source: req.params.source,
-      timestamp: new Date().toISOString(),
-      payload
-    };
-    webhooks.push(webhook);
-    if (webhooks.length > 1000) webhooks.splice(0, webhooks.length - 1000);
-    saveWebhooks(webhooks);
-    res.json({ ok: true, id: webhook.id });
-  } catch (e) {
-    return dashboardErrors.respond(req, res, e, { status: 400, code: "invalid_request", component: "webhook" });
-  }
-});
-
-registerAgentProxyRoutes({ app, http, agentPort: AGENT_PORT, errorResponse: dashboardErrors.respond });
+registerAgentProxyRoutes({ app, http, agentPort: AGENT_PORT, agentProxySecret: AGENT_PROXY_KEY, errorResponse: dashboardErrors.respond });
 
 // --- Frontend ---
 

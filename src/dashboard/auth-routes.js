@@ -24,8 +24,6 @@ function registerAuthRoutes({
   setIdentityCookie,
   clearIdentityCookie,
   requestCookie,
-  verifySessionToken,
-  makeSessionToken,
   bootstrapToken,
   remoteBootstrapAllowed = false,
   errorResponse,
@@ -78,7 +76,7 @@ function registerAuthRoutes({
   app.post("/api/auth/logout", (req, res) => {
     const token = requestCookie(req, "sidekick_identity");
     authentication.invalidateSession(token);
-    clearIdentityCookie(res);
+    clearIdentityCookie(res, req);
     res.status(204).end();
   });
 
@@ -98,19 +96,6 @@ function registerAuthRoutes({
       if (!dashboardUser || !dashboardPass) {
         return res.status(401).json({ error: "Authentication required", code: "unauthenticated" });
       }
-      const cookie = req.headers.cookie || "";
-      for (const part of cookie.split(";")) {
-        const trimmed = part.trim();
-        if (trimmed.startsWith("sidekick_sid=")) {
-          const user = verifySessionToken(trimmed.slice("sidekick_sid=".length));
-          if (user === dashboardUser) {
-            req.authUser = user;
-            req.authPrincipal = legacyDashboardPrincipal(user, dashboardPass);
-            req.authPrincipalId = req.authPrincipal?.principal_id || null;
-            return next();
-          }
-        }
-      }
       const auth = req.headers.authorization;
       if (!auth || !auth.startsWith("Basic ")) {
         res.set("WWW-Authenticate", 'Basic realm="Sidekick Dashboard"');
@@ -123,11 +108,16 @@ function registerAuthRoutes({
       const attemptKeys = authAttemptKeys(req, user);
       if (rejectIfAuthThrottled(req, res, attemptKeys)) return;
       if (timingSafeCompare(user, dashboardUser) && timingSafeCompare(pass, dashboardPass)) {
-        const secure = Boolean(req.secure);
-        res.setHeader("Set-Cookie", `sidekick_sid=${makeSessionToken(user)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=86400${secure ? "; Secure" : ""}`);
+        const principal = legacyDashboardPrincipal(user, pass);
+        if (!principal?.principal_id) return res.status(503).json({ error: "Dashboard identity is unavailable", code: "identity_unavailable" });
+        const session = authentication.createSession(principal.principal_id, {
+          userAgent: req.headers["user-agent"] || null,
+          ipAddress: req.ip || null,
+        });
+        setIdentityCookie(res, session.token, undefined, req);
         req.authUser = user;
-        req.authPrincipal = legacyDashboardPrincipal(user, pass);
-        req.authPrincipalId = req.authPrincipal?.principal_id || null;
+        req.authPrincipal = { ...principal, ...authentication.getSession(session.token) };
+        req.authPrincipalId = principal.principal_id;
         clearAuthFailures(attemptKeys);
         return next();
       }
@@ -142,9 +132,25 @@ function registerAuthRoutes({
     });
   }
 
-  function requireIdentityPermission(req, res, permission) {
+  function identityPermissionDecision(req, permission) {
     const principalId = req.authPrincipal?.principal_id;
-    const decision = authorization.authorize({ principalId, permission });
+    const principal = req.authPrincipal;
+    return authorization.authorize({
+      principalId,
+      permission,
+      ...(Array.isArray(principal?.scopes) ? { credentialScopes: principal.scopes } : {}),
+      delegationId: principal?.delegation_id || null,
+    });
+  }
+
+  function hasIdentityPermission(req, permission) {
+    const principal = req.authPrincipal;
+    if (principal?.session_id && (!authentication || typeof authentication.isSessionActive !== "function" || !authentication.isSessionActive(principal.session_id))) return false;
+    return identityPermissionDecision(req, permission).ok;
+  }
+
+  function requireIdentityPermission(req, res, permission) {
+    const decision = identityPermissionDecision(req, permission);
     if (!decision.ok) {
       res.status(decision.code === "unauthenticated" ? 401 : 403).json({ error: "Forbidden", code: decision.code, permission });
       return false;
@@ -248,8 +254,24 @@ function registerAuthRoutes({
 
   app.post("/api/auth/delegations", (req, res) => {
     const delegatorPrincipalId = req.body?.delegator_principal_id;
-    if (!req.authPrincipal || (delegatorPrincipalId !== req.authPrincipal.principal_id && !authorization.authorize({ principalId: req.authPrincipal.principal_id, permission: "principals.manage" }).ok)) {
+    const principal = req.authPrincipal;
+    const authorizeRequest = permission => authorization.authorize({
+      principalId: principal?.principal_id,
+      permission,
+      ...(Array.isArray(principal?.scopes) ? { credentialScopes: principal.scopes } : {}),
+      delegationId: principal?.delegation_id || null,
+    });
+    const isDelegator = Boolean(principal?.principal_id && delegatorPrincipalId === principal.principal_id);
+    if (!principal || (!isDelegator && !authorizeRequest("principals.manage").ok)) {
       return res.status(403).json({ error: "Delegation must be created by the delegator or an authorized administrator", code: "insufficient_delegation" });
+    }
+    // A principal delegating its own authority must not use a broad role grant
+    // to escape the narrower credential/delegation context of this request.
+    if (isDelegator) {
+      const requested = Array.isArray(req.body?.permissions) ? req.body.permissions : [];
+      if (requested.some(permission => !authorizeRequest(permission).ok)) {
+        return res.status(403).json({ error: "Delegation exceeds the request authority", code: "insufficient_delegation" });
+      }
     }
     try {
       const delegation = authorization.createDelegation({ delegatorPrincipalId, delegatePrincipalId: req.body?.delegate_principal_id, permissions: req.body?.permissions, expiresAt: req.body?.expires_at, actorPrincipalId: req.authPrincipal.principal_id });
@@ -260,9 +282,20 @@ function registerAuthRoutes({
   });
 
   app.post("/api/auth/delegations/:id/revoke", (req, res) => {
-    if (!req.authPrincipal) return res.status(401).json({ error: "Authentication required", code: "unauthenticated" });
+    const principal = req.authPrincipal;
+    if (!principal?.principal_id) return res.status(401).json({ error: "Authentication required", code: "unauthenticated" });
+    const delegation = authorization.getDelegation(req.params.id);
+    if (!delegation) return res.status(404).json({ error: "Delegation not found", code: "not_found" });
+    if (delegation.delegator_principal_id !== principal.principal_id && !authorization.authorize({
+      principalId: principal.principal_id,
+      permission: "principals.manage",
+      ...(Array.isArray(principal.scopes) ? { credentialScopes: principal.scopes } : {}),
+      delegationId: principal.delegation_id || null,
+    }).ok) {
+      return res.status(403).json({ error: "Delegation revocation exceeds the request authority", code: "insufficient_delegation" });
+    }
     try {
-      res.json({ delegation: authorization.revokeDelegation(req.params.id, req.authPrincipal.principal_id) });
+      res.json({ delegation: authorization.revokeDelegation(req.params.id, principal.principal_id) });
     } catch (error) {
       return errorResponse(req, res, error, { status: 403, code: "insufficient_delegation", component: "auth" });
     }
@@ -299,7 +332,7 @@ function registerAuthRoutes({
     }
   });
 
-  return { requireIdentityPermission, requireIdentityAdministrator };
+  return { requireIdentityPermission, hasIdentityPermission, requireIdentityAdministrator };
 }
 
 module.exports = { registerAuthRoutes };

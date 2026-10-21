@@ -1,3 +1,5 @@
+const { persistedTaskAuthIdentity } = require("./task-identity");
+
 function createContinuationJobStarter({ brain, callLLM, callAgentTool, redactSensitive, inferProjectFromText, finalizeResumedTask, stepTimeoutMs, getLiveAgentToolDefs = () => [], getTask = () => null }) {
   return function startApprovalContinuationJobs() {
     if (!brain || !brain.isEnabled()) return { started: false, reason: "brain_disabled" };
@@ -9,9 +11,7 @@ function createContinuationJobStarter({ brain, callLLM, callAgentTool, redactSen
         buildDeps: async (taskId, checkpoint) => {
           let project = null;
           const durableTask = getTask(taskId) || null;
-          const authIdentity = durableTask && (durableTask.actor_principal_id || durableTask.requested_by_principal_id)
-            ? { principal_id: durableTask.actor_principal_id || durableTask.requested_by_principal_id, scopes: durableTask.principal_context?.credential_scopes || [], delegation_id: durableTask.principal_context?.delegation_id || null }
-            : null;
+          const authIdentity = persistedTaskAuthIdentity(durableTask);
           try {
             const store = require("../approvals/store");
             const goal = checkpoint ? store.decryptJson(checkpoint.goal_encrypted) : null;

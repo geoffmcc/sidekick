@@ -39,7 +39,7 @@ before(() => {
 });
 
 after(() => {
-  try { db.close(); } catch {}
+  try { db.closeDatabase?.(); } catch {}
   const removeOwnedEntries = root => {
     for (const entry of fs.readdirSync(root)) {
       const target = path.join(root, entry);

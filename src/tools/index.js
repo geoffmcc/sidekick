@@ -18,7 +18,19 @@ function getBuiltinRegistry() {
 }
 
 function getCompatibilityToolMap() {
-  return getBuiltinRegistry().toolsMap();
+  const registry = getBuiltinRegistry();
+  const wrappers = {};
+  // The old compatibility surface exposed descriptor handlers directly. Keep
+  // its names, but route every call through the canonical dispatcher so auth,
+  // policy, approval, redaction and audit cannot be skipped by using `TOOLS`.
+  for (const name of Object.keys(registry.toolsMap())) {
+    // Preserve trusted identity/project scope already established by an
+    // enclosing server execution. dispatchTool otherwise receives only public
+    // request fields and would replace the active principal with an anonymous
+    // context. The dispatcher still re-evaluates the complete policy pipeline.
+    wrappers[name] = (args = {}) => dispatcher.dispatchTool({ name, args: args || {}, context: context.getExecutionContext() });
+  }
+  return Object.freeze(wrappers);
 }
 
 function getCompatibilityToolDefs() {

@@ -1,6 +1,6 @@
 "use strict";
 
-function registerBlackboxRoutes({ app, blackbox, requireIdentityPermission, blackboxJson, governedDashboardMutation, errorResponse }) {
+function registerBlackboxRoutes({ app, blackbox, requireIdentityPermission, hasIdentityPermission, blackboxJson, governedDashboardMutation, errorResponse }) {
   app.get("/api/blackbox/profiles", (req, res) => {
     if (!requireIdentityPermission(req, res, "blackbox.read")) return;
     res.json({ profiles: blackbox.PROFILE_INFO });
@@ -61,21 +61,46 @@ function registerBlackboxRoutes({ app, blackbox, requireIdentityPermission, blac
 
   app.get("/api/blackbox/captures/:id/stream", (req, res) => {
     if (!requireIdentityPermission(req, res, "blackbox.read")) return;
+    if (typeof hasIdentityPermission !== "function") return res.status(503).json({ error: "Authorization unavailable", code: "authorization_unavailable" });
     res.writeHead(200, {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache, no-transform",
       "Connection": "keep-alive",
     });
+    let ended = false;
+    let authorizationPoll = null;
+    let unsubscribe = () => {};
+    const close = () => {
+      if (ended) return;
+      ended = true;
+      if (authorizationPoll) clearInterval(authorizationPoll);
+      unsubscribe();
+      res.end();
+    };
+    if (!hasIdentityPermission(req, "blackbox.read")) return close();
     res.write(`event: snapshot\ndata: ${JSON.stringify(blackbox.captureStatus(req.params.id))}\n\n`);
-    const unsubscribe = blackbox.subscribeCapture(req.params.id, event => {
+    unsubscribe = blackbox.subscribeCapture(req.params.id, event => {
+      if (ended) return;
+      if (!hasIdentityPermission(req, "blackbox.read")) return close();
       res.write(`event: progress\ndata: ${JSON.stringify(event)}\n\n`);
     });
-    req.on("close", unsubscribe);
+    authorizationPoll = setInterval(() => {
+      if (!hasIdentityPermission(req, "blackbox.read")) close();
+    }, 1000);
+    if (typeof authorizationPoll.unref === "function") authorizationPoll.unref();
+    req.on("close", close);
   });
 
   app.get("/api/blackbox/sources/:id", (req, res) => {
     if (!requireIdentityPermission(req, res, "blackbox.read")) return;
-    return blackboxJson(req, res, () => ({ source: blackbox.getSource(req.params.id, { offset: Number(req.query.offset || 0), limit: Number(req.query.limit || 65536) }) }));
+    const offset = req.query.offset === undefined ? 0 : Number(req.query.offset);
+    const requestedLimit = req.query.limit === undefined ? 65536 : Number(req.query.limit);
+    if (!Number.isSafeInteger(offset) || offset < 0 || offset > 16 * 1024 * 1024 ||
+        !Number.isSafeInteger(requestedLimit) || requestedLimit < 1) {
+      return res.status(400).json({ ok: false, error: "invalid source pagination", code: "invalid_pagination" });
+    }
+    const limit = Math.min(requestedLimit, 65536);
+    return blackboxJson(req, res, () => ({ source: blackbox.getSource(req.params.id, { offset, limit }) }));
   });
 
   app.get("/api/blackbox/search", (req, res) => {

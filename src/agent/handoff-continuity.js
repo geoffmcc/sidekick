@@ -2,7 +2,7 @@
 
 // Handoff checkpoints describe repository continuity; Agent checkpoints remain
 // authoritative for execution recovery and approval continuation.
-function createHandoffContinuity({ getTask, getHandoff, captureHandoffCheckpoint, saveHandoff, transitionHandoff, refreshHandoffEvidence = null, listPlans = null, workingDirectory = process.cwd(), intervalMs = 15000 }) {
+function createHandoffContinuity({ getTask, getHandoff, authorizeHandoffWrite = () => false, captureHandoffCheckpoint, saveHandoff, transitionHandoff, refreshHandoffEvidence = null, listPlans = null, workingDirectory = process.cwd(), intervalMs = 15000 }) {
   const lastCapture = new Map();
 
   function checkpointTask(taskId, { reason = "agent_loop_boundary", safeBoundary = "agent_loop_boundary" } = {}) {
@@ -16,6 +16,7 @@ function createHandoffContinuity({ getTask, getHandoff, captureHandoffCheckpoint
     if (!lifecycleBoundary && prior && now - prior < intervalMs) return { captured: false, reason: "coalesced" };
     const taskDirectory = task.working_directory || task.repository || workingDirectory;
     let handoff = getHandoff(task.handoff_id);
+    if (!authorizeHandoffWrite(task, handoff)) throw new Error("Current authority does not permit updating the linked handoff");
     const taskState = String(task.state || "active");
     const terminal = new Set(["completed", "partial", "failed", "cancelled", "timed_out"]);
     if (typeof saveHandoff === "function") {
@@ -77,6 +78,7 @@ function createHandoffContinuity({ getTask, getHandoff, captureHandoffCheckpoint
         expectedVersion: handoff.version,
       });
     }
+    if (!authorizeHandoffWrite(task, handoff)) throw new Error("Current authority does not permit checkpointing the linked handoff");
     const result = captureHandoffCheckpoint(task.handoff_id, {
       working_directory: handoff.packet?.provenance?.working_directory || taskDirectory,
       expectedVersion: handoff.version,
@@ -95,11 +97,13 @@ function createHandoffContinuity({ getTask, getHandoff, captureHandoffCheckpoint
       },
     });
     if (typeof refreshHandoffEvidence === "function") {
+      if (!authorizeHandoffWrite(task, getHandoff(task.handoff_id))) throw new Error("Current authority does not permit refreshing linked handoff evidence");
       refreshHandoffEvidence(task.handoff_id, { working_directory: handoff.packet?.provenance?.working_directory || taskDirectory, actor: task.actor_id || "agent" });
     }
     if (lifecycleBoundary && typeof transitionHandoff === "function") {
       const target = taskState === "completed" ? "completed" : "active";
       if (handoff.lifecycle_state === "draft" || (target === "completed" && handoff.lifecycle_state === "active")) {
+        if (!authorizeHandoffWrite(task, getHandoff(task.handoff_id))) throw new Error("Current authority does not permit changing linked handoff state");
         transitionHandoff(task.handoff_id, target, { expectedVersion: result.version, actor: task.actor_id || "agent", source: "agent", reason: boundary });
       }
     }

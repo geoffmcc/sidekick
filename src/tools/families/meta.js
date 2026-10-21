@@ -18,7 +18,11 @@ const dbStore = require("../../db");
 const predictEngine = require("../../predict");
 const { redactSensitive } = require("../../redact");
 const toolContext = require("../context");
-const { sidekick_llm } = require("./inference");
+const authorization = require("../../core/authorization");
+const projectAccess = require("../../core/project-access");
+const { runLlm } = require("./inference");
+const { scopedProject } = require("./memory-scope");
+const { requireCanonicalInvocation } = require("../read-authorization");
 
 function jsonText(value) {
   return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }] };
@@ -27,6 +31,8 @@ function jsonText(value) {
 // --- Predict Tool (delegates to src/predict.js) ---
 
 async function sidekick_predict({ action, id, type, project, session_id, task_id, feedback, outcome, limit, status, confidence, maxAge, scope, confirm, retention_days, purge_legacy }) {
+  const dispatchError = requireCanonicalInvocation("predict");
+  if (dispatchError) return dispatchError;
   try {
     const validActions = ["analyze", "list", "get", "feedback", "outcome", "dismiss", "explain", "status", "suggest", "migrate", "purge_preview", "purge", "diagnose"];
     if (!action || !validActions.includes(action)) {
@@ -38,10 +44,45 @@ async function sidekick_predict({ action, id, type, project, session_id, task_id
       action = "list";
     }
 
+    const context = toolContext.getExecutionContext();
+    const auth = context.authIdentity;
+    const principalId = auth?.principal_id || auth?.principalId;
+    const credentialScopes = auth?.scopes;
+    const delegationId = auth?.delegation_id || auth?.delegationId || null;
+    const deny = (message = "Prediction not found") => ({ content: [{ type: "text", text: message }], isError: true, code: "not_found" });
+    const permitted = (permission) => Boolean(principalId && authorization.authorize({ principalId, permission, credentialScopes, delegationId }).ok);
+    const canAccessProject = (resourceProject, required) => projectAccess.hasProjectPermission(principalId, resourceProject, required === "read" ? "predictions.read" : "predictions.write", required, credentialScopes, delegationId);
+    const requestedProject = project || context.project || null;
+    if (!principalId) return { content: [{ type: "text", text: "Authentication required for Predict operations" }], isError: true, code: "unauthenticated" };
+    const requiredPermission = ["list", "get", "explain"].includes(action) ? "predictions.read"
+      : ["feedback", "outcome", "dismiss", "analyze"].includes(action) ? (action === "analyze" && scope === "global" ? "dashboard.operations.manage" : "predictions.write")
+      : ["purge", "migrate"].includes(action) ? "dashboard.operations.manage" : "dashboard.operations.read";
+    if (!permitted(requiredPermission)) return { content: [{ type: "text", text: `Authorization denied: ${requiredPermission}` }], isError: true, code: "authorization_denied" };
+
+    if (action === "analyze") {
+      if (scope === "global") {
+        if (!permitted("dashboard.operations.manage")) return { content: [{ type: "text", text: "Global prediction analysis requires dashboard.operations.manage" }], isError: true, code: "authorization_denied" };
+      } else if (!requestedProject || !canAccessProject(requestedProject, "write")) {
+        return { content: [{ type: "text", text: "Prediction analysis requires write access to an authorized project" }], isError: true, code: "project_forbidden" };
+      }
+    }
+    if (["feedback", "outcome", "dismiss"].includes(action)) {
+      if (!id) return { content: [{ type: "text", text: `id required for ${action}` }], isError: true };
+      const target = predictEngine.getPrediction(id);
+      if (!target || !canAccessProject(target.project, "write")) return deny();
+      if (project && project !== target.project) return deny();
+    }
+    if (["get", "explain"].includes(action) && id) {
+      const target = predictEngine.getPrediction(id);
+      if (!target || !canAccessProject(target.project, "read")) return deny();
+      if (project && project !== target.project) return deny();
+    }
+    if (["list", "suggest"].includes(action) && requestedProject && !canAccessProject(requestedProject, "read")) return deny();
+
     if (action === "analyze") {
       // Scope is required: a global analysis must be requested deliberately
       // (scope="global"), never inferred from omitted parameters.
-      const result = predictEngine.analyze({ scope, project, session_id, task_id, maxAge: maxAge || "7d" });
+      const result = predictEngine.analyze({ scope, project: requestedProject, session_id, task_id, maxAge: maxAge || "7d" });
       if (!result.ok) return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], isError: true };
       return jsonText(result);
     }
@@ -61,7 +102,9 @@ async function sidekick_predict({ action, id, type, project, session_id, task_id
     }
 
     if (action === "list") {
-      const preds = predictEngine.listPredictions({ status, type, project, session_id, task_id, confidence, limit });
+      const global = projectAccess.hasGlobalProjectAccess(principalId, credentialScopes, delegationId);
+      const accessible = requestedProject ? null : (global ? null : projectAccess.listAccessibleProjectsForPermission(principalId, "predictions.read", credentialScopes, delegationId).map(item => item.project_id));
+      const preds = predictEngine.listPredictions({ status, type, project: requestedProject, projects: accessible, session_id, task_id, confidence, limit });
       return jsonText({ ok: true, count: preds.length, predictions: preds });
     }
 
@@ -77,7 +120,7 @@ async function sidekick_predict({ action, id, type, project, session_id, task_id
     if (action === "feedback") {
       if (!id) return { content: [{ type: "text", text: "id required for feedback" }], isError: true };
       if (!feedback) return { content: [{ type: "text", text: "feedback required (useful|not_useful|incorrect|already_known|acted_on|dismissed)" }], isError: true };
-      const result = predictEngine.recordFeedback(id, feedback, project);
+      const result = predictEngine.recordFeedback(id, feedback, project || predictEngine.getPrediction(id)?.project);
       return jsonText(result);
     }
 
@@ -156,15 +199,41 @@ function generateDebugKey(service, issue) {
   return `debug:${service || 'unknown'}:${slug}_${date}`;
 }
 
-function getDebugEntries() {
-  const allKV = dbStore.getAllKV();
+function debugStoragePrefix(scope) {
+  return `__sidekick_debug_v1:${encodeURIComponent(scope.principalId)}:${encodeURIComponent(scope.project || "global")}:`;
+}
+
+function getDebugEntries(scope) {
+  const prefix = debugStoragePrefix(scope);
+  const { entries: scopedEntries, oversized } = dbStore.listScopedKV({ keyPrefix: prefix, project: scope.project, limit: 500 });
+  if (oversized) throw Object.assign(new Error("Debug records exceed the safe read limit and need operator review"), { code: "kv_value_too_large" });
   const entries = [];
-  for (const [key, entry] of Object.entries(allKV)) {
-    if (key.startsWith('debug:') && typeof entry === 'object' && entry !== null && 'value' in entry) {
-      entries.push({ key, ...entry });
+  for (const [key, entry] of scopedEntries) {
+    if (typeof entry === 'object' && entry !== null && 'value' in entry) {
+      const publicKey = key.slice(prefix.length);
+      const segments = publicKey.split(":");
+      entries.push({ key: publicKey, storageKey: key, service: segments[1] || "unknown", issue: segments.slice(2).join(":").replace(/_\d{4}-\d{2}-\d{2}$/, ""), ...entry });
     }
   }
   return entries.sort((a, b) => new Date(b.updated) - new Date(a.updated));
+}
+
+function getDebugScope(action) {
+  const context = toolContext.getExecutionContext();
+  const principalId = context.authIdentity?.principal_id;
+  if (!principalId) throw Object.assign(new Error("Authenticated identity required for debug operations"), { code: "unauthenticated" });
+  const project = scopedProject(undefined, ["store", "cleanup", "start", "stop", "cache", "clear"].includes(action) ? "write" : "read");
+  return { principalId, project };
+}
+
+function debugSessionPrefix(scope) {
+  return `__sidekick_debug_session_v1:${encodeURIComponent(scope.principalId)}:${encodeURIComponent(scope.project || "global")}:`;
+}
+
+function debugSessionId(scope, name) { return `${debugSessionPrefix(scope)}${encodeURIComponent(name)}`; }
+function lastDebugSession(scope) {
+  const prefix = debugSessionPrefix(scope);
+  return Object.keys(DEBUG_SESSIONS).filter(id => id.startsWith(prefix)).at(-1) || null;
 }
 
 function isOlderThan7Days(dateStr) {
@@ -175,8 +244,16 @@ function isOlderThan7Days(dateStr) {
 }
 
 async function sidekick_debug_tool({ action, session_name, key, value, service, issue, redact }) {
+  const denied = requireCanonicalInvocation("debug_tool");
+  if (denied) return denied;
   loadDebugSessions();
   const now = Date.now();
+  if (!["store", "recall", "cleanup", "start", "stop", "cache", "get", "status", "clear"].includes(action)) {
+    return { content: [{ type: "text", text: "Unknown action. Use: store, recall, cleanup (persistent) or start, stop, cache, get, status, clear (session)" }], isError: true };
+  }
+  let scope;
+  try { scope = getDebugScope(action); }
+  catch (error) { return { content: [{ type: "text", text: error.message }], isError: true, code: error.code || "project_scope_denied" }; }
   // Debug findings are persistent data and can contain copied command output.
   // Redaction is mandatory; a caller-controlled opt-out would turn this low-risk
   // helper into an intentional secret sink.
@@ -193,16 +270,19 @@ async function sidekick_debug_tool({ action, session_name, key, value, service, 
     }
 
     const debugKey = generateDebugKey(service, issue);
+    const storageKey = `${debugStoragePrefix(scope)}${debugKey}`;
     const nowISO = new Date().toISOString();
 
     const storedValue = shouldRedact ? redactSensitive(value) : value;
 
-    dbStore.setKV(debugKey, storedValue, "debug", toolContext.getExecutionSource() || "unknown", "debug");
+    dbStore.setKV(storageKey, storedValue, scope.project, toolContext.getExecutionSource() || "unknown", "debug");
     return { content: [{ type: "text", text: `Stored debug finding: ${debugKey} (${storedValue.length} chars)` }] };
   }
 
   if (action === "recall") {
-    const entries = getDebugEntries();
+    let entries;
+    try { entries = getDebugEntries(scope); }
+    catch (error) { return { content: [{ type: "text", text: error.message }], isError: true, code: error.code || "storage_read_failed" }; }
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - DEBUG_RETENTION_DAYS);
 
@@ -236,15 +316,27 @@ async function sidekick_debug_tool({ action, session_name, key, value, service, 
   if (action === "cleanup") {
     // If key parameter provided, delete that specific entry (regardless of age)
     if (key && key !== "all") {
-      const entry = dbStore.getKV(key);
+      const storageKey = `${debugStoragePrefix(scope)}${key}`;
+      const entry = dbStore.getKV(storageKey);
       if (entry && key.startsWith('debug:')) {
-        dbStore.deleteKV(key);
+        dbStore.deleteKV(storageKey);
         return { content: [{ type: "text", text: `Deleted: ${key}` }] };
       }
       return { content: [{ type: "text", text: `Key not found or not a debug entry: ${key}` }], isError: true };
     }
 
-    const entries = getDebugEntries();
+    if (key === "all") {
+      let entries;
+      try { entries = getDebugEntries(scope); }
+      catch (error) { return { content: [{ type: "text", text: error.message }], isError: true, code: error.code || "storage_read_failed" }; }
+      const old = entries.filter(e => isOlderThan7Days(e.updated));
+      for (const entry of old) dbStore.deleteKV(entry.storageKey);
+      return { content: [{ type: "text", text: `Deleted ${old.length} old debug entries` }] };
+    }
+
+    let entries;
+    try { entries = getDebugEntries(scope); }
+    catch (error) { return { content: [{ type: "text", text: error.message }], isError: true, code: error.code || "storage_read_failed" }; }
     const old = entries.filter(e => isOlderThan7Days(e.updated));
 
     if (old.length === 0) {
@@ -263,23 +355,12 @@ async function sidekick_debug_tool({ action, session_name, key, value, service, 
     return { content: [{ type: "text", text: result }] };
   }
 
-  // Special case: delete all old entries
-  if (action === "cleanup" && key === "all") {
-    const entries = getDebugEntries();
-    const old = entries.filter(e => isOlderThan7Days(e.updated));
-    let deleted = 0;
-    for (const e of old) {
-      dbStore.deleteKV(e.key);
-      deleted++;
-    }
-    return { content: [{ type: "text", text: `Deleted ${deleted} old debug entries` }] };
-  }
-
   // --- Legacy in-memory session actions (backward compatibility) ---
 
   if (action === "start") {
     const sessionId = session_name || `debug_${Date.now()}`;
-    DEBUG_SESSIONS[sessionId] = {
+    const internalId = debugSessionId(scope, sessionId);
+    DEBUG_SESSIONS[internalId] = {
       started: now,
       cache: {},
       name: session_name || sessionId
@@ -288,23 +369,25 @@ async function sidekick_debug_tool({ action, session_name, key, value, service, 
   }
 
   if (action === "stop") {
-    const sessionId = session_name || Object.keys(DEBUG_SESSIONS).pop();
-    if (!DEBUG_SESSIONS[sessionId]) {
+    const internalId = session_name ? debugSessionId(scope, session_name) : lastDebugSession(scope);
+    const sessionId = session_name || (internalId ? DEBUG_SESSIONS[internalId].name : "undefined");
+    if (!internalId || !DEBUG_SESSIONS[internalId]) {
       return { content: [{ type: "text", text: `Session not found: ${sessionId}` }], isError: true };
     }
-    delete DEBUG_SESSIONS[sessionId];
+    delete DEBUG_SESSIONS[internalId];
     return { content: [{ type: "text", text: `Debug session stopped: ${sessionId}` }] };
   }
 
   if (action === "cache") {
-    const sessionId = session_name || Object.keys(DEBUG_SESSIONS).pop();
-    if (!DEBUG_SESSIONS[sessionId]) {
+    const internalId = session_name ? debugSessionId(scope, session_name) : lastDebugSession(scope);
+    const sessionId = session_name || (internalId ? DEBUG_SESSIONS[internalId].name : "undefined");
+    if (!internalId || !DEBUG_SESSIONS[internalId]) {
       return { content: [{ type: "text", text: `No active session. Start one with action="start"` }], isError: true };
     }
     if (!key || value === undefined) {
       return { content: [{ type: "text", text: `key and value required` }], isError: true };
     }
-    DEBUG_SESSIONS[sessionId].cache[key] = {
+    DEBUG_SESSIONS[internalId].cache[key] = {
       value: value,
       cached_at: new Date().toISOString()
     };
@@ -312,14 +395,15 @@ async function sidekick_debug_tool({ action, session_name, key, value, service, 
   }
 
   if (action === "get") {
-    const sessionId = session_name || Object.keys(DEBUG_SESSIONS).pop();
-    if (!DEBUG_SESSIONS[sessionId]) {
+    const internalId = session_name ? debugSessionId(scope, session_name) : lastDebugSession(scope);
+    const sessionId = session_name || (internalId ? DEBUG_SESSIONS[internalId].name : "undefined");
+    if (!internalId || !DEBUG_SESSIONS[internalId]) {
       return { content: [{ type: "text", text: `No active session` }], isError: true };
     }
     if (!key) {
       return { content: [{ type: "text", text: `key required` }], isError: true };
     }
-    const cached = DEBUG_SESSIONS[sessionId].cache[key];
+    const cached = DEBUG_SESSIONS[internalId].cache[key];
     if (!cached) {
       return { content: [{ type: "text", text: `Key not found in session: ${key}` }], isError: true };
     }
@@ -327,10 +411,12 @@ async function sidekick_debug_tool({ action, session_name, key, value, service, 
   }
 
   if (action === "status") {
-    if (Object.keys(DEBUG_SESSIONS).length === 0) {
+    const prefix = debugSessionPrefix(scope);
+    const ownSessions = Object.entries(DEBUG_SESSIONS).filter(([id]) => id.startsWith(prefix));
+    if (ownSessions.length === 0) {
       return { content: [{ type: "text", text: `No active debug sessions` }] };
     }
-    const sessions = Object.entries(DEBUG_SESSIONS).map(([id, s]) => {
+    const sessions = ownSessions.map(([, s]) => {
       const age = Math.round((now - s.started) / 1000 / 60);
       const cacheSize = Object.keys(s.cache).length;
       return `${id}: ${cacheSize} items, ${age}min old`;
@@ -341,14 +427,16 @@ async function sidekick_debug_tool({ action, session_name, key, value, service, 
   if (action === "clear") {
     const sessionId = session_name;
     if (sessionId) {
-      if (!DEBUG_SESSIONS[sessionId]) {
+      const internalId = debugSessionId(scope, sessionId);
+      if (!DEBUG_SESSIONS[internalId]) {
         return { content: [{ type: "text", text: `Session not found: ${sessionId}` }], isError: true };
       }
-      delete DEBUG_SESSIONS[sessionId];
+      delete DEBUG_SESSIONS[internalId];
       return { content: [{ type: "text", text: `Cleared session: ${sessionId}` }] };
     } else {
-      const count = Object.keys(DEBUG_SESSIONS).length;
-      for (const id of Object.keys(DEBUG_SESSIONS)) {
+      const ownIds = Object.keys(DEBUG_SESSIONS).filter(id => id.startsWith(debugSessionPrefix(scope)));
+      const count = ownIds.length;
+      for (const id of ownIds) {
         delete DEBUG_SESSIONS[id];
       }
       return { content: [{ type: "text", text: `Cleared ${count} sessions` }] };
@@ -360,6 +448,8 @@ async function sidekick_debug_tool({ action, session_name, key, value, service, 
 
 // FreshEyes tool implementation
 async function sidekick_fresheyes({ problem, context, files, hypotheses, full_response }) {
+  const dispatchError = requireCanonicalInvocation("fresheyes");
+  if (dispatchError) return dispatchError;
   let prompt = `You are analyzing a problem with fresh eyes. Provide a clear, independent analysis.
 
 Problem: ${problem}
@@ -386,7 +476,7 @@ Problem: ${problem}
   const sanitizedPrompt = redactSensitive(prompt);
 
   try {
-    const result = await sidekick_llm({
+    const result = await runLlm({
       prompt: sanitizedPrompt,
       system: "You are a senior engineer providing a fresh perspective on a problem. Be direct and analytical. Focus on key insights, not verbose explanations.",
       temperature: 0.3
@@ -462,7 +552,7 @@ const descriptors = Object.freeze([
     description: "Structured debugging cache with persistent storage for cross-session debugging. Store findings, recall past investigations, cleanup old entries.",
     schema: SCHEMAS.debug_tool,
     args: { action: "string (store|recall|cleanup|start|stop|cache|get|status|clear)", session_name: "string (optional, session identifier for legacy actions)", key: "string (optional, cache key for get/cache, or debug key for cleanup)", value: "string (optional, value to cache/store)", service: "string (optional, service name for store/recall)", issue: "string (optional, issue description for store)", redact: "boolean (optional, default true - set false to skip redaction)" },
-    risk: "low",
+    risk: "medium",
     category: "Meta",
     source: "builtin",
     family: "meta",

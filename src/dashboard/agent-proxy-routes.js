@@ -1,10 +1,20 @@
 /** Browser-facing Agent relay. The Agent service owns task authorization and execution. */
-function registerAgentProxyRoutes({ app, http, agentPort, errorResponse }) {
+const { createAgentProxyHeaders } = require("../security/agent-proxy-auth");
+
+function registerAgentProxyRoutes({ app, http, agentPort, agentProxySecret, errorResponse }) {
   function proxyAgent(req, res, method, body) {
     const headers = { "Content-Type": "application/json" };
-    if (req.authPrincipal?.principal_id) headers["X-Sidekick-Principal-ID"] = String(req.authPrincipal.principal_id).slice(0, 160);
-    if (Array.isArray(req.authPrincipal?.scopes)) headers["X-Sidekick-Principal-Scopes"] = JSON.stringify(req.authPrincipal.scopes.slice(0, 80)).slice(0, 4000);
-    if (req.authPrincipal?.delegation_id) headers["X-Sidekick-Delegation-ID"] = String(req.authPrincipal.delegation_id).slice(0, 160);
+    Object.assign(headers, createAgentProxyHeaders({
+      secret: agentProxySecret,
+      method,
+      path: req.originalUrl,
+      body: body || "",
+      principalId: req.authPrincipal?.principal_id || "",
+      // Preserve interactive role-based sessions (null/undefined scopes) as
+      // distinct from machine credentials whose explicit empty scopes deny all.
+      scopes: Array.isArray(req.authPrincipal?.scopes) ? req.authPrincipal.scopes : null,
+      delegationId: req.authPrincipal?.delegation_id || "",
+    }));
     if (body) headers["Content-Length"] = Buffer.byteLength(body);
     const upstream = http.request({ hostname: "127.0.0.1", port: agentPort, path: req.originalUrl, method, headers }, response => { res.writeHead(response.statusCode, response.headers); response.pipe(res); });
     upstream.on("error", error => { if (!res.headersSent) errorResponse(req, res, error, { status: 502, code: "upstream_unavailable", component: "agent_proxy" }); else res.end(); });

@@ -1,8 +1,12 @@
 /** Register the dashboard activity/logs endpoint. */
-function registerLogsRoute({ app, dbStore, normalizeLogEntry, buildActivitySessions, summarizeActivity, fallbackGapMs, errorResponse }) {
+function registerLogsRoute({ app, dbStore, normalizeLogEntry, buildActivitySessions, summarizeActivity, fallbackGapMs, requireIdentityPermission, errorResponse }) {
   app.get("/api/logs", (req, res) => {
+    if (!requireIdentityPermission(req, res, "audit.read")) return;
     try {
-      const limit = Math.min(parseInt(req.query.limit) || 100, 1000);
+      const requestedLimit = Number.parseInt(req.query.limit, 10);
+      const limit = Number.isFinite(requestedLimit) && requestedLimit > 0
+        ? Math.min(requestedLimit, 1000)
+        : 100;
       const needsPostFilter = !!(req.query.project || req.query.session || req.query.task ||
         req.query.execution || req.query.min_duration || req.query.errors_only === "true" || req.query.search);
       const dbFilters = {

@@ -26,7 +26,12 @@ const { enforcePathPolicy } = require("../path-policy");
 const { childProcessEnv } = require("../../security/child-process");
 const { runBoundedShell } = require("../../security/command-execution");
 const { generateId } = require("../../core/ids");
+const { readSecret } = require("../../core/runtime-secrets");
+const { createScheduledAuthority, verifyScheduledAuthority } = require("../../security/scheduled-authority");
+const { reloadAgentScheduler } = require("../../agent/scheduler-reload");
+const { assertDistinctAgentSchedulerSecret } = require("../../security/agent-proxy-auth");
 const { callTool } = require("../dispatch-seam");
+const { requireToolExecution } = require("../read-authorization");
 const {
   createScheduledPlatformExecution,
   transitionScheduledPlatformExecution,
@@ -57,6 +62,8 @@ function saveCronJobs(jobs) {
 }
 
 async function sidekick_cron({ action, name, schedule, command, id }) {
+  const authorizationError = requireToolExecution({ tool: "cron", action: action || null, id: id || null }, "tools.execute_high", "cron");
+  if (authorizationError) return authorizationError;
   const allowedActions = ["add", "list", "remove", "run"];
   if (!allowedActions.includes(action)) {
     return { content: [{ type: "text", text: "Invalid action. Allowed: " + allowedActions.join(", ") }], isError: true };
@@ -321,6 +328,8 @@ function parseWhen(when) {
 }
 
 async function sidekick_delay({ action, id, when, name, tool, args }) {
+  const authorizationError = requireToolExecution({ tool: "delay", action: action || null, id: id || null }, "tools.execute_high", "delay");
+  if (authorizationError) return authorizationError;
   const delays = loadDelays();
   const now = new Date().toISOString();
   const actorId = toolContext.getExecutionContext().actor;
@@ -348,6 +357,21 @@ async function sidekick_delay({ action, id, when, name, tool, args }) {
       created: now,
       status: "pending"
     };
+    let scheduleAuthorityKey;
+    try {
+      scheduleAuthorityKey = readSecret("SIDEKICK_SECRET_KEY", { required: true });
+    } catch {
+      return { content: [{ type: "text", text: "Cannot schedule delay: durable authority protection is unavailable; configure SIDEKICK_SECRET_KEY and retry" }], isError: true, code: "scheduled_authority_unavailable" };
+    }
+    let agentProxyKey;
+    let agentSchedulerKey;
+    try {
+      agentProxyKey = readSecret("SIDEKICK_AGENT_PROXY_KEY", { required: true });
+      agentSchedulerKey = readSecret("SIDEKICK_AGENT_SCHEDULER_KEY", { required: true });
+      assertDistinctAgentSchedulerSecret(readSecret("SIDEKICK_API_KEY"), agentProxyKey, agentSchedulerKey);
+    } catch {
+      return { content: [{ type: "text", text: "Cannot activate delay scheduling: distinct SIDEKICK_API_KEY, SIDEKICK_AGENT_PROXY_KEY, and SIDEKICK_AGENT_SCHEDULER_KEY credentials are required" }], isError: true, code: "agent_service_credential_unavailable" };
+    }
     createScheduledPlatformExecution("delay", delay, {
       operationType: "delay_task",
       state: "queued",
@@ -355,6 +379,11 @@ async function sidekick_delay({ action, id, when, name, tool, args }) {
       deadlineAt: delay.when,
       metadata: { target_tool: tool },
       reason: "delay scheduled",
+    });
+    delay.scheduled_authority = createScheduledAuthority({
+      delay,
+      context: toolContext.getExecutionContext(),
+      secret: scheduleAuthorityKey,
     });
 
     delays.push(delay);
@@ -364,27 +393,11 @@ async function sidekick_delay({ action, id, when, name, tool, args }) {
     const msUntil = executeAt.getTime() - Date.now();
     const minutes = Math.round(msUntil / 60000);
 
-    try {
-      const http = require("http");
-      const req = http.request({
-        hostname: "127.0.0.1",
-        port: 4099,
-        path: "/api/delays/reload",
-        method: "POST",
-        headers: { Connection: "close" },
-        agent: false
-      });
-      req.on("socket", socket => {
-        socket.unref();
-        socket.setTimeout(1000, () => req.destroy());
-      });
-      req.on("response", response => response.resume());
-      req.setTimeout(1000, () => req.destroy());
-      req.on("error", () => {});
-      req.end();
-    } catch {}
-
-    return { content: [{ type: "text", text: `Scheduled delay: ${delay.id}\nWill execute ${tool} in ${minutes} minutes (${executeAt.toISOString()})` }] };
+    const reload = await reloadAgentScheduler("delays", { secret: agentSchedulerKey });
+    const message = reload.ok
+      ? `Scheduled delay: ${delay.id}\nWill execute ${tool} in ${minutes} minutes (${executeAt.toISOString()})`
+      : `Delay definition ${delay.id} is persisted for ${executeAt.toISOString()}, but the Agent did not acknowledge its timer reload (${reload.code}). It is not active until the Agent reloads scheduled delays.`;
+    return { content: [{ type: "text", text: message }] };
   }
 
   if (action === "list") {
@@ -475,6 +488,11 @@ async function sidekick_delay({ action, id, when, name, tool, args }) {
 
     if (delay.status !== "pending") {
       return { content: [{ type: "text", text: `Delay ${id} is not pending (status: ${delay.status})` }], isError: true };
+    }
+
+    const verifiedAuthority = verifyScheduledAuthority({ delay, secret: readSecret("SIDEKICK_SECRET_KEY", { required: true }) });
+    if (!verifiedAuthority) {
+      return { content: [{ type: "text", text: `Delay ${id} has no valid authority record and will not be executed` }], isError: true, code: "scheduled_authority_invalid" };
     }
 
     // Fenced claim (Phase 4/B): of the agent timer and any MCP-side run, only
@@ -668,6 +686,8 @@ async function executeWatchAction(watch, checkResult, metadata = {}) {
 }
 
 async function sidekick_watch({ action, id, name, source, target, condition, interval, action_tool, action_args, pause }) {
+  const authorizationError = requireToolExecution({ tool: "watch", action: action || null, id: id || null }, "tools.execute_high", "watch");
+  if (authorizationError) return authorizationError;
   const watches = loadWatches();
   const now = new Date().toISOString();
 
@@ -683,6 +703,15 @@ async function sidekick_watch({ action, id, name, source, target, condition, int
     if (source === "file") {
       const policyError = enforcePathPolicy(target, "read");
       if (policyError) return policyError;
+    }
+    let agentProxyKey;
+    let agentSchedulerKey;
+    try {
+      agentProxyKey = readSecret("SIDEKICK_AGENT_PROXY_KEY", { required: true });
+      agentSchedulerKey = readSecret("SIDEKICK_AGENT_SCHEDULER_KEY", { required: true });
+      assertDistinctAgentSchedulerSecret(readSecret("SIDEKICK_API_KEY"), agentProxyKey, agentSchedulerKey);
+    } catch {
+      return { content: [{ type: "text", text: "Cannot activate watch scheduling: distinct SIDEKICK_API_KEY, SIDEKICK_AGENT_PROXY_KEY, and SIDEKICK_AGENT_SCHEDULER_KEY credentials are required" }], isError: true, code: "agent_service_credential_unavailable" };
     }
 
     const watch = {
@@ -712,19 +741,11 @@ async function sidekick_watch({ action, id, name, source, target, condition, int
     saveWatches(watches);
     appendScheduledPlatformEvent("watch", watch, "schedule.watch.added", { source: watch.source, target: watch.target, condition: watch.condition, interval: watch.interval });
 
-    try {
-      const http = require("http");
-      const req = http.request({
-        hostname: "127.0.0.1",
-        port: 4099,
-        path: "/api/watches/reload",
-        method: "POST"
-      });
-      req.on("error", () => {});
-      req.end();
-    } catch {}
-
-    return { content: [{ type: "text", text: `Added watch: ${watch.id}\nName: ${name}\nSource: ${source} ${target}\nCondition: ${condition}\nInterval: ${watch.interval}\nAction: ${watch.action_tool}` }] };
+    const reload = await reloadAgentScheduler("watches", { secret: agentSchedulerKey });
+    const message = reload.ok
+      ? `Added watch: ${watch.id}\nName: ${name}\nSource: ${source} ${target}\nCondition: ${condition}\nInterval: ${watch.interval}\nAction: ${watch.action_tool}`
+      : `Watch definition ${watch.id} is persisted, but the Agent did not acknowledge its timer reload (${reload.code}). It is not active until the Agent reloads scheduled watches.`;
+    return { content: [{ type: "text", text: message }] };
   }
 
   if (action === "list") {
