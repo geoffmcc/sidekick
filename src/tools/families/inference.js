@@ -21,6 +21,7 @@ function configuredModel(value) {
 const compute = require("../../compute");
 const toolContext = require("../context");
 const { resolveOutputTokenBudget } = require("../../compute/token-budget");
+const { requireToolExecution, requireCanonicalInvocation } = require("../read-authorization");
 
 let inferenceService = null;
 try { inferenceService = require("../../compute/inference-service"); } catch {}
@@ -61,6 +62,8 @@ async function runOpenVinoEmbeddingJob({ text, model, device, context }) {
 }
 
 async function sidekick_embed({ text, model, device }) {
+  const denied = requireCanonicalInvocation("embed");
+  if (denied) return denied;
   const m = model || "nomic-embed-text";
   // Embeddings route through Compute — the single inference authority — not a
   // direct Ollama call. Requests are classified private, so placement keeps them
@@ -94,6 +97,8 @@ async function sidekick_embed({ text, model, device }) {
 }
 
 async function sidekick_ollama({ action, model }) {
+  const authorizationError = requireToolExecution({ tool: "ollama", action: action || null, model: model || null }, "tools.execute_high", "ollama");
+  if (authorizationError) return authorizationError;
   try {
     const ollamaUrl = process.env.OLLAMA_URL || "http://127.0.0.1:11434";
 
@@ -171,7 +176,7 @@ async function sidekick_ollama({ action, model }) {
   }
 }
 
-async function sidekick_llm({ prompt, system, temperature, async: asyncMode, timeout_ms: timeoutMs, max_tokens: maxTokens, output_budget: outputBudget, context_limit: contextLimit }) {
+async function runLlm({ prompt, system, temperature, async: asyncMode, timeout_ms: timeoutMs, max_tokens: maxTokens, output_budget: outputBudget, context_limit: contextLimit }) {
   // Chat routes through Compute — the single inference authority. Provider/model
   // selection, credentials, health, and fallback belong to Placement; the tool
   // no longer reaches Ollama/Groq directly or accepts a provider pin. Requests
@@ -240,6 +245,12 @@ async function sidekick_llm({ prompt, system, temperature, async: asyncMode, tim
   }
 }
 
+async function sidekick_llm(args) {
+  const denied = requireCanonicalInvocation("llm");
+  if (denied) return denied;
+  return runLlm(args);
+}
+
 const descriptors = Object.freeze([
   Object.freeze({
     name: "llm",
@@ -284,7 +295,7 @@ const descriptors = Object.freeze([
       model: z.string().optional().describe("Model name (required for pull/show)"),
     }),
     args: { action: "string (list|ps|pull|show)", model: "string (optional, model name for pull/show)" },
-    risk: "low",
+    risk: "high",
     category: "Context & Learning",
     source: "builtin",
     family: "inference",
@@ -292,4 +303,4 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_llm, sidekick_embed, sidekick_ollama };
+module.exports = { descriptors, sidekick_llm, runLlm, sidekick_embed, sidekick_ollama };
