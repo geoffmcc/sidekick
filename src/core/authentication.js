@@ -75,6 +75,15 @@ function getSession(token) {
   };
 }
 
+function isSessionActive(sessionId) {
+  if (typeof sessionId !== "string" || !/^[a-f0-9]{64}$/.test(sessionId)) return false;
+  const row = dbStore.getDb().prepare(`SELECT 1 AS active
+    FROM identity_sessions s JOIN principals p ON p.principal_id = s.principal_id
+    WHERE s.session_id_hash = ? AND s.invalidated_at IS NULL
+      AND s.expires_at > ? AND p.enabled = 1`).get(sessionId, now());
+  return Boolean(row);
+}
+
 function invalidateSession(token) {
   if (typeof token !== "string" || !token) return false;
   const result = dbStore.getDb().prepare("UPDATE identity_sessions SET invalidated_at = ? WHERE session_id_hash = ? AND invalidated_at IS NULL").run(now(), hash(token));
@@ -192,4 +201,4 @@ function rotateCredential(credentialId, createdByPrincipalId = null) {
   }
 }
 
-module.exports = Object.freeze({ SESSION_TTL_MS, RECOVERY_TTL_MS, createSession, getSession, invalidateSession, invalidatePrincipalSessions, createCredential, getCredential, listCredentials, authenticateCredential, revokeCredential, rotateCredential, createOwnerRecoveryToken, recoverOwnerPassword });
+module.exports = Object.freeze({ SESSION_TTL_MS, RECOVERY_TTL_MS, createSession, getSession, isSessionActive, invalidateSession, invalidatePrincipalSessions, createCredential, getCredential, listCredentials, authenticateCredential, revokeCredential, rotateCredential, createOwnerRecoveryToken, recoverOwnerPassword });

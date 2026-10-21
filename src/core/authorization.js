@@ -64,7 +64,10 @@ function effectivePermissions(principalId, { delegationId = null, credentialScop
     permissions.clear();
     for (const permission of granted) if (delegatorPermissions.has(permission)) permissions.add(permission);
   }
-  if (Array.isArray(credentialScopes) && credentialScopes.length) {
+  // `null` means an interactive principal session with role-only authority.
+  // An explicit empty scope list is a machine credential with no grants and
+  // must therefore reduce effective permissions to the empty set.
+  if (Array.isArray(credentialScopes)) {
     const scopes = new Set(credentialScopes.map(scope => String(scope).trim()));
     for (const permission of [...permissions]) if (!scopes.has("*") && !scopes.has(permission)) permissions.delete(permission);
   }
@@ -100,8 +103,11 @@ function createDelegation({ delegatorPrincipalId, delegatePrincipalId, permissio
   const expiry = expiresAt == null ? null : new Date(expiresAt).toISOString();
   if (expiry && expiry <= now()) throw new Error("expires_at must be in the future");
   const delegationId = id("dlg");
-  dbStore.getDb().prepare(`INSERT INTO identity_delegations (delegation_id, delegator_principal_id, delegate_principal_id, permissions_json, created_at, expires_at, created_by_principal_id) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(delegationId, delegator.principal_id, delegate.principal_id, JSON.stringify(unique), now(), expiry, actorPrincipalId || delegator.principal_id);
-  identity.recordAuditEvent("delegation.created", delegate.principal_id, actorPrincipalId || delegator.principal_id, { delegation_id: delegationId, delegator_principal_id: delegator.principal_id, permissions: unique, expires_at: expiry });
+  const db = dbStore.getDb();
+  db.transaction(() => {
+    db.prepare(`INSERT INTO identity_delegations (delegation_id, delegator_principal_id, delegate_principal_id, permissions_json, created_at, expires_at, created_by_principal_id) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(delegationId, delegator.principal_id, delegate.principal_id, JSON.stringify(unique), now(), expiry, actorPrincipalId || delegator.principal_id);
+    identity.recordAuditEvent("delegation.created", delegate.principal_id, actorPrincipalId || delegator.principal_id, { delegation_id: delegationId, delegator_principal_id: delegator.principal_id, permissions: unique, expires_at: expiry });
+  })();
   return getDelegation(delegationId);
 }
 
@@ -117,8 +123,11 @@ function revokeDelegation(delegationId, actorPrincipalId = null) {
   if (delegation.revoked_at) return delegation;
   const actor = actorPrincipalId || delegation.delegator_principal_id;
   if (actor !== delegation.delegator_principal_id && !authorize({ principalId: actor, permission: "principals.manage" }).ok) throw new Error("only the delegator or an authorized administrator may revoke delegation");
-  dbStore.getDb().prepare("UPDATE identity_delegations SET revoked_at = ? WHERE delegation_id = ? AND revoked_at IS NULL").run(now(), delegation.delegation_id);
-  identity.recordAuditEvent("delegation.revoked", delegation.delegate_principal_id, actor, { delegation_id: delegation.delegation_id });
+  const db = dbStore.getDb();
+  db.transaction(() => {
+    db.prepare("UPDATE identity_delegations SET revoked_at = ? WHERE delegation_id = ? AND revoked_at IS NULL").run(now(), delegation.delegation_id);
+    identity.recordAuditEvent("delegation.revoked", delegation.delegate_principal_id, actor, { delegation_id: delegation.delegation_id });
+  })();
   return getDelegation(delegation.delegation_id);
 }
 
