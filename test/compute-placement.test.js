@@ -227,6 +227,20 @@ test("enrollment token data classifications are persisted and enforced", () => {
   workerManager.updateWorker(scoped.workerId, { state: "offline", connectionState: "offline" });
 });
 
+test("an explicitly empty worker classification grant denies all classified data", () => {
+  const scoped = enrollTestWorker({ allowedDataClassifications: [] });
+  assert.deepStrictEqual(scoped.allowedDataClassifications, [], "empty enrollment scope must persist as empty");
+  for (const classification of ["public", "internal", "private"]) {
+    const evaluation = placement.evaluateWorkerCandidate(
+      placement.validatePlacementRequest({ capability: "chat", data_classification: classification }),
+      scoped,
+      { executor: "mock.inference" }
+    );
+    assert.ok(evaluation.reasons.includes("data_classification_denied"), `${classification} data must be denied`);
+  }
+  workerManager.updateWorker(scoped.workerId, { state: "offline", connectionState: "offline" });
+});
+
 test("worker trust below the required floor is rejected", () => {
   const lowTrust = enrollTestWorker({ trustLevel: "limited" });
   const evaluation = placement.evaluateWorkerCandidate(
@@ -400,6 +414,18 @@ testAsync("private job is not claimable by a public-scoped worker", async () => 
   const job = makeOpenvinoJob({ dataClassification: "private" });
   const claim = jobManager.claimNextJob(scoped, {});
   assert.strictEqual(claim, null, "claim must be refused");
+  const diag = jobManager.getJob(job.jobId).schedulingDiagnostics;
+  assert.ok(JSON.stringify(diag).includes("data_classification_denied"), "diagnostics record the denial");
+  jobManager.cancelJob(job.jobId, { actor: "test" });
+  workerManager.updateWorker(scoped.workerId, { state: "offline", connectionState: "offline" });
+});
+
+testAsync("a worker with an empty classification grant cannot claim a private job", async () => {
+  offlineAllWorkers();
+  const scoped = enrollTestWorker({ allowedDataClassifications: [] });
+  const job = makeOpenvinoJob({ dataClassification: "private" });
+  const claim = jobManager.claimNextJob(scoped, {});
+  assert.strictEqual(claim, null, "empty classification scope must deny the claim");
   const diag = jobManager.getJob(job.jobId).schedulingDiagnostics;
   assert.ok(JSON.stringify(diag).includes("data_classification_denied"), "diagnostics record the denial");
   jobManager.cancelJob(job.jobId, { actor: "test" });

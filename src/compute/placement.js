@@ -283,9 +283,13 @@ function evaluateWorkerCandidate(validated, worker, needs = {}, { activeExecutor
   if (worker.protocolVersion !== "1") reasons.push("protocol_mismatch");
   if (Number(worker.currentJobs) >= Number(worker.maxConcurrentJobs)) reasons.push("concurrency_exhausted");
 
-  const allowedClassifications = Array.isArray(worker.allowedDataClassifications) && worker.allowedDataClassifications.length > 0
-    ? worker.allowedDataClassifications
-    : DEFAULT_WORKER_CLASSIFICATIONS;
+  // Missing scope data is tolerated only for legacy in-memory worker objects
+  // created before the field existed. An explicit empty list means this worker
+  // may receive no classified data; treating it as the broad default would
+  // silently widen an operator's enrollment grant.
+  const allowedClassifications = worker.allowedDataClassifications === undefined || worker.allowedDataClassifications === null
+    ? DEFAULT_WORKER_CLASSIFICATIONS
+    : Array.isArray(worker.allowedDataClassifications) ? worker.allowedDataClassifications : [];
   if (!allowedClassifications.includes(validated.dataClassification)) reasons.push("data_classification_denied");
   if (trustRank(worker.trustLevel) < trustRank(validated.trustLevelRequired)) reasons.push("trust_too_low");
 
