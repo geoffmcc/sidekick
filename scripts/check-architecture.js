@@ -15,7 +15,11 @@ function rel(file) { return path.relative(root, file).replaceAll(path.sep, "/");
 function resolveImport(file, spec) { if (!spec.startsWith(".")) return null; let target = path.resolve(path.dirname(file), spec); for (const candidate of [target, `${target}.js`, `${target}.cjs`, path.join(target, "index.js")]) if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) return candidate; return null; }
 for (const file of files) {
   const from = rel(file); const edges = [];
-  for (const match of fs.readFileSync(file, "utf8").matchAll(re)) { const spec = match[1] || match[2]; const target = resolveImport(file, spec); if (!target) continue; const to = rel(target); edges.push(target);
+  const sourceText = fs.readFileSync(file, "utf8");
+  if (!/^src\/db\/(?:kv-store\.js)$/.test(from) && /\.(?:loadKV|getAllKV|replaceKV)\s*\(/.test(sourceText)) {
+    violations.push(`${from}: unbounded whole-table KV APIs are forbidden outside the KV repository; use bounded/scoped database operations`);
+  }
+  for (const match of sourceText.matchAll(re)) { const spec = match[1] || match[2]; const target = resolveImport(file, spec); if (!target) continue; const to = rel(target); edges.push(target);
     if (from.startsWith("packs/") && /^(src\/(?:dashboard|agent(?:\.js|\/)|db(?:\.js|\/)|tools-legacy\.js|tools\/dispatcher\.js))/.test(to)) violations.push(`${from} -> ${to}: capability packs may use public platform interfaces only`);
     if (/^(src\/db\.js|src\/db\/)/.test(from) && /^(src\/(?:dashboard|agent(?:\.js|\/)|mcp\/)|static\/)/.test(to)) violations.push(`${from} -> ${to}: repositories may not depend on transport or frontend code`);
     if (from.startsWith("src/platform/") && to.startsWith("packs/")) violations.push(`${from} -> ${to}: platform code may not import bundled capability packs`);
