@@ -1,4 +1,5 @@
 const { Pool } = require("pg");
+const { normalizeDatabaseSearchRequest } = require("./db/search-bounds");
 const { readSecret } = require("./core/runtime-secrets");
 
 // Connection config is resolved lazily, not at import time, so a deployment
@@ -220,7 +221,10 @@ async function exportTable(tableName, format = "json") {
 }
 
 async function searchAllTables(query, options = {}) {
-  const { tables = null, limit = 50 } = options;
+  const bounded = normalizeDatabaseSearchRequest(query, options);
+  query = bounded.query;
+  const { tables, limit } = bounded;
+  if (!query) return [];
 
   const results = [];
   const tablesResult = await getPool().query(`
@@ -234,6 +238,7 @@ async function searchAllTables(query, options = {}) {
     : tablesResult.rows;
 
   for (const table of searchTables) {
+    if (results.length >= limit) break;
     const columnsResult = await getPool().query(`
       SELECT column_name, data_type
       FROM information_schema.columns
@@ -247,6 +252,7 @@ async function searchAllTables(query, options = {}) {
     );
 
     for (const col of textColumns) {
+      if (results.length >= limit) break;
       try {
         const rows = await executeQuery(`
           SELECT ctid, "${col.column_name}" FROM "${table.table_name}"
