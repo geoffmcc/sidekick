@@ -35,7 +35,8 @@ const modelRegistry = require("../src/compute/model-registry");
 const jobManager = require("../src/compute/job-manager");
 const workerManager = require("../src/compute/worker-manager");
 const placement = require("../src/compute/placement");
-const computeTools = require("../src/compute/tools");
+const tools = require("../src/tools");
+const governedTools = require("./helpers/authorized-context").withOwnerToolContext(tools.TOOLS, { source: "test" });
 
 compute.initialize();
 compute.stopReconciliation();
@@ -66,13 +67,13 @@ async function test(name, fn) {
   });
 
   await test("data_classification argument changes the selected provider", async () => {
-    const asPublic = JSON.parse((await computeTools.sidekick_compute_route({
+    const asPublic = JSON.parse((await governedTools.compute_route({
       action: "explain", workload_class: "chat", data_classification: "public",
     })).content[0].text);
     assert.ok(asPublic.selected, "public request selects the public-only provider");
     assert.strictEqual(asPublic.selected.providerId, publicProvider.providerId);
 
-    const asPrivate = JSON.parse((await computeTools.sidekick_compute_route({
+    const asPrivate = JSON.parse((await governedTools.compute_route({
       action: "explain", workload_class: "chat", data_classification: "private",
     })).content[0].text);
     // Before the mapping fix both calls evaluated the identical default
@@ -81,7 +82,7 @@ async function test(name, fn) {
   });
 
   await test("workload/capability and trust arguments reach the placement dry run", async () => {
-    const r = JSON.parse((await computeTools.sidekick_compute_route({
+    const r = JSON.parse((await governedTools.compute_route({
       action: "explain", workload_class: "embeddings", data_classification: "public", trust_level: "privileged",
     })).content[0].text);
     assert.strictEqual(r.placement.capability, "embeddings", "capability no longer forced to default chat");
@@ -91,7 +92,7 @@ async function test(name, fn) {
   });
 
   await test("capabilities_required wins over workload_class for the capability", async () => {
-    const r = JSON.parse((await computeTools.sidekick_compute_route({
+    const r = JSON.parse((await governedTools.compute_route({
       action: "explain", workload_class: "background", capabilities_required: "generate", data_classification: "public",
     })).content[0].text);
     assert.strictEqual(r.placement.capability, "generate");
@@ -131,8 +132,12 @@ async function test(name, fn) {
     delete process.env.OLLAMA_MODEL;
     process.env.SIDEKICK_AGENT_MODEL = "agent-model:test";
     try {
-      const { sidekick_llm } = require("../src/tools/families/inference");
-      const response = await sidekick_llm({ prompt: "async model chain", async: true });
+      const descriptor = require("../src/tools/canonical-registry").getCanonicalRegistry().get("llm");
+      const response = await require("../src/tools/dispatcher").dispatchTestTool({
+        descriptor,
+        args: { prompt: "async model chain", async: true },
+        context: { source: "compute-audit-test" },
+      });
       const body = JSON.parse(response.content[0].text);
       const job = jobManager.getJob(body.job_id);
       assert.strictEqual(job.requestPayload.model, "agent-model:test",

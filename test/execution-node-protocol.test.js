@@ -14,6 +14,7 @@ const placement = require("../src/node/placement");
 const { normalizeDescriptor } = require("../src/tools/descriptor");
 const { getCanonicalRegistry } = require("../src/tools/canonical-registry");
 const developerEntry = require("../packs/developer/modules/developer-tools/entry");
+const { createOwnerContext } = require("./helpers/authorized-context");
 
 const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-node-protocol-"));
 const workspaceRoot = path.join(fixture, "workspace");
@@ -27,12 +28,13 @@ const nodeId = "node_protocol_fixture";
 const jobs = [];
 const requests = [];
 let oversizeEnrollment = false;
+const nodeCaller = createOwnerContext({ source: "mcp" });
 
 fs.mkdirSync(repositoryRoot, { recursive: true });
 fs.writeFileSync(path.join(repositoryRoot, "result.txt"), "node protocol result\n");
 fs.writeFileSync(path.join(repositoryRoot, "package.json"), JSON.stringify({
   name: "node-protocol-fixture",
-  scripts: { test: "node -e \"setTimeout(() => {}, 2500)\"" },
+  scripts: { test: "node -e \"setTimeout(() => {}, 10000)\"" },
 }, null, 2));
 fs.writeFileSync(configPath, JSON.stringify({
   workspaceRoot,
@@ -113,6 +115,7 @@ function startNode(port, command = "run") {
       SIDEKICK_NODE_NAME: "protocol-fixture",
       SIDEKICK_NODE_POLL_MS: "250",
       SIDEKICK_NODE_HEARTBEAT_MS: "5000",
+      SIDEKICK_ALLOWED_PATHS: repositoryRoot,
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -123,7 +126,7 @@ function startNode(port, command = "run") {
 }
 
 function descriptor(name) {
-  if (name === "read") return getCanonicalRegistry({ includeActiveModules: false }).get(name);
+  if (["read", "bash"].includes(name)) return getCanonicalRegistry({ includeActiveModules: false }).get(name);
   const services = { config: { repository_roots: [workspaceRoot] }, paths: { enforce: () => null } };
   const found = developerEntry.buildDescriptors(services).find(item => item.name === name);
   return normalizeDescriptor({ ...found, source: "module:developer-tools", family: null });
@@ -161,19 +164,36 @@ async function waitForExit(child, timeoutMs = 5000) {
   try {
     await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
     const port = server.address().port;
-    const first = makeJob("job_complete", "read", { path: path.join(repositoryRoot, "result.txt") });
+    const first = makeJob("job_complete", "read", { path: path.join(repositoryRoot, "result.txt") }, {
+      authIdentity: nodeCaller.authIdentity,
+      nodeAuthorization: {
+        principalId: nodeCaller.authIdentity.principal_id,
+        permission: "tools.execute",
+        credentialScopes: null,
+        resource: { tool: "read", source: "mcp" },
+      },
+    });
     const second = makeJob("job_failure", "missing_tool", {});
-    const third = makeJob("job_cancel", "dev_verify", {
-      path: repositoryRoot,
-      intents: ["test"],
-      timeout_ms: 5000,
-    }, { timeoutMs: 5000 }, true);
+    const third = makeJob("job_cancel", "bash", {
+      command: "npm run test",
+      cwd: repositoryRoot,
+    }, {
+      source: "mcp",
+      authIdentity: nodeCaller.authIdentity,
+      nodeAuthorization: {
+        principalId: nodeCaller.authIdentity.principal_id,
+        permission: "tools.execute_critical",
+        credentialScopes: null,
+        resource: { tool: "bash", source: "mcp" },
+      },
+      timeoutMs: 15000,
+    }, true);
     requests.jobById = new Map([first, second, third].map(job => [job.jobId, job]));
 
     nodeProcess = startNode(port);
     await waitFor(() => first.outcome, "successful completion");
     await waitFor(() => second.outcome, "failure delivery");
-    await waitFor(() => third.outcome, "cancellation delivery");
+    await waitFor(() => third.outcome, "cancellation delivery", 20000);
 
     assert.strictEqual(first.outcome.type, "complete", "valid local tool completes over HTTP");
     assert.strictEqual(first.outcome.payload.result.content[0].text, "node protocol result\n");
@@ -187,7 +207,9 @@ async function waitForExit(child, timeoutMs = 5000) {
     assert.ok(protectedCalls.some(request => request.url.endsWith("/cancellation")), "cancellation status was polled over HTTP");
 
     nodeProcess.child.kill("SIGTERM");
-    assert.strictEqual(await waitForExit(nodeProcess.child), 0, "node shuts down cleanly after lifecycle coverage");
+    const nodeExit = await waitForExit(nodeProcess.child);
+    if (process.platform === "win32") assert.notStrictEqual(nodeExit, undefined, "node process exits after forced Windows termination");
+    else assert.strictEqual(nodeExit, 0, "node shuts down cleanly after lifecycle coverage");
 
     oversizeEnrollment = true;
     fs.rmSync(credentialPath, { force: true });

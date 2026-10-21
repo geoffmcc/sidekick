@@ -7,6 +7,8 @@ fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
 fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
 process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
 process.env.SIDEKICK_API_KEY = 'sk-sidekick-test-key';
+process.env.SIDEKICK_TOOL_POLICY = 'open';
+process.env.SIDEKICK_APPROVAL_MODE = 'off';
 
 delete require.cache[require.resolve('../src/db')];
 const dbStore = require('../src/db');
@@ -312,6 +314,17 @@ test('getJobStats returns counts', () => {
   assertOk(typeof stats.byStatus === 'object');
 });
 
+test('getJobStats can constrain job, attempt, and artifact aggregates to one project', () => {
+  const project = `compute-stats-${Date.now()}`;
+  const job = jobManager.createJob({ jobType: 'chat', capability: 'chat', requestPayload: {}, project });
+  jobManager.createArtifact(job.jobId, { artifactType: 'output', name: 'scoped-result.txt', contentType: 'text/plain' });
+  const scoped = jobManager.getJobStats({ project });
+  assertEqual(scoped.total, 1);
+  assertEqual(scoped.artifacts.finalized, 1);
+  assertEqual(jobManager.getJobStats({ project: `${project}-other` }).total, 0);
+  assertEqual(jobManager.getJobStats({ project: `${project}-other` }).artifacts.finalized, undefined);
+});
+
 test('createArtifact and listArtifacts', () => {
   const list = jobManager.listJobs();
   const j = list[0];
@@ -485,41 +498,42 @@ test('compute.overview() returns shape', () => {
 
 // ─── 11. Tool handlers ───
 console.log('Compute.11: tool handlers');
-const computeTools = require('../src/compute/tools');
+const tools = require('../src/tools');
+const governedTools = require('./helpers/authorized-context').withOwnerToolContext(tools.TOOLS, { source: 'test' });
 
 async function runAsyncTests() {
   await testAsync('sidekick_compute overview returns result', async () => {
-    const r = await computeTools.sidekick_compute({ action: 'overview' });
+    const r = await governedTools.compute({ action: 'overview' });
     assertOk(r.content, 'has content');
     assertOk(!r.isError, 'not error');
   });
 
   await testAsync('sidekick_compute_providers list returns result', async () => {
-    const r = await computeTools.sidekick_compute_providers({ action: 'list' });
+    const r = await governedTools.compute_providers({ action: 'list' });
     assertOk(r.content, 'has content');
     assertOk(!r.isError, 'not error');
   });
 
   await testAsync('sidekick_compute_models list returns result', async () => {
-    const r = await computeTools.sidekick_compute_models({ action: 'list' });
+    const r = await governedTools.compute_models({ action: 'list' });
     assertOk(r.content, 'has content');
     assertOk(!r.isError, 'not error');
   });
 
   await testAsync('sidekick_compute_nodes list returns result', async () => {
-    const r = await computeTools.sidekick_compute_nodes({ action: 'list' });
+    const r = await governedTools.compute_nodes({ action: 'list' });
     assertOk(r.content, 'has content');
     assertOk(!r.isError, 'not error');
   });
 
   await testAsync('sidekick_compute_jobs list returns result', async () => {
-    const r = await computeTools.sidekick_compute_jobs({ action: 'list' });
+    const r = await governedTools.compute_jobs({ action: 'list' });
     assertOk(r.content, 'has content');
     assertOk(!r.isError, 'not error');
   });
 
   await testAsync('sidekick_compute_route explain returns result', async () => {
-    const r = await computeTools.sidekick_compute_route({ action: 'explain', workload_class: 'inference' });
+    const r = await governedTools.compute_route({ action: 'explain', workload_class: 'inference' });
     assertOk(r.content, 'has content');
     assertOk(!r.isError, 'not error');
   });
@@ -592,7 +606,7 @@ console.log('Compute.13: tool handler enrollment actions');
 
 async function runEnrollmentToolTests() {
   await testAsync('create_token action returns token', async () => {
-    const r = await computeTools.sidekick_compute_nodes({ action: 'create_token', display_name: 'tool-token-test', trust_level: 'trusted' });
+    const r = await governedTools.compute_nodes({ action: 'create_token', display_name: 'tool-token-test', trust_level: 'trusted' });
     assertOk(r.content, 'has content');
     assertOk(!r.isError, 'not error');
     const data = JSON.parse(r.content[0].text);
@@ -601,7 +615,7 @@ async function runEnrollmentToolTests() {
   });
 
   await testAsync('list_tokens action returns array', async () => {
-    const r = await computeTools.sidekick_compute_nodes({ action: 'list_tokens' });
+    const r = await governedTools.compute_nodes({ action: 'list_tokens' });
     assertOk(r.content, 'has content');
     assertOk(!r.isError, 'not error');
     const data = JSON.parse(r.content[0].text);
@@ -612,7 +626,7 @@ async function runEnrollmentToolTests() {
 
   await testAsync('enroll action creates worker', async () => {
     const tok = workerManager.createEnrollmentToken({ displayName: 'tool-enroll', expiresInMs: 600000 });
-    const r = await computeTools.sidekick_compute_nodes({
+    const r = await governedTools.compute_nodes({
       action: 'enroll', token: tok.token, node_id: 'tool-enroll-node',
       display_name: 'Tool Enrolled', platform: 'darwin',
     });
@@ -623,7 +637,7 @@ async function runEnrollmentToolTests() {
   });
 
   await testAsync('enroll action rejects missing fields', async () => {
-    const r = await computeTools.sidekick_compute_nodes({ action: 'enroll', token: 'x' });
+    const r = await governedTools.compute_nodes({ action: 'enroll', token: 'x' });
     assertOk(r.isError, 'is error');
   });
 }

@@ -4,7 +4,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const manager = require("./manager");
-const { selectNode } = require("./placement");
+const { selectNode, pathWithinRoot } = require("./placement");
 const { stableId } = require("./workspace");
 
 const POLL_MS = 100;
@@ -18,7 +18,11 @@ function pathArguments(args = {}) {
   return Object.entries(args).filter(([key, value]) => typeof value === "string" && /(?:^path$|_path$|^path_[ab]$|^destination$|^output$|^cwd$)/i.test(key)).map(([, value]) => value);
 }
 function visibleOnServer(target) {
-  return fs.existsSync(path.resolve(String(target)));
+  const candidate = path.resolve(String(target));
+  // File-backed tools can create or diagnose one missing leaf under an
+  // existing parent. Do not send those to a remote node just because the leaf
+  // is absent; a path whose parent is also absent remains unproven locally.
+  return fs.existsSync(candidate) || fs.existsSync(path.dirname(candidate));
 }
 function authorizedWorkspaceCapabilities(node) {
   const authorized = new Map(manager.listWorkspaces(node.workerId).map(item => [item.name, item]));
@@ -27,13 +31,14 @@ function authorizedWorkspaceCapabilities(node) {
     const workspace = authorized.get(String(item.name || ""));
     return workspace && workspace.rootIdentity === stableId("root", item.root);
   });
-  return roots.length ? roots : node.authorizedWorkspaces;
+  return roots.map(item => ({ ...authorized.get(String(item.name || "")), root: item.root }));
 }
 
-async function maybeExecute(descriptor, args, context = {}) {
+async function maybeExecute(descriptor, args, context = {}, nodeAuthorization = null) {
   if (!isNodeDispatchEnabled(context) || !descriptor?.placement?.nodeSafe) return null;
   manager.ensureSchema();
   const requestedPaths = pathArguments(args);
+  const requiredWorkspacePermission = manager.workspacePermissionForTool(descriptor.name, args);
   const nodes = manager.list().filter(node => node.worker && node.worker.connectionState === "online");
   const placement = selectNode(nodes.map(node => ({ nodeId: node.nodeId, capabilities: {
     ...node.capabilities,
@@ -44,7 +49,7 @@ async function maybeExecute(descriptor, args, context = {}) {
     networkScopes: node.authorizedNetworkScopes,
     healthy: node.capabilityState === "healthy",
     authorized: node.worker.adminState === "enabled" && node.worker.credentialState === "active",
-  }, node })), descriptor, { descriptorSetHash: context.descriptorSetHash, protocolVersion: "1", requestedPaths });
+  }, node })), descriptor, { descriptorSetHash: context.descriptorSetHash, protocolVersion: "1", requestedPaths, requiredWorkspacePermission });
   if (!placement.selected) {
     const pathIsRemoteOnly = requestedPaths.length > 0 && requestedPaths.some(target => !visibleOnServer(target));
     if (pathIsRemoteOnly) return {
@@ -66,6 +71,25 @@ async function maybeExecute(descriptor, args, context = {}) {
     context: {
       actor: context.actor,
       source: context.source,
+      authIdentity: context.authIdentity ? {
+        principal_id: context.authIdentity.principal_id || null,
+        principal_type: context.authIdentity.principal_type || null,
+        credential_id: context.authIdentity.credential_id || null,
+        authentication_method: context.authIdentity.authentication_method || null,
+        scopes: Array.isArray(context.authIdentity.scopes) ? context.authIdentity.scopes.slice(0, 128) : null,
+        delegation_id: context.authIdentity.delegation_id || context.authIdentity.delegationId || null,
+        acting_for_principal_id: context.authIdentity.acting_for_principal_id || null,
+      } : null,
+      nodeAuthorization: nodeAuthorization ? {
+        principalId: nodeAuthorization.principalId || null,
+        permission: nodeAuthorization.permission || null,
+        credentialScopes: Array.isArray(nodeAuthorization.credentialScopes) ? nodeAuthorization.credentialScopes.slice(0, 128) : null,
+        delegationId: nodeAuthorization.delegationId || null,
+        resource: nodeAuthorization.resource && typeof nodeAuthorization.resource === "object" ? {
+          tool: nodeAuthorization.resource.tool || descriptor.name,
+          source: nodeAuthorization.resource.source || context.source || null,
+        } : { tool: descriptor.name, source: context.source || null },
+      } : null,
       project: context.project,
       taskId: context.taskId,
       requestId: requestId(context),
@@ -73,10 +97,17 @@ async function maybeExecute(descriptor, args, context = {}) {
       operationId: context.operationId,
       approvalId: context.approvalId,
       idempotencyKey: context.idempotencyKey,
+      approvedExecution: context.approvedExecution === true,
       timeoutMs: Number(context.timeoutMs) > 0 ? Number(context.timeoutMs) : null,
       deadlineAt: Number(context.timeoutMs) > 0 ? new Date(Date.now() + Number(context.timeoutMs)).toISOString() : null,
     },
-    workspaceId: workspaceIdFromArgs(args),
+    workspaceId: (() => {
+      const authorizedWorkspaces = placement.selected.candidate.capabilities.workspaces || [];
+      const explicitlyRequested = workspaceIdFromArgs(args);
+      const workspace = authorizedWorkspaces.find(item => item && item.workspaceId === explicitlyRequested && (!requiredWorkspacePermission || item.permissions?.[requiredWorkspacePermission] === true) && (!requestedPaths.length || item.root && requestedPaths.every(target => pathWithinRoot(item.root, target))))
+        || (!explicitlyRequested && authorizedWorkspaces.find(item => item && item.workspaceId && (!requiredWorkspacePermission || item.permissions?.[requiredWorkspacePermission] === true) && (!requestedPaths.length || item.root && requestedPaths.every(target => pathWithinRoot(item.root, target)))));
+      return workspace?.workspaceId || null;
+    })(),
     repositoryId: repositoryIdFromArgs(args),
     idempotencyKey: context.idempotencyKey || null,
   });

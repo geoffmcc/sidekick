@@ -1,4 +1,5 @@
 const compute = require("./index");
+const { requireToolExecution, requireCanonicalInvocation } = require("../tools/read-authorization");
 const { TRUST_LEVELS, DATA_CLASSIFICATIONS } = require("./errors");
 const { validateEndpoint } = require("./endpoint-guard");
 const toolContext = require("../tools/context");
@@ -126,6 +127,8 @@ function invalidEnumValue(args) {
 }
 
 async function sidekick_compute({ action, ...args }) {
+  const denied = requireCanonicalInvocation("compute");
+  if (denied) return denied;
   try {
     compute.initialize();
     switch (action) {
@@ -137,6 +140,8 @@ async function sidekick_compute({ action, ...args }) {
 }
 
 async function sidekick_compute_nodes({ action, node_id, worker_id, ...args }, runtime = {}) {
+  const denied = requireCanonicalInvocation("compute_nodes");
+  if (denied) return denied;
   try {
     compute.initialize();
     const targetWorkerId = worker_id || node_id;
@@ -245,6 +250,8 @@ async function sidekick_compute_nodes({ action, node_id, worker_id, ...args }, r
 }
 
 async function sidekick_compute_providers({ action, provider_id, ...args }) {
+  const authorizationError = requireToolExecution({ tool: "compute_providers", action: action || null, provider_id: provider_id || null }, "tools.execute_high", "compute_providers");
+  if (authorizationError) return authorizationError;
   try {
     compute.initialize();
     switch (action) {
@@ -305,6 +312,8 @@ async function sidekick_compute_providers({ action, provider_id, ...args }) {
 }
 
 async function sidekick_compute_models({ action, model_id, ...args }) {
+  const denied = requireCanonicalInvocation("compute_models");
+  if (denied) return denied;
   try {
     compute.initialize();
     switch (action) {
@@ -375,6 +384,8 @@ function validateExecutorRequest({ capability, capabilityRequirements, requestPa
 }
 
 async function sidekick_compute_jobs({ action, job_id, ...args }) {
+  const denied = requireCanonicalInvocation("compute_jobs");
+  if (denied) return denied;
   try {
     compute.initialize();
     const context = toolContext.getExecutionContext();
@@ -492,6 +503,8 @@ async function sidekick_compute_jobs({ action, job_id, ...args }) {
 }
 
 async function sidekick_compute_route({ action, ...args }) {
+  const denied = requireCanonicalInvocation("compute_route");
+  if (denied) return denied;
   try {
     compute.initialize();
     switch (action) {

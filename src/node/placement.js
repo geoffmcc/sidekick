@@ -32,7 +32,8 @@ function normalizeNodeCapabilities(capabilities = {}) {
     binaries: new Set(Array.isArray(capabilities.binaries) ? capabilities.binaries.map(String) : []),
     packs: new Set(Array.isArray(capabilities.packs) ? capabilities.packs.map(String) : []),
     workspaces: new Set(workspaceEntries.map(item => typeof item === "object" ? String(item.name || "") : String(item)).filter(Boolean)),
-    workspaceRoots: workspaceEntries.filter(item => item && typeof item === "object" && item.root).map(item => ({ name: String(item.name || ""), root: String(item.root) })),
+    workspaceEntries: workspaceEntries.filter(item => item && typeof item === "object").map(item => ({ ...item, name: String(item.name || "") })),
+    workspaceRoots: workspaceEntries.filter(item => item && typeof item === "object" && item.root).map(item => ({ name: String(item.name || ""), root: String(item.root), permissions: item.permissions || {} })),
     networkScopes: new Set(Array.isArray(capabilities.networkScopes) ? capabilities.networkScopes.map(String) : []),
     browser: capabilities.browser === true,
     privilege: capabilities.privilege === true,
@@ -52,7 +53,7 @@ function pathWithinRoot(root, target) {
   return comparisonTarget === comparisonRoot || comparisonTarget.startsWith(`${comparisonRoot}/`);
 }
 
-function checkEligibility(descriptor, capabilities, { descriptorSetHash, protocolVersion = "1", requestedPaths = [] } = {}) {
+function checkEligibility(descriptor, capabilities, { descriptorSetHash, protocolVersion = "1", requestedPaths = [], requiredWorkspacePermission = null } = {}) {
   const placement = descriptor?.placement;
   const reasons = [];
   if (!placement?.nodeSafe || !placement.locations.includes("node")) reasons.push("tool_server_bound");
@@ -66,6 +67,12 @@ function checkEligibility(descriptor, capabilities, { descriptorSetHash, protoco
   for (const binary of requirements.binaries || []) if (!node.binaries.has(binary)) reasons.push(`binary_missing:${binary}`);
   for (const pack of requirements.packs || []) if (!node.packs.has(pack)) reasons.push(`pack_missing:${pack}`);
   for (const workspace of requirements.workspaces || []) if (!node.workspaces.has(workspace)) reasons.push(`workspace_missing:${workspace}`);
+  if (requiredWorkspacePermission && !["read", "write", "execute"].includes(requiredWorkspacePermission)) reasons.push("workspace_permission_invalid");
+  if (requiredWorkspacePermission) {
+    const eligibleWorkspaces = node.workspaceEntries.filter(item => item.permissions?.[requiredWorkspacePermission] === true && (!requirements.workspaces?.length || requirements.workspaces.includes(item.name)));
+    if (!eligibleWorkspaces.length) reasons.push(`workspace_permission_missing:${requiredWorkspacePermission}`);
+    if (requestedPaths.length && !eligibleWorkspaces.some(item => item.root && requestedPaths.every(target => pathWithinRoot(item.root, target)))) reasons.push(`workspace_path_permission_missing:${requiredWorkspacePermission}`);
+  }
   for (const scope of requirements.networkScopes || []) if (!node.networkScopes.has(scope)) reasons.push(`network_scope_missing:${scope}`);
   if (requestedPaths.length) {
     if (!node.workspaceRoots.length) reasons.push("path_visibility_unverifiable");
