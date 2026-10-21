@@ -1086,7 +1086,7 @@ async function dashboardSummaryHandler(req, res) {
   }
 }
 
-registerSummaryRoute({ app, handler: dashboardSummaryHandler });
+registerSummaryRoute({ app, handler: dashboardSummaryHandler, requireIdentityPermission });
 
 registerResearchSourceRoutes({
   app,
