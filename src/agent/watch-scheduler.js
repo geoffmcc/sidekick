@@ -71,7 +71,7 @@ function createWatchScheduler({
         else if (watch.source === "endpoint") checkResult = await checkEndpoint(watch.target, watch.network_scope, watch.network_scope_revision);
         else if (watch.source === "file") checkResult = checkFile(watch.target, watch.condition === "content_matches" ? watch.value : null);
       } catch (error) {
-        const reason = error.policyDenied ? "scheduled endpoint probe denied by current network policy" : "scheduled watch check failed";
+        const reason = error.policyDenied ? "scheduled watch check denied by current security policy" : "scheduled watch check failed";
         if (checkExecution) transitionExecution(checkExecution.execution_id, "failed", {
           source: "agent", actor_id: "agent", reason,
           result_status: "failure", error_category: error.code || "watch_check_failed",

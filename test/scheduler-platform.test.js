@@ -219,7 +219,7 @@ console.log('Passed\n');
     console.log('Test SP.3: watch add/check mirrors monitor and check execution');
     const watchedFile = path.join(TEST_DATA_DIR, 'watched.txt');
     fs.writeFileSync(watchedFile, 'trigger me', 'utf-8');
-    result = await TOOLS.watch({ action: 'add', name: 'platform watch', source: 'file', target: watchedFile, condition: 'exists', action_tool: 'sidekick_respond', action_args: { text: 'watch-ok' } });
+    result = await TOOLS.watch({ action: 'add', name: 'platform watch', source: 'file', target: watchedFile, condition: 'content_matches', value: 'trigger me', action_tool: 'sidekick_respond', action_args: { text: 'watch-ok' } });
     assert.strictEqual(result.isError, undefined, result.content?.[0]?.text || "watch add should succeed");
     const watch = tools.loadWatches()[0];
     assert.ok(watch.platform_execution_id);
@@ -235,6 +235,8 @@ console.log('Passed\n');
     assert.strictEqual(watchCheck.result_status, 'success');
     const triggeredEvent = db.getDb().prepare("SELECT * FROM platform_execution_events WHERE event_type = 'schedule.watch.triggered' AND subject_id = ?").get(watch.id);
     assert.ok(triggeredEvent);
+    assert.deepEqual(JSON.parse(triggeredEvent.payload_json).check_result, { exists: true, matches: true });
+    assert.equal(result.content[0].text.includes('trigger me'), false, 'file bytes must not be returned in the watch result');
     console.log('Passed\n');
 
     console.log('Test SP.4: runbook start mirrors execution and step events');

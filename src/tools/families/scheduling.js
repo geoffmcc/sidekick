@@ -23,6 +23,7 @@ const evolveCommon = require("../../evolve/common");
 const platformKernel = require("../../platform/kernel");
 const toolContext = require("../context");
 const { enforcePathPolicy } = require("../path-policy");
+const { checkWatchFile } = require("../watch-file");
 const { childProcessEnv } = require("../../security/child-process");
 const { runBoundedShell } = require("../../security/command-execution");
 const { generateId } = require("../../core/ids");
@@ -660,13 +661,7 @@ function checkProcess(processName) {
 }
 
 function checkFile(filePath, pattern) {
-  try {
-    const output = fs.readFileSync(filePath, "utf-8");
-    const matches = pattern ? output.includes(pattern) : true;
-    return { exists: true, matches, content: output.substring(0, 200) };
-  } catch {
-    return { exists: false, matches: false };
-  }
+  return checkWatchFile(filePath, pattern, { source: toolContext.getExecutionSource() || "unknown" });
 }
 
 function evaluateCondition(watch, checkResult) {
@@ -721,7 +716,7 @@ async function executeWatchAction(watch, checkResult, metadata = {}) {
   }
 }
 
-async function sidekick_watch({ action, id, name, source, target, condition, interval, action_tool, action_args, pause, network_scope }) {
+async function sidekick_watch({ action, id, name, source, target, condition, value, interval, action_tool, action_args, pause, network_scope }) {
   const authorizationError = requireToolExecution({ tool: "watch", action: action || null, id: id || null }, "tools.execute_high", "watch");
   if (authorizationError) return authorizationError;
   const watches = loadWatches();
@@ -730,6 +725,9 @@ async function sidekick_watch({ action, id, name, source, target, condition, int
   if (action === "add") {
     if (!name || !source || !target || !condition) {
       return { content: [{ type: "text", text: "name, source, target, and condition required" }], isError: true };
+    }
+    if (condition === "content_matches" && (typeof value !== "string" || value.length === 0 || value.length > 4096)) {
+      return { content: [{ type: "text", text: "content_matches requires a non-empty value of at most 4096 characters" }], isError: true };
     }
 
     const validSources = ["service", "process", "endpoint", "file"];
@@ -776,6 +774,7 @@ async function sidekick_watch({ action, id, name, source, target, condition, int
       network_scope: source === "endpoint" ? network_scope || null : null,
       network_scope_revision: source === "endpoint" ? networkScopeRevision || null : null,
       condition,
+      value: source === "file" && condition === "content_matches" ? value : null,
       interval: interval || "60s",
       action_tool: action_tool || "sidekick_notify",
       action_args: action_args || { channel: "discord", message: "Watch triggered: {{source}} {{target}} at {{time}}" },
@@ -1056,6 +1055,7 @@ const SCHEMAS = {
     target: z.string().optional().describe("Watch target: service name, process name, HTTP(S) URL, or file path"),
     network_scope: z.string().max(80).optional().describe("Operator-created network scope for private endpoint targets; revalidated on every check"),
     condition: z.string().optional().describe("Trigger condition: status!=active, not_running, status!=200, content_matches, exists, not_exists"),
+    value: z.string().max(4096).optional().describe("Required text to match for content_matches file watches"),
     interval: z.string().optional().describe("Check interval: 30s, 5m, 1h (default: 60s)"),
     action_tool: z.string().optional().describe("Tool to call when triggered (default: notify)"),
     action_args: z.record(z.any()).optional().describe("Arguments for action tool"),
@@ -1090,7 +1090,7 @@ const descriptors = Object.freeze([
     name: "watch",
     description: "Event-driven monitoring: watch services, processes, endpoints, or files and trigger actions on conditions",
     schema: SCHEMAS.watch,
-    args: { action: "string (add|list|remove|pause|check)", id: "string (optional, for remove/pause/check)", name: "string (optional, watch name)", source: "string (optional, service|process|endpoint|file)", target: "string (optional, service name, process name, HTTP(S) URL, or file path)", network_scope: "string (optional; required for private endpoint targets)", condition: "string (optional, e.g. status!=active, not_running, status!=200, content_matches)", interval: "string (optional, e.g. 30s, 5m, 1h)", action_tool: "string (optional, tool to call when triggered)", action_args: "object (optional, args for action tool)", pause: "boolean (optional, true to pause, false to resume)" },
+    args: { action: "string (add|list|remove|pause|check)", id: "string (optional, for remove/pause/check)", name: "string (optional, watch name)", source: "string (optional, service|process|endpoint|file)", target: "string (optional, service name, process name, HTTP(S) URL, or file path)", network_scope: "string (optional; required for private endpoint targets)", condition: "string (optional, e.g. status!=active, not_running, status!=200, content_matches)", value: "string (required for content_matches)", interval: "string (optional, e.g. 30s, 5m, 1h)", action_tool: "string (optional, tool to call when triggered)", action_args: "object (optional, args for action tool)", pause: "boolean (optional, true to pause, false to resume)" },
     risk: "high",
     category: "Monitoring",
     source: "builtin",

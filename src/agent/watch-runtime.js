@@ -1,6 +1,7 @@
 const { execFileSync } = require("child_process");
 const { childProcessEnv } = require("../security/child-process");
 const { checkEndpoint } = require("../security/endpoint-probe");
+const { checkWatchFile } = require("../tools/watch-file");
 
 function createWatchRuntime({ callAgentTool }) {
   function checkService(serviceName) {
@@ -18,11 +19,7 @@ function createWatchRuntime({ callAgentTool }) {
   }
 
   function checkFile(filePath, pattern) {
-    try {
-      const fs = require("fs");
-      const output = fs.readFileSync(filePath, "utf-8");
-      return { exists: true, matches: pattern ? output.includes(pattern) : true, content: output.substring(0, 200) };
-    } catch { return { exists: false, matches: false }; }
+    return checkWatchFile(filePath, pattern, { source: "agent" });
   }
 
   function evaluateWatchCondition(watch, checkResult) {

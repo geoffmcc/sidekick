@@ -9,6 +9,8 @@ const { after, test } = require("node:test");
 const { createEndpointProbe } = require("../src/security/endpoint-probe");
 const { normalizeScope } = require("../src/security/network-scope");
 const { createWatchScheduler } = require("../src/agent/watch-scheduler");
+const { createWatchRuntime } = require("../src/agent/watch-runtime");
+const { MAX_WATCH_FILE_BYTES } = require("../src/tools/watch-file");
 
 const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-watch-egress-"));
 const ENV_KEYS = [
@@ -244,4 +246,57 @@ test("scheduled endpoint policy denial is audited and never dispatches its actio
   assert.equal(transitions[0][0], "watch-check-execution");
   assert.equal(transitions[0][1], "failed");
   assert.equal(events.some(event => event[2] === "schedule.watch.check_failed"), true);
+});
+
+test("Agent file watches recheck current path policy and never return file contents", () => {
+  const target = path.join(TEST_DATA_DIR, "watch-secret.txt");
+  fs.writeFileSync(target, "SYNTHETIC_WATCH_SECRET", "utf8");
+  const runtime = createWatchRuntime({ callAgentTool: async () => ({}) });
+  const result = runtime.checkFile(target, "SYNTHETIC_WATCH_SECRET");
+  assert.deepEqual(result, { exists: true, matches: true });
+  assert.equal(JSON.stringify(result).includes("SYNTHETIC_WATCH_SECRET"), false);
+
+  const priorDenied = process.env.SIDEKICK_AGENT_DENIED_PATHS;
+  try {
+    process.env.SIDEKICK_AGENT_DENIED_PATHS = target;
+    assert.throws(() => runtime.checkFile(target, "SYNTHETIC_WATCH_SECRET"), error => error.code === "path_policy_denied" && error.policyDenied === true);
+  } finally {
+    if (priorDenied === undefined) delete process.env.SIDEKICK_AGENT_DENIED_PATHS;
+    else process.env.SIDEKICK_AGENT_DENIED_PATHS = priorDenied;
+  }
+
+  const oversized = path.join(TEST_DATA_DIR, "watch-oversized.txt");
+  fs.writeFileSync(oversized, Buffer.alloc(MAX_WATCH_FILE_BYTES + 1, 0x61));
+  assert.throws(() => runtime.checkFile(oversized, "a"), error => error.code === "watch_file_too_large");
+});
+
+test("Agent watch scheduler only persists and dispatches bounded file metadata", async () => {
+  const target = path.join(TEST_DATA_DIR, "watch-event-secret.txt");
+  fs.writeFileSync(target, "SYNTHETIC_EVENT_SECRET", "utf8");
+  const runtime = createWatchRuntime({ callAgentTool: async () => ({}) });
+  const watch = {
+    id: "watch-file-redaction", name: "file event", source: "file", target,
+    condition: "content_matches", value: "SYNTHETIC_EVENT_SECRET", status: "active",
+    platform_execution_id: "watch-file-definition",
+  };
+  const events = [];
+  let dispatched = null;
+  const scheduler = createWatchScheduler({
+    loadWatches: () => [watch], saveWatches: () => {},
+    claimScheduledDefinition: () => ({ ok: true, claim: null }), pauseWatchForCancel: () => {},
+    startScheduledLeaseRenewal: () => null, releaseScheduledClaim: () => {},
+    createScheduledPlatformExecution: () => ({ execution_id: "watch-file-check" }),
+    appendScheduledPlatformEvent: (...args) => events.push(args), transitionExecution: () => {},
+    executeWatchAction: async (_watch, checkResult) => { dispatched = checkResult; return {}; },
+    checkService: () => ({}), checkProcess: () => ({}), checkEndpoint: async () => ({}),
+    checkFile: (filePath, pattern) => runtime.checkFile(filePath, pattern),
+    evaluateWatchCondition: (_watch, checkResult) => checkResult.matches,
+    processId: 42,
+  });
+
+  await scheduler.checkWatch(watch);
+  const trigger = events.find(event => event[2] === "schedule.watch.triggered");
+  assert.deepEqual(trigger[3].check_result, { exists: true, matches: true });
+  assert.deepEqual(dispatched, { exists: true, matches: true });
+  assert.equal(JSON.stringify(trigger[3]).includes("SYNTHETIC_EVENT_SECRET"), false);
 });
