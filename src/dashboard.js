@@ -56,6 +56,7 @@ const { registerNetworkScopeRoutes } = require("./dashboard/network-scope-routes
 const { registerClearRoutes } = require("./dashboard/clear-routes");
 const { registerDatabaseRoutes } = require("./dashboard/database-routes");
 const { dashboardActor, createDashboardAuditEntry } = require("./dashboard/audit-identity");
+const { appendAuditLine } = require("./dashboard/audit-log");
 const { registerAgentProxyRoutes } = require("./dashboard/agent-proxy-routes");
 const { registerBlackboxRoutes } = require("./dashboard/blackbox-routes");
 const { registerPredictRoutes } = require("./dashboard/predict-routes");
@@ -302,7 +303,7 @@ const AUDIT_LOG = path.join(DATA_DIR, 'audit.jsonl');
 function auditLog(req, action, details, actor = null) {
   const entry = createDashboardAuditEntry(req, action, details, actor);
   const line = JSON.stringify(entry) + '\n';
-  fs.appendFileSync(AUDIT_LOG, line);
+  appendAuditLine(AUDIT_LOG, line);
 }
 
 function startDashboardExecution(req, action) {
