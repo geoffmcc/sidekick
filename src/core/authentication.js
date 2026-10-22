@@ -49,10 +49,13 @@ function createSession(principalId, { userAgent = null, ipAddress = null, ttlMs 
   const timestamp = Date.now();
   const createdAt = new Date(timestamp).toISOString();
   const expiresAt = new Date(timestamp + Math.max(60_000, Number(ttlMs) || SESSION_TTL_MS)).toISOString();
-  dbStore.getDb().prepare(`INSERT INTO identity_sessions
-    (session_id_hash, principal_id, created_at, expires_at, last_seen_at, user_agent, ip_address)
-    VALUES (?, ?, ?, ?, ?, ?, ?)`).run(hash(raw), principalId, createdAt, expiresAt, createdAt, userAgent, ipAddress);
-  identity.recordAuditEvent("session.created", principalId, principalId, { expires_at: expiresAt });
+  const db = dbStore.getDb();
+  db.transaction(() => {
+    db.prepare(`INSERT INTO identity_sessions
+      (session_id_hash, principal_id, created_at, expires_at, last_seen_at, user_agent, ip_address)
+      VALUES (?, ?, ?, ?, ?, ?, ?)`).run(hash(raw), principalId, createdAt, expiresAt, createdAt, userAgent, ipAddress);
+    identity.recordAuditEvent("session.created", principalId, principalId, { expires_at: expiresAt });
+  })();
   return { token: raw, expires_at: expiresAt };
 }
 
@@ -104,10 +107,13 @@ function createCredential({ principalId, displayName, scopes = [], expiresAt = n
   const secret = crypto.randomBytes(CREDENTIAL_BYTES).toString("base64url");
   const token = `skc_${credentialId}_${secret}`;
   const timestamp = now();
-  dbStore.getDb().prepare(`INSERT INTO identity_credentials
-    (credential_id, principal_id, display_name, verifier_hash, token_prefix, scopes_json, created_at, expires_at, created_by_principal_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(credentialId, principalId, name, hash(secret), token.slice(0, 16), JSON.stringify([...new Set(scopes.map(scope => scope.trim()))]), timestamp, expiry, createdByPrincipalId);
-  identity.recordAuditEvent("credential.created", principalId, createdByPrincipalId, { credential_id: credentialId, scopes: [...new Set(scopes.map(scope => scope.trim()))], expires_at: expiry });
+  const db = dbStore.getDb();
+  db.transaction(() => {
+    db.prepare(`INSERT INTO identity_credentials
+      (credential_id, principal_id, display_name, verifier_hash, token_prefix, scopes_json, created_at, expires_at, created_by_principal_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(credentialId, principalId, name, hash(secret), token.slice(0, 16), JSON.stringify([...new Set(scopes.map(scope => scope.trim()))]), timestamp, expiry, createdByPrincipalId);
+    identity.recordAuditEvent("credential.created", principalId, createdByPrincipalId, { credential_id: credentialId, scopes: [...new Set(scopes.map(scope => scope.trim()))], expires_at: expiry });
+  })();
   return { token, credential: getCredential(credentialId) };
 }
 
@@ -139,12 +145,15 @@ function authenticateCredential(token) {
   return { ...safeCredential(row), principal_type: row.principal_type, principal_display_name: row.display_name, last_used_at: lastUsed };
 }
 
-function revokeCredential(credentialId) {
+function revokeCredential(credentialId, actorPrincipalId = null) {
   const idValue = requiredText(credentialId, "credential_id");
-  const principal = dbStore.getDb().prepare("SELECT principal_id FROM identity_credentials WHERE credential_id = ?").get(idValue);
-  const result = dbStore.getDb().prepare("UPDATE identity_credentials SET revoked_at = ? WHERE credential_id = ? AND revoked_at IS NULL").run(now(), idValue);
-  if (result.changes === 1) identity.recordAuditEvent("credential.revoked", principal?.principal_id, null, { credential_id: idValue });
-  return result.changes === 1;
+  const db = dbStore.getDb();
+  return db.transaction(() => {
+    const principal = db.prepare("SELECT principal_id FROM identity_credentials WHERE credential_id = ?").get(idValue);
+    const result = db.prepare("UPDATE identity_credentials SET revoked_at = ? WHERE credential_id = ? AND revoked_at IS NULL").run(now(), idValue);
+    if (result.changes === 1) identity.recordAuditEvent("credential.revoked", principal?.principal_id, actorPrincipalId, { credential_id: idValue });
+    return result.changes === 1;
+  })();
 }
 
 function createOwnerRecoveryToken(ownerPrincipalId, ttlMs = RECOVERY_TTL_MS) {
@@ -153,8 +162,11 @@ function createOwnerRecoveryToken(ownerPrincipalId, ttlMs = RECOVERY_TTL_MS) {
   const token = crypto.randomBytes(RECOVERY_BYTES).toString("base64url");
   const createdAt = now();
   const expiresAt = new Date(Date.now() + Math.max(60_000, Number(ttlMs) || RECOVERY_TTL_MS)).toISOString();
-  dbStore.getDb().prepare("INSERT INTO identity_recovery_tokens (token_hash, owner_principal_id, created_at, expires_at) VALUES (?, ?, ?, ?)").run(hash(token), owner.principal_id, createdAt, expiresAt);
-  identity.recordAuditEvent("owner.recovery_token_created", owner.principal_id, owner.principal_id, { expires_at: expiresAt });
+  const db = dbStore.getDb();
+  db.transaction(() => {
+    db.prepare("INSERT INTO identity_recovery_tokens (token_hash, owner_principal_id, created_at, expires_at) VALUES (?, ?, ?, ?)").run(hash(token), owner.principal_id, createdAt, expiresAt);
+    identity.recordAuditEvent("owner.recovery_token_created", owner.principal_id, owner.principal_id, { expires_at: expiresAt });
+  })();
   return { token, expires_at: expiresAt };
 }
 

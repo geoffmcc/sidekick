@@ -428,7 +428,7 @@ function registerAuthRoutes({
 
   app.post("/api/auth/credentials/:id/revoke", (req, res) => {
     if (!requireIdentityPermission(req, res, "credentials.revoke")) return;
-    res.json({ revoked: authentication.revokeCredential(req.params.id) });
+    res.json({ revoked: authentication.revokeCredential(req.params.id, req.authPrincipal?.principal_id || null) });
   });
 
   app.post("/api/auth/credentials/:id/rotate", (req, res) => {

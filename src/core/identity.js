@@ -109,9 +109,11 @@ function createPrincipal({ type, displayName, createdByPrincipalId = null, metad
   const id = principalId();
   const timestamp = now();
   const db = dbStore.getDb();
-  db.prepare(`INSERT INTO principals (principal_id, principal_type, display_name, created_by_principal_id, metadata_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(id, type, name, createdByPrincipalId, JSON.stringify(metadata), timestamp, timestamp);
-  audit("principal.created", id, actorPrincipalId || createdByPrincipalId, { principal_type: type });
-  return getPrincipal(id);
+  return db.transaction(() => {
+    db.prepare(`INSERT INTO principals (principal_id, principal_type, display_name, created_by_principal_id, metadata_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(id, type, name, createdByPrincipalId, JSON.stringify(metadata), timestamp, timestamp);
+    audit("principal.created", id, actorPrincipalId || createdByPrincipalId, { principal_type: type });
+    return getPrincipal(id);
+  })();
 }
 
 function createHumanUser({ username, password, displayName, actorPrincipalId = null, metadata = {} } = {}) {
@@ -119,16 +121,12 @@ function createHumanUser({ username, password, displayName, actorPrincipalId = n
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{2,79}$/.test(name)) throw new Error("username must be 3-80 characters and use letters, numbers, ., _, or -");
   const passwordDigest = passwordHash(password);
   const db = dbStore.getDb();
-  const user = createPrincipal({ type: "human", displayName: displayName || name, metadata, actorPrincipalId });
-  try {
+  return db.transaction(() => {
+    const user = createPrincipal({ type: "human", displayName: displayName || name, metadata, actorPrincipalId });
     db.prepare("INSERT INTO human_users (principal_id, username, password_hash, password_scheme, password_changed_at) VALUES (?, ?, ?, ?, ?)").run(user.principal_id, name, passwordDigest, PASSWORD_SCHEME, now());
-  } catch (error) {
-    db.prepare("DELETE FROM identity_audit_events WHERE principal_id = ?").run(user.principal_id);
-    db.prepare("DELETE FROM principals WHERE principal_id = ?").run(user.principal_id);
-    throw error;
-  }
-  audit("user.created", user.principal_id, actorPrincipalId, { username: name });
-  return getPrincipal(user.principal_id);
+    audit("user.created", user.principal_id, actorPrincipalId, { username: name });
+    return getPrincipal(user.principal_id);
+  })();
 }
 
 function updatePrincipal(id, { displayName, metadata } = {}, actorPrincipalId = null) {
@@ -137,9 +135,12 @@ function updatePrincipal(id, { displayName, metadata } = {}, actorPrincipalId = 
   const nextName = displayName === undefined ? principal.display_name : requiredText(displayName, "displayName");
   const nextMetadata = metadata === undefined ? principal.metadata : metadata;
   if (!nextMetadata || typeof nextMetadata !== "object" || Array.isArray(nextMetadata)) throw new Error("metadata must be an object");
-  dbStore.getDb().prepare("UPDATE principals SET display_name = ?, metadata_json = ?, updated_at = ? WHERE principal_id = ?").run(nextName, JSON.stringify(nextMetadata), now(), principal.principal_id);
-  audit("principal.updated", principal.principal_id, actorPrincipalId, { display_name_changed: nextName !== principal.display_name });
-  return getPrincipal(principal.principal_id);
+  const db = dbStore.getDb();
+  return db.transaction(() => {
+    db.prepare("UPDATE principals SET display_name = ?, metadata_json = ?, updated_at = ? WHERE principal_id = ?").run(nextName, JSON.stringify(nextMetadata), now(), principal.principal_id);
+    audit("principal.updated", principal.principal_id, actorPrincipalId, { display_name_changed: nextName !== principal.display_name });
+    return getPrincipal(principal.principal_id);
+  })();
 }
 
 function updateUsername(id, username, actorPrincipalId = null) {
@@ -147,9 +148,12 @@ function updateUsername(id, username, actorPrincipalId = null) {
   if (!principal || principal.principal_type !== "human") throw new Error("human principal not found");
   const name = requiredText(username, "username", 80);
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{2,79}$/.test(name)) throw new Error("username must be 3-80 characters and use letters, numbers, ., _, or -");
-  dbStore.getDb().prepare("UPDATE human_users SET username = ? WHERE principal_id = ?").run(name, principal.principal_id);
-  audit("user.username_changed", principal.principal_id, actorPrincipalId, {});
-  return getPrincipal(principal.principal_id);
+  const db = dbStore.getDb();
+  return db.transaction(() => {
+    db.prepare("UPDATE human_users SET username = ? WHERE principal_id = ?").run(name, principal.principal_id);
+    audit("user.username_changed", principal.principal_id, actorPrincipalId, {});
+    return getPrincipal(principal.principal_id);
+  })();
 }
 
 function assignRole(principalIdValue, role, actorPrincipalId = null) {
@@ -268,9 +272,13 @@ function setPrincipalEnabled(id, enabled, actorPrincipalId = null) {
     if (remaining < 1) throw new Error("cannot disable the final usable Owner");
   }
   const timestamp = now();
-  dbStore.getDb().prepare("UPDATE principals SET enabled = ?, disabled_at = ?, updated_at = ? WHERE principal_id = ?").run(enabled ? 1 : 0, enabled ? null : timestamp, timestamp, principal.principal_id);
-  audit(enabled ? "principal.enabled" : "principal.disabled", principal.principal_id, actorPrincipalId, {});
-  return getPrincipal(principal.principal_id);
+  const db = dbStore.getDb();
+  return db.transaction(() => {
+    db.prepare("UPDATE principals SET enabled = ?, disabled_at = ?, updated_at = ? WHERE principal_id = ?").run(enabled ? 1 : 0, enabled ? null : timestamp, timestamp, principal.principal_id);
+    if (!enabled) db.prepare("UPDATE identity_sessions SET invalidated_at = ? WHERE principal_id = ? AND invalidated_at IS NULL").run(timestamp, principal.principal_id);
+    audit(enabled ? "principal.enabled" : "principal.disabled", principal.principal_id, actorPrincipalId, {});
+    return getPrincipal(principal.principal_id);
+  })();
 }
 
 function changePassword(id, password, actorPrincipalId = null) {
@@ -278,16 +286,23 @@ function changePassword(id, password, actorPrincipalId = null) {
   if (!principal) throw new Error("principal not found");
   const digest = passwordHash(password);
   const timestamp = now();
-  dbStore.getDb().prepare("UPDATE human_users SET password_hash = ?, password_changed_at = ?, last_login_at = NULL WHERE principal_id = ?").run(digest, timestamp, principal.principal_id);
-  audit("user.password_changed", principal.principal_id, actorPrincipalId, {});
-  return getPrincipal(principal.principal_id);
+  const db = dbStore.getDb();
+  return db.transaction(() => {
+    db.prepare("UPDATE human_users SET password_hash = ?, password_changed_at = ?, last_login_at = NULL WHERE principal_id = ?").run(digest, timestamp, principal.principal_id);
+    db.prepare("UPDATE identity_sessions SET invalidated_at = ? WHERE principal_id = ? AND invalidated_at IS NULL").run(timestamp, principal.principal_id);
+    audit("user.password_changed", principal.principal_id, actorPrincipalId, {});
+    return getPrincipal(principal.principal_id);
+  })();
 }
 
 function verifyUserPassword(username, password) {
   const row = dbStore.getDb().prepare("SELECT p.*, h.password_hash FROM principals p JOIN human_users h ON h.principal_id = p.principal_id WHERE h.username = ?").get(requiredText(username, "username", 80));
   if (!row || !row.enabled || !verifyPassword(password, row.password_hash)) return null;
-  dbStore.getDb().prepare("UPDATE human_users SET last_login_at = ? WHERE principal_id = ?").run(now(), row.principal_id);
-  audit("user.login_succeeded", row.principal_id, row.principal_id, {});
+  const db = dbStore.getDb();
+  db.transaction(() => {
+    db.prepare("UPDATE human_users SET last_login_at = ? WHERE principal_id = ?").run(now(), row.principal_id);
+    audit("user.login_succeeded", row.principal_id, row.principal_id, {});
+  })();
   return getPrincipal(row.principal_id);
 }
 
