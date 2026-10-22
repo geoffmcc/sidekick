@@ -2073,12 +2073,15 @@ function getUserId() {
   return row ? row.value : null;
 }
 
-function setUserId(userId) {
-  db.prepare(`
-    INSERT INTO meta (key, value) VALUES ('user_id', ?)
-    ON CONFLICT(key) DO UPDATE SET value = excluded.value
-  `).run(userId);
-  return userId;
+function setUserId(userId, options = {}) {
+  return db.transaction(() => {
+    db.prepare(`
+      INSERT INTO meta (key, value) VALUES ('user_id', ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value
+    `).run(userId);
+    if (typeof options.audit === "function") options.audit({ user_id: userId });
+    return userId;
+  })();
 }
 
 function exportForSync(options = {}) {

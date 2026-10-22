@@ -124,3 +124,35 @@ test("sync import is refused when no transactional identity audit writer is conf
   assert.equal(response.body.code, "audit_unavailable");
   assert.equal(hasMemory(content), false);
 });
+
+test("sync identity update writes its request audit before changing the user ID", () => {
+  const existing = dbStore.getUserId();
+  failRequestAudit = true;
+  const response = invoke(handlers.get("POST /api/sync/identity"), { body: { user_id: "sync-user-request-fail" } });
+  failRequestAudit = false;
+  assert.equal(response.statusCode, 503);
+  assert.equal(response.body.code, "audit_unavailable");
+  assert.equal(dbStore.getUserId(), existing);
+});
+
+test("sync identity update rolls back when its actor audit cannot be committed", () => {
+  const existing = dbStore.getUserId();
+  dbStore.getDb().exec(`CREATE TEMP TRIGGER reject_sync_identity_audit BEFORE INSERT ON identity_audit_events WHEN NEW.event_type = 'dashboard.sync.identity.updated' BEGIN SELECT RAISE(ABORT, 'synthetic sync identity audit failure'); END`);
+  const response = invoke(handlers.get("POST /api/sync/identity"), { body: { user_id: "sync-user-identity-fail" } });
+  dbStore.getDb().exec("DROP TRIGGER reject_sync_identity_audit");
+  assert.equal(response.statusCode, 503);
+  assert.equal(response.body.code, "audit_unavailable");
+  assert.equal(dbStore.getUserId(), existing);
+});
+
+test("sync identity update commits actor audit atomically and reports degraded completion logging", () => {
+  failCompletionAudit = true;
+  const response = invoke(handlers.get("POST /api/sync/identity"), { body: { user_id: "sync-user-identity-success" } });
+  failCompletionAudit = false;
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.body.audit_status, "degraded");
+  assert.equal(dbStore.getUserId(), "sync-user-identity-success");
+  const event = dbStore.getDb().prepare("SELECT actor_principal_id, details_json FROM identity_audit_events WHERE event_type = 'dashboard.sync.identity.updated' ORDER BY created_at DESC LIMIT 1").get();
+  assert.equal(event.actor_principal_id, actor.principal_id);
+  assert.equal(JSON.parse(event.details_json).user_id, "sync-user-identity-success");
+});

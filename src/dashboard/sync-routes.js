@@ -38,10 +38,21 @@ function registerSyncRoutes({ app, dbStore, requireIdentityPermission, projectAc
     if (!requireIdentityPermission(req, res, "sync.manage")) return;
     try {
       const { user_id } = req.body || {};
-       if (!user_id || typeof user_id !== "string") return errorResponse(req, res, null, { status: 400, code: "invalid_request", component: "sync" });
-      dbStore.setUserId(user_id);
-      auditLog(req, "sync_set_user_id", { user_id });
-      res.json({ ok: true, user_id });
+      if (!user_id || typeof user_id !== "string") return errorResponse(req, res, null, { status: 400, code: "invalid_request", component: "sync" });
+      if (typeof recordIdentityAudit !== "function") return errorResponse(req, res, null, { status: 503, code: "audit_unavailable", component: "sync" });
+      try { auditLog(req, "sync_identity.update.requested", {}); }
+      catch { return errorResponse(req, res, null, { status: 503, code: "audit_unavailable", component: "sync" }); }
+      try {
+        dbStore.setUserId(user_id, {
+          audit: details => recordIdentityAudit("dashboard.sync.identity.updated", null, req.authPrincipal.principal_id, details),
+        });
+      } catch {
+        return errorResponse(req, res, null, { status: 503, code: "audit_unavailable", component: "sync" });
+      }
+      let auditStatus = "complete";
+      try { auditLog(req, "sync_set_user_id", { user_id }); }
+      catch { auditStatus = "degraded"; }
+      res.json({ ok: true, user_id, audit_status: auditStatus });
     } catch (error) { return errorResponse(req, res, error, { status: 400, code: "invalid_request", component: "sync" }); }
   });
 
