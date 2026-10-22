@@ -54,6 +54,20 @@ function Restart-SidekickService {
   param([string]$Name)
   Write-Host "  restarting $Name..." -ForegroundColor Yellow
   Run-Remote "sudo systemctl restart $Name" | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "Failed to restart $Name" }
+}
+
+function Sync-SidekickSystemdUnits {
+  Write-Host "  installing updated Sidekick systemd units..." -ForegroundColor Yellow
+  $units = @("sidekick-mcp.service", "sidekick-agent.service", "sidekick-dashboard.service")
+  foreach ($unit in $units) {
+    $source = "$REMOTE_DIR/systemd/$unit"
+    $target = "/etc/systemd/system/$unit"
+    Run-Remote "sudo install -o root -g root -m 0644 $source $target" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Failed to install $unit" }
+  }
+  Run-Remote "sudo systemctl daemon-reload" | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "Failed to reload systemd after updating Sidekick units" }
 }
 
 function Ensure-SecretConfig {
@@ -508,6 +522,7 @@ try {
 
   Repair-OptionalTools
   Ensure-SecretConfig
+  Sync-SidekickSystemdUnits
 
   # Generate version.json from local git
   Write-Host "  Generating version.json..." -ForegroundColor Green
@@ -553,8 +568,10 @@ try {
 
   if ($gitModeUsed) {
     Write-Host ""
-    Write-Host "--- Restarting MCP ---" -ForegroundColor Cyan
+    Write-Host "--- Restarting Services ---" -ForegroundColor Cyan
     Restart-SidekickService "sidekick-mcp"
+    Restart-SidekickService "sidekick-agent"
+    Restart-SidekickService "sidekick-dashboard"
   } else {
     Write-Host ""
     Write-Host "--- Installing Dependencies ---" -ForegroundColor Cyan

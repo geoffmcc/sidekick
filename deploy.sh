@@ -51,6 +51,15 @@ run_remote() { ssh -i "$SSH_KEY" $SSH_OPTS "$VPS" "$@" 2>&1; }
 copy_to_vps() { scp -i "$SSH_KEY" $SSH_OPTS "$1" "$VPS:$2" 2>&1; }
 restart_service() { echo -e "  \033[33mrestarting $1...\033[0m"; run_remote "sudo systemctl restart $1" >/dev/null; }
 
+sync_service_units() {
+  echo -e "  \033[33minstalling updated Sidekick systemd units...\033[0m"
+  local command="sudo install -o root -g root -m 0644 $REMOTE_DIR/systemd/sidekick-mcp.service /etc/systemd/system/sidekick-mcp.service && sudo install -o root -g root -m 0644 $REMOTE_DIR/systemd/sidekick-agent.service /etc/systemd/system/sidekick-agent.service && sudo install -o root -g root -m 0644 $REMOTE_DIR/systemd/sidekick-dashboard.service /etc/systemd/system/sidekick-dashboard.service && sudo systemctl daemon-reload"
+  if ! run_remote "$command" >/dev/null; then
+    echo -e "\033[31mERROR: Failed to install/reload Sidekick systemd units\033[0m"
+    return 1
+  fi
+}
+
 ensure_secret_config() {
   echo -e "  \033[33mEnsuring protected secret configuration...\033[0m"
   if ! run_remote "test -x $REMOTE_DIR/scripts/ensure-secret-config.sh && bash $REMOTE_DIR/scripts/ensure-secret-config.sh $REMOTE_DIR" >/dev/null; then
@@ -487,11 +496,14 @@ fi
 
 repair_optional_tools
 ensure_secret_config
+sync_service_units
 
 if [ "$git_mode_used" = true ]; then
   echo ""
-  echo -e "\033[36m--- Restarting MCP ---\033[0m"
+  echo -e "\033[36m--- Restarting Services ---\033[0m"
   restart_service "sidekick-mcp"
+  restart_service "sidekick-agent"
+  restart_service "sidekick-dashboard"
 else
   echo ""
   echo -e "\033[36m--- Installing Dependencies ---\033[0m"

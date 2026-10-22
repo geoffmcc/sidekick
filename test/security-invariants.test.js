@@ -43,6 +43,24 @@ test("all Sidekick processes migrate shared state before restoring module entrie
   const mcpUnit = source("systemd/sidekick-mcp.service");
   assert.match(mcpUnit, /^ExecStartPost=\/usr\/bin\/node scripts\/wait-for-mcp-ready\.js$/m,
     "MCP is not considered started until its health endpoint responds");
+
+  const deploySh = source("deploy.sh");
+  assert.match(deploySh, /sudo install .*sidekick-mcp\.service .*sidekick-mcp\.service.*sudo install .*sidekick-agent\.service .*sidekick-agent\.service.*sudo install .*sidekick-dashboard\.service .*sidekick-dashboard\.service.*sudo systemctl daemon-reload/,
+    "Bash deploy installs all dependent units and reloads systemd");
+  assert.ok(deploySh.indexOf("ensure_secret_config\nsync_service_units") < deploySh.indexOf('if [ "$git_mode_used" = true ]'),
+    "Bash deploy installs unit changes before restarting services");
+  assert.match(deploySh, /restart_service "sidekick-mcp"\s+restart_service "sidekick-agent"\s+restart_service "sidekick-dashboard"/,
+    "Bash deploy restarts core before its dependent services");
+
+  const deployPs = source("deploy.ps1");
+  assert.match(deployPs, /\$units = @\("sidekick-mcp\.service", "sidekick-agent\.service", "sidekick-dashboard\.service"\)/,
+    "PowerShell deploy syncs all Sidekick units");
+  assert.match(deployPs, /Run-Remote "sudo install -o root -g root -m 0644 \$source \$target"[\s\S]*sudo systemctl daemon-reload/,
+    "PowerShell deploy installs unit files and reloads systemd");
+  assert.ok(deployPs.indexOf("Ensure-SecretConfig\n  Sync-SidekickSystemdUnits") < deployPs.indexOf("if ($gitModeUsed)"),
+    "PowerShell deploy installs unit changes before restarting services");
+  assert.match(deployPs, /Restart-SidekickService "sidekick-mcp"\s+Restart-SidekickService "sidekick-agent"\s+Restart-SidekickService "sidekick-dashboard"/,
+    "PowerShell deploy restarts core before dependent services");
 });
 
 test("selected privileged handler boundaries retain exact canonical dispatch guards", () => {
