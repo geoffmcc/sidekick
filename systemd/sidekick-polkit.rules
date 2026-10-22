@@ -1,0 +1,30 @@
+// Installed as /etc/polkit-1/rules.d/50-sidekick.rules.
+// This grants the Sidekick OS account unit-state operations only. It does not
+// grant unit-file enablement, daemon reload, environment changes, or general
+// administrative access.
+polkit.addRule(function(action, subject) {
+  if (action.id !== "org.freedesktop.systemd1.manage-units" ||
+      subject.user !== "@SIDEKICK_USER@") {
+    return;
+  }
+
+  var unit = action.lookup("unit");
+  var verb = action.lookup("verb");
+  var units = [
+    "sidekick-mcp.service",
+    "sidekick-dashboard.service",
+    "sidekick-agent.service",
+    "sidekick-postgres.service",
+    "sidekick-redis.service",
+    "sidekick-qdrant.service",
+    "sidekick-influxdb.service",
+    "sidekick-grafana.service",
+    "sidekick-metrics.timer",
+    "nginx.service"
+  ];
+  var verbs = ["start", "stop", "restart", "reload"];
+
+  if (units.indexOf(unit) !== -1 && verbs.indexOf(verb) !== -1) {
+    return polkit.Result.YES;
+  }
+});

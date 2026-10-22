@@ -176,7 +176,7 @@ async function sidekick_nginx({ action, site_name, domain, upstream_port, ssl_em
   if (denied) return denied;
   try {
     if (action === "status") {
-      const result = safeExecFileSync("sudo", ["systemctl", "status", "nginx", "--no-pager"], { timeout: 5000, encoding: "utf-8" });
+      const result = safeExecFileSync("systemctl", ["status", "nginx", "--no-pager"], { timeout: 5000, encoding: "utf-8" });
       return { content: [{ type: "text", text: result }] };
     }
 
@@ -218,7 +218,7 @@ async function sidekick_nginx({ action, site_name, domain, upstream_port, ssl_em
       // Test config
       try {
         safeExecFileSync("sudo", ["nginx", "-t"], { timeout: 5000, stdio: ["ignore", "pipe", "pipe"] });
-        safeExecFileSync("sudo", ["systemctl", "reload", "nginx"], { timeout: 5000 });
+        safeExecFileSync("systemctl", ["reload", "nginx"], { timeout: 5000 });
         return { content: [{ type: "text", text: `Added site ${siteName} for ${domainName} -> port ${proxyPort}` }] };
       } catch (e) {
         safeExecFileSync("sudo", ["rm", "-f", enabledPath, availablePath], { timeout: 5000 });
@@ -235,7 +235,7 @@ async function sidekick_nginx({ action, site_name, domain, upstream_port, ssl_em
       }
       const siteName = validIdentifier(site_name, "site name");
       safeExecFileSync("sudo", ["rm", "-f", `/etc/nginx/sites-enabled/${siteName}`, `/etc/nginx/sites-available/${siteName}`], { timeout: 5000 });
-      safeExecFileSync("sudo", ["systemctl", "reload", "nginx"], { timeout: 5000 });
+      safeExecFileSync("systemctl", ["reload", "nginx"], { timeout: 5000 });
       return { content: [{ type: "text", text: `Removed site ${siteName}` }] };
     }
 
@@ -249,7 +249,7 @@ async function sidekick_nginx({ action, site_name, domain, upstream_port, ssl_em
     }
 
     if (action === "reload") {
-      safeExecFileSync("sudo", ["systemctl", "reload", "nginx"], { timeout: 5000 });
+      safeExecFileSync("systemctl", ["reload", "nginx"], { timeout: 5000 });
       return { content: [{ type: "text", text: "Nginx reloaded" }] };
     }
 

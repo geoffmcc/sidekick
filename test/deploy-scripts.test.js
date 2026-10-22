@@ -471,8 +471,8 @@ console.log('Test 3.3: bootstrap.sh installs systemd services');
   console.log('✓ Systemd service installation present\n');
 }
 
-// Test 3.4: bootstrap.sh configures sudoers
-console.log('Test 3.4: bootstrap.sh configures sudoers');
+// Test 3.4: bootstrap.sh configures narrowly scoped service control
+console.log('Test 3.4: bootstrap.sh configures narrowly scoped service control');
 {
   assert.ok(
     bootstrapShContent.includes('/etc/sudoers.d/sidekick'),
@@ -483,16 +483,16 @@ console.log('Test 3.4: bootstrap.sh configures sudoers');
     'bootstrap.sh should configure NOPASSWD sudo'
   );
   assert.ok(
-    bootstrapShContent.includes('systemctl start sidekick-mcp'),
-    'bootstrap.sh should allow starting sidekick-mcp'
+    bootstrapShContent.includes('install_sidekick_polkit_rule "$USERNAME" "$SCRIPT_DIR"'),
+    'bootstrap.sh should install the scoped systemd polkit rule'
   );
   assert.ok(
-    bootstrapShContent.includes('systemctl restart sidekick-dashboard'),
-    'bootstrap.sh should allow restarting sidekick-dashboard'
+    bootstrapShContent.includes('polkitd'),
+    'bootstrap.sh should install the polkit authorization service'
   );
   assert.ok(
-    bootstrapShContent.includes('systemctl start sidekick-metrics.timer'),
-    'bootstrap.sh should allow starting sidekick-metrics.timer'
+    !bootstrapShContent.includes('NOPASSWD: /usr/bin/systemctl'),
+    'bootstrap.sh must not use sudoers for systemd unit control'
   );
   assert.ok(
     !bootstrapShContent.includes('NOPASSWD: /usr/bin/docker'),

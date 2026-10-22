@@ -7,7 +7,7 @@
 // the shared path policy, and the observability family's sidekick_status
 // (incident snapshots) — never on tools-legacy.js. All helpers move verbatim,
 // including scheduleMcpRestart (spawns a detached delayed
-// "sudo systemctl restart sidekick-mcp" at call time — behavior-critical for
+// "systemctl restart sidekick-mcp" at call time — behavior-critical for
 // deploys; no timers run at module load). `ops` is `critical` risk,
 // preserved from src/tools/metadata.js and gated by the dispatcher.
 
@@ -111,7 +111,7 @@ function formatOpsReport(title, rows, details = []) {
 function scheduleMcpRestart(delaySeconds = 2) {
   const delayMs = Math.max(0, (Number(delaySeconds) || 2) * 1000);
   setTimeout(() => {
-    const child = spawn("sudo", ["systemctl", "restart", "sidekick-mcp"], {
+    const child = spawn("systemctl", ["restart", "sidekick-mcp"], {
       detached: true,
       stdio: "ignore",
       env: childProcessEnv()
@@ -149,7 +149,7 @@ async function sidekick_ops({ action, repo_path, restart_mcp }) {
   if (action === "restart_and_smoke_test") {
     const restarted = [];
     for (const service of ["sidekick-dashboard", "sidekick-agent"]) {
-      const result = runOpsCommand("sudo", ["systemctl", "restart", service], { timeout: 30000 });
+      const result = runOpsCommand("systemctl", ["restart", service], { timeout: 30000 });
       restarted.push([service, result.ok ? "restarted" : "failed"]);
     }
 
