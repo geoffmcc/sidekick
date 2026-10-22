@@ -769,7 +769,7 @@ function enrollExecutionNodeHandler(req, res) {
     });
     const node = executionNode.register(enrolled.worker.workerId, {
       protocolVersion: "1", descriptorSetHash: body.descriptorSetHash,
-      capabilities: body.capabilities || {}, workspaces: [], networkScopes: [], limits: body.limits || {},
+      capabilities: body.capabilities || {}, limits: body.limits || {},
     });
     res.json({ ok: true, node, worker: enrolled.worker, credential: enrolled.credential, credentialType: "worker-bearer-v1" });
   } catch (e) { sendComputeError(res, e, 400); }
@@ -780,8 +780,7 @@ function nodeHeartbeatHandler(req, res) {
     const body = req.body || {};
     const node = executionNode.register(req.computeWorker.workerId, {
       protocolVersion: body.protocolVersion || "1", descriptorSetHash: body.descriptorSetHash || "",
-      capabilities: body.capabilities || {}, workspaces: executionNode.get(req.computeWorker.workerId)?.authorizedWorkspaces || [],
-      networkScopes: executionNode.get(req.computeWorker.workerId)?.authorizedNetworkScopes || [], limits: body.limits || {},
+      capabilities: body.capabilities || {}, limits: body.limits || {},
     });
     const worker = compute.workerManager.heartbeat(req.computeWorker.workerId, { utilization: body.utilization, currentJobs: body.currentJobs, telemetry: body.telemetry });
     res.json({ ok: true, node, worker, workspaces: executionNode.listWorkspaces(req.computeWorker.workerId) });

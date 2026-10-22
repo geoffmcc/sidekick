@@ -63,6 +63,17 @@ identity.assignRole(initiator.principal_id, "operator");
 const initiatorCredential = authentication.createCredential({ principalId: initiator.principal_id, displayName: "synthetic test credential", scopes: ["tools.execute"] });
 manager.register("wk_test_node", { descriptorSetHash: "hash", capabilities: { workspaces: [{ name: "security-research", root, permissions: { read: true, write: true } }] } });
 manager.authorizeWorkspace("wk_test_node", { workspaceId: "ws_test", name: "security-research", rootIdentity: configured.rootIdentity, permissions: { read: true } });
+const nodeAuthorityBeforeHeartbeat = manager.get("wk_test_node");
+manager.register("wk_test_node", {
+  descriptorSetHash: "heartbeat-hash",
+  capabilities: { networkScopes: ["node-claimed-scope"], workspaces: ["node-claimed-workspace"] },
+  networkScopes: ["untrusted-scope-argument"],
+  workspaces: ["untrusted-workspace-argument"],
+});
+const nodeAfterHeartbeat = manager.get("wk_test_node");
+assert.deepStrictEqual(nodeAfterHeartbeat.authorizedWorkspaces, nodeAuthorityBeforeHeartbeat.authorizedWorkspaces, "node registration and heartbeat telemetry cannot grant or replace workspace authority");
+assert.deepStrictEqual(nodeAfterHeartbeat.authorizedNetworkScopes, nodeAuthorityBeforeHeartbeat.authorizedNetworkScopes, "node registration and heartbeat telemetry cannot grant or replace network-scope authority");
+assert.deepStrictEqual(nodeAfterHeartbeat.capabilities.networkScopes, ["node-claimed-scope"], "reported capability labels remain telemetry separate from Core authorization");
 const job = manager.enqueue({ workerId: "wk_test_node", requestId: "req_test", toolName: "read", descriptor: { name: "read", version: "1", placement: { nodeSafe: true, locations: ["node"] } }, args: { path: path.join(root, "file") }, workspaceId: "ws_test", idempotencyKey: "idem_test" });
 assert.strictEqual(manager.enqueue({ workerId: "wk_test_node", requestId: "req_other", toolName: "read", descriptor: { name: "read", version: "1", placement: { nodeSafe: true, locations: ["node"] } }, args: { path: path.join(root, "file") }, workspaceId: "ws_test", idempotencyKey: "idem_test" }).jobId, job.jobId);
 assert.throws(() => manager.enqueue({ workerId: "wk_test_node", requestId: "req_changed_args", toolName: "read", descriptor: { name: "read", version: "1", placement: { nodeSafe: true, locations: ["node"] } }, args: { path: path.join(root, "other-file") }, workspaceId: "ws_test", idempotencyKey: "idem_test" }), /different execution scope or operation/);
