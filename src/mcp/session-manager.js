@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 const { WebStandardStreamableHTTPServerTransport } = require("@modelcontextprotocol/server");
 const { MAX_MCP_REQUEST_BODY_BYTES } = require("./limits");
 
@@ -12,7 +13,7 @@ function sameSessionPrincipal(established, presented) {
 function createSessionManager({ createMcpServer, logDebug, now = () => Date.now(), sessionIdGenerator } = {}) {
   const sessions = new Map();
   const staleSessionMap = new Map();
-  const generateSessionId = sessionIdGenerator || (() => "sess-" + now().toString(36) + "-" + Math.random().toString(36).slice(2, 8));
+  const generateSessionId = sessionIdGenerator || (() => `sess-${crypto.randomBytes(24).toString("base64url")}`);
 
   function registerSession(sessionId, server, transport, metadata = {}) {
     logDebug("REGISTER_SESSION", { sessionId, sessionCount: sessions.size + 1, userAgent: metadata.userAgent, clientInfo: metadata.clientInfo });

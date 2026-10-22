@@ -40,6 +40,20 @@ test("MCP session identity rejects a different principal without rebinding the s
   assert.equal(authState.current, original);
 });
 
+test("default MCP session IDs use 192 bits of cryptographic randomness", async t => {
+  const manager = createSessionManager({
+    createMcpServer: () => ({ connect: async () => {}, close: async () => {} }),
+    logDebug() {},
+  });
+  t.after(() => manager.dispose());
+
+  const first = await manager.getTransportForRequest(null, { authIdentity: { principal_id: "prn_test" } });
+  const second = await manager.getTransportForRequest(null, { authIdentity: { principal_id: "prn_test" } });
+  assert.match(first.newSessionId, /^sess-[A-Za-z0-9_-]{32}$/);
+  assert.match(second.newSessionId, /^sess-[A-Za-z0-9_-]{32}$/);
+  assert.notEqual(first.newSessionId, second.newSessionId);
+});
+
 test("MCP session accepts refreshed credentials only for its established principal", async t => {
   const manager = createSessionManager({ createMcpServer: () => ({}), logDebug() {} });
   t.after(() => manager.dispose());
