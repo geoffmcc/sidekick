@@ -1,4 +1,4 @@
-# Sidekick user permissions - journal access (unit control is mediated by polkit)
+# Sidekick user permissions - journal access
 sidekick ALL=(ALL) NOPASSWD: /usr/bin/journalctl -u sidekick-mcp, /usr/bin/journalctl -u sidekick-dashboard, /usr/bin/journalctl -u sidekick-agent
 
 sidekick ALL=(ALL) NOPASSWD: /usr/bin/journalctl -u sidekick-postgres, /usr/bin/journalctl -u sidekick-redis, /usr/bin/journalctl -u sidekick-qdrant, /usr/bin/journalctl -u sidekick-influxdb, /usr/bin/journalctl -u sidekick-grafana

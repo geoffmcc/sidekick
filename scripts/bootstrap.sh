@@ -20,6 +20,7 @@ SSH_PUB_KEY=""
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/apt-repository.sh"
 source "$SCRIPT_DIR/lib/polkit.sh"
+source "$SCRIPT_DIR/lib/sudoers.sh"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -105,7 +106,7 @@ apt-get update -qq
 
 # Install required packages
 log "Installing required packages..."
-apt-get install -y -qq curl ca-certificates gnupg build-essential python3 make g++ git openssl polkitd > /dev/null
+apt-get install -y -qq curl ca-certificates gnupg build-essential python3 make g++ git openssl polkitd sudo > /dev/null
 
 # Create user if doesn't exist
 if id "$USERNAME" &>/dev/null; then
@@ -135,7 +136,7 @@ if [ -f "$WRAPPER_SOURCE" ]; then
 fi
 
 cat > /etc/sudoers.d/sidekick << 'EOF'
-# Sidekick user permissions - journal access (unit control is mediated by polkit)
+# Sidekick user permissions - journal access
 sidekick ALL=(ALL) NOPASSWD: /usr/bin/journalctl -u sidekick-mcp, /usr/bin/journalctl -u sidekick-dashboard, /usr/bin/journalctl -u sidekick-agent
 
 sidekick ALL=(ALL) NOPASSWD: /usr/bin/journalctl -u sidekick-postgres, /usr/bin/journalctl -u sidekick-redis, /usr/bin/journalctl -u sidekick-qdrant, /usr/bin/journalctl -u sidekick-influxdb, /usr/bin/journalctl -u sidekick-grafana
@@ -154,6 +155,8 @@ sidekick ALL=(ALL) NOPASSWD: /usr/bin/chown -R sidekick\:sidekick /home/sidekick
 EOF
 
 chmod 440 /etc/sudoers.d/sidekick
+visudo -cf /etc/sudoers.d/sidekick
+install_sidekick_deploy_sudoers "$USERNAME" "$SCRIPT_DIR"
 install_sidekick_polkit_rule "$USERNAME" "$SCRIPT_DIR"
 log "Sudoers configured"
 

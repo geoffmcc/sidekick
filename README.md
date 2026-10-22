@@ -808,14 +808,11 @@ The deploy script automatically syncs `.env` to the remote machine if it exists 
 
 The deploy script follows a two-phase security approach:
 
-1. **First deploy (password required):** The script SSHs as the initial user (ubuntu/admin/root) and bootstraps the VM using SSH ControlMaster for connection multiplexing. This creates the sidekick user, installs Node.js, configures sudoers, installs systemd services, installs your SSH key, and opens firewall ports. All privileged operations require the initial user's password (prompted once via SSH ControlMaster).
+1. **First deploy (password required):** The script SSHs as the initial user (ubuntu/admin/root) and bootstraps the VM using SSH ControlMaster for connection multiplexing. This creates the sidekick user, installs Node.js and Polkit, configures narrow sudoers entries, installs systemd services and the Polkit policy, installs your SSH key, and opens firewall ports. All privileged operations require the initial user's password (prompted once via SSH ControlMaster).
 
-2. **Subsequent deploys (no password):** The script SSHs as the sidekick user using SSH key authentication. Only minimal sudo permissions are used for service management (start/stop/restart/status) and log viewing. The sudoers file restricts the sidekick user to only these specific commands:
-   - `systemctl start/stop/restart/status sidekick-*`
-   - `journalctl -u sidekick-*`
-   - `ufw allow 4097/4098/4099`
+2. **Subsequent deploys (no password):** The script SSHs as the sidekick user using SSH key authentication. Core operations use Polkit only when requested from `sidekick-mcp.service` with `NoNewPrivileges=true`; SSH deployment uses exact sudoers grants for start/stop/restart/status of the three Sidekick services. Unit enablement, daemon reload, and arbitrary commands are not granted. The sudoers entries do not bypass `NoNewPrivileges` inside the services.
 
-This follows the principle of least privilege: after initial setup, the sidekick user cannot reload systemd, enable/disable services, or modify the system in any way beyond managing the Sidekick services.
+Manual systemd installations must install `polkitd` and run `sudo bash ./scripts/install-polkit-policy.sh sidekick` from the repository root before starting the services. WireGuard changes and Nginx configuration-file changes still require separate NNP-compatible mediation and are not granted by the service-control Polkit policy.
 
 | Variable | Default | Description |
 |----------|---------|-------------|

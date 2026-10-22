@@ -25,6 +25,7 @@ const DEPLOY_PS1_PATH = path.join(PROJECT_ROOT, 'deploy.ps1');
 const BOOTSTRAP_SH_PATH = path.join(PROJECT_ROOT, 'scripts', 'bootstrap.sh');
 const SETUP_TOOLS_SH_PATH = path.join(PROJECT_ROOT, 'scripts', 'setup-tools.sh');
 const SUDOERS_PATH = path.join(PROJECT_ROOT, 'systemd', 'sidekick-sudoers');
+const DEPLOY_SUDOERS_PATH = path.join(PROJECT_ROOT, 'systemd', 'sidekick-deploy-sudoers');
 
 // Read script contents
 let deployShContent = '';
@@ -32,6 +33,7 @@ let deployPs1Content = '';
 let bootstrapShContent = '';
 let setupToolsShContent = '';
 let sudoersContent = '';
+let deploySudoersContent = '';
 
 try {
   deployShContent = fs.readFileSync(DEPLOY_SH_PATH, 'utf8');
@@ -56,6 +58,7 @@ try {
 
 setupToolsShContent = fs.readFileSync(SETUP_TOOLS_SH_PATH, 'utf8');
 sudoersContent = fs.readFileSync(SUDOERS_PATH, 'utf8');
+deploySudoersContent = fs.readFileSync(DEPLOY_SUDOERS_PATH, 'utf8');
 
 // ============================================================================
 // DEPLOY.SH TESTS
@@ -490,10 +493,19 @@ console.log('Test 3.4: bootstrap.sh configures narrowly scoped service control')
     bootstrapShContent.includes('polkitd'),
     'bootstrap.sh should install the polkit authorization service'
   );
-  assert.ok(
-    !bootstrapShContent.includes('NOPASSWD: /usr/bin/systemctl'),
-    'bootstrap.sh must not use sudoers for systemd unit control'
-  );
+  for (const [name, content] of [['bootstrap.sh', bootstrapShContent], ['setup-tools.sh', setupToolsShContent]]) {
+    assert.ok(content.includes('install_sidekick_deploy_sudoers "$USERNAME" "$SCRIPT_DIR"'), `${name} must install the shared narrow SSH deploy policy`);
+  }
+  for (const [name, content] of [['systemd/sidekick-deploy-sudoers', deploySudoersContent]]) {
+    for (const service of ['sidekick-mcp', 'sidekick-dashboard', 'sidekick-agent']) {
+      assert.ok(content.includes(`systemctl start ${service}`), `${name} must preserve the SSH deploy start grant for ${service}`);
+      assert.ok(content.includes(`systemctl stop ${service}`), `${name} must preserve the SSH deploy stop grant for ${service}`);
+      assert.ok(content.includes(`systemctl restart ${service}`), `${name} must preserve the SSH deploy restart grant for ${service}`);
+      assert.ok(content.includes(`systemctl status ${service}`), `${name} must preserve the SSH deploy status grant for ${service}`);
+    }
+    assert.doesNotMatch(content, /NOPASSWD: \/usr\/bin\/systemctl (?:daemon-reload|enable|disable)/, `${name} must not grant unit-file or daemon-reload access`);
+  }
+  assert.doesNotMatch(sudoersContent, /NOPASSWD: \/usr\/bin\/systemctl/, 'base sudoers policy must not duplicate deployment unit grants');
   assert.ok(
     !bootstrapShContent.includes('NOPASSWD: /usr/bin/docker'),
     'bootstrap.sh must not grant root-equivalent Docker wildcard access'

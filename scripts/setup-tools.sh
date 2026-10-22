@@ -17,6 +17,7 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 source "$SCRIPT_DIR/lib/apt-repository.sh"
 source "$SCRIPT_DIR/lib/install-ollama.sh"
 source "$SCRIPT_DIR/lib/polkit.sh"
+source "$SCRIPT_DIR/lib/sudoers.sh"
 
 PASS=0
 FAIL=0
@@ -48,7 +49,7 @@ echo ""
 log "Phase 1: Installing foundation packages..."
 
 apt-get update -qq
-apt-get install -y -qq ca-certificates curl gnupg polkitd
+apt-get install -y -qq ca-certificates curl gnupg polkitd sudo
 
 # pip3
 if command -v pip3 &>/dev/null; then
@@ -463,7 +464,7 @@ log "Phase 9: Updating sudoers for new services..."
 install -o root -g root -m 0755 "$SCRIPT_DIR/sidekick-wg-wrapper.sh" /usr/local/sbin/sidekick-wg
 
 cat > /etc/sudoers.d/sidekick << 'SUDOERS'
-# Sidekick user permissions - journal access (unit control is mediated by polkit)
+# Sidekick user permissions - journal access
 sidekick ALL=(ALL) NOPASSWD: /usr/bin/journalctl -u sidekick-mcp, /usr/bin/journalctl -u sidekick-dashboard, /usr/bin/journalctl -u sidekick-agent
 
 sidekick ALL=(ALL) NOPASSWD: /usr/bin/journalctl -u sidekick-postgres, /usr/bin/journalctl -u sidekick-redis, /usr/bin/journalctl -u sidekick-qdrant, /usr/bin/journalctl -u sidekick-influxdb, /usr/bin/journalctl -u sidekick-grafana
@@ -482,6 +483,8 @@ sidekick ALL=(ALL) NOPASSWD: /usr/bin/chown -R sidekick\:sidekick /home/sidekick
 SUDOERS
 
 chmod 440 /etc/sudoers.d/sidekick
+visudo -cf /etc/sudoers.d/sidekick
+install_sidekick_deploy_sudoers "$USERNAME" "$SCRIPT_DIR"
 install_sidekick_polkit_rule "$USERNAME" "$SCRIPT_DIR"
 pass "Sudoers updated with Docker service permissions"
 

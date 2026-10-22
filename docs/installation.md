@@ -121,6 +121,8 @@ The scripts use SSH. On a fresh host they may prompt for the initial user's pass
 Assuming the app lives at `/home/sidekick/sidekick` and runs as the `sidekick` user:
 
 ```bash
+sudo apt-get update
+sudo apt-get install -y polkitd
 sudo useradd --system --create-home --shell /bin/bash sidekick
 sudo mkdir -p /home/sidekick/sidekick
 sudo chown -R sidekick:sidekick /home/sidekick/sidekick
@@ -143,10 +145,18 @@ sudo cp systemd/sidekick-dashboard.service /etc/systemd/system/
 sudo cp systemd/sidekick-agent.service /etc/systemd/system/
 sudo cp systemd/sidekick-sudoers /etc/sudoers.d/sidekick
 sudo chmod 440 /etc/sudoers.d/sidekick
+sudo bash ./scripts/install-polkit-policy.sh sidekick
 
 sudo systemctl daemon-reload
 sudo systemctl enable --now sidekick-mcp sidekick-dashboard sidekick-agent
 ```
+
+The installer creates `/etc/sudoers.d/sidekick-deploy` for the SSH deployment
+scripts, limited to start, stop, restart, and status for the three Sidekick
+services. Calls made by the running Core service use the narrower Polkit
+policy, which also requires the caller to be `sidekick-mcp.service` with
+`NoNewPrivileges=true`. Neither mechanism grants unit enablement, daemon
+reload, or arbitrary systemd commands.
 
 Check services:
 

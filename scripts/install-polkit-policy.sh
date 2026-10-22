@@ -5,7 +5,6 @@ set -euo pipefail
 # Debian/Ubuntu host without rerunning the broader setup-tools workflow.
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 USERNAME="${1:-sidekick}"
-
 if [[ "$EUID" -ne 0 ]]; then
   echo "Run this installer as root (for example: sudo bash ./scripts/install-polkit-policy.sh)" >&2
   exit 1
@@ -36,7 +35,15 @@ if ! command -v pkaction >/dev/null 2>&1; then
   DEBIAN_FRONTEND=noninteractive apt-get install -y polkitd
 fi
 
+if ! command -v visudo >/dev/null 2>&1; then
+  apt-get update
+  DEBIAN_FRONTEND=noninteractive apt-get install -y sudo
+fi
+
 # shellcheck source=scripts/lib/polkit.sh
 source "$SCRIPT_DIR/lib/polkit.sh"
+# shellcheck source=scripts/lib/sudoers.sh
+source "$SCRIPT_DIR/lib/sudoers.sh"
+install_sidekick_deploy_sudoers "$USERNAME" "$SCRIPT_DIR"
 install_sidekick_polkit_rule "$USERNAME" "$SCRIPT_DIR"
-echo "Installed Sidekick Polkit service-control policy for OS account '$USERNAME'."
+echo "Installed Sidekick Polkit policy and exact SSH deployment grants for OS account '$USERNAME'."

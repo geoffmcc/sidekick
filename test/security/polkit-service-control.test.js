@@ -74,12 +74,14 @@ test("application allowlist exactly matches the Polkit unit allowlist", () => {
   assert.deepEqual(polkitUnits, applicationUnits);
 });
 
-test("bootstrap installs polkit and the rule without putting unit control in sudoers", () => {
+test("bootstrap installs Polkit and narrowly scoped SSH deployment grants", () => {
   const bootstrap = fs.readFileSync(path.join(root, "scripts/bootstrap.sh"), "utf8");
   const setupTools = fs.readFileSync(path.join(root, "scripts/setup-tools.sh"), "utf8");
   const existingHostInstaller = fs.readFileSync(path.join(root, "scripts/install-polkit-policy.sh"), "utf8");
   const sudoers = fs.readFileSync(path.join(root, "systemd/sidekick-sudoers"), "utf8");
+  const deploySudoers = fs.readFileSync(path.join(root, "systemd/sidekick-deploy-sudoers"), "utf8");
   const installer = fs.readFileSync(path.join(root, "scripts/lib/polkit.sh"), "utf8");
+  const sudoersInstaller = fs.readFileSync(path.join(root, "scripts/lib/sudoers.sh"), "utf8");
 
   for (const script of [bootstrap, setupTools]) {
     assert.match(script, /apt-get install[^\n]*polkitd/);
@@ -90,7 +92,16 @@ test("bootstrap installs polkit and the rule without putting unit control in sud
   assert.match(existingHostInstaller, /apt-get install -y polkitd/);
   assert.match(existingHostInstaller, /install_sidekick_polkit_rule "\$USERNAME" "\$SCRIPT_DIR"/);
   assert.match(existingHostInstaller, /running systemd host is required/);
+  assert.match(existingHostInstaller, /install_sidekick_deploy_sudoers "\$USERNAME" "\$SCRIPT_DIR"/);
+  assert.match(sudoersInstaller, /visudo -cf/);
+  assert.match(sudoersInstaller, /mktemp/);
+  assert.match(sudoersInstaller, /chown root:root/);
+  assert.match(sudoersInstaller, /cmp -s/);
+  assert.match(sudoersInstaller, /differs from the generated policy/);
   assert.match(installer, /mktemp/);
   assert.match(installer, /chown root:root/);
-  assert.doesNotMatch(sudoers, /systemctl\s+(?:start|stop|restart|reload|status)\s/);
+  assert.doesNotMatch(sudoers, /NOPASSWD: \/usr\/bin\/systemctl/);
+  assert.doesNotMatch(sudoers, /systemctl\s+(?:daemon-reload|enable|disable)\s/);
+  assert.ok(deploySudoers.includes("/usr/bin/systemctl restart sidekick-agent"));
+  assert.doesNotMatch(deploySudoers, /systemctl\s+(?:daemon-reload|enable|disable)\s/);
 });
