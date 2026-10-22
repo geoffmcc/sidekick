@@ -105,8 +105,8 @@ async function sidekick_notify({ channel, webhook_url, recipient, message, title
       if (urlObj.protocol === "https:") requestOptions.servername = urlObj.hostname.replace(/^\[|\]$/g, "");
       const req = lib.request(requestOptions, (res) => {
         if (res.statusCode >= 200 && res.statusCode < 300) {
-          res.resume();
-          res.on("end", () => resolve({ content: [{ type: "text", text: "Sent to " + channel }] }));
+          resolve({ content: [{ type: "text", text: "Sent to " + channel }] });
+          res.destroy();
           return;
         }
         readBoundedNotificationError(res).then(data => {
@@ -150,10 +150,8 @@ async function sidekick_notify({ channel, webhook_url, recipient, message, title
         },
         timeout: 30000
       }, (res) => {
-        res.resume();
-        res.on("end", () => {
-          resolve({ content: [{ type: "text", text: "Email sent to " + recipient }] });
-        });
+        resolve({ content: [{ type: "text", text: "Email sent to " + recipient }] });
+        res.destroy();
       });
       req.on("error", (err) => resolve({ content: [{ type: "text", text: "Email error: " + err.message }], isError: true }));
       req.on("timeout", () => { req.destroy(); resolve({ content: [{ type: "text", text: "Email timeout" }], isError: true }); });

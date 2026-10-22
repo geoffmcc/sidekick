@@ -480,6 +480,8 @@ test("scheduler reload uses a signed, route-bound service identity", async () =>
   const secret = "synthetic-agent-service-key";
   const usedNonces = new Map();
   let captured;
+  let successfulBodyClosed = false;
+  let rejectedBodyClosed = false;
   const http = {
     request(options, callback) {
       captured = options;
@@ -503,13 +505,14 @@ test("scheduler reload uses a signed, route-bound service identity", async () =>
         }), null, "the scheduler key does not authenticate Dashboard proxy assertions");
         const response = new EventEmitter();
         response.statusCode = 204;
-        response.resume = () => {};
+        response.destroy = () => { successfulBodyClosed = true; };
         callback(response);
       };
       return req;
     },
   };
   assert.deepEqual(await reloadAgentScheduler("delays", { secret, http }), { ok: true });
+  assert.equal(successfulBodyClosed, true, "successful reload response body is closed after the status is recorded");
   assert.equal(captured.path, "/api/delays/reload");
   assert.equal(captured.method, "POST");
   const rejectedHttp = {
@@ -519,7 +522,7 @@ test("scheduler reload uses a signed, route-bound service identity", async () =>
       req.end = () => {
         const response = new EventEmitter();
         response.statusCode = 403;
-        response.resume = () => {};
+        response.destroy = () => { rejectedBodyClosed = true; };
         callback(response);
       };
       return req;
@@ -528,6 +531,7 @@ test("scheduler reload uses a signed, route-bound service identity", async () =>
   assert.deepEqual(await reloadAgentScheduler("watches", { secret, http: rejectedHttp }), {
     ok: false, code: "agent_reload_rejected", status: 403,
   });
+  assert.equal(rejectedBodyClosed, true, "rejected reload response body is closed after the status is recorded");
   assert.deepEqual(await reloadAgentScheduler("unknown", { secret, http }), { ok: false, code: "unsupported_reload" });
   assert.deepEqual(await reloadAgentScheduler("delays", { http }), { ok: false, code: "service_credential_unavailable" });
 });

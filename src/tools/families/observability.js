@@ -209,8 +209,8 @@ function probeHttps(url, timeoutMs = 4000) {
 
     try {
       request = https.request(url, { method: "HEAD" }, response => {
-        response.resume();
         finish({ ok: true, statusCode: response.statusCode });
+        response.destroy();
       });
       request.setTimeout(timeoutMs, () => request.destroy(new Error("Timed out")));
       request.on("error", error => finish({ ok: false, error: error.message }));
@@ -1097,6 +1097,7 @@ module.exports = {
   checkNetwork,
   requestInflux,
   readInfluxResponseText,
+  probeHttps,
   INFLUX_REQUEST_TIMEOUT_MS,
   MAX_INFLUX_RESPONSE_BYTES,
 };

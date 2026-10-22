@@ -53,8 +53,8 @@ function registerSystemRoutes({
     try {
       await new Promise((resolve, reject) => {
         const request = http.get({ hostname: "127.0.0.1", port: 8086, path: "/ping", timeout: 3000 }, response => {
-          response.resume();
           response.statusCode >= 200 && response.statusCode < 500 ? resolve() : reject(new Error(`HTTP ${response.statusCode}`));
+          response.destroy();
         });
         request.on("timeout", () => request.destroy(new Error("timeout")));
         request.on("error", reject);
