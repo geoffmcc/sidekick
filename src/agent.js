@@ -13,6 +13,7 @@ const { createAgentCatalog } = require("./agent/catalog");
 const { persistedTaskAuthIdentity } = require("./agent/task-identity");
 const { authorizeRecoveredTask } = require("./agent/recovery-authorization");
 const { authorizeScheduledAgentDelay } = require("./agent/delay-policy");
+const { validateEscalationApproval } = require("./agent/escalation-approval");
 const { readSecret } = require("./core/runtime-secrets");
 const { verifyAgentProxyRequest, createSqliteNonceConsumer, assertDistinctProxySecret, assertDistinctAgentSchedulerSecret } = require("./security/agent-proxy-auth");
 const { taskBelongsToIdentity, canReviewUnownedTask, isAllowedServiceRoute } = require("./agent/task-access");
@@ -2008,7 +2009,8 @@ app.post("/api/agent/tasks/:taskId/escalations/:escalationId/decision", (req, re
       const approvalStore = require("./approvals/store");
       approvalStore.ensureApprovalContinuationSchema();
       const approval = approvalStore.getApproval(approvalRef);
-      if (!approval || (approval.task_id && approval.task_id !== task.task_id)) return res.status(400).json({ error: "approval_ref is not an existing approval for this task" });
+      const approvalCheck = validateEscalationApproval(approval, { taskId: task.task_id });
+      if (!approvalCheck.ok) return res.status(400).json({ error: "approval_ref must identify an unexpired approved approval for this task" });
     }
     const updated = durableOperations.updateEscalation(escalation.escalation_id, body.decision, { decided_by_principal_id: auth.principal_id, approval_ref: approvalRef });
     durableTaskStore.recordGuidance(task.task_id, `Escalation ${escalation.escalation_id} ${body.decision}: ${redactSensitive(String(body.reason || "operator decision")).slice(0, 500)}`, auth.principal_id);

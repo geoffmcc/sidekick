@@ -18,8 +18,20 @@ const { HISTORY_LIMITS, clampHistoryOffset } = require("../src/agent-history");
 const { dispatchTool } = require("../src/tools/dispatcher");
 const { getStaticToolRisk } = require("../src/tools/metadata");
 const { collectSnapshotRows } = require("../src/db/snapshot-bounds");
+const { validateEscalationApproval } = require("../src/agent/escalation-approval");
 
 const root = path.resolve(__dirname, "..");
+
+test("escalation approval references must be approved, live, and bound to the same task", () => {
+  const now = Date.parse("2026-10-22T20:00:00.000Z");
+  const approval = { task_id: "task-a", status: "approved", expires_at: "2026-10-22T21:00:00.000Z" };
+  assert.deepEqual(validateEscalationApproval(approval, { taskId: "task-a", now }), { ok: true });
+  assert.equal(validateEscalationApproval({ ...approval, status: "pending" }, { taskId: "task-a", now }).reason, "approval_not_approved");
+  assert.equal(validateEscalationApproval(approval, { taskId: "task-b", now }).reason, "approval_task_mismatch");
+  assert.equal(validateEscalationApproval({ ...approval, expires_at: "2026-10-22T19:59:59.000Z" }, { taskId: "task-a", now }).reason, "approval_expired");
+  assert.equal(validateEscalationApproval({ ...approval, expires_at: "invalid" }, { taskId: "task-a", now }).reason, "approval_expired");
+  assert.match(fs.readFileSync(path.join(root, "src/agent.js"), "utf8"), /validateEscalationApproval\(approval, \{ taskId: task\.task_id \}\)/);
+});
 
 test("all Sidekick processes migrate shared state before restoring module entries", () => {
   const source = file => fs.readFileSync(path.join(root, file), "utf8");
