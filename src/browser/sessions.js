@@ -24,9 +24,8 @@ const browserArtifacts = require("./artifacts");
 
 const sessions = new Map();
 const EVIDENCE_CAP = 200;
-// TEMPORARY DIAGNOSTIC: bound download.path() so a stalled CI download settles
-// with failure()/warnings instead of leaving wait for="download" to time out
-// with no visibility. Remove once the GH-runner-only stall is understood.
+// Bound the time until a download is materialized; a timeout cancels the live
+// transfer so an abandoned or stalled response cannot keep consuming disk.
 const DOWNLOAD_PATH_DIAGNOSTIC_TIMEOUT_MS = 4000;
 
 function newSessionId() {
@@ -101,10 +100,10 @@ function adoptPage(session, page, { origin = "created" } = {}) {
   return pageId;
 }
 
-async function boundedDownloadPath(download) {
+async function boundedDownloadPath(download, timeoutMs = DOWNLOAD_PATH_DIAGNOSTIC_TIMEOUT_MS) {
   let timer;
   const timerPromise = new Promise((resolve) => {
-    timer = setTimeout(() => resolve({ timeout: true }), DOWNLOAD_PATH_DIAGNOSTIC_TIMEOUT_MS);
+    timer = setTimeout(() => resolve({ timeout: true }), timeoutMs);
   });
   try {
     const result = await Promise.race([
@@ -133,7 +132,7 @@ async function diagnosticDownloadFailure(download) {
   }
 }
 
-async function captureDownload(session, download) {
+async function captureDownload(session, download, { downloadPathTimeoutMs = DOWNLOAD_PATH_DIAGNOSTIC_TIMEOUT_MS } = {}) {
   const config = browserConfig();
   const entry = {
     at: new Date().toISOString(),
@@ -143,12 +142,20 @@ async function captureDownload(session, download) {
   };
   record(session.downloads, entry);
   try {
-    const result = await boundedDownloadPath(download);
+    const result = await boundedDownloadPath(download, downloadPathTimeoutMs);
     if (result.timeout) {
+      let cancellation = "requested";
+      try {
+        if (typeof download.cancel !== "function") throw new Error("download cancellation is unavailable");
+        await download.cancel();
+        cancellation = "completed";
+      } catch (error) {
+        cancellation = `failed: ${String(error.message || error).slice(0, 200)}`;
+      }
       const failure = await diagnosticDownloadFailure(download);
       const failureText = failure.timeout ? "unavailable (failure() did not answer)" : JSON.stringify(failure.value);
       entry.status = "failed";
-      entry.error = `download did not produce a file within ${DOWNLOAD_PATH_DIAGNOSTIC_TIMEOUT_MS}ms diagnostic bound; failure=${failureText}; url=${entry.url}; suggested_filename=${entry.suggested_filename}; session_warnings=${JSON.stringify(session.warnings.slice(-5))}`;
+      entry.error = `download did not produce a file within ${downloadPathTimeoutMs}ms diagnostic bound; cancellation=${cancellation}; failure=${failureText}; url=${entry.url}; suggested_filename=${entry.suggested_filename}; session_warnings=${JSON.stringify(session.warnings.slice(-5))}`;
       return;
     }
     const tempPath = result.path;
@@ -158,11 +165,10 @@ async function captureDownload(session, download) {
       return;
     }
     // Size is enforced post-write: Chromium exposes no pre-download byte cap
-    // and download.path() resolves only once the file is complete, so an
-    // oversized download is rejected and deleted here rather than kept. The
-    // bytes transit an isolated Playwright temp dir first; deletion and the
-    // limit bound the exposure. A truly endless download is additionally
-    // bounded by the per-action/navigation timeout the dispatcher enforces.
+    // and download.path() resolves only once the file is complete, so a finite
+    // oversized download can temporarily consume isolated Playwright temp
+    // storage before it is rejected and deleted. The bounded path wait cancels
+    // stalled transfers. A proxy-level pre-write byte cap remains open.
     const size = fs.statSync(tempPath).size;
     if (size > config.maxDownloadBytes) {
       entry.status = "rejected";
@@ -493,6 +499,8 @@ module.exports = {
   markPageSensitive,
   isPageSensitive,
   safeDownloadFilename,
+  boundedDownloadPath,
+  captureDownload,
   scrubSecrets,
   scrubSecretsDeep,
 };
