@@ -1089,7 +1089,7 @@ app.get("/api/repository/semantic", async (req, res) => {
    } catch (error) { return dashboardErrors.respond(req, res, error, { status: 400, code: "invalid_request", component: "semantic_repository" }); }
 });
 
-registerEventRoutes({ app, platformKernel, authenticatedUser, requireIdentityPermission, auditLog, errorResponse: dashboardErrors.respond });
+registerEventRoutes({ app, platformKernel, authenticatedUser, requireIdentityPermission, recordIdentityAudit: identity.recordAuditEvent, auditLog, errorResponse: dashboardErrors.respond });
 
 registerConnectorRoutes({
   app,
