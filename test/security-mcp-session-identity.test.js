@@ -120,3 +120,36 @@ test("legacy-key MCP sessions remain bound to the same identityless authenticati
   assert.ok(sameLegacy.transport);
   assert.equal(scopedPrincipal.identityMismatch, true);
 });
+
+test("MCP session capacity limits individual identities and the whole server", async t => {
+  const perIdentity = createSessionManager({ createMcpServer: () => ({}), logDebug() {}, maxSessions: 2, maxSessionsPerIdentity: 1 });
+  t.after(() => perIdentity.dispose());
+  perIdentity.registerSession("first", {}, {}, { authIdentity: { principal_id: "prn_a" } });
+  const repeated = await perIdentity.getTransportForRequest(null, { authIdentity: { principal_id: "prn_a" } });
+  assert.equal(repeated.capacityExceeded, true);
+  assert.equal(repeated.capacityScope, "identity");
+  assert.equal(repeated.capacityLimit, 1);
+
+  const global = createSessionManager({ createMcpServer: () => ({}), logDebug() {}, maxSessions: 1, maxSessionsPerIdentity: 2 });
+  t.after(() => global.dispose());
+  global.registerSession("first", {}, {}, { authIdentity: { principal_id: "prn_a" } });
+  const other = await global.getTransportForRequest(null, { authIdentity: { principal_id: "prn_b" } });
+  assert.equal(other.capacityExceeded, true);
+  assert.equal(other.capacityScope, "global");
+  assert.equal(other.capacityLimit, 1);
+});
+
+test("legacy SSE refuses sessions above the per-identity cap before creating a server", async t => {
+  const manager = createSessionManager({ createMcpServer: () => ({}), logDebug() {}, maxSessions: 2, maxSessionsPerIdentity: 1 });
+  t.after(() => manager.dispose());
+  manager.registerSession("first", {}, {}, { authIdentity: { principal_id: "prn_a" } });
+  const app = createApp();
+  let serverCreated = false;
+  registerLegacySseRoutes({ app, sessionManager: manager, createMcpServer: () => { serverCreated = true; return {}; } });
+  const res = createResponse();
+
+  await app.routes.get("GET /sse")({ authIdentity: { principal_id: "prn_a" }, headers: {} }, res);
+  assert.equal(res.statusCode, 429);
+  assert.equal(res.body.code, "session_capacity_exceeded");
+  assert.equal(serverCreated, false);
+});

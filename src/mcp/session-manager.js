@@ -1,6 +1,6 @@
 const crypto = require("crypto");
 const { WebStandardStreamableHTTPServerTransport } = require("@modelcontextprotocol/server");
-const { MAX_MCP_REQUEST_BODY_BYTES } = require("./limits");
+const { MAX_MCP_REQUEST_BODY_BYTES, MAX_MCP_SESSIONS, MAX_MCP_SESSIONS_PER_IDENTITY } = require("./limits");
 
 function sameSessionPrincipal(established, presented) {
   if (!established || !presented || typeof established !== "object" || typeof presented !== "object") return false;
@@ -10,12 +10,30 @@ function sameSessionPrincipal(established, presented) {
   return typeof established.authentication_method === "string" && established.authentication_method === presented.authentication_method;
 }
 
-function createSessionManager({ createMcpServer, logDebug, now = () => Date.now(), sessionIdGenerator } = {}) {
+function createSessionManager({ createMcpServer, logDebug, now = () => Date.now(), sessionIdGenerator, maxSessions = MAX_MCP_SESSIONS, maxSessionsPerIdentity = MAX_MCP_SESSIONS_PER_IDENTITY } = {}) {
   const sessions = new Map();
   const staleSessionMap = new Map();
   const generateSessionId = sessionIdGenerator || (() => `sess-${crypto.randomBytes(24).toString("base64url")}`);
 
+  function sessionIdentityKey(authIdentity) {
+    if (typeof authIdentity?.principal_id === "string" && authIdentity.principal_id) return `principal:${authIdentity.principal_id}`;
+    if (typeof authIdentity?.authentication_method === "string" && authIdentity.authentication_method) return `auth:${authIdentity.authentication_method}`;
+    return "identityless";
+  }
+
+  function getSessionCapacity(authIdentity) {
+    if (sessions.size >= maxSessions) return { allowed: false, scope: "global", limit: maxSessions };
+    const key = sessionIdentityKey(authIdentity);
+    let owned = 0;
+    for (const entry of sessions.values()) {
+      if (sessionIdentityKey(entry.authIdentity) === key) owned += 1;
+    }
+    if (owned >= maxSessionsPerIdentity) return { allowed: false, scope: "identity", limit: maxSessionsPerIdentity };
+    return { allowed: true, scope: null, limit: null };
+  }
+
   function registerSession(sessionId, server, transport, metadata = {}) {
+    if (!getSessionCapacity(metadata.authIdentity).allowed) return false;
     logDebug("REGISTER_SESSION", { sessionId, sessionCount: sessions.size + 1, userAgent: metadata.userAgent, clientInfo: metadata.clientInfo });
     sessions.set(sessionId, {
       server,
@@ -28,6 +46,7 @@ function createSessionManager({ createMcpServer, logDebug, now = () => Date.now(
       authIdentity: metadata.authIdentity || null,
       authState: metadata.authState || { current: metadata.authIdentity || null }
     });
+    return true;
   }
 
   function markSessionInitialized(sessionId) {
@@ -81,11 +100,20 @@ function createSessionManager({ createMcpServer, logDebug, now = () => Date.now(
       return { transport: null, isNew: false, newSessionId: null, staleRedirect: true };
     }
 
+    const capacity = getSessionCapacity(metadata.authIdentity);
+    if (!capacity.allowed) {
+      logDebug("SESSION_CAPACITY_REACHED", { scope: capacity.scope, limit: capacity.limit });
+      return { transport: null, isNew: false, capacityExceeded: true, capacityScope: capacity.scope, capacityLimit: capacity.limit };
+    }
     const newSessionId = generateSessionId();
     const authState = { current: metadata.authIdentity || null };
     const server = createMcpServer(() => authState.current);
     const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: () => newSessionId, enableJsonResponse: true, maxRequestBodySize: MAX_MCP_REQUEST_BODY_BYTES });
-    registerSession(newSessionId, server, transport, { ...metadata, authState });
+    if (!registerSession(newSessionId, server, transport, { ...metadata, authState })) {
+      await Promise.allSettled([transport.close?.(), server.close?.()]);
+      const latestCapacity = getSessionCapacity(metadata.authIdentity);
+      return { transport: null, isNew: false, capacityExceeded: true, capacityScope: latestCapacity.scope, capacityLimit: latestCapacity.limit };
+    }
     await server.connect(transport);
     logDebug("CREATED_NEW_TRANSPORT", { newSessionId });
     return { transport, isNew: true, newSessionId };
@@ -150,7 +178,7 @@ function createSessionManager({ createMcpServer, logDebug, now = () => Date.now(
     await Promise.all(Array.from(sessions.entries()).map(([id, entry]) => closeSessionEntry(id, entry)));
     staleSessionMap.clear();
   }
-  return { authorizeSessionIdentity, cleanupIdleSessions, deleteSession, dispose, getHealthSnapshot, getSession, getTransportForRequest, hasSession, markSessionInitialized, registerSession };
+  return { authorizeSessionIdentity, cleanupIdleSessions, deleteSession, dispose, getHealthSnapshot, getSession, getSessionCapacity, getTransportForRequest, hasSession, markSessionInitialized, registerSession };
 }
 
 module.exports = { createSessionManager };

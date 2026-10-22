@@ -108,9 +108,16 @@ function registerStreamableHttpRoutes({ app, sessionManager, createMcpServer, lo
         return;
       }
 
-      const { transport, isNew, newSessionId, staleRedirect, replacedStaleSession, identityMismatch } = await sessionManager.getTransportForRequest(sessionId, metadata, { allowStalePost: true });
+      const { transport, isNew, newSessionId, staleRedirect, replacedStaleSession, identityMismatch, capacityExceeded, capacityScope } = await sessionManager.getTransportForRequest(sessionId, metadata, { allowStalePost: true });
       if (identityMismatch) {
         return res.status(403).json({ error: "MCP session belongs to a different authenticated principal", code: "session_identity_mismatch" });
+      }
+      if (capacityExceeded) {
+        const perIdentity = capacityScope === "identity";
+        return res.status(perIdentity ? 429 : 503).json({
+          error: perIdentity ? "MCP session limit reached for this identity; close an unused session and retry" : "MCP server session capacity is full; retry after inactive sessions expire",
+          code: "session_capacity_exceeded",
+        });
       }
       if (staleRedirect) {
         return sendInvalidSession(res, logDebug, { sessionId, replacementId: newSessionId, message: "MCP session expired. Reconnect and initialize using the mcp-session-id response header." });
