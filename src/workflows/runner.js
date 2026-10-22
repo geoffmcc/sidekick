@@ -124,9 +124,12 @@ async function runWorkflowDefinition(name, inputs = {}, options = {}) {
   const definition = record.definition;
   let workflowEffects = null;
   const executionContext = toolContext.getExecutionContext();
-  let requestedByPrincipalId = options.requestedByPrincipalId || executionContext.authIdentity?.requested_by_principal_id || executionContext.authIdentity?.principal_id || null;
-  let actorPrincipalId = options.actorPrincipalId || executionContext.authIdentity?.principal_id || null;
-  let actingForPrincipalId = options.actingForPrincipalId || executionContext.authIdentity?.acting_for_principal_id || null;
+  // Durable option fields and workflow checkpoints are not authentication.
+  // Attribute and authorize each step only with the current trusted execution
+  // context; persisted/requested IDs remain metadata, never credentials.
+  let requestedByPrincipalId = executionContext.authIdentity?.requested_by_principal_id || executionContext.authIdentity?.principal_id || null;
+  let actorPrincipalId = executionContext.authIdentity?.principal_id || null;
+  let actingForPrincipalId = executionContext.authIdentity?.acting_for_principal_id || null;
 
   let state;
   let workflow;
@@ -364,13 +367,7 @@ async function runWorkflowDefinition(name, inputs = {}, options = {}) {
         }
         if (!result) result = await dispatcher.callInternalTool(step.tool, args, {
           actor: options.actor || "workflow-runner",
-          authIdentity: executionContext.authIdentity || (actorPrincipalId ? {
-            principal_id: actorPrincipalId,
-            requested_by_principal_id: requestedByPrincipalId,
-            acting_for_principal_id: actingForPrincipalId,
-            scopes: options.scopes || null,
-            delegation_id: options.delegationId || null,
-          } : null),
+          authIdentity: executionContext.authIdentity || null,
           timeoutMs: step.timeout_ms || options.stepTimeoutMs || DEFAULT_STEP_TIMEOUT_MS,
           executionId,
           project: options.project || undefined,
