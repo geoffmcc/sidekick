@@ -27,7 +27,9 @@ function registerLegacySseRoutes({ app, sessionManager, createMcpServer }) {
       const sessionId = req.query.sessionId;
       if (!sessionId || !sessionManager.hasSession(sessionId)) return res.status(400).json({ error: "Invalid session" });
       const entry = sessionManager.getSession(sessionId);
-      if (entry.authState) entry.authState.current = req.authIdentity || null;
+      if (!sessionManager.authorizeSessionIdentity(sessionId, req.authIdentity || null)) {
+        return res.status(403).json({ error: "MCP session belongs to a different authenticated principal", code: "session_identity_mismatch" });
+      }
       if (!(entry.transport instanceof SSEServerTransport)) return res.status(400).json({ error: "Not an SSE session" });
       entry.lastAccess = Date.now();
       await entry.transport.handlePostMessage(req, res, req.body);

@@ -108,7 +108,10 @@ function registerStreamableHttpRoutes({ app, sessionManager, createMcpServer, lo
         return;
       }
 
-      const { transport, isNew, newSessionId, staleRedirect, replacedStaleSession } = await sessionManager.getTransportForRequest(sessionId, metadata, { allowStalePost: true });
+      const { transport, isNew, newSessionId, staleRedirect, replacedStaleSession, identityMismatch } = await sessionManager.getTransportForRequest(sessionId, metadata, { allowStalePost: true });
+      if (identityMismatch) {
+        return res.status(403).json({ error: "MCP session belongs to a different authenticated principal", code: "session_identity_mismatch" });
+      }
       if (staleRedirect) {
         return sendInvalidSession(res, logDebug, { sessionId, replacementId: newSessionId, message: "MCP session expired. Reconnect and initialize using the mcp-session-id response header." });
       }
@@ -146,7 +149,10 @@ function registerStreamableHttpRoutes({ app, sessionManager, createMcpServer, lo
         logDebug("GET_WITHOUT_SESSION", { sessionId });
         return sendInvalidSession(res, logDebug, { sessionId, message: "GET requires a valid mcp-session-id header." });
       }
-      const { transport, newSessionId, staleRedirect } = await sessionManager.getTransportForRequest(sessionId, { authIdentity: req.authIdentity || null });
+      const { transport, newSessionId, staleRedirect, identityMismatch } = await sessionManager.getTransportForRequest(sessionId, { authIdentity: req.authIdentity || null });
+      if (identityMismatch) {
+        return res.status(403).json({ error: "MCP session belongs to a different authenticated principal", code: "session_identity_mismatch" });
+      }
       if (staleRedirect) return sendInvalidSession(res, logDebug, { sessionId, replacementId: newSessionId, message: "MCP session expired. Reconnect and initialize using the mcp-session-id response header." });
       const webReq = new Request("http://127.0.0.1:4097/mcp", { method: "GET", headers: wh });
       const webRes = await transport.handleRequest(webReq);
@@ -170,7 +176,10 @@ function registerStreamableHttpRoutes({ app, sessionManager, createMcpServer, lo
         logDebug("DELETE_WITHOUT_SESSION", { sessionId });
         return sendInvalidSession(res, logDebug, { sessionId, message: "DELETE requires a valid mcp-session-id header." });
       }
-      const { transport, newSessionId, staleRedirect } = await sessionManager.getTransportForRequest(sessionId, { authIdentity: req.authIdentity || null });
+      const { transport, newSessionId, staleRedirect, identityMismatch } = await sessionManager.getTransportForRequest(sessionId, { authIdentity: req.authIdentity || null });
+      if (identityMismatch) {
+        return res.status(403).json({ error: "MCP session belongs to a different authenticated principal", code: "session_identity_mismatch" });
+      }
       if (staleRedirect) return sendInvalidSession(res, logDebug, { sessionId, replacementId: newSessionId, message: "MCP session expired. The previous session is already gone." });
       const webReq = new Request("http://127.0.0.1:4097/mcp", { method: "DELETE", headers: wh });
       const webRes = await transport.handleRequest(webReq);

@@ -1,6 +1,14 @@
 const { WebStandardStreamableHTTPServerTransport } = require("@modelcontextprotocol/server");
 const { MAX_MCP_REQUEST_BODY_BYTES } = require("./limits");
 
+function sameSessionPrincipal(established, presented) {
+  if (!established || !presented || typeof established !== "object" || typeof presented !== "object") return false;
+  const establishedPrincipal = typeof established.principal_id === "string" && established.principal_id ? established.principal_id : null;
+  const presentedPrincipal = typeof presented.principal_id === "string" && presented.principal_id ? presented.principal_id : null;
+  if (establishedPrincipal || presentedPrincipal) return Boolean(establishedPrincipal && presentedPrincipal && establishedPrincipal === presentedPrincipal);
+  return typeof established.authentication_method === "string" && established.authentication_method === presented.authentication_method;
+}
+
 function createSessionManager({ createMcpServer, logDebug, now = () => Date.now(), sessionIdGenerator } = {}) {
   const sessions = new Map();
   const staleSessionMap = new Map();
@@ -29,11 +37,21 @@ function createSessionManager({ createMcpServer, logDebug, now = () => Date.now(
     }
   }
 
+  function authorizeSessionIdentity(sessionId, authIdentity) {
+    const entry = sessions.get(sessionId);
+    if (!entry || !sameSessionPrincipal(entry.authIdentity, authIdentity)) return false;
+    if (entry.authState) entry.authState.current = authIdentity;
+    return true;
+  }
+
   async function getTransportForRequest(sessionId, metadata = {}, options = {}) {
     logDebug("getTransportForRequest", { requestedSessionId: sessionId, sessionCount: sessions.size });
     if (sessionId && sessions.has(sessionId)) {
       const entry = sessions.get(sessionId);
-      if (metadata.authIdentity !== undefined && entry.authState) entry.authState.current = metadata.authIdentity;
+      if (metadata.authIdentity !== undefined && !authorizeSessionIdentity(sessionId, metadata.authIdentity)) {
+        logDebug("SESSION_IDENTITY_MISMATCH", { sessionId });
+        return { transport: null, isNew: false, identityMismatch: true };
+      }
       const age = now() - entry.createdAt;
       const idle = now() - entry.lastAccess;
       entry.lastAccess = now();
@@ -48,7 +66,10 @@ function createSessionManager({ createMcpServer, logDebug, now = () => Date.now(
         logDebug("STALE_SESSION_KNOWN_REPLACEMENT", { staleSessionId: sessionId, replacementId });
         if (options.allowStalePost) {
           const entry = sessions.get(replacementId);
-          if (metadata.authIdentity !== undefined && entry.authState) entry.authState.current = metadata.authIdentity;
+          if (metadata.authIdentity !== undefined && !authorizeSessionIdentity(replacementId, metadata.authIdentity)) {
+            logDebug("SESSION_IDENTITY_MISMATCH", { sessionId, replacementId });
+            return { transport: null, isNew: false, newSessionId: replacementId, identityMismatch: true };
+          }
           entry.lastAccess = now();
           return { transport: entry.transport, isNew: false, newSessionId: replacementId, staleRedirect: false, replacedStaleSession: true };
         }
@@ -128,7 +149,7 @@ function createSessionManager({ createMcpServer, logDebug, now = () => Date.now(
     await Promise.all(Array.from(sessions.entries()).map(([id, entry]) => closeSessionEntry(id, entry)));
     staleSessionMap.clear();
   }
-  return { cleanupIdleSessions, deleteSession, dispose, getHealthSnapshot, getSession, getTransportForRequest, hasSession, markSessionInitialized, registerSession };
+  return { authorizeSessionIdentity, cleanupIdleSessions, deleteSession, dispose, getHealthSnapshot, getSession, getTransportForRequest, hasSession, markSessionInitialized, registerSession };
 }
 
 module.exports = { createSessionManager };
