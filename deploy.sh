@@ -515,9 +515,9 @@ else
 
   echo ""
   echo -e "\033[36m--- Starting Services ---\033[0m"
+  restart_service "sidekick-mcp"
   restart_service "sidekick-agent"
   restart_service "sidekick-dashboard"
-  restart_service "sidekick-mcp"
 fi
 
 echo ""

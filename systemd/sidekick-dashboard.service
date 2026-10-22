@@ -1,6 +1,7 @@
 [Unit]
 Description=Sidekick Dashboard
-After=network.target
+Requires=sidekick-mcp.service
+After=network.target sidekick-mcp.service
 
 [Service]
 Type=simple

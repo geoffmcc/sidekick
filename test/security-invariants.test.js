@@ -20,6 +20,28 @@ const { getStaticToolRisk } = require("../src/tools/metadata");
 
 const root = path.resolve(__dirname, "..");
 
+test("all Sidekick processes migrate shared state before restoring module entries", () => {
+  const source = file => fs.readFileSync(path.join(root, file), "utf8");
+  const index = source("src/index.js");
+  const dashboard = source("src/dashboard.js");
+  const agent = source("src/agent.js");
+  const mcpMigration = index.indexOf("dbStore.runPendingMigrations()");
+  const packAttestation = index.indexOf("reconcileBundledPackModules()");
+  const mcpProvision = index.indexOf("provisionBuiltinModules()");
+  assert.ok(mcpMigration >= 0 && mcpMigration < packAttestation && packAttestation < mcpProvision,
+    "MCP migrates, reconciles bundled provenance, then restores modules");
+  assert.ok(dashboard.indexOf("dbStore.runPendingMigrations()") < dashboard.indexOf("provisionBuiltinModules()"),
+    "Dashboard migrates before restoring modules");
+  assert.ok(agent.indexOf("dbStore.runPendingMigrations()") < agent.indexOf("provisionBuiltinModules()"),
+    "Agent migrates before restoring modules");
+
+  for (const file of ["systemd/sidekick-dashboard.service", "systemd/sidekick-agent.service"]) {
+    const unit = source(file);
+    assert.match(unit, /^Requires=sidekick-mcp\.service$/m, `${file} requires the pack-attesting MCP service`);
+    assert.match(unit, /^After=.*sidekick-mcp\.service/m, `${file} starts after MCP completes startup reconciliation`);
+  }
+});
+
 test("selected privileged handler boundaries retain exact canonical dispatch guards", () => {
   const guardedHandlers = [
     ["src/tools/families/shell.js", "sidekick_bash", "bash"],

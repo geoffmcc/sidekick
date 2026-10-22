@@ -11,16 +11,6 @@ const { formatKb, parseMemInfo, parseDiskRoot, runCommand, systemSnapshot, syste
 const { callDashboardTool, getToolDefsForSource, getToolCategoriesWithTools, buildPolicyInspection, summarizePolicyInspection, enforceToolPolicy, listApprovals, resolveApproval, renderContinuationApprovalPreview, loadWatches, syncToolRegistry } = require("./tools");
 const dynamicTools = require("./dynamic-tools");
 
-// Restore persisted platform modules in this process so module tools resolve
-// through the registry here as well (each process holds its own loader state).
-try {
-  const builtinModules = require("./modules/builtin-modules");
-  builtinModules.provisionBuiltinModules();
-  builtinModules.startModuleHealthChecks();
-  builtinModules.startModuleReconciliation();
-} catch (error) {
-  console.error("[Modules] Builtin module provisioning failed");
-}
 const dbStore = require("./db");
 const identity = require("./core/identity");
 const authentication = require("./core/authentication");
@@ -101,6 +91,17 @@ fs.mkdirSync(DATA_DIR, { recursive: true });
 // as well as in the MCP process so authentication routes never race startup.
 dbStore.runPendingMigrations();
 syncToolRegistry();
+
+// Restore persisted platform modules only after this process has converged
+// the shared database schema and synchronized the builtin tool registry.
+try {
+  const builtinModules = require("./modules/builtin-modules");
+  builtinModules.provisionBuiltinModules();
+  builtinModules.startModuleHealthChecks();
+  builtinModules.startModuleReconciliation();
+} catch (error) {
+  console.error("[Modules] Builtin module provisioning failed:", String(error?.message || error).slice(0, 300));
+}
 
 const app = express();
 const dashboardErrors = createDashboardErrorBoundary({ fs, logFile: ERROR_LOG });

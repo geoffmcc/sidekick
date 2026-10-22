@@ -135,15 +135,6 @@ async function prepareTaskBranch({ task, repoPath, statusEvidence, options = {},
   }
 }
 
-try {
-  const builtinModules = require("./modules/builtin-modules");
-  builtinModules.provisionBuiltinModules();
-  builtinModules.startModuleHealthChecks();
-  builtinModules.startModuleReconciliation();
-} catch (error) {
-  console.error("[Modules] Builtin module provisioning failed:", error.message);
-}
-
 const { recordAgentTaskMemory, inferProjectFromText } = require("./memory");
 const { assembleContext } = require("./context");
 const { classifyEvidenceRequirement } = require("./agent-protocol");
@@ -178,6 +169,17 @@ const dbStore = require("./db");
 // The Agent owns a separate process in deployments. Migrate before exposing
 // health or accepting tasks so readiness never depends on lazy store access.
 dbStore.runPendingMigrations();
+// This process has an independent module registry. Restore it only after
+// schema migration; the MCP service performs verified bundled-pack provenance
+// reconciliation before the dependent systemd units start.
+try {
+  const builtinModules = require("./modules/builtin-modules");
+  builtinModules.provisionBuiltinModules();
+  builtinModules.startModuleHealthChecks();
+  builtinModules.startModuleReconciliation();
+} catch (error) {
+  console.error("[Modules] Builtin module provisioning failed:", String(error?.message || error).slice(0, 300));
+}
 const consumeAgentProxyNonce = createSqliteNonceConsumer(dbStore.getDb());
 const durableReceiptStore = require("./agent/receipt-store");
 const durableWorkspaceTransactions = require("./agent/workspace-transactions");
