@@ -17,6 +17,7 @@ const { clampOffset: clampPredictionOffset } = require("../src/predict");
 const { HISTORY_LIMITS, clampHistoryOffset } = require("../src/agent-history");
 const { dispatchTool } = require("../src/tools/dispatcher");
 const { getStaticToolRisk } = require("../src/tools/metadata");
+const { collectSnapshotRows } = require("../src/db/snapshot-bounds");
 
 const root = path.resolve(__dirname, "..");
 
@@ -293,6 +294,29 @@ test("database diff bounds and validates imported snapshot files", async () => {
     else process.env.SIDEKICK_ALLOWED_PATHS = previousAllowed;
     fs.rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("database snapshot collection stops at configured row and byte budgets", () => {
+  let yielded = 0;
+  function* rows() {
+    while (true) {
+      yielded += 1;
+      yield { value: "x" };
+    }
+  }
+  assert.throws(
+    () => collectSnapshotRows(rows(), { rows: 0, bytes: 0 }, { maxRows: 2, maxBytes: 1024 }),
+    /exceeds the 2 row limit/,
+  );
+  assert.equal(yielded, 3, "iteration must stop at the first row beyond the cap");
+  assert.throws(
+    () => collectSnapshotRows([{ value: "long" }], { rows: 0, bytes: 0 }, { maxRows: 2, maxBytes: 2 }),
+    /exceeds the 2 byte limit/,
+  );
+  assert.deepEqual(
+    collectSnapshotRows([{ value: "ok" }], { rows: 0, bytes: 0 }, { maxRows: 1, maxBytes: 1024 }),
+    [{ value: "ok" }],
+  );
 });
 
 test("persistent knowledge and memory operations cannot run through identityless dispatch", async () => {

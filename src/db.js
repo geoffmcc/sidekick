@@ -15,6 +15,7 @@ const { createGeneratedCapabilityStore } = require("./db/generated-capabilities"
 const { createGeneratedExecutionRowMappers } = require("./db/generated-execution-rows");
 const { createDatabaseInspection } = require("./db/inspection");
 const { createDatabaseQuery } = require("./db/query");
+const { collectSnapshotRows } = require("./db/snapshot-bounds");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const DB_FILE = process.env.SIDEKICK_DB_FILE || path.join(DATA_DIR, "sidekick.db");
@@ -2016,21 +2017,41 @@ function runPendingMigrations() {
   return { applied: applied.length, migrations: applied };
 }
 
-function createSnapshot() {
-  const tables = getTableList().filter(t => t.type === "table");
+const MAX_SNAPSHOT_ROWS = 20000;
+const MAX_SNAPSHOT_BYTES = 16 * 1024 * 1024;
+
+function createSnapshot(options = {}) {
+  const requestedTable = options.table;
+  const tables = getTableList().filter(t => t.type === "table" && (!requestedTable || t.name === requestedTable));
+  if (requestedTable && !tables.length) throw new Error(`Unknown database table: ${requestedTable}`);
   const snapshot = {};
-  
+  const budget = { rows: 0, bytes: 0 };
+
   for (const table of tables) {
-    snapshot[table.name] = db.prepare(`SELECT * FROM ${table.name}`).all();
+    const statement = db.prepare(`SELECT * FROM ${quoteIdentifier(table.name)}`);
+    snapshot[table.name] = collectSnapshotRows(statement.iterate(), budget, { maxRows: MAX_SNAPSHOT_ROWS, maxBytes: MAX_SNAPSHOT_BYTES });
   }
-  
-  return {
-    timestamp: nowIso(),
-    tables: snapshot
-  };
+
+  return { timestamp: nowIso(), tables: snapshot };
 }
 
 function compareSnapshots(snapshotA, snapshotB) {
+  let inputRows = 0;
+  let inputBytes = 0;
+  for (const snapshot of [snapshotA, snapshotB]) {
+    if (!snapshot || !snapshot.tables || typeof snapshot.tables !== "object" || Array.isArray(snapshot.tables)) {
+      throw new Error("Snapshot must contain a tables object");
+    }
+    for (const rows of Object.values(snapshot.tables)) {
+      if (!Array.isArray(rows)) throw new Error("Snapshot tables must contain row arrays");
+      for (const row of rows) {
+        inputRows += 1;
+        if (inputRows > MAX_SNAPSHOT_ROWS * 2) throw new Error(`Snapshot comparison exceeds the ${MAX_SNAPSHOT_ROWS * 2} row limit`);
+        inputBytes += Buffer.byteLength(JSON.stringify(row), "utf8");
+        if (inputBytes > MAX_SNAPSHOT_BYTES * 2) throw new Error(`Snapshot comparison exceeds the ${MAX_SNAPSHOT_BYTES * 2} byte limit`);
+      }
+    }
+  }
   const diff = {};
   
   const allTables = new Set([
@@ -2553,4 +2574,6 @@ module.exports = {
   runPendingMigrations,
   createSnapshot,
   compareSnapshots,
+  MAX_SNAPSHOT_ROWS,
+  MAX_SNAPSHOT_BYTES,
 };

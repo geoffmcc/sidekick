@@ -8,7 +8,7 @@ const { enforcePathPolicy } = require("../path-policy");
 const { getStaticToolRisk } = require("../metadata");
 const { requireToolExecution, requireCanonicalInvocation } = require("../read-authorization");
 
-const MAX_SNAPSHOT_BYTES = 16 * 1024 * 1024;
+const MAX_SNAPSHOT_BYTES = dbStore.MAX_SNAPSHOT_BYTES;
 
 function readSnapshot(filePath) {
   const fd = fs.openSync(filePath, "r");
@@ -121,8 +121,15 @@ async function sidekick_db_diff({ snapshot_a, snapshot_b, table }) {
       const policyError = enforcePathPolicy(snapshot_b, "read");
       if (policyError) return policyError;
     }
-    const snapA = snapshot_a === "current" || !snapshot_a ? dbStore.createSnapshot() : readSnapshot(snapshot_a);
-    const snapB = snapshot_b === "current" || !snapshot_b ? dbStore.createSnapshot() : readSnapshot(snapshot_b);
+    const loadSnapshot = value => {
+      const snapshot = value === "current" || !value
+        ? dbStore.createSnapshot(table ? { table } : undefined)
+        : readSnapshot(value);
+      if (!table) return snapshot;
+      return { ...snapshot, tables: { [table]: snapshot.tables[table] || [] } };
+    };
+    const snapA = loadSnapshot(snapshot_a);
+    const snapB = loadSnapshot(snapshot_b);
     const diff = dbStore.compareSnapshots(snapA, snapB);
     if (table) return jsonResult({ [table]: diff[table] || { added: [], removed: [] } });
     const summary = {};
