@@ -57,9 +57,8 @@ function hasForbiddenKeyDeep(value, depth = 0) {
 //
 // Deliberately NOT exempt, because for these `source` is an authority or
 // execution input — exactly what this check exists to refuse:
-//   memory     — source:"correction" sets source_authority 10, the maximum in
-//                the system. A model could self-assert top authority and have
-//                it recalled into later planning.
+//   memory     — source is provenance metadata; runtime persistence pins
+//                authority, while plans still cannot self-assert source labels.
 //   handoff    — overrides the recorded origin of the handoff.
 //   session    — same override on action=begin, persisted and emitted in the
 //                session_started event. Audit-provenance rather than privilege,

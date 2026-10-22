@@ -79,3 +79,23 @@ test("authorized confirmation records the authenticated principal, not caller te
   assert.notEqual(result.isError, true, JSON.stringify(result));
   assert.equal(db.getMemoryById(pending.id, { includeDisabled: true }).confirmed_by, owner.principal_id);
 });
+
+test("failed replacement persistence rolls back the old-memory deletion", async () => {
+  const original = db.upsertMemory({ type: "fact", project: "memory_authority_project", content: "atomic correction original", summary: "atomic correction original", source: "explicit", source_authority: 5 });
+  const upsertMemory = db.upsertMemory;
+  db.upsertMemory = () => { throw new Error("synthetic replacement write failure"); };
+  try {
+    const result = await dispatcher.dispatchTestTool({
+      descriptor: memory,
+      args: { action: "correct", id: original.id, correct_to: "replacement that must not persist", project: "memory_authority_project" },
+      context: { authIdentity: { principal_id: owner.principal_id, principal_type: "human" }, project: "memory_authority_project" },
+    });
+    assert.equal(result.isError, true);
+  } finally {
+    db.upsertMemory = upsertMemory;
+  }
+  const unchanged = db.getMemoryById(original.id, { includeDisabled: true });
+  assert.equal(unchanged.state, "active");
+  assert.equal(unchanged.content, "atomic correction original");
+  assert.equal(db.searchMemories({ project: "memory_authority_project", query: "replacement that must not persist", includeDisabled: true }).length, 0);
+});

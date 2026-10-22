@@ -87,8 +87,10 @@ async function sidekick_memory({ action, id, project, type, memory_class, conten
     const old = dbStore.getMemoryById(id, { includeDisabled: true });
     try { assertInScope(old, "write", effectiveProject); } catch { return { content: [{ type: "text", text: "Memory not found: " + id }], isError: true }; }
     if (!old) return { content: [{ type: "text", text: "Memory not found: " + id }], isError: true };
-    dbStore.softDeleteMemory(id, reason || "corrected");
-    const replacement = dbStore.upsertMemory({ type: old.type, project: old.project, content: redactSensitive(correct_to), summary: redactSensitive(correct_to), confidence: 0.95, source: "user_correction", source_tool: "sidekick_memory", automatic: false, memory_class: old.memory_class, primary_scope_type: old.primary_scope_type, primary_scope_id: old.primary_scope_id, supersedes_id: id, evidence_excerpt: redactSensitive(correct_to), directness: "direct", source_authority: 10, metadata: { corrected_memory_id: id, correction_reason: reason || null } });
+    const replacement = dbStore.getDb().transaction(() => {
+      dbStore.softDeleteMemory(id, reason || "corrected");
+      return dbStore.upsertMemory({ type: old.type, project: old.project, content: redactSensitive(correct_to), summary: redactSensitive(correct_to), confidence: 0.95, source: "user_correction", source_tool: "sidekick_memory", automatic: false, memory_class: old.memory_class, primary_scope_type: old.primary_scope_type, primary_scope_id: old.primary_scope_id, supersedes_id: id, evidence_excerpt: redactSensitive(correct_to), directness: "direct", source_authority: 10, metadata: { corrected_memory_id: id, correction_reason: reason || null } });
+    })();
     dbStore.auditMemoryEvent("correct", "memory", id, { replacement_id: replacement.id, reason }, toolContext.getExecutionSource());
     recordMemoryEvent("memory.corrected", { memory_id: id, replacement_id: replacement.id, project: replacement.project, type: replacement.type, reason: reason || null }, { subjectType: "memory", subjectId: replacement.id, project: replacement.project });
     return jsonText({ ok: true, old_memory: id, replacement });
