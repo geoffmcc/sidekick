@@ -145,6 +145,9 @@ function requiredToolPermission(descriptor, args = {}) {
   }
   if (descriptor.name === "memory" && ["confirm", "correct"].includes(args.action)) return "tools.execute_critical";
   if (descriptor.name === "memory_manage" && args.action === "confirm") return "tools.execute_critical";
+  if (descriptor.name === "sync_identity") return args.action === "get" ? "sync.read" : "sync.manage";
+  if (["sync_export", "sync_diff"].includes(descriptor.name)) return args.project ? "memory.read" : "sync.read";
+  if (descriptor.name === "sync_import") return args.project ? "memory.write" : "sync.manage";
   if (descriptor.name === "webhook") {
     return args.action === "clear" ? "webhooks.manage" : "webhooks.read";
   }
