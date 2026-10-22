@@ -18,6 +18,7 @@ source "$SCRIPT_DIR/lib/apt-repository.sh"
 source "$SCRIPT_DIR/lib/install-ollama.sh"
 source "$SCRIPT_DIR/lib/polkit.sh"
 source "$SCRIPT_DIR/lib/sudoers.sh"
+source "$SCRIPT_DIR/lib/bubblewrap.sh"
 
 PASS=0
 FAIL=0
@@ -507,8 +508,11 @@ info "Foundation:"
 command -v pip3 &>/dev/null && pass "pip3" || fail "pip3"
 command -v rg &>/dev/null && pass "ripgrep" || fail "ripgrep"
 command -v sqlite3 &>/dev/null && pass "sqlite3" || fail "sqlite3"
-[[ -x /usr/bin/bwrap ]] && pass "Bubblewrap command isolation" || fail "Bubblewrap (/usr/bin/bwrap)"
-[[ -x /usr/bin/prlimit ]] && pass "Kernel process limits" || fail "prlimit (/usr/bin/prlimit)"
+if sidekick_bubblewrap_smoke_test "$USERNAME"; then
+  pass "Bubblewrap namespaces and kernel limits under NoNewPrivileges"
+else
+  fail "Bubblewrap isolation unavailable for $USERNAME; shell calls will fail closed"
+fi
 
 # Docker
 info "Docker:"

@@ -24,6 +24,7 @@ const DEPLOY_SH_PATH = path.join(PROJECT_ROOT, 'deploy.sh');
 const DEPLOY_PS1_PATH = path.join(PROJECT_ROOT, 'deploy.ps1');
 const BOOTSTRAP_SH_PATH = path.join(PROJECT_ROOT, 'scripts', 'bootstrap.sh');
 const SETUP_TOOLS_SH_PATH = path.join(PROJECT_ROOT, 'scripts', 'setup-tools.sh');
+const BUBBLEWRAP_LIB_PATH = path.join(PROJECT_ROOT, 'scripts', 'lib', 'bubblewrap.sh');
 const SUDOERS_PATH = path.join(PROJECT_ROOT, 'systemd', 'sidekick-sudoers');
 const DEPLOY_SUDOERS_PATH = path.join(PROJECT_ROOT, 'systemd', 'sidekick-deploy-sudoers');
 
@@ -32,6 +33,7 @@ let deployShContent = '';
 let deployPs1Content = '';
 let bootstrapShContent = '';
 let setupToolsShContent = '';
+let bubblewrapLibContent = '';
 let sudoersContent = '';
 let deploySudoersContent = '';
 
@@ -57,6 +59,7 @@ try {
 }
 
 setupToolsShContent = fs.readFileSync(SETUP_TOOLS_SH_PATH, 'utf8');
+  bubblewrapLibContent = fs.readFileSync(BUBBLEWRAP_LIB_PATH, 'utf8');
 sudoersContent = fs.readFileSync(SUDOERS_PATH, 'utf8');
 deploySudoersContent = fs.readFileSync(DEPLOY_SUDOERS_PATH, 'utf8');
 
@@ -544,8 +547,13 @@ console.log('Test 3.5b: Linux setup installs required shell isolation dependenci
   for (const [name, content] of [['bootstrap.sh', bootstrapShContent], ['setup-tools.sh', setupToolsShContent]]) {
     assert.ok(/apt-get install[^\n]*bubblewrap[^\n]*util-linux/.test(content), `${name} must install bubblewrap and util-linux/prlimit`);
   }
-  assert.ok(bootstrapShContent.includes('[ ! -x /usr/bin/bwrap ]') && bootstrapShContent.includes('[ ! -x /usr/bin/prlimit ]'), 'bootstrap.sh must fail if the runtime isolation binaries are missing');
-  assert.ok(setupToolsShContent.includes('[[ -x /usr/bin/bwrap ]]') && setupToolsShContent.includes('[[ -x /usr/bin/prlimit ]]'), 'setup-tools.sh must report runtime isolation binary health');
+  for (const [name, content] of [['bootstrap.sh', bootstrapShContent], ['setup-tools.sh', setupToolsShContent]]) {
+    assert.ok(content.includes('source "$SCRIPT_DIR/lib/bubblewrap.sh"'), `${name} must use the shared isolation health check`);
+    assert.ok(content.includes('sidekick_bubblewrap_smoke_test "$USERNAME"'), `${name} must verify the backend as the service identity`);
+  }
+  assert.ok(bubblewrapLibContent.includes('setpriv --no-new-privs'), 'the smoke check must match the service NNP boundary');
+  assert.ok(bubblewrapLibContent.includes('/usr/bin/prlimit') && bubblewrapLibContent.includes('/usr/bin/bwrap'), 'the smoke check must exercise both required executables');
+  assert.ok(bubblewrapLibContent.includes('--unshare-all') && bubblewrapLibContent.includes('--cap-drop ALL'), 'the smoke check must exercise namespace and capability isolation');
   console.log('✓ Shell isolation dependencies and checks present\n');
 }
 

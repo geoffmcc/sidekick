@@ -21,6 +21,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/apt-repository.sh"
 source "$SCRIPT_DIR/lib/polkit.sh"
 source "$SCRIPT_DIR/lib/sudoers.sh"
+source "$SCRIPT_DIR/lib/bubblewrap.sh"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -351,8 +352,10 @@ if ! command -v node &> /dev/null; then
   error "Node.js not found after installation"
 fi
 
-if [ ! -x /usr/bin/bwrap ] || [ ! -x /usr/bin/prlimit ]; then
-  error "Bubblewrap and prlimit are required for isolated command execution"
+if sidekick_bubblewrap_smoke_test "$USERNAME"; then
+  log "Linux command isolation verified for $USERNAME under NoNewPrivileges"
+else
+  warn "Bubblewrap isolation is unavailable for $USERNAME; isolated shell calls will fail closed until the host supports the required user namespace and limits"
 fi
 
 if [ ! -d "$USER_HOME/sidekick" ]; then
