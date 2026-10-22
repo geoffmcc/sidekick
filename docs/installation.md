@@ -158,6 +158,14 @@ policy, which also requires the caller to be `sidekick-mcp.service` with
 `NoNewPrivileges=true`. Neither mechanism grants unit enablement, daemon
 reload, or arbitrary systemd commands.
 
+WireGuard status/peer changes and Nginx site-file changes/config tests still
+depend on `sudo` and are not yet mediated for Sidekick services running with
+`NoNewPrivileges=true`. They fail before making a change and report that a
+narrow privileged broker is required. Keep `NoNewPrivileges` enabled; these
+operations need a separate reviewed broker implementation before they can be
+used from the hardened services. Nginx status and reload use the scoped
+systemd Polkit path.
+
 Check services:
 
 ```bash

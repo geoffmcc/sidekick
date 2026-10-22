@@ -16,10 +16,15 @@ const { z } = require("zod");
 const { validIdentifier, validPort, validDomainName, validAllowedIps, validWireGuardEndpoint, validWireGuardPublicKey } = require("../../core/command-validation");
 const { DATA_DIR } = require("../../db");
 const { childProcessEnv } = require("../../security/child-process");
+const { runSudoCommand } = require("../../core/privilege-diagnostics");
 const { requireToolExecution } = require("../read-authorization");
 
 function safeExecFileSync(program, args, options = {}) {
   return execFileSync(program, args, { ...options, env: childProcessEnv(options.env) });
+}
+
+function safeSudoExecFileSync(args, options = {}) {
+  return runSudoCommand(args, options, { childProcessEnv });
 }
 
 async function sidekick_tunnel({ action, url, port, name }) {
@@ -107,7 +112,7 @@ async function sidekick_wireguard({ action, interface_name, peer_name, public_ke
   if (denied) return denied;
   try {
     if (action === "status") {
-      const result = safeExecFileSync("sudo", ["/usr/local/sbin/sidekick-wg", "show", "all"], { timeout: 5000, encoding: "utf-8" });
+      const result = safeSudoExecFileSync(["/usr/local/sbin/sidekick-wg", "show", "all"], { timeout: 5000, encoding: "utf-8" });
       if (!result.trim()) {
         return { content: [{ type: "text", text: "No WireGuard interfaces found" }] };
       }
@@ -119,7 +124,7 @@ async function sidekick_wireguard({ action, interface_name, peer_name, public_ke
         return { content: [{ type: "text", text: "Error: interface_name required" }], isError: true };
       }
       const iface = validIdentifier(interface_name, "interface name", 32);
-      const result = safeExecFileSync("sudo", ["/usr/local/sbin/sidekick-wg", "show", iface, "peers"], { timeout: 5000, encoding: "utf-8" });
+      const result = safeSudoExecFileSync(["/usr/local/sbin/sidekick-wg", "show", iface, "peers"], { timeout: 5000, encoding: "utf-8" });
       const peers = result.trim().split('\n').filter(line => line && !line.startsWith('Warning')).map(line => {
         const parts = line.split('\t');
         return {
@@ -145,7 +150,7 @@ async function sidekick_wireguard({ action, interface_name, peer_name, public_ke
       const peerEndpoint = validWireGuardEndpoint(endpoint);
       const args = ["/usr/local/sbin/sidekick-wg", "set", iface, "peer", key, "allowed-ips", ips];
       if (peerEndpoint) args.push("endpoint", peerEndpoint);
-      safeExecFileSync("sudo", args, { timeout: 5000 });
+      safeSudoExecFileSync(args, { timeout: 5000 });
       return { content: [{ type: "text", text: `Added peer ${peerName} to ${iface}` }] };
     }
 
@@ -155,7 +160,7 @@ async function sidekick_wireguard({ action, interface_name, peer_name, public_ke
       }
       const iface = validIdentifier(interface_name, "interface name", 32);
       const key = validWireGuardPublicKey(public_key);
-      safeExecFileSync("sudo", ["/usr/local/sbin/sidekick-wg", "set", iface, "peer", key, "remove"], { timeout: 5000 });
+      safeSudoExecFileSync(["/usr/local/sbin/sidekick-wg", "set", iface, "peer", key, "remove"], { timeout: 5000 });
       return { content: [{ type: "text", text: `Removed peer from ${iface}` }] };
     }
 
@@ -212,16 +217,16 @@ async function sidekick_nginx({ action, site_name, domain, upstream_port, ssl_em
       const availablePath = `/etc/nginx/sites-available/${siteName}`;
       const enabledPath = `/etc/nginx/sites-enabled/${siteName}`;
       fs.writeFileSync(tmpPath, config, { flag: "wx", mode: 0o600 });
-      safeExecFileSync("sudo", ["install", "-m", "0644", tmpPath, availablePath], { timeout: 5000 });
-      safeExecFileSync("sudo", ["ln", "-sf", availablePath, enabledPath], { timeout: 5000 });
+      safeSudoExecFileSync(["install", "-m", "0644", tmpPath, availablePath], { timeout: 5000 });
+      safeSudoExecFileSync(["ln", "-sf", availablePath, enabledPath], { timeout: 5000 });
 
       // Test config
       try {
-        safeExecFileSync("sudo", ["nginx", "-t"], { timeout: 5000, stdio: ["ignore", "pipe", "pipe"] });
+        safeSudoExecFileSync(["nginx", "-t"], { timeout: 5000, stdio: ["ignore", "pipe", "pipe"] });
         safeExecFileSync("systemctl", ["reload", "nginx"], { timeout: 5000 });
         return { content: [{ type: "text", text: `Added site ${siteName} for ${domainName} -> port ${proxyPort}` }] };
       } catch (e) {
-        safeExecFileSync("sudo", ["rm", "-f", enabledPath, availablePath], { timeout: 5000 });
+        safeSudoExecFileSync(["rm", "-f", enabledPath, availablePath], { timeout: 5000 });
         const detail = (e.stderr || e.stdout || e.message || "").toString();
         return { content: [{ type: "text", text: `Error: Invalid nginx config: ${detail}` }], isError: true };
       } finally {
@@ -234,14 +239,14 @@ async function sidekick_nginx({ action, site_name, domain, upstream_port, ssl_em
         return { content: [{ type: "text", text: "Error: site_name required" }], isError: true };
       }
       const siteName = validIdentifier(site_name, "site name");
-      safeExecFileSync("sudo", ["rm", "-f", `/etc/nginx/sites-enabled/${siteName}`, `/etc/nginx/sites-available/${siteName}`], { timeout: 5000 });
+      safeSudoExecFileSync(["rm", "-f", `/etc/nginx/sites-enabled/${siteName}`, `/etc/nginx/sites-available/${siteName}`], { timeout: 5000 });
       safeExecFileSync("systemctl", ["reload", "nginx"], { timeout: 5000 });
       return { content: [{ type: "text", text: `Removed site ${siteName}` }] };
     }
 
     if (action === "test_config") {
       try {
-        safeExecFileSync("sudo", ["nginx", "-t"], { timeout: 5000, stdio: ["ignore", "pipe", "pipe"] });
+        safeSudoExecFileSync(["nginx", "-t"], { timeout: 5000, stdio: ["ignore", "pipe", "pipe"] });
         return { content: [{ type: "text", text: "nginx config test passed" }] };
       } catch (e) {
         return { content: [{ type: "text", text: (e.stderr || e.stdout || e.message).toString() }], isError: true };
