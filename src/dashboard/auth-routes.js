@@ -75,7 +75,8 @@ function registerAuthRoutes({
 
   app.post("/api/auth/logout", (req, res) => {
     const token = requestCookie(req, "sidekick_identity");
-    authentication.invalidateSession(token);
+    try { authentication.invalidateSession(token, req.authPrincipal?.principal_id || null); }
+    catch { clearIdentityCookie(res, req); return res.status(503).json({ error: "Session audit storage is unavailable", code: "audit_unavailable" }); }
     clearIdentityCookie(res, req);
     res.status(204).end();
   });
@@ -174,7 +175,7 @@ function registerAuthRoutes({
     if (!identity.verifyUserPassword(account.username, req.body?.current_password)) return res.status(401).json({ error: "Current password is incorrect" });
     try {
       identity.changePassword(principalId, req.body?.new_password, principalId);
-      authentication.invalidatePrincipalSessions(principalId);
+      authentication.invalidatePrincipalSessions(principalId, principalId);
       res.json({ ok: true });
     } catch (error) {
       return errorResponse(req, res, error, { status: 400, code: "invalid_request", component: "auth" });
@@ -198,7 +199,7 @@ function registerAuthRoutes({
       const target = identity.getHumanUser(req.params.id);
       if (!target) return res.status(404).json({ error: "Human principal not found" });
       identity.changePassword(target.principal.principal_id, req.body?.new_password, req.authPrincipal.principal_id);
-      authentication.invalidatePrincipalSessions(target.principal.principal_id);
+      authentication.invalidatePrincipalSessions(target.principal.principal_id, req.authPrincipal.principal_id);
       res.json({ ok: true });
     } catch (error) {
       return errorResponse(req, res, error, { status: 400, code: "invalid_request", component: "auth" });
@@ -216,7 +217,7 @@ function registerAuthRoutes({
     if (!['enable', 'disable'].includes(req.params.state)) return res.status(404).json({ error: "Unknown principal state" });
     try {
       const principal = identity.setPrincipalEnabled(req.params.id, req.params.state === 'enable', req.authPrincipal.principal_id);
-      if (req.params.state === 'disable') authentication.invalidatePrincipalSessions(principal.principal_id);
+      if (req.params.state === 'disable') authentication.invalidatePrincipalSessions(principal.principal_id, req.authPrincipal.principal_id);
       res.json({ principal });
     } catch (error) {
       return errorResponse(req, res, error, { status: String(error?.message || "").includes("Owner") ? 409 : 400, code: "principal_state_change_rejected", component: "auth" });

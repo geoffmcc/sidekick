@@ -153,6 +153,26 @@ test("session, credential, and recovery-token issuance/revocation roll back with
   const revocationAudit = db.prepare("SELECT actor_principal_id FROM identity_audit_events WHERE event_type = 'credential.revoked' AND principal_id = ? ORDER BY created_at DESC LIMIT 1").get(service.principal_id);
   assert.equal(revocationAudit.actor_principal_id, owner.principal_id);
 
+  const session = authentication.createSession(service.principal_id);
+  rejectAudit("session.revoked", "reject_session_revoke_audit", () => {
+    assert.throws(() => authentication.invalidateSession(session.token, owner.principal_id), /synthetic audit failure/);
+    assert.ok(authentication.getSession(session.token), "failed single-session revocation preserves the active session");
+  });
+  assert.equal(authentication.invalidateSession(session.token, owner.principal_id), true);
+  const sessionAudit = db.prepare("SELECT actor_principal_id, details_json FROM identity_audit_events WHERE event_type = 'session.revoked' AND principal_id = ? ORDER BY created_at DESC LIMIT 1").get(service.principal_id);
+  assert.equal(sessionAudit.actor_principal_id, owner.principal_id);
+  assert.equal(sessionAudit.details_json, "{}");
+
+  const bulkSessions = [authentication.createSession(service.principal_id), authentication.createSession(service.principal_id)];
+  rejectAudit("principal.sessions_revoked", "reject_bulk_session_revoke_audit", () => {
+    assert.throws(() => authentication.invalidatePrincipalSessions(service.principal_id, owner.principal_id), /synthetic audit failure/);
+    for (const active of bulkSessions) assert.ok(authentication.getSession(active.token), "failed bulk revocation preserves each active session");
+  });
+  assert.equal(authentication.invalidatePrincipalSessions(service.principal_id, owner.principal_id), 2);
+  const bulkAudit = db.prepare("SELECT actor_principal_id, details_json FROM identity_audit_events WHERE event_type = 'principal.sessions_revoked' AND principal_id = ? ORDER BY created_at DESC LIMIT 1").get(service.principal_id);
+  assert.equal(bulkAudit.actor_principal_id, owner.principal_id);
+  assert.equal(JSON.parse(bulkAudit.details_json).count, 2);
+
   const beforeRecoveryTokens = db.prepare("SELECT COUNT(*) AS count FROM identity_recovery_tokens WHERE owner_principal_id = ?").get(owner.principal_id).count;
   rejectAudit("owner.recovery_token_created", "reject_recovery_token_audit", () => {
     assert.throws(() => authentication.createOwnerRecoveryToken(owner.principal_id), /synthetic audit failure/);

@@ -87,15 +87,26 @@ function isSessionActive(sessionId) {
   return Boolean(row);
 }
 
-function invalidateSession(token) {
+function invalidateSession(token, actorPrincipalId = null) {
   if (typeof token !== "string" || !token) return false;
-  const result = dbStore.getDb().prepare("UPDATE identity_sessions SET invalidated_at = ? WHERE session_id_hash = ? AND invalidated_at IS NULL").run(now(), hash(token));
-  return result.changes === 1;
+  const db = dbStore.getDb();
+  return db.transaction(() => {
+    const sessionHash = hash(token);
+    const session = db.prepare("SELECT principal_id FROM identity_sessions WHERE session_id_hash = ?").get(sessionHash);
+    const result = db.prepare("UPDATE identity_sessions SET invalidated_at = ? WHERE session_id_hash = ? AND invalidated_at IS NULL").run(now(), sessionHash);
+    if (result.changes === 1) identity.recordAuditEvent("session.revoked", session?.principal_id, actorPrincipalId || session?.principal_id || null, {});
+    return result.changes === 1;
+  })();
 }
 
-function invalidatePrincipalSessions(principalId) {
-  const result = dbStore.getDb().prepare("UPDATE identity_sessions SET invalidated_at = ? WHERE principal_id = ? AND invalidated_at IS NULL").run(now(), requiredText(principalId, "principal_id"));
-  return result.changes;
+function invalidatePrincipalSessions(principalId, actorPrincipalId = null) {
+  const idValue = requiredText(principalId, "principal_id");
+  const db = dbStore.getDb();
+  return db.transaction(() => {
+    const result = db.prepare("UPDATE identity_sessions SET invalidated_at = ? WHERE principal_id = ? AND invalidated_at IS NULL").run(now(), idValue);
+    if (result.changes > 0) identity.recordAuditEvent("principal.sessions_revoked", idValue, actorPrincipalId, { count: result.changes });
+    return result.changes;
+  })();
 }
 
 function createCredential({ principalId, displayName, scopes = [], expiresAt = null, createdByPrincipalId = null } = {}) {
