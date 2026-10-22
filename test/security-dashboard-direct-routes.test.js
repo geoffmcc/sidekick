@@ -40,6 +40,7 @@ function makeHarness(register, overrides = {}) {
   register({
     app, dbStore, platformKernel,
     authenticatedUser: () => "viewer",
+    recordIdentityAudit: () => {},
     requireIdentityPermission,
     projectAccess: { hasGlobalProjectAccess: () => false, hasGlobalMemoryAccess: () => false, hasProjectAccess: () => false, listAccessibleProjects: () => [] },
     memoryCategory: () => "fact",
@@ -319,7 +320,7 @@ test("sync export and import enforce memory action permission and project member
     projectAccess,
     dbStore: {
       exportForSync: options => { calls.push(["export", options]); return { count: 1, memories: [] }; },
-      importFromSync: (_data, options) => { calls.push(["import", options]); return { imported: 0, conflicts: 0, skipped: 0 }; },
+      importFromSync: (_data, options) => { calls.push(["import", options]); options.audit({ imported: 0, updated: 0, skipped: 0, conflicts: 0 }); return { imported: 0, conflicts: 0, skipped: 0 }; },
     },
   });
 
@@ -347,7 +348,7 @@ test("sync import constrains writes to its authorized project and diff requires 
       hasProjectAccess: (_principalId, project, access) => project === "allowed_project" && access === "write",
     },
     dbStore: {
-      importFromSync: (_data, options) => { calls.push(options); return { imported: 0, conflicts: 0, skipped: 2 }; },
+      importFromSync: (_data, options) => { calls.push(options); options.audit({ imported: 0, updated: 0, skipped: 2, conflicts: 0 }); return { imported: 0, conflicts: 0, skipped: 2 }; },
       getSyncDiff: () => { throw new Error("must not expose unscoped sync diff"); },
     },
   });

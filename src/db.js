@@ -2353,6 +2353,9 @@ function importFromSync(data, options = {}) {
       );
       imported++;
     }
+    if (typeof options.audit === "function") {
+      options.audit({ imported, updated, skipped, conflicts });
+    }
     db.exec("COMMIT");
   } catch (e) {
     try { db.exec("ROLLBACK"); } catch {}

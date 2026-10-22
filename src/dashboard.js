@@ -1686,7 +1686,7 @@ app.post("/api/memories/expire", (req, res) => {
 
 registerHandoffReadRoutes({ app, dbStore, errorResponse: dashboardErrors.respond });
 
-registerSyncRoutes({ app, dbStore, requireIdentityPermission, projectAccess, auditLog, errorResponse: dashboardErrors.respond });
+registerSyncRoutes({ app, dbStore, requireIdentityPermission, projectAccess, auditLog, recordIdentityAudit: identity.recordAuditEvent, errorResponse: dashboardErrors.respond });
 
 app.get("/api/procedures", (req, res) => {
   if (!requireIdentityPermission(req, res, "dashboard.catalog.read")) return;

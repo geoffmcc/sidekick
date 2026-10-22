@@ -26,7 +26,7 @@ function authorizeMemoryScope(req, res, projectAccess, access, requestedProject)
   return { project, global };
 }
 
-function registerSyncRoutes({ app, dbStore, requireIdentityPermission, projectAccess, auditLog, errorResponse }) {
+function registerSyncRoutes({ app, dbStore, requireIdentityPermission, projectAccess, auditLog, recordIdentityAudit, errorResponse }) {
   app.get("/api/sync/identity", (req, res) => {
     if (!requireIdentityPermission(req, res, "sync.read")) return;
     try {
@@ -67,13 +67,45 @@ function registerSyncRoutes({ app, dbStore, requireIdentityPermission, projectAc
       const { data, strategy, preserve_ids } = req.body || {};
       const scope = authorizeMemoryScope(req, res, projectAccess, "write", req.body?.project);
       if (!scope) return;
+      if (!data || !Array.isArray(data.memories)) {
+        return errorResponse(req, res, null, { status: 400, code: "invalid_request", component: "sync" });
+      }
+      if (typeof recordIdentityAudit !== "function") {
+        return errorResponse(req, res, null, { status: 503, code: "audit_unavailable", component: "sync" });
+      }
+      try {
+        auditLog(req, "sync_import.requested", { project: scope.project, strategy: strategy || "newest" });
+      } catch {
+        return errorResponse(req, res, null, { status: 503, code: "audit_unavailable", component: "sync" });
+      }
+      let identityAuditWritten = false;
+      let identityAuditFailed = false;
       const result = dbStore.importFromSync(data, {
         strategy: strategy || "newest",
         preserveIds: preserve_ids === true,
         ...((scope.project || !scope.global) ? { projectScope: scope.project } : {}),
+        audit: summary => {
+          try {
+            recordIdentityAudit("dashboard.sync.imported", null, req.authPrincipal.principal_id, {
+              project: scope.project,
+              strategy: strategy || "newest",
+              ...summary,
+            });
+            identityAuditWritten = true;
+          } catch (error) {
+            identityAuditFailed = true;
+            throw error;
+          }
+        },
       });
-      auditLog(req, "sync_import", { imported: result.imported, conflicts: result.conflicts, strategy });
-      res.json({ ok: true, ...result });
+      if (identityAuditFailed) {
+        return errorResponse(req, res, null, { status: 503, code: "audit_unavailable", component: "sync" });
+      }
+      if (!identityAuditWritten) return errorResponse(req, res, null, { status: 503, code: "sync_unavailable", component: "sync" });
+      let auditStatus = "complete";
+      try { auditLog(req, "sync_import", { imported: result.imported, conflicts: result.conflicts, strategy }); }
+      catch { auditStatus = "degraded"; }
+      res.json({ ok: true, ...result, audit_status: auditStatus });
     } catch (error) { return errorResponse(req, res, error, { status: 400, code: "invalid_request", component: "sync" }); }
   });
 
