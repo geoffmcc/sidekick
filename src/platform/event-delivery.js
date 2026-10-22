@@ -58,28 +58,36 @@ function createEventDeliveryStore({
     const subscriptionId = input.subscription_id || newId("sub");
     const ts = nowIso();
     const db = getDb();
-    db.prepare(`
-      INSERT INTO platform_event_subscriptions
-        (subscription_id, name, event_type, state, max_attempts, created_at, updated_at, metadata_json)
-      VALUES (?, ?, ?, 'active', ?, ?, ?, ?)
-    `).run(subscriptionId, name, eventType, maxAttempts, ts, ts, json({
-      ...(input.metadata || {}),
-      ...(typeCheck.unknown_namespace ? { unknown_namespace: true } : {}),
-    }));
-    db.prepare(`
-      INSERT INTO platform_event_offsets (subscription_id, last_event_rowid, updated_at)
-      VALUES (?, 0, ?)
-    `).run(subscriptionId, ts);
-    return normalizeEventSubscription(db.prepare("SELECT * FROM platform_event_subscriptions WHERE subscription_id = ?").get(subscriptionId));
+    return db.transaction(() => {
+      db.prepare(`
+        INSERT INTO platform_event_subscriptions
+          (subscription_id, name, event_type, state, max_attempts, created_at, updated_at, metadata_json)
+        VALUES (?, ?, ?, 'active', ?, ?, ?, ?)
+      `).run(subscriptionId, name, eventType, maxAttempts, ts, ts, json({
+        ...(input.metadata || {}),
+        ...(typeCheck.unknown_namespace ? { unknown_namespace: true } : {}),
+      }));
+      db.prepare(`
+        INSERT INTO platform_event_offsets (subscription_id, last_event_rowid, updated_at)
+        VALUES (?, 0, ?)
+      `).run(subscriptionId, ts);
+      const subscription = normalizeEventSubscription(db.prepare("SELECT * FROM platform_event_subscriptions WHERE subscription_id = ?").get(subscriptionId));
+      if (typeof input.audit === "function") input.audit({ subscription_id: subscriptionId, event_type: eventType });
+      return subscription;
+    })();
   }
 
-  function setEventSubscriptionState(subscriptionId, state) {
+  function setEventSubscriptionState(subscriptionId, state, options = {}) {
     ensureSchema();
     if (!["active", "paused"].includes(state)) throw new Error("subscription state must be active or paused");
     const db = getDb();
-    const result = db.prepare("UPDATE platform_event_subscriptions SET state = ?, updated_at = ? WHERE subscription_id = ?").run(state, nowIso(), String(subscriptionId));
-    if (!result.changes) throw new Error(`Event subscription not found: ${subscriptionId}`);
-    return normalizeEventSubscription(db.prepare("SELECT * FROM platform_event_subscriptions WHERE subscription_id = ?").get(String(subscriptionId)));
+    return db.transaction(() => {
+      const result = db.prepare("UPDATE platform_event_subscriptions SET state = ?, updated_at = ? WHERE subscription_id = ?").run(state, nowIso(), String(subscriptionId));
+      if (!result.changes) throw new Error(`Event subscription not found: ${subscriptionId}`);
+      const subscription = normalizeEventSubscription(db.prepare("SELECT * FROM platform_event_subscriptions WHERE subscription_id = ?").get(String(subscriptionId)));
+      if (typeof options.audit === "function") options.audit({ subscription_id: String(subscriptionId), state });
+      return subscription;
+    })();
   }
 
   function listEventSubscriptions() {
@@ -254,16 +262,20 @@ function createEventDeliveryStore({
     return normalizeEventDelivery(db.prepare("SELECT * FROM platform_event_deliveries WHERE delivery_id = ?").get(delivery.delivery_id));
   }
 
-  function requeueEventDelivery(deliveryId) {
+  function requeueEventDelivery(deliveryId, options = {}) {
     ensureSchema();
     const db = getDb();
-    const result = db.prepare(`
-      UPDATE platform_event_deliveries
-      SET status = 'pending', attempt_count = 0, next_attempt_at = NULL, last_error = NULL, updated_at = ?
-      WHERE delivery_id = ? AND status = 'dead_letter'
-    `).run(nowIso(), String(deliveryId));
-    if (!result.changes) throw new Error("Only dead-lettered deliveries can be requeued");
-    return normalizeEventDelivery(db.prepare("SELECT * FROM platform_event_deliveries WHERE delivery_id = ?").get(String(deliveryId)));
+    return db.transaction(() => {
+      const result = db.prepare(`
+        UPDATE platform_event_deliveries
+        SET status = 'pending', attempt_count = 0, next_attempt_at = NULL, last_error = NULL, updated_at = ?
+        WHERE delivery_id = ? AND status = 'dead_letter'
+      `).run(nowIso(), String(deliveryId));
+      if (!result.changes) throw new Error("Only dead-lettered deliveries can be requeued");
+      const delivery = normalizeEventDelivery(db.prepare("SELECT * FROM platform_event_deliveries WHERE delivery_id = ?").get(String(deliveryId)));
+      if (typeof options.audit === "function") options.audit({ delivery_id: delivery.delivery_id });
+      return delivery;
+    })();
   }
 
   /**
