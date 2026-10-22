@@ -538,6 +538,17 @@ console.log('Test 3.5: bootstrap.sh installs Node.js');
   console.log('✓ Node.js installation present\n');
 }
 
+// Test 3.5b: supported Linux setup paths install the required shell isolation backend
+console.log('Test 3.5b: Linux setup installs required shell isolation dependencies');
+{
+  for (const [name, content] of [['bootstrap.sh', bootstrapShContent], ['setup-tools.sh', setupToolsShContent]]) {
+    assert.ok(/apt-get install[^\n]*bubblewrap[^\n]*util-linux/.test(content), `${name} must install bubblewrap and util-linux/prlimit`);
+  }
+  assert.ok(bootstrapShContent.includes('[ ! -x /usr/bin/bwrap ]') && bootstrapShContent.includes('[ ! -x /usr/bin/prlimit ]'), 'bootstrap.sh must fail if the runtime isolation binaries are missing');
+  assert.ok(setupToolsShContent.includes('[[ -x /usr/bin/bwrap ]]') && setupToolsShContent.includes('[[ -x /usr/bin/prlimit ]]'), 'setup-tools.sh must report runtime isolation binary health');
+  console.log('✓ Shell isolation dependencies and checks present\n');
+}
+
 // Test 3.6: bootstrap.sh creates sidekick user
 console.log('Test 3.6: bootstrap.sh creates sidekick user');
 {

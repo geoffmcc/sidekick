@@ -440,10 +440,10 @@ copying a fixed inventory. See
  [`docs/security-research-pack.md`](docs/security-research-pack.md), plus
  [`docs/browser-automation.md`](docs/browser-automation.md).
 
-> Installing or enabling a pack activates executable module code inside the
-> Sidekick process. Inspection never executes package code, and every installed
-> package is integrity-verified before it loads — but there is no sandbox.
-> Treat installing a third-party pack as equivalent to deploying code.
+> Enabling a bundled first-party pack activates trusted module code inside the
+> Sidekick process; pack-level isolation is not provided. Third-party module
+> code fails closed before loading until an OS isolation boundary and broker
+> exist. Package integrity and provenance are not a sandbox.
 
 ### Semantic Repository Intelligence
 
@@ -510,7 +510,7 @@ The Knowledge Base replaces the need for large markdown files. Instead of re-rea
 - Sidekick Compute accepts only versioned, allowlisted model workloads; it is not arbitrary worker-side command execution.
 - Evolve does not silently activate free-form code. Generated capabilities must pass validation and approval before trial or active exposure.
 - The Agent Bridge acts only on submitted tasks, schedules, or watches and remains bounded by task profiles, model/tool budgets, wall-clock and idle limits, tool policy, approvals, checkpoint/recovery rules, verification, and the same dispatcher used by other execution paths.
-- The module system's full lifecycle is implemented for first-party AND third-party modules: safe package inspection, a managed module store, verified entry-point loading with whole-package integrity, install/configure/enable/disable/upgrade/uninstall, and a derived health model. **Installed module code is trusted executable code running in-process with Sidekick's privileges — there is no sandbox and none is claimed.** The controls are integrity, provenance and lifecycle, not isolation. Treat installing a third-party pack as equivalent to deploying code.
+- The module lifecycle supports first-party and third-party package inspection and management. Bundled first-party module code runs in-process as trusted release code. Third-party executable module code fails closed before loading until an OS isolation boundary and capability broker exist; integrity and provenance do not constitute a sandbox.
 - Capability packs compose existing subsystems; they are not a second plugin runtime, dispatcher or workflow engine. There is no remote marketplace: packs are installed from the bundled release copy or from an approved server-local path.
 - Handler extraction out of `src/tools-legacy.js` is complete (zero production handlers remain there); the remaining platform convergence work is tracked in `docs/platform-roadmap.md`.
 

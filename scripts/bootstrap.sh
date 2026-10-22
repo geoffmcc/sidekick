@@ -106,7 +106,7 @@ apt-get update -qq
 
 # Install required packages
 log "Installing required packages..."
-apt-get install -y -qq curl ca-certificates gnupg build-essential python3 make g++ git openssl polkitd sudo > /dev/null
+apt-get install -y -qq curl ca-certificates gnupg build-essential python3 make g++ git openssl polkitd sudo bubblewrap util-linux > /dev/null
 
 # Create user if doesn't exist
 if id "$USERNAME" &>/dev/null; then
@@ -349,6 +349,10 @@ fi
 
 if ! command -v node &> /dev/null; then
   error "Node.js not found after installation"
+fi
+
+if [ ! -x /usr/bin/bwrap ] || [ ! -x /usr/bin/prlimit ]; then
+  error "Bubblewrap and prlimit are required for isolated command execution"
 fi
 
 if [ ! -d "$USER_HOME/sidekick" ]; then

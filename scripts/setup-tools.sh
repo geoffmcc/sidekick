@@ -49,7 +49,7 @@ echo ""
 log "Phase 1: Installing foundation packages..."
 
 apt-get update -qq
-apt-get install -y -qq ca-certificates curl gnupg polkitd sudo
+apt-get install -y -qq ca-certificates curl gnupg polkitd sudo bubblewrap util-linux
 
 # pip3
 if command -v pip3 &>/dev/null; then
@@ -507,6 +507,8 @@ info "Foundation:"
 command -v pip3 &>/dev/null && pass "pip3" || fail "pip3"
 command -v rg &>/dev/null && pass "ripgrep" || fail "ripgrep"
 command -v sqlite3 &>/dev/null && pass "sqlite3" || fail "sqlite3"
+[[ -x /usr/bin/bwrap ]] && pass "Bubblewrap command isolation" || fail "Bubblewrap (/usr/bin/bwrap)"
+[[ -x /usr/bin/prlimit ]] && pass "Kernel process limits" || fail "prlimit (/usr/bin/prlimit)"
 
 # Docker
 info "Docker:"

@@ -506,10 +506,11 @@ cannot browse server files.
 
 ## Security and trust model
 
-**Installed pack modules are trusted executable code.** Node module code loads
-into the Sidekick process. There is **no process isolation and none is
-claimed**. What the platform provides is integrity, provenance and lifecycle
-control:
+**Bundled first-party pack modules are trusted executable code.** They load
+into the Sidekick Core process and do not have pack-level process isolation.
+Third-party module code fails closed before `require` until an external OS
+isolation boundary and capability broker are available. Integrity, provenance
+and lifecycle checks do not themselves provide isolation:
 
 | Control | Mechanism |
 |---|---|
@@ -530,8 +531,9 @@ control:
 | Audit | every lifecycle operation and every workflow step is dispatched and logged |
 | Redaction | inherited from the dispatcher and the tool result path |
 
-Third-party module code runs with Sidekick's privileges. Treat installing a
-third-party pack as equivalent to deploying code.
+Bundled first-party module code runs with Sidekick's privileges; treat enabling
+one as deploying trusted code. Installing a third-party pack stores it for
+review but does not make its module code executable.
 
 ## Related documents
 
