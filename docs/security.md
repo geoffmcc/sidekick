@@ -37,6 +37,10 @@ Qdrant memory requests reject redirects and abort after 15 seconds. Semantic
 search responses are streamed through an 8 MiB bound, with oversized response
 bodies cancelled; the Qdrant endpoint remains an operator-configured service.
 
+GitHub API requests keep their existing 30-second timeout and cap each response
+at 8 MiB. CI status pagination is capped at 50 pages; reaching the cap returns
+an explicit error instead of silently presenting partial results as complete.
+
 ## MCP authentication
 
 The MCP server requires an API key. Clients can send it as:

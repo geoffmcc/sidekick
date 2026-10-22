@@ -18,6 +18,29 @@
 // src/tools/metadata.js.
 
 const https = require("https");
+const MAX_GITHUB_RESPONSE_BYTES = 8 * 1024 * 1024;
+const MAX_GITHUB_PAGES = 50;
+
+function readGithubResponseText(response, maxBytes = MAX_GITHUB_RESPONSE_BYTES) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let totalBytes = 0;
+    let oversized = false;
+    response.on("data", chunk => {
+      if (oversized) return;
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      totalBytes += buffer.byteLength;
+      if (totalBytes > maxBytes) {
+        oversized = true;
+        chunks.length = 0;
+        return;
+      }
+      chunks.push(buffer);
+    });
+    response.on("end", () => resolve(oversized ? null : Buffer.concat(chunks, totalBytes).toString("utf8")));
+    response.on("error", reject);
+  });
+}
 const { z } = require("zod");
 const { redactSensitive } = require("../../redact");
 const { resolveOutboundUrl } = require("../../security/outbound-url");
@@ -198,9 +221,12 @@ async function githubRequest(token, method, endpoint, body) {
       options.headers["Content-Length"] = Buffer.byteLength(bodyStr);
     }
     const req = https.request(options, (res) => {
-      let data = "";
-      res.on("data", (chunk) => data += chunk);
-      res.on("end", () => {
+      readGithubResponseText(res).then((data) => {
+        if (data === null) {
+          noteGithubResponse(res.statusCode);
+          resolve({ status: 0, headers: {}, data: `GitHub API response exceeded ${MAX_GITHUB_RESPONSE_BYTES} bytes` });
+          return;
+        }
         let parsed = data;
         try {
           parsed = data ? JSON.parse(data) : null;
@@ -209,7 +235,7 @@ async function githubRequest(token, method, endpoint, body) {
         }
         noteGithubResponse(res.statusCode);
         resolve({ status: res.statusCode, headers: res.headers || {}, data: parsed });
-      });
+      }).catch(err => resolve({ status: 0, headers: {}, data: err.message }));
     });
     req.on("error", (err) => resolve({ status: 0, headers: {}, data: err.message }));
     req.setTimeout(30000, () => { req.destroy(); resolve({ status: 0, headers: {}, data: "timeout" }); });
@@ -237,8 +263,13 @@ async function githubPaginatedRequest(token, endpoint, dataKey) {
   let next = endpoint;
   const items = [];
   let lastResponse = null;
+  let pageCount = 0;
 
   while (next) {
+    if (pageCount >= MAX_GITHUB_PAGES) {
+      return { response: { status: 0, headers: {}, data: `GitHub API pagination exceeded ${MAX_GITHUB_PAGES} pages` }, items };
+    }
+    pageCount++;
     const res = await githubRequest(token, "GET", next);
     lastResponse = res;
     if (res.status < 200 || res.status >= 300) return { response: res, items };
@@ -472,9 +503,12 @@ async function sidekick_github({ action, repo, args: extraArgs }) {
         options.headers["Content-Length"] = Buffer.byteLength(bodyStr);
       }
       const req = https.request(options, (res) => {
-        let data = "";
-        res.on("data", (chunk) => data += chunk);
-        res.on("end", () => {
+        readGithubResponseText(res).then((data) => {
+          if (data === null) {
+            noteGithubResponse(res.statusCode);
+            resolve({ status: 0, data: `GitHub API response exceeded ${MAX_GITHUB_RESPONSE_BYTES} bytes` });
+            return;
+          }
           noteGithubResponse(res.statusCode);
           try {
             const parsed = JSON.parse(data);
@@ -482,7 +516,7 @@ async function sidekick_github({ action, repo, args: extraArgs }) {
           } catch (e) {
             resolve({ status: res.statusCode, data: data });
           }
-        });
+        }).catch(error => resolve({ status: 0, data: error.message }));
       });
       req.on("error", (err) => resolve({ status: 0, data: err.message }));
       req.setTimeout(30000, () => { req.destroy(); resolve({ status: 0, data: "timeout" }); });
@@ -616,4 +650,21 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_github, sidekick_ci_status, parseGithubArgs, getGithubArg, getCiRevisionSelector, buildCiStatusResult, formatCiStatusText, resolveGithubToken, resolveGithubApiBase, githubCredentialMissing, githubHealthDecision, noteGithubResponse };
+module.exports = {
+  descriptors,
+  sidekick_github,
+  sidekick_ci_status,
+  parseGithubArgs,
+  getGithubArg,
+  getCiRevisionSelector,
+  buildCiStatusResult,
+  formatCiStatusText,
+  resolveGithubToken,
+  resolveGithubApiBase,
+  githubCredentialMissing,
+  githubHealthDecision,
+  noteGithubResponse,
+  readGithubResponseText,
+  MAX_GITHUB_RESPONSE_BYTES,
+  MAX_GITHUB_PAGES,
+};
