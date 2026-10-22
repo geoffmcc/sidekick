@@ -43,6 +43,18 @@ const { discoverCapabilities, resolveContextProviderArgs } = require('../src/age
 const platformKernel = require('../src/platform/kernel');
 const semantic = require('../packs/developer/modules/developer-tools/lib/semantic');
 
+// This suite runs on developer workstations as well as Linux CI. Execution is
+// asserted only when the OS-enforced backend is available; otherwise the
+// supported behavior is an observable fail-closed result.
+const shellIsolationAvailable = (() => {
+  try {
+    require('../src/core/bubblewrap-executor').resolveBubblewrap();
+    return true;
+  } catch {
+    return false;
+  }
+})();
+
 const SIDEKICK_ROOT = path.resolve(__dirname, '..');
 const FIXTURE_REPO = path.join(TEST_DATA_DIR, 'fixture-repo');
 
@@ -403,13 +415,21 @@ function buildFixtureRepository() {
   await test('DP.5: dev_verify selects and executes real commands, reporting the evidence', async () => {
     const result = await callInternalTool('dev_verify', { path: FIXTURE_REPO, intents: ['test'] });
     const report = json(result);
+    if (!shellIsolationAvailable) {
+      assert.strictEqual(report.verdict, 'blocked');
+      assert.strictEqual(report.summary.executed_count, 0);
+      assert.strictEqual(report.commands[0].executed, false);
+      assert.match(report.commands[0].detail, /isolation|sandbox/i);
+      return;
+    }
     assert.strictEqual(report.verdict, 'passed', JSON.stringify(report.summary));
     const testCommand = report.commands.find(entry => entry.intent === 'test');
     assert.strictEqual(testCommand.status, 'passed');
     assert.strictEqual(testCommand.executed, true);
     assert.strictEqual(testCommand.command, 'npm run test');
     assert.match(testCommand.selected_because, /package\.json scripts/);
-    assert.ok(testCommand.command_executed.includes(FIXTURE_REPO), 'the executed command is reported verbatim');
+    assert.strictEqual(testCommand.command_executed, 'npm run test', 'the executed command is reported verbatim');
+    assert.strictEqual(testCommand.workspace_path, FIXTURE_REPO, 'the OS sandbox workspace is reported separately from command text');
     assert.strictEqual(testCommand.exit_code, 0);
     assert.ok(typeof testCommand.duration_ms === 'number');
 
@@ -427,6 +447,17 @@ function buildFixtureRepository() {
     fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2));
 
     const result = await callInternalTool('dev_verify', { path: FIXTURE_REPO, intents: ['test'] });
+    if (!shellIsolationAvailable) {
+      assert.strictEqual(result.isError, true, 'unavailable isolation blocks verification');
+      const report = json(result);
+      assert.strictEqual(report.verdict, 'blocked');
+      assert.strictEqual(report.summary.executed_count, 0);
+      assert.strictEqual(report.commands[0].executed, false);
+      assert.match(report.commands[0].detail, /isolation|sandbox/i);
+      pkg.scripts.test = 'node test/run.js';
+      fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2));
+      return;
+    }
     assert.strictEqual(result.isError, true, 'a failing verification is an error result');
     const report = json(result);
     assert.strictEqual(report.verdict, 'failed');
@@ -470,7 +501,12 @@ function buildFixtureRepository() {
     assert.strictEqual(testCommand.command, 'echo override-marker');
     assert.strictEqual(testCommand.selected_because, 'explicit test_command configuration override');
     assert.ok(report.overrides_applied.includes('test_command'));
-    assert.ok(/override-marker/.test(testCommand.output));
+    if (shellIsolationAvailable) assert.ok(/override-marker/.test(testCommand.output));
+    else {
+      assert.strictEqual(report.verdict, 'blocked');
+      assert.strictEqual(testCommand.executed, false);
+      assert.match(testCommand.detail, /isolation|sandbox/i);
+    }
     packLifecycle.configure('developer', { verification_mode: 'standard' });
   });
 
@@ -551,7 +587,7 @@ function buildFixtureRepository() {
     assert.strictEqual(run.result.totals.files > 0, true, 'the review analyzed a real change set');
     assert.ok(run.result.risks.some(risk => risk.risk === 'schema_migration'), JSON.stringify(run.result.risks));
     assert.ok(run.result.api_surface.detected, 'API surface changes are reported');
-    assert.strictEqual(run.result.verification_verdict, 'passed', JSON.stringify(run.result.verification));
+    assert.strictEqual(run.result.verification_verdict, shellIsolationAvailable ? 'passed' : 'blocked', JSON.stringify(run.result.verification));
     assert.ok(run.result.changed_by_kind.migration.count >= 1);
     // The GitHub-dependent steps were skipped because no repo was supplied,
     // and the workflow still produced a complete review.

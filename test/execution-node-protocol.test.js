@@ -199,12 +199,26 @@ async function waitForExit(child, timeoutMs = 5000) {
     assert.strictEqual(first.outcome.payload.result.content[0].text, "node protocol result\n");
     assert.strictEqual(second.outcome.type, "fail", "unknown local tool is reported as failure");
     assert.strictEqual(second.outcome.payload.code, "local_execution_failed");
-    assert.strictEqual(third.outcome.type, "fail", "cancelled local work reports failure delivery");
-    assert.strictEqual(third.outcome.payload.code, "node_execution_cancelled");
+    if (process.platform === "win32") {
+      // Windows has no configured OS-enforced shell backend, so the local
+      // worker must deliver the tool's fail-closed isolation result instead
+      // of starting an unsandboxed command. Linux CI covers actual cancellation
+      // of the running sandboxed process.
+      assert.strictEqual(third.outcome.type, "complete");
+      assert.strictEqual(third.outcome.payload.result.isError, true);
+      assert.strictEqual(third.outcome.payload.result.code, "isolation_unavailable");
+    } else {
+      assert.strictEqual(third.outcome.type, "fail", "cancelled local work reports failure delivery");
+      assert.strictEqual(third.outcome.payload.code, "node_execution_cancelled");
+    }
     const protectedCalls = requests.filter(request => request.url.startsWith("/execution-node/node/"));
     assert.ok(protectedCalls.length > 0, "node protocol routes were exercised");
     assert.ok(protectedCalls.every(request => request.authorization === `Bearer ${workerId}:${credential}`), "all node routes use the enrolled bearer credential");
-    assert.ok(protectedCalls.some(request => request.url.endsWith("/cancellation")), "cancellation status was polled over HTTP");
+    if (process.platform === "win32") {
+      assert.ok(third.outcome.payload.result.content[0].text.includes("isolation is unavailable"));
+    } else {
+      assert.ok(protectedCalls.some(request => request.url.endsWith("/cancellation")), "cancellation status was polled over HTTP");
+    }
 
     nodeProcess.child.kill("SIGTERM");
     const nodeExit = await waitForExit(nodeProcess.child);

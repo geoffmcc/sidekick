@@ -199,16 +199,16 @@ function gate(ctx, probe) {
 // --- execution --------------------------------------------------------------
 
 async function runCommand(services, ctx, probe, runtime) {
-  let command = String(probe.command || "").trim();
+  const command = String(probe.command || "").trim();
   if (!command) throw new ResearchError("invalid_input", "command probe requires a 'command'");
+  let cwd = ctx.root;
   if (probe.workdir) {
     // Confine an explicit workdir to the workspace for local execution.
     const ws = require("./workspace");
-    const abs = require("path").resolve(probe.workdir);
-    ws.assertInside(ctx.root, abs);
-    command = `cd ${JSON.stringify(abs)} && ${command}`;
+    cwd = require("path").resolve(probe.workdir);
+    ws.assertInside(ctx.root, cwd);
   }
-  const result = await services.dispatch("bash", { command }, { signal: runtime && runtime.signal, timeoutMs: ctx.timeoutMs });
+  const result = await services.dispatch("bash", { command, cwd }, { signal: runtime && runtime.signal, timeoutMs: ctx.timeoutMs });
   return mapDispatch(result, "command");
 }
 

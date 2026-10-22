@@ -16,6 +16,15 @@ const os = require("os");
 const path = require("path");
 const { execFileSync } = require("child_process");
 
+const shellIsolationAvailable = (() => {
+  try {
+    require("../src/core/bubblewrap-executor").resolveBubblewrap();
+    return true;
+  } catch {
+    return false;
+  }
+})();
+
 const REPO = path.resolve(__dirname, "..");
 const SUITE_ROOT = process.env.SIDEKICK_TEST_SUITE_ROOT || os.tmpdir();
 const TEST_DATA_DIR = fs.mkdtempSync(path.join(SUITE_ROOT, "sr-pack-data-"));
@@ -280,6 +289,13 @@ function makeGitRepo() {
   let baselineRef, candidateRef;
 
   await test("SR.7 command probes compose bash and capture observations as evidence", async () => {
+    if (!shellIsolationAvailable) {
+      const denied = await call("research_probe", { run_id: runId, probe: { name: "baseline", type: "command", target: "lab", command: `node -e "process.stdout.write('status:403')"` } });
+      assert.strictEqual(denied.isError, true);
+      assert.strictEqual(denied.code, "capability_unavailable");
+      assert.match(denied.j.error, /isolation is unavailable.*command execution was not started/i);
+      return;
+    }
     const baseline = await okCall("research_probe", { run_id: runId, probe: { name: "baseline", type: "command", target: "lab", command: `node -e "process.stdout.write('status:403')"` } });
     const candidate = await okCall("research_probe", { run_id: runId, probe: { name: "candidate", type: "command", target: "lab", command: `node -e "process.stdout.write('status:200')"` } });
     assert.strictEqual(baseline.observation.succeeded, true);
@@ -292,6 +308,7 @@ function makeGitRepo() {
   });
 
   await test("SR.8 deterministic comparison of the two observations", async () => {
+    if (!shellIsolationAvailable) { assert.strictEqual(baselineRef, undefined); return; }
     const cmp = await okCall("research_compare", { run_id: runId, baseline_evidence: baselineRef, candidate_evidence: candidateRef, mode: "text" });
     assert.strictEqual(cmp.comparison.changed, true, `text comparison should detect different probe outputs: ${JSON.stringify(cmp)}`);
     // Comparing evidence must not echo the raw evidence values back into the result.
@@ -303,6 +320,7 @@ function makeGitRepo() {
   });
 
   await test("SR.9 validate completes the run and records a confirmed finding", async () => {
+    if (!shellIsolationAvailable) { assert.strictEqual(baselineRef, undefined); return; }
     const val = await okCall("research_validate", {
       expected: "status:403", observed: "status:200", mode: "status",
       run_id: runId, record_outcome: true, outcome_label: "regression_confirmed",
@@ -314,6 +332,7 @@ function makeGitRepo() {
   });
 
   await test("SR.10 evidence list (by run) / inspect (metadata only) / redact (derivative)", async () => {
+    if (!shellIsolationAvailable) { assert.strictEqual(baselineRef, undefined); return; }
     const list = await okCall("research_evidence", { action: "list", run_id: runId });
     assert.ok(list.evidence.length >= 2);
     const inspect = await okCall("research_evidence", { action: "inspect", run_id: runId, references: [baselineRef] });
@@ -338,6 +357,7 @@ function makeGitRepo() {
   });
 
   await test("SR.11 report material is evidence-linked and written into the workspace", async () => {
+    if (!shellIsolationAvailable) { assert.strictEqual(baselineRef, undefined); return; }
     const findings = await okCall("research_report", { action: "list", campaign_id: campaignId });
     const rep = await okCall("research_report", {
       action: "materialize", campaign_id: campaignId, title: "Synthetic regression report", run_id: runId,
@@ -360,6 +380,17 @@ function makeGitRepo() {
     const run = await okCall("research_run", { action: "plan", hypothesis_id: hyp.hypothesis.hypothesis_id, environment: { kind: "local", name: "lab" } });
     await okCall("research_run", { action: "start", run_id: run.run.run_id });
     const inScope = await call("research_probe", { run_id: run.run.run_id, probe: { type: "command", target: "lab", command: "printf ok" } });
+    if (!shellIsolationAvailable) {
+      assert.strictEqual(inScope.isError, true);
+      assert.strictEqual(inScope.code, "capability_unavailable");
+      const bound = platformKernel.getExecution(run.run.execution_id);
+      assert.strictEqual(bound.metadata.scope_snapshot_id, snap.snapshot.snapshot_id);
+      const outScope = await call("research_probe", { run_id: run.run.run_id, probe: { type: "command", target: "prod", command: "printf nope" } });
+      assert.strictEqual(outScope.isError, true);
+      assert.strictEqual(outScope.code, "scope_denied");
+      assert.deepStrictEqual(platformKernel.getExecution(run.run.execution_id).metadata, bound.metadata);
+      return;
+    }
     assert.strictEqual(inScope.isError, false, `in-scope probe should pass: ${JSON.stringify(inScope.j)}`);
     const bound = platformKernel.getExecution(run.run.execution_id);
     assert.strictEqual(bound.metadata.scope_snapshot_id, snap.snapshot.snapshot_id);
@@ -405,7 +436,16 @@ function makeGitRepo() {
   await test("SR.14 a run can be cancelled and evidence is preserved", async () => {
     const planned = await okCall("research_run", { action: "plan", hypothesis_id: hypothesisId, environment: { kind: "local", name: "lab" } });
     await okCall("research_run", { action: "start", run_id: planned.run.run_id });
-    await okCall("research_probe", { run_id: planned.run.run_id, probe: { type: "command", target: "lab", command: "printf keep" } });
+    const probe = await call("research_probe", { run_id: planned.run.run_id, probe: { type: "command", target: "lab", command: "printf keep" } });
+    if (!shellIsolationAvailable) {
+      assert.strictEqual(probe.isError, true);
+      assert.strictEqual(probe.code, "capability_unavailable");
+      const cancelled = await okCall("research_run", { action: "cancel", run_id: planned.run.run_id, reason: "no longer needed" });
+      assert.strictEqual(cancelled.run.state, "cancelled");
+      const ev = await okCall("research_evidence", { action: "list", run_id: planned.run.run_id });
+      assert.strictEqual(ev.evidence.length, 0, "a denied command must not fabricate evidence");
+      return;
+    }
     const cancelled = await okCall("research_run", { action: "cancel", run_id: planned.run.run_id, reason: "no longer needed" });
     assert.strictEqual(cancelled.run.state, "cancelled");
     const ev = await okCall("research_evidence", { action: "list", run_id: planned.run.run_id });
@@ -433,7 +473,7 @@ function makeGitRepo() {
   await test("SR.16 version-regression-check workflow composes probes + compare", async () => {
     const planned = await okCall("research_run", { action: "plan", hypothesis_id: hypothesisId, environment: { kind: "local", name: "lab" } });
     await okCall("research_run", { action: "start", run_id: planned.run.run_id });
-    const run = await okCall("workflow", {
+    const workflowResult = await call("workflow", {
       action: "run", name: "security-research/version-regression-check",
       inputs: {
         run_id: planned.run.run_id,
@@ -442,6 +482,15 @@ function makeGitRepo() {
         compare_mode: "text",
       },
     });
+    if (!shellIsolationAvailable) {
+      assert.strictEqual(workflowResult.isError, true);
+      const run = workflowResult.j;
+      assert.strictEqual(run.status, "failed");
+      assert.strictEqual(run.failure.code, "capability_unavailable");
+      assert.strictEqual(run.steps[0].status, "failed");
+      return;
+    }
+    const run = workflowResult.j;
     assert.strictEqual(run.owner, "pack:security-research");
     assert.ok(run.result && run.result.comparison, `workflow should return a comparison: ${JSON.stringify(run.result)}`);
     assert.strictEqual(run.result.comparison.changed, true, `workflow comparison should detect different probe outputs: ${JSON.stringify(run.result.comparison)}`);

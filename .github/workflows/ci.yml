@@ -54,6 +54,8 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
+      - name: Install OS sandbox backend for changed tests
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y bubblewrap
       - run: npm ci
       - name: Run changed-test selector self-tests
         run: node --test test/scripts-quality-gates.test.js
@@ -109,6 +111,8 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
+      - name: Install OS sandbox backend for security tests
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y bubblewrap
       - run: npm ci
       - run: npm run test:security
 
@@ -132,6 +136,8 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
+      - name: Install OS sandbox backend for security shard
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y bubblewrap
       - run: npm ci
       - name: Install browser runtime for browser shard only
         if: matrix.domain == 'platforms'
@@ -166,6 +172,8 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
+      - name: Install OS sandbox backend for compatibility tests
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y bubblewrap
       - run: npm ci
       - run: node scripts/run-tests.js --tier=compatibility
 
@@ -249,6 +257,8 @@ jobs:
         with:
           node-version: 22.x
           cache: npm
+      - name: Install OS sandbox backend for coverage tests
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y bubblewrap
       - run: npm ci
       - name: Install browser runtime for coverage E2E
         env:
@@ -315,6 +325,8 @@ jobs:
         with:
           node-version: 22.x
           cache: npm
+      - name: Install OS sandbox backend for mutation tests
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y bubblewrap
       - run: npm ci
       - name: Run mutation policy self-tests
         run: node --test test/mutation-policy.test.js
@@ -343,6 +355,8 @@ jobs:
         with:
           node-version: 22.x
           cache: npm
+      - name: Install OS sandbox backend for flake tests
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y bubblewrap
       - run: npm ci
       - name: Run flake policy self-tests
         run: node --test test/scripts-quality-gates.test.js

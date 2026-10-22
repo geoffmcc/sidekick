@@ -182,13 +182,11 @@ async function runSelection(services, { root, selection, maxOutputChars, timeout
       results.push({ ...entry, status: "not_detected", executed: false });
       continue;
     }
-    const command = process.platform === "win32"
-      ? `cd /d ${windowsQuote(root)} && ${entry.command}`
-      : `cd ${quote(root)} && ${entry.command}`;
+    const command = entry.command;
     const started = Date.now();
     let dispatched;
     try {
-      dispatched = await services.dispatch("bash", { command }, { timeoutMs });
+      dispatched = await services.dispatch("bash", { command, cwd: root }, { timeoutMs });
     } catch (error) {
       const detail = String(error && error.message ? error.message : error);
       results.push({
@@ -196,6 +194,7 @@ async function runSelection(services, { root, selection, maxOutputChars, timeout
         status: /timeout|timed out|mcp|session/i.test(detail) ? "timed_out" : "failed",
         executed: false,
         command_executed: command,
+        workspace_path: root,
         duration_ms: Date.now() - started,
         error_code: "verification_dispatch_failed",
         detail: detail.slice(0, 1000),
@@ -212,18 +211,24 @@ async function runSelection(services, { root, selection, maxOutputChars, timeout
         executed: false,
         approval_id: dispatched.approvalId || null,
         command_executed: command,
+        workspace_path: root,
         duration_ms: durationMs,
         detail: "verification command requires operator approval before it can run",
       });
       break;
     }
     if (dispatched && dispatched.code === "module_permission_denied") {
-      results.push({ ...entry, status: "blocked", executed: false, command_executed: command, detail: textOf(dispatched), duration_ms: durationMs });
+      results.push({ ...entry, status: "blocked", executed: false, command_executed: command, workspace_path: root, detail: textOf(dispatched), duration_ms: durationMs });
+      break;
+    }
+
+    if (dispatched && ["isolation_unavailable", "isolation_configuration_invalid", "sandbox_initialization_failed", "workspace_invalid", "workspace_denied"].includes(dispatched.code)) {
+      results.push({ ...entry, status: "blocked", executed: false, command_executed: command, workspace_path: root, error_code: dispatched.code, detail: textOf(dispatched), duration_ms: durationMs });
       break;
     }
 
     if (!dispatched || typeof dispatched !== "object") {
-      results.push({ ...entry, status: "failed", executed: false, command_executed: command, duration_ms: durationMs, error_code: "empty_verification_dispatch", detail: "The governed command dispatcher returned no result.", execution_state: "unknown" });
+      results.push({ ...entry, status: "failed", executed: false, command_executed: command, workspace_path: root, duration_ms: durationMs, error_code: "empty_verification_dispatch", detail: "The governed command dispatcher returned no result.", execution_state: "unknown" });
       break;
     }
     const execution = parseExecution(dispatched);
@@ -234,6 +239,7 @@ async function runSelection(services, { root, selection, maxOutputChars, timeout
       status: passed ? "passed" : execution.timed_out ? "timed_out" : "failed",
       executed: true,
       command_executed: command,
+      workspace_path: root,
       exit_code: execution.exit_code,
       duration_ms: durationMs,
       output: bounded.output,
