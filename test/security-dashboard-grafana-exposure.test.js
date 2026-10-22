@@ -4,13 +4,15 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
+const YAML = require("yaml");
 
-test("Grafana auth proxy is published only on host loopback", () => {
-  const compose = fs.readFileSync(path.join(__dirname, "..", "docker", "docker-compose.yml"), "utf8");
-  const grafana = (compose.match(/^  grafana:\n(?:^(?:    .*|)\n)*/m) || [""])[0];
-  assert.ok(grafana, "Grafana Compose service exists");
-  assert.match(grafana, /^\s*- "127\.0\.0\.1:3000:3000"\s*$/m);
-  assert.doesNotMatch(grafana, /^\s*- "0\.0\.0\.0:3000:3000"\s*$/m);
-  assert.match(grafana, /GF_AUTH_PROXY_ENABLED:\s*"true"/);
-  assert.match(grafana, /GF_AUTH_PROXY_HEADER_NAME:\s*"X-WEBAUTH-USER"/);
+test("Grafana uses private Basic Auth instead of trusting caller identity headers", () => {
+  const composePath = path.join(__dirname, "..", "docker", "docker-compose.yml");
+  const compose = YAML.parse(fs.readFileSync(composePath, "utf8"));
+  const grafana = compose.services.grafana;
+  assert.deepEqual(grafana.ports, ["127.0.0.1:3000:3000"]);
+  assert.equal(grafana.environment.GF_AUTH_BASIC_ENABLED, "true");
+  assert.equal(grafana.environment.GF_SECURITY_ADMIN_USER, "${SIDEKICK_GRAFANA_ADMIN_USER:-sidekick}");
+  assert.equal(grafana.environment.GF_SECURITY_ADMIN_PASSWORD__FILE, "/run/secrets/sidekick_grafana_admin_password");
+  assert.notEqual(grafana.environment.GF_AUTH_PROXY_ENABLED, "true");
 });

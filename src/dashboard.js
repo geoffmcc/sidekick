@@ -57,6 +57,7 @@ const { registerClearRoutes } = require("./dashboard/clear-routes");
 const { registerDatabaseRoutes } = require("./dashboard/database-routes");
 const { dashboardActor, createDashboardAuditEntry } = require("./dashboard/audit-identity");
 const { appendAuditLine } = require("./dashboard/audit-log");
+const { buildGrafanaProxyHeaders } = require("./dashboard/grafana-proxy");
 const { registerAgentProxyRoutes } = require("./dashboard/agent-proxy-routes");
 const { registerBlackboxRoutes } = require("./dashboard/blackbox-routes");
 const { registerPredictRoutes } = require("./dashboard/predict-routes");
@@ -497,15 +498,9 @@ app.post('/grafana/api/user/auth-tokens/rotate', (req, res) => {
 });
 
 app.use('/grafana', (req, res) => {
-  if (!GRAFANA_USER) return res.status(503).send('Grafana proxy is not configured');
+  if (!GRAFANA_USER || !GRAFANA_PASS) return res.status(503).send('Grafana proxy credentials are unavailable');
   const targetPath = req.originalUrl || '/grafana/';
-  const headers = { ...req.headers };
-  delete headers.host;
-  delete headers.cookie;
-  delete headers.authorization;
-  // Grafana Auth Proxy: set trusted user header (strip any incoming to prevent spoofing)
-  delete headers['x-webauth-user'];
-  headers['x-webauth-user'] = GRAFANA_USER;
+  const headers = buildGrafanaProxyHeaders(req.headers, GRAFANA_USER, GRAFANA_PASS);
 
   let body = null;
   if (req.body && Object.keys(req.body).length) {
