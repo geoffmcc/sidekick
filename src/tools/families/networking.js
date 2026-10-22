@@ -11,6 +11,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 const { execFileSync, spawn } = require("child_process");
 const { z } = require("zod");
 const { validIdentifier, validPort, validDomainName, validAllowedIps, validWireGuardEndpoint, validWireGuardPublicKey } = require("../../core/command-validation");
@@ -18,6 +19,32 @@ const { DATA_DIR } = require("../../db");
 const { childProcessEnv } = require("../../security/child-process");
 const { runSudoCommand } = require("../../core/privilege-diagnostics");
 const { requireToolExecution } = require("../read-authorization");
+const toolContext = require("../context");
+const authorization = require("../../core/authorization");
+const { loadSecrets, saveSecrets } = require("../../core/secrets-store");
+const { encryptSecret } = require("../../core/secret-cipher");
+
+function wireGuardSecretPermission() {
+  const authIdentity = toolContext.getExecutionContext().authIdentity || null;
+  return authorization.authorize({
+    principalId: authIdentity?.principal_id || null,
+    permission: "secrets.manage",
+    credentialScopes: authIdentity?.scopes,
+    delegationId: authIdentity?.delegation_id || authIdentity?.delegationId || null,
+    resource: { tool: "wireguard", action: "generate_keypair" },
+  });
+}
+
+function storeWireGuardPrivateKey(privateKey) {
+  const decision = wireGuardSecretPermission();
+  if (!decision.ok) return { ok: false, code: decision.code };
+  const key = `wireguard:${crypto.randomUUID()}`;
+  const now = new Date().toISOString();
+  const secrets = loadSecrets();
+  secrets[key] = { ...encryptSecret(privateKey), created: now, updated: now };
+  saveSecrets(secrets);
+  return { ok: true, key };
+}
 
 function safeExecFileSync(program, args, options = {}) {
   return execFileSync(program, args, { ...options, env: childProcessEnv(options.env) });
@@ -165,9 +192,17 @@ async function sidekick_wireguard({ action, interface_name, peer_name, public_ke
     }
 
     if (action === "generate_keypair") {
+      const permission = wireGuardSecretPermission();
+      if (!permission.ok) {
+        return { content: [{ type: "text", text: "WireGuard key generation requires secrets.manage permission" }], isError: true, code: "forbidden" };
+      }
       const privateKey = safeExecFileSync("wg", ["genkey"], { timeout: 5000, encoding: "utf-8" }).trim();
       const publicKey = safeExecFileSync("wg", ["pubkey"], { input: privateKey + "\n", timeout: 5000, encoding: "utf-8" }).trim();
-      return { content: [{ type: "text", text: JSON.stringify({ private_key: privateKey, public_key: publicKey }, null, 2) }] };
+      const stored = storeWireGuardPrivateKey(privateKey);
+      if (!stored.ok) {
+        return { content: [{ type: "text", text: "WireGuard key storage permission is no longer available" }], isError: true, code: "forbidden" };
+      }
+      return { content: [{ type: "text", text: JSON.stringify({ key_name: stored.key, public_key: publicKey }, null, 2) }] };
     }
 
     return { content: [{ type: "text", text: "Error: Invalid action. Use: status, list_peers, add_peer, remove_peer, generate_keypair" }], isError: true };
@@ -317,4 +352,4 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_tunnel, sidekick_wireguard, sidekick_nginx };
+module.exports = { descriptors, sidekick_tunnel, sidekick_wireguard, sidekick_nginx, storeWireGuardPrivateKey };
