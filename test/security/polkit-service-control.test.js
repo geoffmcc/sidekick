@@ -73,6 +73,7 @@ test("bootstrap installs polkit and the rule without putting unit control in sud
     assert.match(script, /apt-get install[^\n]*polkitd/);
     assert.match(script, /install_sidekick_polkit_rule "\$USERNAME" "\$SCRIPT_DIR"/);
   }
+  assert.match(existingHostInstaller, /sudo bash \.\/scripts\/install-polkit-policy\.sh/);
   assert.match(existingHostInstaller, /EUID/);
   assert.match(existingHostInstaller, /apt-get install -y polkitd/);
   assert.match(existingHostInstaller, /install_sidekick_polkit_rule "\$USERNAME" "\$SCRIPT_DIR"/);

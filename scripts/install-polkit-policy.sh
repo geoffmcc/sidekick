@@ -7,7 +7,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 USERNAME="${1:-sidekick}"
 
 if [[ "$EUID" -ne 0 ]]; then
-  echo "Run this installer as root (for example: sudo ./scripts/install-polkit-policy.sh)" >&2
+  echo "Run this installer as root (for example: sudo bash ./scripts/install-polkit-policy.sh)" >&2
   exit 1
 fi
 
