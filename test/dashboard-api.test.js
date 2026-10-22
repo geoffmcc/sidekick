@@ -303,6 +303,24 @@ setTimeout(async () => {
       console.log('Passed\n');
     }
 
+    console.log('Test 3.0b3: Grafana proxy requires the operations-read permission');
+    {
+      const owner = dbStore.getDb().prepare("SELECT principal_id FROM principals WHERE json_extract(metadata_json, '$.legacy_dashboard_username') = 'test-user' LIMIT 1").get();
+      assert.ok(owner?.principal_id, 'Dashboard test identity should exist');
+      const identity = require('../src/core/identity');
+      const authentication = require('../src/core/authentication');
+      const viewer = identity.createHumanUser({ username: 'grafana-viewer', password: 'synthetic-viewer-password', displayName: 'Grafana Viewer', actorPrincipalId: owner.principal_id });
+      identity.assignRole(viewer.principal_id, 'viewer', owner.principal_id);
+      const session = authentication.createSession(viewer.principal_id, { userAgent: 'security-test', ipAddress: '127.0.0.1' });
+      const response = await makeRequest('GET', '/grafana/api/health', null, {
+        headers: { Cookie: `sidekick_identity=${session.token}` }
+      });
+      assert.strictEqual(response.status, 403, 'Viewer must not receive access through the privileged Grafana proxy');
+      assert.strictEqual(response.data.permission, 'dashboard.operations.read');
+      authentication.invalidateSession(session.token, owner.principal_id);
+      console.log('Passed\n');
+    }
+
     // Test 3.0c: dashboard database endpoints honor tool policy
     console.log('Test 3.0c: dashboard database endpoints honor tool policy');
     {

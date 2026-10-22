@@ -498,6 +498,7 @@ app.post('/grafana/api/user/auth-tokens/rotate', (req, res) => {
 });
 
 app.use('/grafana', (req, res) => {
+  if (!requireIdentityPermission(req, res, "dashboard.operations.read")) return;
   if (!GRAFANA_USER || !GRAFANA_PASS) return res.status(503).send('Grafana proxy credentials are unavailable');
   const targetPath = req.originalUrl || '/grafana/';
   const headers = buildGrafanaProxyHeaders(req.headers, GRAFANA_USER, GRAFANA_PASS);
