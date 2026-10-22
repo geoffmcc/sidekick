@@ -39,10 +39,17 @@ async function runRecipe(pack, { project = "pack-proving", actor = "proving-runn
   const validation = validateRecipe(recipe);
   if (!validation.valid) return { schema: "sidekick.pack-proving-run.v1", status: "failed", pack, errors: validation.errors };
   const runId = `proving_${Date.now().toString(36)}`;
-  const execution = platformKernel.createExecution({ execution_id: runId, project_id: project, actor_id: actor, actor_principal_id: actor, operation_type: "pack_proving", trigger_type: "operator", source: "proving", correlation_id: runId, metadata: { pack: recipe.pack, recipe_id: recipe.id, recipe_version: recipe.version } });
-  platformKernel.transitionExecution(runId, "running", { source: "proving", actor_id: actor, reason: "proving recipe started" });
+  // `actor` is a display/diagnostic label, not proof of an authenticated
+  // principal. Only identity supplied by the trusted caller may be attributed
+  // as a principal or as project ownership.
+  const principalId = typeof authIdentity?.principal_id === "string" && authIdentity.principal_id.trim()
+    ? authIdentity.principal_id.trim()
+    : null;
+  const executionActor = principalId || null;
+  const execution = platformKernel.createExecution({ execution_id: runId, project_id: project, actor_id: executionActor, actor_principal_id: principalId, operation_type: "pack_proving", trigger_type: "operator", source: "proving", correlation_id: runId, metadata: { pack: recipe.pack, recipe_id: recipe.id, recipe_version: recipe.version, actor_label: actor } });
+  platformKernel.transitionExecution(runId, "running", { source: "proving", actor_id: executionActor, reason: "proving recipe started" });
   const steps = [];
-  const context = { project, actor, sessionId: runId, executionId: runId, authIdentity: authIdentity || { principal_id: actor } };
+  const context = { project, actor, sessionId: runId, executionId: runId, authIdentity: principalId ? authIdentity : null };
   for (const check of recipe.discovery) {
     const [name, action] = check.split(".");
     const args = { action };
@@ -71,7 +78,7 @@ async function runRecipe(pack, { project = "pack-proving", actor = "proving-runn
     steps.push({ name: "provider", status: "unavailable", reason: "recipe requires a live provider and none was authorized" });
   }
   const status = steps.some(step => step.status === "failed") ? "failed" : steps.some(step => step.status === "unavailable") ? "unavailable" : steps.some(step => step.status === "not_evaluated") ? "not_evaluated" : "passed";
-  platformKernel.transitionExecution(runId, status === "passed" ? "completed" : "failed", { source: "proving", actor_id: actor, result_status: status, result_summary: `${recipe.pack} proving ${status}` });
+  platformKernel.transitionExecution(runId, status === "passed" ? "completed" : "failed", { source: "proving", actor_id: executionActor, result_status: status, result_summary: `${recipe.pack} proving ${status}` });
   if (!TERMINAL.has(status)) throw new Error("proving runner produced a non-terminal status");
   return {
     schema: "sidekick.pack-proving-run.v1",
