@@ -499,7 +499,19 @@ async function executeAuthorizedTaskStep(toolName, args, meta = {}) {
   });
 }
 
-async function executeApprovedTool({ approvalId, reviewer = "system", reviewerPrincipalId = null, source } = {}) {
+async function executeApprovedTool({ approvalId, reviewer = "system", reviewerPrincipalId = null, reviewerAuthIdentity = null, source } = {}) {
+  if (reviewerAuthIdentity?.principal_id && reviewerPrincipalId && reviewerAuthIdentity.principal_id !== reviewerPrincipalId) {
+    return errorResult("Approval reviewer identity does not match the authenticated principal", "authorization_denied");
+  }
+  const effectiveReviewerPrincipalId = reviewerAuthIdentity?.principal_id || reviewerPrincipalId;
+  const effectiveReviewerIdentity = effectiveReviewerPrincipalId
+    ? {
+      principal_id: effectiveReviewerPrincipalId,
+      principal_type: reviewerAuthIdentity?.principal_type || "human",
+      ...(Array.isArray(reviewerAuthIdentity?.scopes) ? { scopes: reviewerAuthIdentity.scopes } : {}),
+      ...(reviewerAuthIdentity?.delegation_id ? { delegation_id: reviewerAuthIdentity.delegation_id } : {}),
+    }
+    : null;
   // ADR §1: an approval authorizes an action, it never performs one. For a
   // TASK-ORIGINATED approval this call is a STATE TRANSITION (T2) — mark the
   // approval approved and the task runnable, atomically — and returns. The task
@@ -523,7 +535,13 @@ async function executeApprovedTool({ approvalId, reviewer = "system", reviewerPr
 
   if (taskApproval) {
     const { approve } = require("../approvals/continuation");
-    const outcome = approve({ approvalId, approverIdentity: reviewer, approverPrincipalId: reviewerPrincipalId });
+    const outcome = approve({
+      approvalId,
+      approverIdentity: reviewer,
+      approverPrincipalId: effectiveReviewerPrincipalId,
+      credentialScopes: effectiveReviewerIdentity?.scopes ?? null,
+      delegationId: effectiveReviewerIdentity?.delegation_id || null,
+    });
     if (!outcome.ok) {
       const message = outcome.code === "task_not_waiting"
         ? `Approval ${approvalId} was decided, but its task is no longer waiting for it`
@@ -578,8 +596,8 @@ async function executeApprovedTool({ approvalId, reviewer = "system", reviewerPr
       args: claim.args,
       context: createApprovalExecutionContext({
         actor: reviewer,
-        authIdentity: reviewerPrincipalId ? { principal_id: reviewerPrincipalId, principal_type: "human" } : null,
-        provenance: { approved_by: reviewerPrincipalId, executed_by: reviewerPrincipalId },
+        authIdentity: effectiveReviewerIdentity,
+        provenance: { approved_by: effectiveReviewerPrincipalId, executed_by: effectiveReviewerPrincipalId },
         approvalId,
         operationId: claim.operationId,
         idempotencyKey: claim.idempotencyKey,

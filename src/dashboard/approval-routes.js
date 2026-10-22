@@ -40,7 +40,14 @@ function registerApprovalRoutes({ app, listApprovals, renderContinuationApproval
         if (!requireApprovalPermission(req, res, "approvals.grant")) return;
         const reviewer = principalId;
         auditLog(req, `approval.${action}`, { id: req.params.id, reviewer_principal_id: principalId });
-        const result = await resolveApproval(req.params.id, verb, reviewer, { reviewerPrincipalId: principalId });
+        const principal = req.authPrincipal;
+        const reviewerAuthIdentity = {
+          principal_id: principalId,
+          principal_type: principal.principal_type || "human",
+          ...(Array.isArray(principal.scopes) ? { scopes: principal.scopes } : {}),
+          ...(principal.delegation_id ? { delegation_id: principal.delegation_id } : {}),
+        };
+        const result = await resolveApproval(req.params.id, verb, reviewer, { reviewerPrincipalId: principalId, reviewerAuthIdentity });
         res.json({ ok: !result.isError, result: result.content?.[0]?.text || "" });
       } catch (error) {
         return errorResponse(req, res, error, { status: 500, code: "service_unavailable", component: "approvals" });

@@ -12,6 +12,7 @@ const { taskBelongsToIdentity, isAllowedCertificationRoute, isAllowedServiceRout
 const { reloadAgentScheduler } = require("../src/agent/scheduler-reload");
 const { normalizePrincipalContext } = require("../src/agent/task-model");
 const { registerAgentProxyRoutes } = require("../src/dashboard/agent-proxy-routes");
+const { registerApprovalRoutes } = require("../src/dashboard/approval-routes");
 const { createBlackboxQuery } = require("../src/blackbox/query");
 const { clampOffset: clampPredictionOffset } = require("../src/predict");
 const { HISTORY_LIMITS, clampHistoryOffset } = require("../src/agent-history");
@@ -466,6 +467,47 @@ test("Agent proxy identity requires a fresh request-bound signature and rejects 
   assert.equal(verifyAgentProxyRequest({ ...request, path: request.path + "?changed=1", secret, headers, now, usedNonces: new Map() }), null, "signature binds the exact route and query");
   assert.equal(verifyAgentProxyRequest({ ...request, body: "{\"changed\":true}", secret, headers, now, usedNonces: new Map() }), null, "signature binds the request body");
   assert.equal(verifyAgentProxyRequest({ ...request, secret, headers, now: now + 120_000, usedNonces: new Map() }), null, "expired signatures are rejected");
+});
+
+test("Dashboard approval forwards the authenticated reviewer scope and delegation", async () => {
+  const routes = new Map();
+  const app = { get: (route, handler) => routes.set(`GET ${route}`, handler), post: (route, handler) => routes.set(`POST ${route}`, handler) };
+  let captured = null;
+  registerApprovalRoutes({
+    app,
+    listApprovals: () => [],
+    renderContinuationApprovalPreview: () => ({ ok: true }),
+    authenticatedUser: () => "scoped-reviewer",
+    auditLog: () => {},
+    logError: () => {},
+    resolveApproval: async (...args) => { captured = args; return { content: [{ type: "text", text: "approved" }] }; },
+    requireIdentityPermission: () => true,
+    errorResponse: () => assert.fail("unexpected approval route error"),
+  });
+  const req = {
+    params: { id: "approval-synthetic" },
+    authPrincipal: { principal_id: "principal-reviewer", principal_type: "human", scopes: ["approvals.grant"], delegation_id: "delegation-review" },
+  };
+  const res = { json(value) { this.value = value; return this; }, status(code) { this.statusCode = code; return this; } };
+  await routes.get("POST /api/approvals/:id/approve")(req, res);
+  assert.equal(res.statusCode, undefined);
+  assert.equal(captured[0], "approval-synthetic");
+  assert.equal(captured[1], "approve");
+  assert.deepEqual(captured[3], {
+    reviewerPrincipalId: "principal-reviewer",
+    reviewerAuthIdentity: {
+      principal_id: "principal-reviewer",
+      principal_type: "human",
+      scopes: ["approvals.grant"],
+      delegation_id: "delegation-review",
+    },
+  });
+  const dispatcher = fs.readFileSync(path.join(root, "src/tools/dispatcher.js"), "utf8");
+  assert.match(dispatcher, /credentialScopes: effectiveReviewerIdentity\?\.scopes/);
+  assert.match(dispatcher, /authIdentity: effectiveReviewerIdentity/);
+  assert.match(dispatcher, /reviewerAuthIdentity\.principal_id !== reviewerPrincipalId/);
+  const approvalCompat = fs.readFileSync(path.join(root, "src/tools/approval-compat.js"), "utf8");
+  assert.equal((approvalCompat.match(/reviewerAuthIdentity: options\.reviewerAuthIdentity/g) || []).length, 2);
 });
 
 test("identityless certification service can access only its durably attributed tasks", () => {

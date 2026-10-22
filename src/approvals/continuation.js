@@ -330,14 +330,14 @@ function park({
  * runnable — an authorization that can never be consumed and never expires,
  * because expiry only applies to `pending`.
  */
-function approve({ approvalId, approverIdentity, approverPrincipalId = null, now = store.nowIso() }) {
+function approve({ approvalId, approverIdentity, approverPrincipalId = null, credentialScopes = null, delegationId = null, now = store.nowIso() }) {
   if (!approverIdentity) return { ok: false, code: "approver_identity_required" };
   if (approverPrincipalId) {
     const approver = identity.getPrincipal(approverPrincipalId);
     if (!approver) return { ok: false, code: "principal-not-found" };
     if (!approver.enabled) return { ok: false, code: "principal-disabled" };
     if (approver.principal_type !== "human") return { ok: false, code: "human_approval_required" };
-    const grant = authorization.authorize({ principalId: approverPrincipalId, permission: "approvals.grant" });
+    const grant = authorization.authorize({ principalId: approverPrincipalId, permission: "approvals.grant", credentialScopes, delegationId });
     if (!grant.ok) return { ok: false, code: grant.code };
   }
 
