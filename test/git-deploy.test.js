@@ -40,6 +40,7 @@ function makeMock(overrides = {}) {
     behind: '1',
     services: 'active',
     installCalls: 0,
+    installTimeouts: [],
     calls: [],
     ...overrides
   };
@@ -68,6 +69,7 @@ function makeMock(overrides = {}) {
     if (cmd === 'chown') return '';
     if (cmd === 'npm') {
       state.installCalls += 1;
+      if (args[0] === 'ci' && args[1] === '--omit=dev') state.installTimeouts.push(options.timeout);
       if (state.failInstall && args[0] === 'ci' && state.installCalls === 1) fail('npm token ghp_secret leaked');
       if (state.failSeed && args.join(' ') === 'run seed:knowledge') fail('seed failed');
       return 'ok\n';
@@ -161,6 +163,7 @@ try {
   assert.strictEqual(result.previous_commit, 'aaa111');
   assert.strictEqual(result.deployed_commit, 'bbb222');
   assert.ok(result.backup, 'changed deploy should create a pre-deploy backup');
+  assert.deepStrictEqual(state.installTimeouts, [600000], 'production dependency installation should allow up to ten minutes');
   assert.ok(fs.existsSync(path.join(result.backup, '.env')), 'backup should include .env');
   assert.ok(fs.existsSync(path.join(result.backup, 'data')), 'backup should include data');
   assert.ok(fs.existsSync(path.join(result.backup, 'manifest.json')), 'backup should include a manifest');

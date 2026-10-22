@@ -139,7 +139,7 @@ function npmInstall(cwd) {
   if (!fs.existsSync(lockfile)) {
     return { ok: false, stdout: '', stderr: 'package-lock.json is required; refusing unpinned dependency installation' };
   }
-  return run('npm', ['ci', '--omit=dev'], { cwd, timeout: 180000, maxBuffer: 20 * 1024 * 1024 });
+  return run('npm', ['ci', '--omit=dev'], { cwd, timeout: 600000, maxBuffer: 20 * 1024 * 1024 });
 }
 
 function runSeed(cwd) {
