@@ -13,6 +13,9 @@ const dbStore = require("../../db");
 const { loadProcedures } = require("../../core/procedures-store");
 const { redactSensitiveKeysDeep } = require("../../redact");
 const { requireCanonicalInvocation } = require("../read-authorization");
+const authorization = require("../../core/authorization");
+const projectAccess = require("../../core/project-access");
+const { canonicalizeProjectName } = require("../../core/project-identity");
 
 const MAX_KNOWLEDGE_PROVENANCE_BYTES = 16 * 1024;
 
@@ -53,6 +56,52 @@ function recordKnowledgeMutation(existing, execution, action, at) {
     throw new Error("Knowledge provenance exceeds its storage limit");
   }
   return serialized;
+}
+
+function knowledgeScope(execution, permission) {
+  const identity = execution.authIdentity;
+  const principalId = identity?.principal_id;
+  const delegationId = identity?.delegation_id || identity?.delegationId || null;
+  if (!principalId) return { error: "Knowledge access requires an authenticated principal" };
+  const decision = authorization.authorize({
+    principalId,
+    permission: `knowledge.${permission}`,
+    credentialScopes: identity.scopes,
+    delegationId,
+  });
+  if (!decision.ok) return { error: `Knowledge ${permission} permission denied` };
+
+  let scopedProject = null;
+  if (execution.project) {
+    try { scopedProject = canonicalizeProjectName(execution.project); }
+    catch { return { error: "Knowledge project scope is invalid" }; }
+    if (!scopedProject) return { error: "Knowledge project scope is invalid" };
+    if (!projectAccess.hasProjectPermission(principalId, scopedProject, `knowledge.${permission}`, permission === "write" ? "write" : "read", identity.scopes, delegationId)) {
+      return { error: "Knowledge project scope denied" };
+    }
+    if (permission === "write") {
+      const project = require("../../platform/kernel").getProject(scopedProject);
+      if (!project || project.state !== "active") return { error: "Knowledge writes require an active registered project" };
+    }
+  }
+  const globalAccess = projectAccess.hasGlobalProjectAccess(principalId, identity.scopes, delegationId);
+  if (permission === "write" && !scopedProject && !globalAccess) {
+    return { error: "Global knowledge writes require project administration access or an authorized project scope" };
+  }
+  return { projectId: scopedProject, allProjects: !scopedProject && globalAccess };
+}
+
+function knowledgeRowInScope(row, scope, permission) {
+  if (!row) return false;
+  if (!row.project_id) return permission === "read" || scope.allProjects;
+  return scope.allProjects || row.project_id === scope.projectId;
+}
+
+function knowledgeWhere(scope, alias = "") {
+  const column = alias ? `${alias}.project_id` : "project_id";
+  if (scope.allProjects) return { sql: "1 = 1", params: [] };
+  if (scope.projectId) return { sql: `(${column} IS NULL OR ${column} = ?)`, params: [scope.projectId] };
+  return { sql: `${column} IS NULL`, params: [] };
 }
 
 function promotedContent(sourceType, item) {
@@ -100,31 +149,35 @@ async function sidekick_knowledge({ action, id, category, title, content, tags, 
   if (denied) return denied;
   try {
     const db = dbStore.getDb();
+    const execution = toolContext.getExecutionContext();
     const now = new Date().toISOString();
 
     if (action === "search") {
       if (!query) return { content: [{ type: "text", text: "Error: query is required for search" }], isError: true };
+      const scope = knowledgeScope(execution, "read");
+      if (scope.error) return { content: [{ type: "text", text: `Error: ${scope.error}` }], isError: true, code: "forbidden" };
+      const scopeWhere = knowledgeWhere(scope, "k");
       const searchLimit = limit || 10;
 
       const ftsQuery = query.trim().split(/\s+/).filter(Boolean)
         .map(term => `"${term.replace(/"/g, '""')}"`).join(" AND ");
       const categoryClause = category ? " AND k.category = ?" : "";
-      const ftsParams = category ? [ftsQuery, category, searchLimit] : [ftsQuery, searchLimit];
+      const ftsParams = category
+        ? [ftsQuery, category, ...scopeWhere.params, searchLimit]
+        : [ftsQuery, ...scopeWhere.params, searchLimit];
       let rows;
       try {
         rows = db.prepare(`
           SELECT k.id, k.category, k.title, k.content, k.tags, k.updated_at
           FROM knowledge k
           JOIN knowledge_fts f ON f.rowid = k.id
-          WHERE k.enabled = 1 AND knowledge_fts MATCH ?${categoryClause}
+          WHERE k.enabled = 1 AND knowledge_fts MATCH ?${categoryClause} AND ${scopeWhere.sql}
           ORDER BY bm25(knowledge_fts), k.updated_at DESC
           LIMIT ?
         `).all(...ftsParams);
       } catch (error) {
         const fallbackCategoryClause = category ? " AND category = ?" : "";
-        const fallbackParams = category
-          ? [`%${query}%`, `%${query}%`, `%${query}%`, category, searchLimit]
-          : [`%${query}%`, `%${query}%`, `%${query}%`, searchLimit];
+        const fallbackScope = knowledgeWhere(scope);
         rows = db.prepare(`
           SELECT id, category, title, content, tags, updated_at
           FROM knowledge
@@ -132,10 +185,10 @@ async function sidekick_knowledge({ action, id, category, title, content, tags, 
             title LIKE ? OR
             content LIKE ? OR
             tags LIKE ?
-          )${fallbackCategoryClause}
+          )${fallbackCategoryClause} AND ${fallbackScope.sql}
           ORDER BY updated_at DESC
           LIMIT ?
-        `).all(...fallbackParams);
+        `).all(`%${query}%`, `%${query}%`, `%${query}%`, ...(category ? [category] : []), ...fallbackScope.params, searchLimit);
       }
 
       return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
@@ -143,17 +196,23 @@ async function sidekick_knowledge({ action, id, category, title, content, tags, 
 
     if (action === "get") {
       if (!id) return { content: [{ type: "text", text: "Error: id is required for get" }], isError: true };
+      const scope = knowledgeScope(execution, "read");
+      if (scope.error) return { content: [{ type: "text", text: `Error: ${scope.error}` }], isError: true, code: "forbidden" };
+      const scopeWhere = knowledgeWhere(scope);
       const row = db.prepare(`
         SELECT id, category, title, content, tags, updated_at
         FROM knowledge
-        WHERE id = ? AND enabled = 1
-      `).get(id);
+        WHERE id = ? AND enabled = 1 AND ${scopeWhere.sql}
+      `).get(id, ...scopeWhere.params);
 
       if (!row) return { content: [{ type: "text", text: "Error: knowledge entry not found" }], isError: true };
       return { content: [{ type: "text", text: JSON.stringify(row, null, 2) }] };
     }
 
     if (action === "list") {
+      const scope = knowledgeScope(execution, "read");
+      if (scope.error) return { content: [{ type: "text", text: `Error: ${scope.error}` }], isError: true, code: "forbidden" };
+      const scopeWhere = knowledgeWhere(scope);
       const listLimit = limit || 50;
       let rows;
 
@@ -161,18 +220,18 @@ async function sidekick_knowledge({ action, id, category, title, content, tags, 
         rows = db.prepare(`
           SELECT id, category, title, tags, updated_at
           FROM knowledge
-          WHERE enabled = 1 AND category = ?
+          WHERE enabled = 1 AND category = ? AND ${scopeWhere.sql}
           ORDER BY updated_at DESC
           LIMIT ?
-        `).all(category, listLimit);
+        `).all(category, ...scopeWhere.params, listLimit);
       } else {
         rows = db.prepare(`
           SELECT id, category, title, tags, updated_at
           FROM knowledge
-          WHERE enabled = 1
+          WHERE enabled = 1 AND ${scopeWhere.sql}
           ORDER BY category, updated_at DESC
           LIMIT ?
-        `).all(listLimit);
+        `).all(...scopeWhere.params, listLimit);
       }
 
       return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
@@ -183,12 +242,14 @@ async function sidekick_knowledge({ action, id, category, title, content, tags, 
         return { content: [{ type: "text", text: "Error: category, title, and content are required for add" }], isError: true };
       }
 
-      const provenance = recordKnowledgeMutation(null, toolContext.getExecutionContext(), "add", now);
+      const scope = knowledgeScope(execution, "write");
+      if (scope.error) return { content: [{ type: "text", text: `Error: ${scope.error}` }], isError: true, code: "forbidden" };
+      const provenance = recordKnowledgeMutation(null, execution, "add", now);
 
       const result = db.prepare(`
-        INSERT INTO knowledge (category, title, content, tags, enabled, version_added, updated_at, provenance_json)
-        VALUES (?, ?, ?, ?, 1, ?, ?, ?)
-      `).run(category, title, content, tags || '', now, now, provenance);
+        INSERT INTO knowledge (category, title, content, tags, enabled, version_added, updated_at, provenance_json, project_id)
+        VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)
+      `).run(category, title, content, tags || '', now, now, provenance, scope.projectId);
       refreshKnowledgeFts();
 
       return { content: [{ type: "text", text: `Added knowledge entry with id: ${result.lastInsertRowid}` }] };
@@ -198,7 +259,8 @@ async function sidekick_knowledge({ action, id, category, title, content, tags, 
       if (!source || !source_id || !category) {
         return { content: [{ type: "text", text: "source, source_id, and category are required for promote" }], isError: true };
       }
-      const execution = toolContext.getExecutionContext();
+      const scope = knowledgeScope(execution, "write");
+      if (scope.error) return { content: [{ type: "text", text: `Error: ${scope.error}` }], isError: true, code: "forbidden" };
       const verifiedApprover = execution.authIdentity?.principal_id || null;
       if (!execution.approvedExecution || !execution.approvalId || !verifiedApprover) {
         return { content: [{ type: "text", text: "Knowledge promotion requires an authenticated dispatcher approval" }], isError: true, code: "approval_required" };
@@ -209,9 +271,9 @@ async function sidekick_knowledge({ action, id, category, title, content, tags, 
       if (!promotedTitle) return { content: [{ type: "text", text: "Error: promoted source has no title or name" }], isError: true };
       const existing = db.prepare(`
         SELECT id FROM knowledge
-        WHERE source_type = ? AND source_id = ? AND source_version = ? AND enabled = 1
+        WHERE source_type = ? AND source_id = ? AND source_version = ? AND enabled = 1 AND project_id IS ?
         ORDER BY id DESC LIMIT 1
-      `).get(source, resolved.id, resolved.version);
+      `).get(source, resolved.id, resolved.version, scope.projectId);
       if (existing) {
         return { content: [{ type: "text", text: JSON.stringify({ promoted: false, existing_id: existing.id, source, source_id: resolved.id, source_version: resolved.version }, null, 2) }] };
       }
@@ -226,8 +288,8 @@ async function sidekick_knowledge({ action, id, category, title, content, tags, 
       const result = db.prepare(`
         INSERT INTO knowledge (
           category, title, content, tags, enabled, version_added, updated_at,
-          source_type, source_id, source_version, provenance_json, approved_by, approved_at
-        ) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
+          source_type, source_id, source_version, provenance_json, approved_by, approved_at, project_id
+        ) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         category,
         promotedTitle,
@@ -241,6 +303,7 @@ async function sidekick_knowledge({ action, id, category, title, content, tags, 
         storedProvenance,
         verifiedApprover,
         now,
+        scope.projectId,
       );
       refreshKnowledgeFts();
       return { content: [{ type: "text", text: JSON.stringify({ promoted: true, id: result.lastInsertRowid, source, source_id: resolved.id, source_version: resolved.version, approved_by: verifiedApprover }, null, 2) }] };
@@ -248,6 +311,8 @@ async function sidekick_knowledge({ action, id, category, title, content, tags, 
 
     if (action === "update") {
       if (!id) return { content: [{ type: "text", text: "Error: id is required for update" }], isError: true };
+      const scope = knowledgeScope(execution, "write");
+      if (scope.error) return { content: [{ type: "text", text: `Error: ${scope.error}` }], isError: true, code: "forbidden" };
 
       const updates = [];
       const params = [];
@@ -262,8 +327,8 @@ async function sidekick_knowledge({ action, id, category, title, content, tags, 
       }
 
       const updated = db.transaction(() => {
-        const current = db.prepare("SELECT provenance_json FROM knowledge WHERE id = ? AND enabled = 1").get(id);
-        if (!current) return false;
+        const current = db.prepare("SELECT project_id, provenance_json FROM knowledge WHERE id = ? AND enabled = 1").get(id);
+        if (!knowledgeRowInScope(current, scope, "write")) return false;
         const provenance = recordKnowledgeMutation(current.provenance_json, toolContext.getExecutionContext(), "update", now);
         const updateFields = [...updates, "provenance_json = ?", "updated_at = ?"];
         return db.prepare(`UPDATE knowledge SET ${updateFields.join(", ")} WHERE id = ? AND enabled = 1`)
@@ -277,9 +342,11 @@ async function sidekick_knowledge({ action, id, category, title, content, tags, 
 
     if (action === "delete") {
       if (!id) return { content: [{ type: "text", text: "Error: id is required for delete" }], isError: true };
+      const scope = knowledgeScope(execution, "write");
+      if (scope.error) return { content: [{ type: "text", text: `Error: ${scope.error}` }], isError: true, code: "forbidden" };
       const deleted = db.transaction(() => {
-        const current = db.prepare("SELECT provenance_json FROM knowledge WHERE id = ? AND enabled = 1").get(id);
-        if (!current) return false;
+        const current = db.prepare("SELECT project_id, provenance_json FROM knowledge WHERE id = ? AND enabled = 1").get(id);
+        if (!knowledgeRowInScope(current, scope, "write")) return false;
         const provenance = recordKnowledgeMutation(current.provenance_json, toolContext.getExecutionContext(), "delete", now);
         return db.prepare("UPDATE knowledge SET enabled = 0, updated_at = ?, provenance_json = ? WHERE id = ? AND enabled = 1")
           .run(now, provenance, id).changes > 0;
@@ -291,8 +358,10 @@ async function sidekick_knowledge({ action, id, category, title, content, tags, 
 
     if (action === "purge") {
       if (!id) return { content: [{ type: "text", text: "Error: id is required for purge" }], isError: true };
-      const row = db.prepare("SELECT id, enabled FROM knowledge WHERE id = ?").get(id);
-      if (!row) return { content: [{ type: "text", text: "Error: knowledge entry not found" }], isError: true };
+      const scope = knowledgeScope(execution, "write");
+      if (scope.error) return { content: [{ type: "text", text: `Error: ${scope.error}` }], isError: true, code: "forbidden" };
+      const row = db.prepare("SELECT id, enabled, project_id FROM knowledge WHERE id = ?").get(id);
+      if (!knowledgeRowInScope(row, scope, "write")) return { content: [{ type: "text", text: "Error: knowledge entry not found" }], isError: true };
       if (row.enabled) {
         return { content: [{ type: "text", text: "Error: purge only removes disabled entries. Run action=delete first to soft-delete the entry." }], isError: true };
       }
