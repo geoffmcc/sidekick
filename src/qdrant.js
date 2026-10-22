@@ -16,10 +16,7 @@ async function readBoundedJson(response, maxBytes = MAX_RESPONSE_BYTES) {
   const reader = response?.body?.getReader?.();
   let text;
   if (!reader) {
-    text = await response.text();
-    if (Buffer.byteLength(text, "utf8") > maxBytes) {
-      throw new Error("Qdrant response exceeded the configured size limit");
-    }
+    throw new Error("Qdrant response cannot be read with a bounded stream");
   } else {
     const chunks = [];
     let totalBytes = 0;

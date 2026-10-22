@@ -26,13 +26,8 @@ let fetchCalls = 0;
 global.fetch = async (_url, options) => {
   assert.equal(options.redirect, 'error', 'metrics requests must not forward credentials through redirects');
   assert.ok(options.signal instanceof AbortSignal, 'metrics requests must have a finite deadline');
-  return {
-    ok: true,
-    text: async () => {
-      fetchCalls++;
-      return options.body.includes('_field') ? csv.fields : csv.measurements;
-    },
-  };
+  fetchCalls++;
+  return new Response(options.body.includes('_field') ? csv.fields : csv.measurements, { status: 200 });
 };
 
 const tools = require('../src/tools');

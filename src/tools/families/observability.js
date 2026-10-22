@@ -48,11 +48,8 @@ async function requestInflux(url, options = {}) {
 async function readInfluxResponseText(response, maxBytes = MAX_INFLUX_RESPONSE_BYTES) {
   const reader = response?.body?.getReader?.();
   if (!reader) {
-    const text = await response.text();
-    if (Buffer.byteLength(text, "utf8") > maxBytes) {
-      throw new Error("InfluxDB response exceeded the configured size limit");
-    }
-    return text;
+    if (response?.body === null) return "";
+    throw new Error("InfluxDB response cannot be read with a bounded stream");
   }
 
   const chunks = [];

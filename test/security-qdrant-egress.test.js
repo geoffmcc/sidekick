@@ -27,6 +27,15 @@ test("Qdrant JSON responses are rejected when their streamed body exceeds the bo
   assert.deepEqual(await qdrant.readBoundedJson(new Response('{"result":[]}'), 32), { result: [] });
 });
 
+test("Qdrant JSON responses fail closed when bounded streaming is unavailable", async () => {
+  let textFallbackCalled = false;
+  await assert.rejects(qdrant.readBoundedJson({
+    body: { getReader: null },
+    async text() { textFallbackCalled = true; return "{}"; },
+  }, 32), /cannot be read with a bounded stream/);
+  assert.equal(textFallbackCalled, false);
+});
+
 test("Qdrant semantic search rejects an oversized response and cancels the body", async t => {
   const originalFetch = global.fetch;
   const originalBaseUrl = qdrant.baseUrl;
