@@ -34,6 +34,45 @@ function safeExecFileSync(program, args, options = {}) {
 
 const HEALTH_HISTORY_FILE = path.join(DATA_DIR, "health_history.json");
 const MAX_HEALTH_HISTORY = 100;
+const INFLUX_REQUEST_TIMEOUT_MS = 15_000;
+const MAX_INFLUX_RESPONSE_BYTES = 5 * 1024 * 1024;
+
+async function requestInflux(url, options = {}) {
+  return fetch(url, {
+    ...options,
+    redirect: "error",
+    signal: AbortSignal.timeout(INFLUX_REQUEST_TIMEOUT_MS),
+  });
+}
+
+async function readInfluxResponseText(response, maxBytes = MAX_INFLUX_RESPONSE_BYTES) {
+  const reader = response?.body?.getReader?.();
+  if (!reader) {
+    const text = await response.text();
+    if (Buffer.byteLength(text, "utf8") > maxBytes) {
+      throw new Error("InfluxDB response exceeded the configured size limit");
+    }
+    return text;
+  }
+
+  const chunks = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > maxBytes) {
+        await reader.cancel().catch(() => {});
+        throw new Error("InfluxDB response exceeded the configured size limit");
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } finally {
+    reader.releaseLock?.();
+  }
+  return Buffer.concat(chunks, totalBytes).toString("utf8");
+}
 
 function loadHealthHistory() {
   if (!fs.existsSync(HEALTH_HISTORY_FILE)) return [];
@@ -848,7 +887,7 @@ async function sidekick_metrics({ action, measurement, fields, tags, timestamp, 
       line += ' ' + ts;
 
       // Write to InfluxDB
-      const response = await fetch(`${INFLUX_URL}/api/v2/write?org=${INFLUX_ORG}&bucket=${INFLUX_BUCKET}&precision=ns`, {
+      const response = await requestInflux(`${INFLUX_URL}/api/v2/write?org=${INFLUX_ORG}&bucket=${INFLUX_BUCKET}&precision=ns`, {
         method: 'POST',
         headers: {
           'Authorization': `Token ${INFLUX_TOKEN}`,
@@ -858,7 +897,7 @@ async function sidekick_metrics({ action, measurement, fields, tags, timestamp, 
       });
 
       if (!response.ok) {
-        const errorText = await response.text();
+        const errorText = await readInfluxResponseText(response, 64 * 1024);
         return { content: [{ type: "text", text: `Error writing to InfluxDB: ${response.status} - ${errorText}` }], isError: true };
       }
 
@@ -870,7 +909,7 @@ async function sidekick_metrics({ action, measurement, fields, tags, timestamp, 
         return { content: [{ type: "text", text: "Error: query is required for query action" }], isError: true };
       }
 
-      const response = await fetch(`${INFLUX_URL}/api/v2/query?org=${INFLUX_ORG}`, {
+      const response = await requestInflux(`${INFLUX_URL}/api/v2/query?org=${INFLUX_ORG}`, {
         method: 'POST',
         headers: {
           'Authorization': `Token ${INFLUX_TOKEN}`,
@@ -881,11 +920,11 @@ async function sidekick_metrics({ action, measurement, fields, tags, timestamp, 
       });
 
       if (!response.ok) {
-        const errorText = await response.text();
+        const errorText = await readInfluxResponseText(response, 64 * 1024);
         return { content: [{ type: "text", text: `Error querying InfluxDB: ${response.status} - ${errorText}` }], isError: true };
       }
 
-      const result = await response.text();
+      const result = await readInfluxResponseText(response);
       return { content: [{ type: "text", text: result }] };
     }
 
@@ -900,7 +939,7 @@ async function sidekick_metrics({ action, measurement, fields, tags, timestamp, 
   |> distinct(column: "_measurement")
   |> keep(columns: ["_measurement"])`;
 
-      const response = await fetch(`${INFLUX_URL}/api/v2/query?org=${INFLUX_ORG}`, {
+      const response = await requestInflux(`${INFLUX_URL}/api/v2/query?org=${INFLUX_ORG}`, {
         method: 'POST',
         headers: {
           'Authorization': `Token ${INFLUX_TOKEN}`,
@@ -911,11 +950,11 @@ async function sidekick_metrics({ action, measurement, fields, tags, timestamp, 
       });
 
       if (!response.ok) {
-        const errorText = await response.text();
+        const errorText = await readInfluxResponseText(response, 64 * 1024);
         return { content: [{ type: "text", text: `Error listing measurements: ${response.status} - ${errorText}` }], isError: true };
       }
 
-      const result = await response.text();
+      const result = await readInfluxResponseText(response);
       const values = cacheMetricsMetadata(cacheKey, parseInfluxCsvColumn(result, "_measurement"));
       return { content: [{ type: "text", text: JSON.stringify(values) }] };
     }
@@ -938,7 +977,7 @@ async function sidekick_metrics({ action, measurement, fields, tags, timestamp, 
   |> distinct(column: "_field")
   |> keep(columns: ["_field"])`;
 
-      const response = await fetch(`${INFLUX_URL}/api/v2/query?org=${INFLUX_ORG}`, {
+      const response = await requestInflux(`${INFLUX_URL}/api/v2/query?org=${INFLUX_ORG}`, {
         method: 'POST',
         headers: {
           'Authorization': `Token ${INFLUX_TOKEN}`,
@@ -949,11 +988,11 @@ async function sidekick_metrics({ action, measurement, fields, tags, timestamp, 
       });
 
       if (!response.ok) {
-        const errorText = await response.text();
+        const errorText = await readInfluxResponseText(response, 64 * 1024);
         return { content: [{ type: "text", text: `Error listing fields: ${response.status} - ${errorText}` }], isError: true };
       }
 
-      const result = await response.text();
+      const result = await readInfluxResponseText(response);
       const values = cacheMetricsMetadata(cacheKey, parseInfluxCsvColumn(result, "_field"));
       return { content: [{ type: "text", text: JSON.stringify(values) }] };
     }
@@ -1049,4 +1088,15 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_status, sidekick_health, sidekick_metrics, sidekick_netdiag, checkNetwork };
+module.exports = {
+  descriptors,
+  sidekick_status,
+  sidekick_health,
+  sidekick_metrics,
+  sidekick_netdiag,
+  checkNetwork,
+  requestInflux,
+  readInfluxResponseText,
+  INFLUX_REQUEST_TIMEOUT_MS,
+  MAX_INFLUX_RESPONSE_BYTES,
+};

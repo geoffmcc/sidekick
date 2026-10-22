@@ -28,6 +28,11 @@ network scope for private URL targets. URL checks do not also send ping or SSH
 probes to the hostname. Host-only diagnostic actions remain separately gated
 by the high-risk `netdiag` permission.
 
+InfluxDB metrics requests reject redirects, abort after 15 seconds, and stream
+responses through a 5 MiB bound (error bodies are limited to 64 KiB). The
+configured Influx URL must still pass the explicit host allowlist, and metrics
+operations retain their action-specific identity and risk checks.
+
 ## MCP authentication
 
 The MCP server requires an API key. Clients can send it as:

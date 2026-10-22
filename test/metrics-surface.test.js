@@ -23,13 +23,17 @@ const csv = {
 
 const originalFetch = global.fetch;
 let fetchCalls = 0;
-global.fetch = async (_url, options) => ({
-  ok: true,
-  text: async () => {
-    fetchCalls++;
-    return options.body.includes('_field') ? csv.fields : csv.measurements;
-  },
-});
+global.fetch = async (_url, options) => {
+  assert.equal(options.redirect, 'error', 'metrics requests must not forward credentials through redirects');
+  assert.ok(options.signal instanceof AbortSignal, 'metrics requests must have a finite deadline');
+  return {
+    ok: true,
+    text: async () => {
+      fetchCalls++;
+      return options.body.includes('_field') ? csv.fields : csv.measurements;
+    },
+  };
+};
 
 const tools = require('../src/tools');
 const rawObservability = require('../src/tools/families/observability');
@@ -49,6 +53,12 @@ console.log('Running Metrics Surface Tests...');
     const fields = await TOOLS.metrics({ action: 'list_fields', measurement: 'tool_calls' });
     assert.deepStrictEqual(JSON.parse(fields.content[0].text), ['duration_ms', 'p95_ms']);
     assert.strictEqual(fetchCalls, 2, 'repeated metadata reads should use the short TTL cache');
+
+    await assert.rejects(
+      rawObservability.readInfluxResponseText(new Response('0123456789'), 5),
+      /response exceeded the configured size limit/,
+    );
+    assert.equal(await rawObservability.readInfluxResponseText(new Response('bounded'), 16), 'bounded');
 
     global.fetch = originalFetch;
     try { require('../src/db').closeDatabase(); } catch {}
