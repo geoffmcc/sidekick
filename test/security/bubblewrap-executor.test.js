@@ -60,6 +60,20 @@ test("bubblewrap starts only after namespace setup and clears inherited environm
   assert.equal(result.stdout, "isolated-command-ok");
 });
 
+test("command resource limits are kernel-enforced and cannot be raised by the sandbox child", { skip: process.platform !== "linux" || !fs.existsSync(executor.DEFAULT_BWRAP) }, async () => {
+  const result = await executor.runBubblewrap({
+    command: '/usr/bin/prlimit --pid $$ --output RESOURCE,SOFT,HARD --noheadings; if /usr/bin/prlimit --nproc=65 --pid $$ >/dev/null 2>&1; then printf "raise-succeeded"; exit 9; else printf "raise-denied"; fi',
+    source: "mcp",
+  });
+  assert.equal(result.exitCode, 0, result.stderr);
+  assert.match(result.stdout, /CPU\s+300\s+300/);
+  assert.match(result.stdout, /NPROC\s+64\s+64/);
+  assert.match(result.stdout, /NOFILE\s+1024\s+1024/);
+  assert.match(result.stdout, /FSIZE\s+268435456\s+268435456/);
+  assert.match(result.stdout, /CORE\s+0\s+0/);
+  assert.match(result.stdout, /raise-denied$/);
+});
+
 test("workspace binding permits scoped writes and hides unrelated host files and network", { skip: process.platform !== "linux" || !fs.existsSync(executor.DEFAULT_BWRAP) }, async () => {
   fixtureRoot = fs.mkdtempSync(path.join("/var/tmp", "sidekick-bwrap-test-"));
   const workspace = path.join(fixtureRoot, "workspace");

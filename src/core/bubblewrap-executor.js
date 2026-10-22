@@ -9,8 +9,15 @@ const pathPolicy = require("../tools/path-policy");
 const DEFAULT_BWRAP = "/usr/bin/bwrap";
 const MAX_COMMAND_LENGTH = 65536;
 const MAX_TMPFS_BYTES = 256 * 1024 * 1024;
+const COMMAND_LIMITS = Object.freeze({
+  cpuSeconds: 300,
+  processes: 64,
+  openFiles: 1024,
+  fileBytes: 256 * 1024 * 1024,
+});
 const SANDBOX_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 const SYSTEM_MOUNTS = ["/usr", "/bin", "/lib", "/lib64", "/sbin"];
+const PRLIMIT = "/usr/bin/prlimit";
 
 function isolationError(message, code = "isolation_unavailable") {
   const error = new Error(message);
@@ -30,7 +37,7 @@ function hasSingleUnprivilegedUidMap() {
 }
 
 function isImmutableRootSystemPath(resolved) {
-  if (resolved !== DEFAULT_BWRAP || !hasSingleUnprivilegedUidMap()) return false;
+  if (![DEFAULT_BWRAP, PRLIMIT].includes(resolved) || !hasSingleUnprivilegedUidMap()) return false;
   let current = resolved;
   while (current !== path.dirname(current)) {
     try {
@@ -67,6 +74,23 @@ function resolveBubblewrap(binaryPath = process.env.SIDEKICK_BWRAP_PATH || DEFAU
   const trustedOwner = stat.uid === 0 || (stat.uid === 65534 && isImmutableRootSystemPath(resolved));
   if (!stat.isFile() || !trustedOwner || (stat.mode & 0o022) !== 0) {
     throw isolationError("The bubblewrap executable must be a root-owned, non-writable regular file; command execution was not started", "isolation_configuration_invalid");
+  }
+  return resolved;
+}
+
+function resolvePrlimit() {
+  let resolved;
+  let stat;
+  try {
+    resolved = fs.realpathSync(PRLIMIT);
+    stat = fs.statSync(resolved);
+    fs.accessSync(resolved, fs.constants.X_OK);
+  } catch {
+    throw isolationError("The required Linux resource-limit utility is unavailable; command execution was not started");
+  }
+  const trustedOwner = stat.uid === 0 || (stat.uid === 65534 && isImmutableRootSystemPath(resolved));
+  if (!stat.isFile() || !trustedOwner || (stat.mode & 0o022) !== 0) {
+    throw isolationError("The Linux resource-limit utility must be a root-owned, non-writable regular file; command execution was not started", "isolation_configuration_invalid");
   }
   return resolved;
 }
@@ -117,6 +141,7 @@ function buildBubblewrapArgs({ command, workspace = null, source = "mcp", binary
     throw isolationError("command must be a non-empty string within the shell command size limit", "command_invalid");
   }
   const executable = resolveBubblewrap(binaryPath);
+  resolvePrlimit();
   const canonicalWorkspace = resolveWorkspace(workspace, source);
   const args = [
     "--unshare-all",
@@ -137,7 +162,15 @@ function buildBubblewrapArgs({ command, workspace = null, source = "mcp", binary
   args.push("--proc", "/proc", "--dev", "/dev", "--size", String(MAX_TMPFS_BYTES), "--tmpfs", "/tmp", "--dir", "/tmp/home");
   if (canonicalWorkspace) args.push("--bind", canonicalWorkspace, "/workspace");
   else args.push("--dir", "/workspace");
-  args.push("--chdir", "/workspace", "--", "/bin/sh", "-c", command);
+  args.push(
+    "--chdir", "/workspace", "--", PRLIMIT,
+    `--cpu=${COMMAND_LIMITS.cpuSeconds}:${COMMAND_LIMITS.cpuSeconds}`,
+    `--nproc=${COMMAND_LIMITS.processes}:${COMMAND_LIMITS.processes}`,
+    `--nofile=${COMMAND_LIMITS.openFiles}:${COMMAND_LIMITS.openFiles}`,
+    `--fsize=${COMMAND_LIMITS.fileBytes}:${COMMAND_LIMITS.fileBytes}`,
+    "--core=0:0",
+    "--", "/bin/sh", "-c", command,
+  );
   return { executable, args, workspace: canonicalWorkspace };
 }
 
@@ -244,7 +277,9 @@ module.exports = Object.freeze({
   DEFAULT_BWRAP,
   MAX_COMMAND_LENGTH,
   MAX_TMPFS_BYTES,
+  COMMAND_LIMITS,
   resolveBubblewrap,
+  resolvePrlimit,
   resolveWorkspace,
   buildBubblewrapArgs,
   runBubblewrap,
