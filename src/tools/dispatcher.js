@@ -143,6 +143,8 @@ function requiredToolPermission(descriptor, args = {}) {
     const readActions = new Set(["list", "get", "telemetry", "stats", "list_tokens"]);
     return readActions.has(args.action) ? "compute.nodes.read" : "compute.nodes.manage";
   }
+  if (descriptor.name === "memory" && ["confirm", "correct"].includes(args.action)) return "tools.execute_critical";
+  if (descriptor.name === "memory_manage" && args.action === "confirm") return "tools.execute_critical";
   if (descriptor.name === "webhook") {
     return args.action === "clear" ? "webhooks.manage" : "webhooks.read";
   }

@@ -5,8 +5,9 @@ const dbStore = require("../../db");
 const { loadContext, findContextItemById, updateLegacyContextItem } = require("./context");
 const { scopedProject, assertInScope } = require("./memory-scope");
 const { requireCanonicalInvocation } = require("../read-authorization");
+const toolContext = require("../context");
 
-async function manageMemory({ action, id, confirmed_by, days, reason, limit, project }) {
+async function manageMemory({ action, id, days, reason, limit, project }) {
   let effectiveProject;
   const readActions = new Set(["list_by_state", "pending_confirmations"]);
   try { effectiveProject = scopedProject(project, readActions.has(action) ? "read" : "write"); } catch (error) { return { content: [{ type: "text", text: error.message }], isError: true }; }
@@ -28,7 +29,9 @@ async function manageMemory({ action, id, confirmed_by, days, reason, limit, pro
     if (!id) return { content: [{ type: "text", text: "id required" }], isError: true };
     const legacy = findContextItemById(loadContext(), id, "all");
     if (legacy) return { content: [{ type: "text", text: `Unsupported memory id for confirm: ${id} is a legacy context ${legacy.type}. Use delete, disable, expire, or restore for legacy context entries.` }], isError: true };
-    const success = dbStore.confirmMemory(id, confirmed_by || "user");
+    const confirmedBy = toolContext.getExecutionContext().authIdentity?.principal_id;
+    if (!confirmedBy) return { content: [{ type: "text", text: "authenticated principal required to confirm memory" }], isError: true };
+    const success = dbStore.confirmMemory(id, confirmedBy);
     return { content: [{ type: "text", text: success ? `Memory ${id} confirmed` : `Memory not found: ${id}` }], isError: !success };
   }
 
@@ -88,13 +91,12 @@ const descriptors = Object.freeze([Object.freeze({
   schema: z.object({
     action: z.enum(["confirm", "set_requires_confirmation", "delete", "disable", "expire", "restore", "set_auto_expire", "list_by_state", "pending_confirmations", "process_auto_expirations"]).describe("Action to perform"),
     id: z.string().optional().describe("Memory ID (or state name for list_by_state)"),
-    confirmed_by: z.string().optional().describe("Who confirmed (for confirm action - default 'user')"),
     days: z.number().optional().describe("Days until expiration (for set_auto_expire)"),
     reason: z.string().optional().describe("Reason for delete/expire"),
     limit: z.number().optional().describe("Limit for list operations (default 50)"),
     project: z.string().optional().describe("Filter by project for list operations"),
   }),
-  args: { action: "string (confirm|set_requires_confirmation|delete|disable|expire|restore|set_auto_expire|list_by_state|pending_confirmations|process_auto_expirations)", id: "string (memory/context ID, or state name for list_by_state)", confirmed_by: "string (optional, who confirmed - default 'user')", days: "number (for set_auto_expire)", reason: "string (optional, reason for delete/disable/expire)", limit: "number (optional, for list operations - default 50)", project: "string (optional, filter by project for list operations)" },
+  args: { action: "string (confirm|set_requires_confirmation|delete|disable|expire|restore|set_auto_expire|list_by_state|pending_confirmations|process_auto_expirations)", id: "string (memory/context ID, or state name for list_by_state)", days: "number (for set_auto_expire)", reason: "string (optional, reason for delete/disable/expire)", limit: "number (optional, for list operations - default 50)", project: "string (optional, filter by project for list operations)" },
   risk: "medium",
   category: "Context & Learning",
   source: "builtin",
