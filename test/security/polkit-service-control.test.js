@@ -65,6 +65,7 @@ test("application allowlist exactly matches the Polkit unit allowlist", () => {
 test("bootstrap installs polkit and the rule without putting unit control in sudoers", () => {
   const bootstrap = fs.readFileSync(path.join(root, "scripts/bootstrap.sh"), "utf8");
   const setupTools = fs.readFileSync(path.join(root, "scripts/setup-tools.sh"), "utf8");
+  const existingHostInstaller = fs.readFileSync(path.join(root, "scripts/install-polkit-policy.sh"), "utf8");
   const sudoers = fs.readFileSync(path.join(root, "systemd/sidekick-sudoers"), "utf8");
   const installer = fs.readFileSync(path.join(root, "scripts/lib/polkit.sh"), "utf8");
 
@@ -72,6 +73,10 @@ test("bootstrap installs polkit and the rule without putting unit control in sud
     assert.match(script, /apt-get install[^\n]*polkitd/);
     assert.match(script, /install_sidekick_polkit_rule "\$USERNAME" "\$SCRIPT_DIR"/);
   }
+  assert.match(existingHostInstaller, /EUID/);
+  assert.match(existingHostInstaller, /apt-get install -y polkitd/);
+  assert.match(existingHostInstaller, /install_sidekick_polkit_rule "\$USERNAME" "\$SCRIPT_DIR"/);
+  assert.match(existingHostInstaller, /running systemd host is required/);
   assert.match(installer, /mktemp/);
   assert.match(installer, /chown root:root/);
   assert.doesNotMatch(sudoers, /systemctl\s+(?:start|stop|restart|reload|status)\s/);
