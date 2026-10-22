@@ -27,6 +27,42 @@ let inferenceService = null;
 try { inferenceService = require("../../compute/inference-service"); } catch {}
 
 const OPENVINO_EMBEDDING_MODEL = "qwen3-embedding-0.6b-int8";
+const MAX_OLLAMA_RESPONSE_BYTES = 8 * 1024 * 1024;
+const MAX_OLLAMA_ERROR_BYTES = 16 * 1024;
+
+async function readOllamaResponseText(response, maxBytes = MAX_OLLAMA_RESPONSE_BYTES, { truncate = false } = {}) {
+  const reader = response.body?.getReader?.();
+  if (!reader) throw new Error("Ollama response stream is unavailable");
+  const chunks = [];
+  let bytes = 0;
+  let wasTruncated = false;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const chunk = Buffer.from(value);
+    const remaining = maxBytes - bytes;
+    if (chunk.length > remaining) {
+      if (!truncate) {
+        await reader.cancel().catch(() => {});
+        throw new Error(`Ollama response exceeded ${maxBytes} bytes`);
+      }
+      if (remaining > 0) chunks.push(chunk.subarray(0, remaining));
+      bytes = maxBytes;
+      wasTruncated = true;
+      await reader.cancel().catch(() => {});
+      break;
+    }
+    chunks.push(chunk);
+    bytes += chunk.length;
+  }
+  return { text: Buffer.concat(chunks, bytes).toString("utf8"), truncated: wasTruncated };
+}
+
+async function readOllamaResponseJson(response) {
+  const { text } = await readOllamaResponseText(response);
+  try { return JSON.parse(text); }
+  catch { throw new Error("Ollama returned invalid JSON"); }
+}
 
 async function runOpenVinoEmbeddingJob({ text, model, device, context }) {
   compute.initialize();
@@ -105,9 +141,10 @@ async function sidekick_ollama({ action, model }) {
     if (action === "list") {
       const response = await fetch(`${ollamaUrl}/api/tags`);
       if (!response.ok) {
+        await readOllamaResponseText(response, MAX_OLLAMA_ERROR_BYTES, { truncate: true });
         return { content: [{ type: "text", text: `Error: Failed to list models (${response.status})` }], isError: true };
       }
-      const data = await response.json();
+      const data = await readOllamaResponseJson(response);
       const models = (data.models || []).map(m => ({
         name: m.name,
         size: m.size,
@@ -120,9 +157,10 @@ async function sidekick_ollama({ action, model }) {
     if (action === "ps") {
       const response = await fetch(`${ollamaUrl}/api/ps`);
       if (!response.ok) {
+        await readOllamaResponseText(response, MAX_OLLAMA_ERROR_BYTES, { truncate: true });
         return { content: [{ type: "text", text: `Error: Failed to list running models (${response.status})` }], isError: true };
       }
-      const data = await response.json();
+      const data = await readOllamaResponseJson(response);
       const models = (data.models || []).map(m => ({
         name: m.name,
         size: m.size,
@@ -142,9 +180,11 @@ async function sidekick_ollama({ action, model }) {
         body: JSON.stringify({ name: model, stream: false }),
       });
       if (!response.ok) {
-        const errText = await response.text();
+        const errorBody = await readOllamaResponseText(response, MAX_OLLAMA_ERROR_BYTES, { truncate: true });
+        const errText = errorBody.text + (errorBody.truncated ? " [truncated]" : "");
         return { content: [{ type: "text", text: `Error: Failed to pull model (${response.status}): ${errText}` }], isError: true };
       }
+      await readOllamaResponseJson(response);
       return { content: [{ type: "text", text: `Successfully pulled model: ${model}` }] };
     }
 
@@ -158,9 +198,10 @@ async function sidekick_ollama({ action, model }) {
         body: JSON.stringify({ name: model }),
       });
       if (!response.ok) {
+        await readOllamaResponseText(response, MAX_OLLAMA_ERROR_BYTES, { truncate: true });
         return { content: [{ type: "text", text: `Error: Failed to show model (${response.status})` }], isError: true };
       }
-      const data = await response.json();
+      const data = await readOllamaResponseJson(response);
       return { content: [{ type: "text", text: JSON.stringify({
         name: data.details?.family,
         parameter_size: data.details?.parameter_size,
@@ -303,4 +344,4 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_llm, runLlm, sidekick_embed, sidekick_ollama };
+module.exports = { descriptors, sidekick_llm, runLlm, sidekick_embed, sidekick_ollama, readOllamaResponseText, readOllamaResponseJson, MAX_OLLAMA_RESPONSE_BYTES, MAX_OLLAMA_ERROR_BYTES };
