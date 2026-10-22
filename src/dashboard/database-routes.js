@@ -53,10 +53,13 @@ function registerDatabaseRoutes({ app, dbStore, dataDir, path, fs, callDashboard
       const backupPath = path.join(backupDir, `sidekick-${new Date().toISOString().replace(/[:.]/g, "-")}.db`);
       // Persist an actor-attributed record before exporting the database. If
       // audit storage is unavailable, do not create a sensitive backup.
-      auditLog(req, "db.backup.requested", { path: backupPath });
+      try { auditLog(req, "db.backup.requested", { path: backupPath }); }
+      catch (error) { return errorResponse(req, res, error, { status: 503, code: "audit_unavailable", component: "database" }); }
       await dbStore.getDb().backup(backupPath);
-      auditLog(req, "db.backup.completed", { path: backupPath });
-      res.json({ ok: true, path: backupPath });
+      let auditStatus = "complete";
+      try { auditLog(req, "db.backup.completed", { path: backupPath }); }
+      catch { auditStatus = "degraded"; }
+      res.json({ ok: true, path: backupPath, audit_status: auditStatus });
     } catch (error) { return errorResponse(req, res, error, { status: 500, code: "service_unavailable", component: "database" }); }
   });
 

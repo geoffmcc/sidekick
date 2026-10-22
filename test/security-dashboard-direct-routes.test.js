@@ -842,11 +842,12 @@ test("database backup requires an attributable audit record before export", asyn
     dataDir: "C:/sidekick-test-data", path: require("node:path"), fs: { mkdirSync() {} },
     callDashboardTool: async () => ({}), dashboardExecutionMetadata: () => ({}), authenticatedUser: () => "backup-actor",
     requireDashboardTool: () => true, auditLog,
-    errorResponse: (_req, res, error, options) => res.status(options.status).json({ error: error?.message || "audit failed" }),
+    errorResponse: (_req, res, error, options) => res.status(options.status).json({ error: error?.message || "audit failed", code: options.code }),
   });
   register((req, action) => { events.push(action); if (action === "db.backup.requested") throw new Error("audit unavailable"); });
   await handlers.get("/api/db/backup")(request, response);
-  assert.equal(response.statusCode, 500);
+  assert.equal(response.statusCode, 503);
+  assert.equal(response.body.code, "audit_unavailable");
   assert.equal(backups, 0, "backup must not be exported when the request audit cannot be stored");
 
   events.length = 0;
@@ -856,4 +857,13 @@ test("database backup requires an attributable audit record before export", asyn
   assert.equal(response.statusCode, 200);
   assert.deepEqual(events, ["db.backup.requested", "backup", "db.backup.completed"]);
   assert.equal(backups, 1);
+
+  events.length = 0;
+  response.statusCode = 200;
+  register((req, action) => { events.push(action); if (action === "db.backup.completed") throw new Error("completion audit unavailable"); });
+  await handlers.get("/api/db/backup")(request, response);
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.body.audit_status, "degraded");
+  assert.deepEqual(events, ["db.backup.requested", "backup", "db.backup.completed"]);
+  assert.equal(backups, 2);
 });
