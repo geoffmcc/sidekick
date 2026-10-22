@@ -102,47 +102,73 @@ function getDeniedRoots(source) {
   ];
 }
 
-function resolveWorkspace(workspace, source = "mcp") {
+function openAuthorizedWorkspace(workspace, source = "mcp") {
   if (workspace === undefined || workspace === null || workspace === "") return null;
   if (typeof workspace !== "string" || !path.isAbsolute(workspace)) {
     throw isolationError("workspace_path must be an absolute path", "workspace_invalid");
   }
 
-  const decision = pathPolicy.getPathPolicyDecision(workspace, "execute", source);
-  if (!decision.allowed) {
-    throw isolationError(`Workspace is not authorized for shell execution: ${decision.reason}`, "workspace_denied");
-  }
-
-  let canonical;
-  let stat;
+  let fd;
   try {
-    canonical = fs.realpathSync(workspace);
-    stat = fs.statSync(canonical);
-  } catch {
-    throw isolationError("workspace_path must name an existing directory", "workspace_invalid");
-  }
-  if (!stat.isDirectory()) throw isolationError("workspace_path must name an existing directory", "workspace_invalid");
+    const directoryFlags = fs.constants.O_RDONLY | fs.constants.O_DIRECTORY;
+    fd = fs.openSync(workspace, directoryFlags);
+    const stat = fs.fstatSync(fd);
+    if (!stat.isDirectory()) throw new Error("workspace is not a directory");
 
-  // A bind of a directory exposes all descendants, so refuse rather than
-  // accidentally bypassing a narrower operator deny root inside it.
-  for (const deniedRoot of getDeniedRoots(source)) {
-    if (
-      pathPolicy.pathMatchesPolicyEntry(canonical, deniedRoot) ||
-      pathPolicy.pathMatchesPolicyEntry(deniedRoot, canonical)
-    ) {
-      throw isolationError("workspace_path overlaps a denied filesystem root", "workspace_denied");
+    // Resolve and authorize the object held by the descriptor, not the caller's
+    // path. Bubblewrap receives this same open descriptor below, so replacing
+    // a path component after authorization cannot redirect the mount.
+    const canonical = fs.realpathSync(`/proc/self/fd/${fd}`);
+    const decision = pathPolicy.getPathPolicyDecision(canonical, "execute", source);
+    if (!decision.allowed) {
+      throw isolationError(`Workspace is not authorized for shell execution: ${decision.reason}`, "workspace_denied");
     }
+
+    // A bind of a directory exposes all descendants, so refuse rather than
+    // accidentally bypassing a narrower operator deny root inside it.
+    for (const deniedRoot of getDeniedRoots(source)) {
+      if (
+        pathPolicy.pathMatchesPolicyEntry(canonical, deniedRoot) ||
+        pathPolicy.pathMatchesPolicyEntry(deniedRoot, canonical)
+      ) {
+        throw isolationError("workspace_path overlaps a denied filesystem root", "workspace_denied");
+      }
+    }
+    return { path: canonical, fd };
+  } catch (error) {
+    if (Number.isInteger(fd)) {
+      try { fs.closeSync(fd); } catch {}
+    }
+    if (error && ["workspace_denied", "workspace_invalid"].includes(error.code)) throw error;
+    throw isolationError("workspace_path must name an existing authorized directory", "workspace_invalid");
   }
-  return canonical;
 }
 
-function buildBubblewrapArgs({ command, workspace = null, source = "mcp", binaryPath = DEFAULT_BWRAP } = {}) {
+function resolveWorkspace(workspace, source = "mcp") {
+  const binding = openAuthorizedWorkspace(workspace, source);
+  if (!binding) return null;
+  try { return binding.path; }
+  finally { fs.closeSync(binding.fd); }
+}
+
+function validateCommand(command) {
   if (typeof command !== "string" || command.length === 0 || command.length > MAX_COMMAND_LENGTH) {
     throw isolationError("command must be a non-empty string within the shell command size limit", "command_invalid");
   }
+}
+
+function buildBubblewrapArgs({ command, workspace = null, workspaceFd = null, source = "mcp", binaryPath = DEFAULT_BWRAP } = {}) {
+  validateCommand(command);
   const executable = resolveBubblewrap(binaryPath);
   resolvePrlimit();
   const canonicalWorkspace = resolveWorkspace(workspace, source);
+  if (canonicalWorkspace && workspaceFd !== 4) {
+    throw isolationError("An authorized open workspace descriptor is required; command execution was not started", "workspace_invalid");
+  }
+  return composeBubblewrapArgs({ command, canonicalWorkspace, workspaceFd, executable });
+}
+
+function composeBubblewrapArgs({ command, canonicalWorkspace, workspaceFd, executable }) {
   const args = [
     "--unshare-all",
     "--die-with-parent",
@@ -160,7 +186,7 @@ function buildBubblewrapArgs({ command, workspace = null, source = "mcp", binary
     if (fs.existsSync(mount)) args.push("--ro-bind", mount, mount);
   }
   args.push("--proc", "/proc", "--dev", "/dev", "--size", String(MAX_TMPFS_BYTES), "--tmpfs", "/tmp", "--dir", "/tmp/home");
-  if (canonicalWorkspace) args.push("--bind", canonicalWorkspace, "/workspace");
+  if (canonicalWorkspace) args.push("--bind-fd", String(workspaceFd), "/workspace");
   else args.push("--dir", "/workspace");
   args.push(
     "--chdir", "/workspace", "--", PRLIMIT,
@@ -175,21 +201,40 @@ function buildBubblewrapArgs({ command, workspace = null, source = "mcp", binary
 }
 
 async function runBubblewrap({ command, workspace = null, source = "mcp", timeoutMs, signal, maxBuffer = 10 * 1024 * 1024 } = {}) {
-  const invocation = buildBubblewrapArgs({ command, workspace, source });
+  validateCommand(command);
+  const executable = resolveBubblewrap();
+  resolvePrlimit();
+  const workspaceBinding = openAuthorizedWorkspace(workspace, source);
+  let invocation;
+  try {
+    invocation = composeBubblewrapArgs({
+      command,
+      canonicalWorkspace: workspaceBinding?.path || null,
+      workspaceFd: workspaceBinding ? 4 : null,
+      executable,
+    });
+  } catch (error) {
+    if (workspaceBinding) fs.closeSync(workspaceBinding.fd);
+    throw error;
+  }
   const timeout = Number(timeoutMs) > 0 ? Math.min(Number(timeoutMs), 3600000) : 60000;
   const env = { PATH: "/usr/sbin:/usr/bin:/sbin:/bin" };
   return new Promise((resolve, reject) => {
     let child;
     try {
+      const stdio = ["ignore", "pipe", "pipe", "pipe"];
+      if (workspaceBinding) stdio.push(workspaceBinding.fd);
       child = spawn(invocation.executable, invocation.args, {
         env,
-        stdio: ["ignore", "pipe", "pipe", "pipe"],
+        stdio,
         windowsHide: true,
       });
     } catch {
+      if (workspaceBinding) fs.closeSync(workspaceBinding.fd);
       reject(isolationError("The required bubblewrap executable could not be started; command execution was not started"));
       return;
     }
+    if (workspaceBinding) fs.closeSync(workspaceBinding.fd);
 
     let stdout = "";
     let stderr = "";

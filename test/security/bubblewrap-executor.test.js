@@ -84,6 +84,10 @@ test("workspace binding permits scoped writes and hides unrelated host files and
   process.env.SIDEKICK_ALLOWED_PATHS = workspace;
   process.env.SIDEKICK_DENIED_PATHS = outside;
 
+  const args = executor.buildBubblewrapArgs({ command: "true", workspace, workspaceFd: 4, source: "mcp" });
+  assert.ok(args.args.includes("--bind-fd"), "workspace must be bound from the authorized open descriptor");
+  assert.ok(!args.args.includes(workspace), "sandbox arguments must not reopen the authorized workspace by path");
+
   const command = `grep -qx authorized-workspace input.txt && printf workspace-write > output.txt && test ! -e ${shellQuote(outside)}`;
   const result = await executor.runBubblewrap({ command, workspace, source: "mcp" });
   assert.equal(result.exitCode, 0, result.stderr);
