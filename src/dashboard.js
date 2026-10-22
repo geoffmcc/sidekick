@@ -53,6 +53,7 @@ const { registerStatsToolsRoutes } = require("./dashboard/stats-tools-routes");
 const { registerSummaryRoute } = require("./dashboard/summary-route");
 const { registerResearchSourceRoutes } = require("./dashboard/research-source-routes");
 const { registerNetworkScopeRoutes } = require("./dashboard/network-scope-routes");
+const { registerClearRoutes } = require("./dashboard/clear-routes");
 const { registerDatabaseRoutes } = require("./dashboard/database-routes");
 const { dashboardActor, createDashboardAuditEntry } = require("./dashboard/audit-identity");
 const { registerAgentProxyRoutes } = require("./dashboard/agent-proxy-routes");
@@ -1701,17 +1702,6 @@ function clearConversationFiles() {
   return removed;
 }
 
-function respondToClear(req, res, auditEvent, run) {
-  try {
-    const detail = run() || {};
-    auditLog(req, auditEvent, detail);
-    res.json({ ok: true, ...detail });
-  } catch (error) {
-    auditLog(req, auditEvent + ".failed", { error: "dashboard_action_failed" });
-    return dashboardErrors.respond(req, res, error, { status: 500, code: "service_unavailable", component: auditEvent });
-  }
-}
-
 function requireDashboardAdministrator(req, res) {
   if (typeof requireIdentityAdministrator !== "function") {
     res.status(503).json({ ok: false, error: "authorization service unavailable", code: "authorization_unavailable" });
@@ -1720,23 +1710,7 @@ function requireDashboardAdministrator(req, res) {
   return requireIdentityAdministrator(req, res);
 }
 
-app.delete("/api/logs", (req, res) =>
-  requireDashboardAdministrator(req, res) && respondToClear(req, res, "logs.clear", () => { dbStore.clearToolLogs(); return {}; }));
-
-app.delete("/api/kv", (req, res) =>
-  requireDashboardAdministrator(req, res) && respondToClear(req, res, "kv.clear", () => { dbStore.clearKV(); return {}; }));
-
-app.delete("/api/conversations", (req, res) =>
-  requireDashboardAdministrator(req, res) && respondToClear(req, res, "conversations.clear", () => ({ removed: clearConversationFiles() })));
-
-app.delete("/api/data", (req, res) =>
-  requireDashboardAdministrator(req, res) && respondToClear(req, res, "data.clear", () => {
-    // Ordered so a failure reports which stage stopped the wipe rather than
-    // claiming the whole clear succeeded.
-    dbStore.clearToolLogs();
-    dbStore.clearKV();
-    return { removed: clearConversationFiles() };
-  }));
+registerClearRoutes({ app, dbStore, clearConversationFiles, requireDashboardAdministrator, auditLog, errorResponse: dashboardErrors.respond });
 
 // Error logging endpoint (for frontend errors). Fire-and-forget by design:
 // 204 says "received, no body" without asserting the write succeeded — the
