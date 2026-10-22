@@ -95,9 +95,11 @@ available under the configured source policy. Direct API routes must enforce
 their own permission checks and are audited separately.
 
 For integrations that need a durable machine identity, the first-run Dashboard
-opens Identity after Owner setup and offers an optional **Connect an MCP
-client** flow. An authenticated Dashboard Owner can also provision one with
-`POST /api/auth/service-credentials`.
+opens Identity after Owner setup and offers **Connect an MCP client**. The flow
+creates a separate named service identity for each agent and lets the Owner
+choose standard tool execution, pack management, high-risk tools, and
+critical-risk tools independently. An authenticated Dashboard Owner can also
+provision one with `POST /api/auth/service-credentials`.
 Supply a display name plus explicit `permissions` and `scopes`; scopes must be
 a subset of the grants, and the initiating identity must currently hold every
 requested permission. The endpoint creates the service principal, records its
@@ -105,8 +107,13 @@ per-principal grants, and issues its credential atomically. Omit
 `expires_at` for a non-expiring credential; it remains revocable, and disabling
 the principal invalidates its credentials. The raw token is returned once, so
 the client must store it in its protected credential settings and never in
-chat, logs, ordinary configuration, or memory. For example, a pack-management
-connection should receive only `packs.read` and `packs.manage`.
+chat, logs, ordinary configuration, or memory. Dashboard-created credentials
+expire after 90 days by default; the Owner can select a shorter or longer
+lifetime, or explicitly choose no expiration. For example, a pack-management
+connection should receive only `packs.read` and `packs.manage`. A client that
+also needs to use ordinary low/medium-risk tools requires `tools.execute`; a
+pack-management-only credential does not authorize those calls. High- and
+critical-risk tools require their own explicit scopes.
 
 The local CLI's MCP stdio transport uses the file-backed `sidekick_mcp_credential`
 (`SIDEKICK_MCP_CREDENTIAL_FILE` may point to a protected file). It authenticates

@@ -681,12 +681,15 @@ async function loadIdentityAdmin() {
 
 function showMcpServiceCredentialToken(result) {
   const status = $('mcpServiceSetupStatus');
-  const details = $('mcpServiceSetupDetails');
-  if (!status || !details) return;
+  const output = $('mcpServiceCredentialResult');
+  if (!status || !output) return;
   status.textContent = 'Credential created';
   status.className = 'metrics-status-pill ok';
-  details.innerHTML = '<div class="service-credential-warning">Copy this token now. Sidekick will not show it again. Store it in your MCP client’s protected credential settings.</div>' +
-    '<div class="sub">Identity: ' + esc(result.principal.display_name) + ' · Permissions: packs.read, packs.manage · No expiry</div>' +
+  const scopes = (result.credential?.scopes || []).join(', ');
+  const expiresAt = result.credential?.expires_at ? 'Expires ' + esc(new Date(result.credential.expires_at).toLocaleDateString()) : 'No expiration';
+  output.innerHTML = '<div class="service-credential-warning">Copy this token now. Sidekick will not show it again. Store it in the client’s protected credential settings.</div>' +
+    '<div class="sub">For HTTP MCP clients, use the Sidekick MCP URL and send this credential as an Authorization: Bearer token.</div>' +
+    '<div class="sub">Identity: ' + esc(result.principal.display_name) + ' · Permissions: ' + esc(scopes) + ' · ' + expiresAt + '</div>' +
     '<pre class="service-credential-token" id="mcpServiceCredentialToken"></pre>' +
     '<button class="btn btn-sm btn-outline" type="button" data-dashboard-action="copy-element" data-id="mcpServiceCredentialToken">Copy token</button>';
   $('mcpServiceCredentialToken').textContent = result.token;
@@ -712,36 +715,26 @@ async function loadMcpServiceCredentialSetup() {
         : (data.error || 'Unable to inspect MCP service access.');
       return;
     }
-    const principals = data.service_principals || [];
-    const packPermissions = ['packs.read', 'packs.manage'];
-    const principal = principals.find(item => item.enabled && item.permissions.length === packPermissions.length && packPermissions.every(permission => item.permissions.includes(permission))) ||
-      principals.find(item => item.enabled) || null;
-    if (!principal) {
-      status.textContent = 'Not set up';
-      details.innerHTML = '<div class="sub">Create a dedicated identity limited to viewing and managing Capability Packs. This is optional and can be done later from Identity.</div>' +
-        '<button class="btn btn-sm" type="button" data-dashboard-action="identity" data-handler="createMcpServiceCredential">Set up MCP access</button>';
-      return;
+    const clientForm = document.querySelector('.mcp-client-form');
+    if (clientForm) clientForm.hidden = false;
+    const principals = (data.service_principals || []).filter(item => item.enabled);
+    const clientsWithCredentials = principals.filter(principal => (principal.credentials || []).some(credential =>
+      !credential.revoked_at && (!credential.expires_at || Date.parse(credential.expires_at) > Date.now())));
+    status.textContent = clientsWithCredentials.length
+      ? `${clientsWithCredentials.length} client${clientsWithCredentials.length === 1 ? '' : 's'} ready`
+      : principals.length ? 'Credential needed' : 'No clients configured';
+    if (principals.length) {
+      details.innerHTML = '<div class="sub">Each agent has its own permissions and can be revoked independently. Create one credential per client.</div>' +
+        '<ul class="mcp-client-list">' + principals.map(principal => {
+          const active = (principal.credentials || []).find(credential => !credential.revoked_at && (!credential.expires_at || Date.parse(credential.expires_at) > Date.now()));
+          return '<li><strong>' + esc(principal.display_name) + '</strong><span>' + esc(principal.permissions.join(', ')) + '</span>' +
+            (active ? '<span>' + (active.expires_at ? 'Expires ' + esc(new Date(active.expires_at).toLocaleDateString()) : 'No expiration') + '</span>' +
+              '<button class="btn btn-sm btn-outline" type="button" data-dashboard-action="identity" data-handler="rotateMcpServiceCredential" data-id="' + attr(active.credential_id) + '">Rotate credential</button>' : '<span>No active credential</span>') +
+            '</li>';
+        }).join('') + '</ul>';
+    } else {
+      details.innerHTML = '<div class="sub">Choose the permissions this agent needs. You can create a separate identity for every agent.</div>';
     }
-    const isNarrowPackIdentity = packPermissions.every(permission => principal.permissions.includes(permission)) &&
-      principal.permissions.length === packPermissions.length;
-    if (!isNarrowPackIdentity) {
-      status.textContent = 'Restricted setup recommended';
-      details.innerHTML = '<div class="sub">An existing service identity has broader permissions. Create a separate identity limited to Capability Packs.</div>' +
-        '<button class="btn btn-sm" type="button" data-dashboard-action="identity" data-handler="createMcpServiceCredential">Create restricted MCP access</button>';
-      return;
-    }
-    const credential = (principal.credentials || []).find(item => !item.revoked_at && (!item.expires_at || Date.parse(item.expires_at) > Date.now()));
-    if (!credential) {
-      status.textContent = 'Credential needed';
-      details.innerHTML = '<div class="sub">The dedicated service identity exists, but it has no active credential.</div>' +
-        '<button class="btn btn-sm" type="button" data-dashboard-action="identity" data-handler="createMcpServiceCredential" data-id="' + attr(principal.principal_id) + '">Create credential</button>';
-      return;
-    }
-    status.textContent = 'Configured';
-    status.className = 'metrics-status-pill ok';
-    details.innerHTML = '<div class="sub">' + esc(principal.display_name) + ' · ' + esc(principal.principal_id) + '</div>' +
-      '<div class="sub">Permissions: ' + esc((credential.scopes || []).join(', ')) + ' · ' + (credential.expires_at ? 'Expires ' + esc(credential.expires_at) : 'No expiry') + '</div>' +
-      '<button class="btn btn-sm btn-outline" type="button" data-dashboard-action="identity" data-handler="rotateMcpServiceCredential" data-id="' + attr(credential.credential_id) + '">Replace credential</button>';
   } catch (error) {
     status.textContent = 'Setup unavailable';
     details.textContent = dashboardSafeErrorMessage(error);
@@ -750,12 +743,24 @@ async function loadMcpServiceCredentialSetup() {
 
 async function createMcpServiceCredential(principalId) {
   const details = $('mcpServiceSetupDetails');
+  const name = String($('mcpClientName')?.value || '').trim();
+  const permissions = [];
+  if ($('mcpGrantTools')?.checked) permissions.push('tools.execute');
+  if ($('mcpGrantPacks')?.checked) permissions.push('packs.read', 'packs.manage');
+  if ($('mcpGrantHigh')?.checked) permissions.push('tools.execute_high');
+  if ($('mcpGrantCritical')?.checked) permissions.push('tools.execute_critical');
+  if (!name || permissions.length === 0) {
+    identityError(!name ? 'Enter a name for this client.' : 'Select at least one permission.');
+    return;
+  }
   const body = {
-    display_name: 'Sidekick MCP pack manager',
-    credential_name: 'MCP pack management',
-    permissions: ['packs.read', 'packs.manage'],
-    scopes: ['packs.read', 'packs.manage'],
+    display_name: name,
+    credential_name: name,
+    permissions,
+    scopes: permissions,
   };
+  const lifetimeDays = Number($('mcpClientExpiry')?.value ?? 90);
+  if (lifetimeDays > 0) body.expires_at = new Date(Date.now() + lifetimeDays * 24 * 60 * 60 * 1000).toISOString();
   if (principalId) body.principal_id = principalId;
   try {
     const response = await authFetch('/api/auth/service-credentials', {

@@ -742,14 +742,25 @@
     <div class="service-credential-heading">
       <div>
         <div class="section-title" id="mcpServiceSetupTitle">Connect an MCP client</div>
-        <p class="page-note">Create a dedicated service identity for this connection. It will be limited to viewing and managing Capability Packs.</p>
+        <p class="page-note">Create a separate service identity for any agent that supports MCP. Choose what it may do; each connection can be revoked independently.</p>
       </div>
       <span class="metrics-status-pill" id="mcpServiceSetupStatus">Checking setup…</span>
     </div>
-    <div id="mcpServiceSetupDetails" class="service-credential-details">
-      <div class="sub">This is optional. You can set it up now or return to this page later.</div>
-      <button class="btn btn-sm" type="button" data-dashboard-action="identity" data-handler="createMcpServiceCredential">Set up MCP access</button>
+    <div id="mcpServiceSetupDetails" class="service-credential-details"></div>
+    <div class="mcp-client-form" hidden>
+      <label>Client name<input id="mcpClientName" type="text" maxlength="120" placeholder="e.g. Home assistant" value="My MCP agent"></label>
+      <label>Credential lifetime<select id="mcpClientExpiry"><option value="30">30 days</option><option value="90" selected>90 days</option><option value="365">1 year</option><option value="0">No expiration</option></select></label>
+      <fieldset>
+        <legend>Allow this client to</legend>
+        <label><input id="mcpGrantTools" type="checkbox" checked> Use standard tools (low and medium risk)</label>
+        <label><input id="mcpGrantPacks" type="checkbox"> View and manage Capability Packs</label>
+        <label><input id="mcpGrantHigh" type="checkbox"> Use high-risk tools</label>
+        <label><input id="mcpGrantCritical" type="checkbox"> Request critical-risk tools</label>
+      </fieldset>
+      <div class="sub">Critical actions still follow Sidekick policy and approval checks. Only grant permissions this agent needs.</div>
+      <button class="btn btn-sm" type="button" data-dashboard-action="identity" data-handler="createMcpServiceCredential">Create client credential</button>
     </div>
+    <div id="mcpServiceCredentialResult" class="service-credential-details" aria-live="polite"></div>
   </section>
   <div class="card form-card">
     <div class="section-title">Create human account</div>

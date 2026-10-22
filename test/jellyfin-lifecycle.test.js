@@ -14,6 +14,8 @@ require("../src/db").runPendingMigrations();
 const bundled = require("../src/packs/bundled"),
   lifecycle = require("../src/packs/lifecycle"),
   repository = require("../src/packs/repository");
+const moduleRepository = require("../src/modules/repository");
+const moduleLoader = require("../src/modules/loader");
 test("Jellyfin pack lifecycle", async (t) => {
   t.after(() => {
     require("../src/db").closeDatabase();
@@ -40,5 +42,26 @@ test("Jellyfin pack lifecycle", async (t) => {
     lifecycle.disable("jellyfin");
     lifecycle.uninstall("jellyfin");
     assert.strictEqual(repository.getPack("jellyfin"), null);
+  });
+  await t.test("startup repair refreshes legacy module provenance from an exact bundled digest", () => {
+    bundled.installBundledPack("jellyfin", { config: { profiles: {} }, enable: true });
+    require("../src/db").getDb().prepare("UPDATE platform_modules SET provenance_json = '{}' WHERE name = ?").run("jellyfin-tools");
+    const result = bundled.reconcileBundledPackModules();
+    assert.deepStrictEqual(result.repaired, [{ name: "jellyfin", modules: ["jellyfin-tools"] }]);
+    assert.deepStrictEqual(result.failed, []);
+    assert.strictEqual(moduleRepository.getModule("jellyfin-tools").provenance.pack_provenance, "first_party");
+    assert.strictEqual(repository.getPack("jellyfin").state, "enabled");
+    assert.strictEqual(moduleLoader.isModuleActive("jellyfin-tools"), true);
+    assert.deepStrictEqual(bundled.reconcileBundledPackModules().repaired, [], "repair is idempotent");
+    lifecycle.uninstall("jellyfin");
+  });
+  await t.test("startup repair does not promote a third-party pack based on its name", () => {
+    const candidate = bundled.getBundledPack("jellyfin");
+    lifecycle.install(candidate.path, { provenance: "third_party", source: { kind: "bundled" }, config: { profiles: {} } });
+    const result = bundled.reconcileBundledPackModules();
+    assert.ok(result.skipped.some(item => item.name === "jellyfin" && item.reason === "pack_not_attested_first_party"));
+    assert.strictEqual(repository.getPack("jellyfin").provenance, "third_party");
+    assert.strictEqual(moduleLoader.isModuleActive("jellyfin-tools"), false);
+    lifecycle.uninstall("jellyfin");
   });
 });

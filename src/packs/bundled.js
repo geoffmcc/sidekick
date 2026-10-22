@@ -105,4 +105,63 @@ function upgradeBundledPack(name, options = {}) {
   });
 }
 
-module.exports = { bundledRoot, listBundledPacks, getBundledPack, installBundledPack, upgradeBundledPack };
+/**
+ * Repair legacy module provenance for bundled packs after a Sidekick upgrade.
+ *
+ * This is intentionally narrower than a general pack upgrade: the persisted
+ * pack must already be marked first-party, and its version and package digest
+ * must exactly match the copy shipped in this release. The normal upgrade
+ * lifecycle then refreshes owned module bindings from those verified bytes,
+ * preserving pack configuration and disabled state. Third-party packs,
+ * locally modified packages, and version mismatches are never promoted.
+ */
+function reconcileBundledPackModules() {
+  const repaired = [];
+  const skipped = [];
+  const failed = [];
+  const modules = require("../modules/repository");
+
+  for (const candidate of listBundledPacks()) {
+    if (candidate.error || !candidate.compatible) continue;
+    const record = repository.getPack(candidate.name);
+    if (!record) continue;
+    if (record.provenance !== "first_party") {
+      skipped.push({ name: record.name, reason: "pack_not_attested_first_party" });
+      continue;
+    }
+    if (record.version !== candidate.version) {
+      skipped.push({ name: record.name, reason: "release_version_mismatch" });
+      continue;
+    }
+
+    let inspection;
+    try { inspection = lifecycle.inspect(candidate.path); }
+    catch (error) { failed.push({ name: record.name, error: error.message }); continue; }
+    if (!record.package_hash || record.package_hash !== inspection.package_hash) {
+      skipped.push({ name: record.name, reason: "release_digest_mismatch" });
+      continue;
+    }
+
+    const staleModules = (record.manifest.modules || []).filter(reference => {
+      const module = modules.getModule(reference.name);
+      const provenance = module?.provenance || {};
+      return !module || provenance.source_kind !== "capability_pack" ||
+        provenance.pack !== record.name || provenance.pack_version !== record.version ||
+        provenance.pack_package_hash !== record.package_hash || provenance.pack_provenance !== "first_party";
+    });
+    if (!staleModules.length) continue;
+
+    try {
+      upgradeBundledPack(record.name, {
+        allowSameVersion: true,
+        expectedPackageHash: inspection.package_hash,
+      });
+      repaired.push({ name: record.name, modules: staleModules.map(module => module.name) });
+    } catch (error) {
+      failed.push({ name: record.name, error: error.message });
+    }
+  }
+  return { repaired, skipped, failed };
+}
+
+module.exports = { bundledRoot, listBundledPacks, getBundledPack, installBundledPack, upgradeBundledPack, reconcileBundledPackModules };
