@@ -32,6 +32,56 @@ function copyResponseHeaders(res, webRes) {
   });
 }
 
+function waitForDrainOrClose(res, isDisconnected) {
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      res.removeListener("drain", onDrain);
+      res.removeListener("close", onClose);
+      res.removeListener("error", onError);
+    };
+    const onDrain = () => { cleanup(); resolve(); };
+    const onClose = () => { cleanup(); resolve(); };
+    const onError = error => { cleanup(); reject(error); };
+    res.once("drain", onDrain);
+    res.once("close", onClose);
+    res.once("error", onError);
+    if (isDisconnected()) { cleanup(); resolve(); }
+  });
+}
+
+async function relayResponseBody(body, res) {
+  const reader = body?.getReader?.();
+  if (!reader) {
+    res.end();
+    return;
+  }
+
+  let disconnected = false;
+  const onClose = () => {
+    if (res.writableEnded) return;
+    disconnected = true;
+    reader.cancel().catch(() => {});
+  };
+  res.once("close", onClose);
+
+  try {
+    while (!disconnected) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (disconnected) return;
+      if (!res.write(Buffer.from(value))) {
+        await waitForDrainOrClose(res, () => disconnected);
+      }
+    }
+    if (!disconnected) res.end();
+  } catch (error) {
+    if (!disconnected) throw error;
+  } finally {
+    res.removeListener("close", onClose);
+    reader.releaseLock?.();
+  }
+}
+
 function registerStreamableHttpRoutes({ app, sessionManager, createMcpServer, logDebug }) {
   const modernMcpHandler = createModernMcpHandler(createMcpServer);
 
@@ -54,15 +104,8 @@ function registerStreamableHttpRoutes({ app, sessionManager, createMcpServer, lo
         const webRes = await modernMcpHandler.fetch(webReq, { authInfo: req.authIdentity || undefined, parsedBody: req.body });
         res.status(webRes.status);
         copyResponseHeaders(res, webRes);
-        if (webRes.body) {
-          const reader = webRes.body.getReader();
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            res.write(Buffer.from(value));
-          }
-        }
-        return res.end();
+        await relayResponseBody(webRes.body, res);
+        return;
       }
 
       const { transport, isNew, newSessionId, staleRedirect, replacedStaleSession } = await sessionManager.getTransportForRequest(sessionId, metadata, { allowStalePost: true });
@@ -85,12 +128,12 @@ function registerStreamableHttpRoutes({ app, sessionManager, createMcpServer, lo
       res.status(webRes.status);
       if (replacedStaleSession && newSessionId) res.setHeader("mcp-session-id", newSessionId);
       copyResponseHeaders(res, webRes);
-      const text = await webRes.text();
-      if (text) res.send(text); else res.end();
+      await relayResponseBody(webRes.body, res);
     } catch (e) {
       console.error("MCP error:", e.message);
       logDebug("MCP_POST_ERROR", { error: e.message, stack: e.stack, sessionId: req.headers["mcp-session-id"] });
       if (!res.headersSent) res.status(500).json({ error: e.message });
+      else res.destroy(e);
     }
   });
 
@@ -109,18 +152,12 @@ function registerStreamableHttpRoutes({ app, sessionManager, createMcpServer, lo
       const webRes = await transport.handleRequest(webReq);
       res.status(webRes.status);
       copyResponseHeaders(res, webRes);
-      if (webRes.body) {
-        const reader = webRes.body.getReader();
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) { res.end(); break; }
-          res.write(Buffer.from(value));
-        }
-      } else res.end();
+      await relayResponseBody(webRes.body, res);
     } catch (e) {
       console.error("MCP GET error:", e.message);
       logDebug("MCP_GET_ERROR", { error: e.message, stack: e.stack, sessionId: req.headers["mcp-session-id"] });
       if (!res.headersSent) res.status(500).json({ error: e.message });
+      else res.destroy(e);
     }
   });
 
@@ -143,14 +180,14 @@ function registerStreamableHttpRoutes({ app, sessionManager, createMcpServer, lo
       }
       res.status(webRes.status);
       copyResponseHeaders(res, webRes);
-      const text = await webRes.text();
-      if (text) res.send(text); else res.end();
+      await relayResponseBody(webRes.body, res);
     } catch (e) {
       console.error("MCP DELETE error:", e.message);
       logDebug("MCP_DELETE_ERROR", { error: e.message, stack: e.stack, sessionId: req.headers["mcp-session-id"] });
       if (!res.headersSent) res.status(500).json({ error: e.message });
+      else res.destroy(e);
     }
   });
 }
 
-module.exports = { createModernMcpHandler, registerStreamableHttpRoutes, sendInvalidSession };
+module.exports = { createModernMcpHandler, registerStreamableHttpRoutes, sendInvalidSession, relayResponseBody };
