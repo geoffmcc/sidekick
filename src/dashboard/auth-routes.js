@@ -184,6 +184,10 @@ function registerAuthRoutes({
 
   app.post("/api/auth/users", (req, res) => {
     if (!requireIdentityAdministrator(req, res)) return;
+    // Creating an account and assigning it a role are separate authorities.
+    // In particular, users.manage must not become an indirect path to the
+    // critical roles.manage operation through this convenience endpoint.
+    if (req.body?.role && !requireIdentityPermission(req, res, "roles.manage")) return;
     try {
       const principal = identity.createHumanUser({ username: req.body?.username, password: req.body?.password, displayName: req.body?.display_name, actorPrincipalId: req.authPrincipal.principal_id });
       if (req.body?.role) identity.assignRole(principal.principal_id, req.body.role, req.authPrincipal.principal_id);

@@ -71,3 +71,55 @@ test("Dashboard authorization preserves credential and delegation attenuation", 
   assert.equal(revokeResponse.statusCode, 403);
   assert.equal(revokedDelegations, 0, "attenuated authority cannot revoke another principal's delegation");
 });
+
+test("user creation cannot assign a role without roles.manage", () => {
+  const handlers = new Map();
+  let createdUsers = 0;
+  let assignedRoles = 0;
+  const app = Object.fromEntries(["get", "post", "put", "patch", "delete"].map(method => [method, (route, handler) => handlers.set(`${method.toUpperCase()} ${route}`, handler)]));
+  app.use = () => {};
+  const authorization = {
+    authorize({ permission }) {
+      return { ok: permission === "users.manage", code: permission === "users.manage" ? "allowed" : "forbidden" };
+    },
+  };
+  registerAuthRoutes({
+    app,
+    dbStore: {},
+    identity: {
+      createHumanUser() { createdUsers++; return { principal_id: "new-user" }; },
+      assignRole() { assignedRoles++; },
+    },
+    authentication: { isSessionActive: () => true },
+    authorization,
+    timingSafeCompare: () => false,
+    dashboardUser: "",
+    dashboardPass: "",
+    bootstrapCompleted: () => true,
+    authAttemptKeys: () => [],
+    rejectIfAuthThrottled: () => false,
+    recordAuthFailure() {},
+    clearAuthFailures() {},
+    legacyDashboardPrincipal: () => null,
+    setIdentityCookie() {},
+    clearIdentityCookie() {},
+    requestCookie: () => null,
+    bootstrapToken: null,
+    errorResponse: (_req, res, _error, options) => res.status(options.status).json({ code: options.code }),
+  });
+
+  const res = {
+    statusCode: 200,
+    status(code) { this.statusCode = code; return this; },
+    json(body) { this.body = body; return this; },
+    set() { return this; },
+  };
+  handlers.get("POST /api/auth/users")({
+    authPrincipal: { principal_id: "limited-admin", principal_type: "human", scopes: null },
+    body: { username: "new-admin", password: "synthetic sufficiently long password", role: "administrator" },
+  }, res);
+
+  assert.equal(res.statusCode, 403);
+  assert.equal(createdUsers, 0, "authorization is checked before account creation");
+  assert.equal(assignedRoles, 0, "unauthorized role assignment never executes");
+});
