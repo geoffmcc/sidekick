@@ -32,10 +32,14 @@ function registerScopeSnapshotRoutes({ app, platformKernel, projectAccess, authe
     if (!actor || !requireIdentityPermission(req, res, "scopes.manage")) return;
     const project = accessibleProject(actor, req.body?.project_id, "write");
     if (!project) return res.status(404).json({ ok: false, error: "project not found", code: "not_found" });
+    try { auditLog(req, "scope_snapshot.create.requested", { project_id: project.project_id, actor: actor.principal_id }); }
+    catch (error) { return errorResponse(req, res, error, { status: 503, code: "audit_unavailable", component: "scope_snapshots" }); }
     try {
       const snapshot = platformKernel.createScopeSnapshot({ ...req.body, project_id: project.project_id, created_by: authenticatedUser(req), source: "dashboard" });
-      auditLog(req, "scope_snapshot.create", { snapshot_id: snapshot.snapshot_id, digest: snapshot.digest, target_count: snapshot.target_count, actor: authenticatedUser(req) });
-      res.json({ ok: true, snapshot });
+      let auditStatus = "complete";
+      try { auditLog(req, "scope_snapshot.create", { snapshot_id: snapshot.snapshot_id, digest: snapshot.digest, target_count: snapshot.target_count, actor: actor.principal_id }); }
+      catch { auditStatus = "degraded"; }
+      res.json({ ok: true, snapshot, audit_status: auditStatus });
     } catch (error) { return errorResponse(req, res, error, { status: 400, code: "invalid_request", component: "scope_snapshots" }); }
   });
 
