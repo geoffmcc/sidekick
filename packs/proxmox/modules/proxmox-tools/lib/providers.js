@@ -12,8 +12,8 @@
  * the binary exists on the Sidekick host; it does NOT mean configured,
  * authorized, or usable. This release exposes NO execution through any of these
  * providers — a guest being discoverable via Proxmox never implies it is
- * SSH- or Ansible-manageable. Ansible is the governed exception exposed by
- * `ansible_run`; the other providers remain detection-only.
+ * SSH- or Ansible-manageable. Ansible planning is exposed by `ansible_run`,
+ * but execution is unavailable until scoped network mediation is implemented.
  */
 
 const fs = require("fs");
@@ -54,12 +54,12 @@ function detectProvider(name) {
     name,
     installed,
     state: installed ? "installed" : "not_installed",
-    // Ansible is executed through the governed ansible_run tool when present;
-    // the other optional local providers remain detection-only.
-    execution: name === "ansible" ? "governed" : "not_implemented",
+    // Ansible planning is available, but execution is blocked until the
+    // scoped network broker and isolated workspace are implemented.
+    execution: name === "ansible" ? "unavailable" : "not_implemented",
     note: installed
       ? (name === "ansible"
-        ? "Ansible is available through the governed ansible_run capability."
+        ? "Ansible is installed; execution is unavailable until scoped network mediation is configured."
         : `${name} is present on the Sidekick host but no execution capability is exposed in this release.`)
       : `${name} was not found on the Sidekick host.`,
   };

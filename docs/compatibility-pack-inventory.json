@@ -1,9 +1,9 @@
 {
   "schema": "sidekick.compatibility-pack-inventory.v1",
   "source": "bundled pack manifests and repository files",
-  "source_commit": "ec01979bf0d13c6b6fb45fb5310f18f3eab03170",
-  "source_commit_date": "2026-10-22T10:42:59-04:00",
-  "source_fingerprint": "sha256:9768a051558a9164bbc60565b358cd2f51ea6b1382d570b6307e245210cdf347",
+  "source_commit": "d9bd8a323f87da220e84b149cb2687079ca4b55d",
+  "source_commit_date": "2026-10-22T11:28:06-04:00",
+  "source_fingerprint": "sha256:d94a8225af8dfddc0e0cb32039ba09b2a704537e27cb37ededeb000fe1f9fdf7",
   "pack_count": 27,
   "packs": [
     {
@@ -9127,6 +9127,7 @@
               "test/production-compatibility-packs-11-15.test.js",
               "test/production-compatibility-packs.test.js",
               "test/proxmox-pack.test.js",
+              "test/proxmox-unit.test.js",
               "test/security-invariants.test.js",
               "test/security-network-scope-event-atomicity.test.js",
               "test/security-project-access.test.js",
@@ -11337,7 +11338,7 @@
             },
             "ansible": {
               "type": "object",
-              "description": "Optional Ansible integration. Absent or unconfigured means Ansible is simply unavailable. Point playbook_dir at an administrator-controlled directory of allowlisted playbooks on the Sidekick host.",
+              "description": "Optional Ansible planner. Configure playbook_dir to an administrator-controlled directory of allowlisted playbooks. Detect/dry_run work; run fails closed until a scoped network broker and isolated workspace are configured.",
               "properties": {
                 "playbook_dir": {
                   "type": "string"
@@ -11432,16 +11433,10 @@
         "tools": [],
         "optional_tools": [
           "secret",
-          "netdiag",
-          "bash"
+          "netdiag"
         ]
       },
-      "permissions": [
-        {
-          "tool": "bash",
-          "risk": "critical"
-        }
-      ],
+      "permissions": [],
       "network_scopes": [],
       "provider_requirements": null,
       "workflow_contract": {
@@ -11488,19 +11483,8 @@
               "category": "Infrastructure"
             }
           ],
-          "permissions": [
-            {
-              "tool": "bash",
-              "risk": "critical"
-            }
-          ],
+          "permissions": [],
           "operations": [
-            {
-              "read_only": false,
-              "mutating": false,
-              "external": false,
-              "security_sensitive": true
-            },
             {
               "read_only": true,
               "mutating": false,
@@ -11541,12 +11525,6 @@
         }
       ],
       "operation_classes": [
-        {
-          "read_only": true,
-          "mutating": false,
-          "external": false,
-          "security_sensitive": false
-        },
         {
           "read_only": true,
           "mutating": false,
@@ -11687,6 +11665,7 @@
               "packs/proxmox/knowledge/proxmox-least-privilege.md",
               "packs/proxmox/knowledge/proxmox-operating.md",
               "packs/proxmox/knowledge/proxmox-provisioning.md",
+              "packs/proxmox/knowledge/usage-reference.md",
               "packs/proxmox/modules/proxmox-tools/entry.js",
               "packs/proxmox/modules/proxmox-tools/manifest.json",
               "packs/proxmox/workflows/backup-coverage.json",
@@ -11772,6 +11751,7 @@
               "test/brain.test.js",
               "test/jellyfin-pack.test.js",
               "test/proxmox-pack.test.js",
+              "test/proxmox-unit.test.js",
               "test/security-research-pack.test.js",
               "test/security-research-unit.test.js",
               "test/tools.test.js"

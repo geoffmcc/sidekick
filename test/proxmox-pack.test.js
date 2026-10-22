@@ -563,9 +563,9 @@ nodeTest("Proxmox pack integration", async t => {
     assert.strictEqual(reg.getToolRisk("ansible_run"), "high");
     assert.strictEqual(reg.getToolRisk("proxmox_migrate"), "high");
     assert.strictEqual(reg.getToolRisk("proxmox_retire"), "critical");
-    assert.deepStrictEqual(manifest.permissions, [{ tool: "bash", risk: "critical" }]);
-    assert.ok(pack.requires.optional_tools.includes("bash"), "Ansible's governed shell dependency is optional to the pack");
-    assert.ok(manifest.tools.ansible_run, "Ansible execution remains a separate high-risk tool");
+    assert.deepStrictEqual(manifest.permissions, []);
+    assert.ok(!pack.requires.optional_tools.includes("bash"), "the pack does not request shell authority while Ansible execution is unavailable");
+    assert.ok(manifest.tools.ansible_run, "Ansible planning remains a separate high-risk tool");
   });
 
   await test("PXV.2: create_vm provisions a provenance-tagged guest through the tool", async () => {
@@ -650,7 +650,8 @@ nodeTest("Proxmox pack integration", async t => {
   await test("PXV.9: ansible_run detect reports state and dry_run without config is not_ready", async () => {
     const det = json(await callInternalTool("ansible_run", { action: "detect" }));
     assert.strictEqual(det.ok, true);
-    assert.ok(["not_installed", "installed_unconfigured", "misconfigured", "ready"].includes(det.ansible.state));
+    assert.ok(["not_installed", "installed_unconfigured", "misconfigured", "ready", "execution_unavailable"].includes(det.ansible.state));
+    if (det.ansible.state === "execution_unavailable") assert.strictEqual(det.ansible.execution_available, false);
     const dry = json(await callInternalTool("ansible_run", { action: "dry_run", playbook: "baseline.yml", hosts: [{ alias: "h", host: "10.0.0.9" }] }));
     // Not configured (no playbook_dir) or ansible absent -> a clean not-ready code, never a crash.
     assert.strictEqual(dry.ok, false);
@@ -792,19 +793,18 @@ nodeTest("Proxmox pack integration", async t => {
     }
   });
 
-  await test("PXV.17: ansible_run run executes end to end through the governed bash tool and derives success from JSON stats", async () => {
-    // A shimmed ansible-playbook on PATH emits a captured-shape JSON stats
-    // document on stdout and a warning on stderr — the pack must run it
-    // through the REAL dispatcher/bash path, isolate the JSON from the
-    // appended stderr, and derive per-host success from the stats, never from
-    // "the command ran".
+  await test("PXV.17: ansible_run fails closed before starting a command without scoped network mediation", async () => {
+    // Even with a valid allowlisted playbook, host configuration, and an
+    // executable shim, the pack must not dispatch shell execution until a
+    // scoped network broker and isolated workspace are configured.
     const binDir = path.join(TEST_DATA_DIR, "bin");
     const playbookDir = path.join(TEST_DATA_DIR, "playbooks");
     fs.mkdirSync(binDir, { recursive: true });
     fs.mkdirSync(playbookDir, { recursive: true });
     fs.writeFileSync(path.join(playbookDir, "baseline.yml"), "- hosts: targets\n  tasks: []\n");
+    const executedMarker = path.join(TEST_DATA_DIR, "ansible-executed.marker");
     const stats = JSON.stringify({ plays: [{ play: { name: "fixture" } }], stats: { h1: { ok: 3, changed: 1, failures: 0, unreachable: 0, skipped: 0 } } });
-    fs.writeFileSync(path.join(binDir, "ansible-playbook"), `#!/bin/sh\necho '${stats}'\necho '[WARNING]: fixture deprecation {not json}' >&2\nexit 0\n`, { mode: 0o755 });
+    fs.writeFileSync(path.join(binDir, "ansible-playbook"), `#!/bin/sh\nprintf executed > '${executedMarker}'\necho '${stats}'\necho '[WARNING]: fixture deprecation {not json}' >&2\nexit 0\n`, { mode: 0o755 });
     const previousPath = process.env.PATH;
     process.env.PATH = `${binDir}${path.delimiter}${previousPath}`;
     const mainProfile = { endpoint, token_ref: "secret:proxmox_test_token", ca_pem: certPem, allow_lifecycle: true, task_poll_interval_ms: 300, task_timeout_ms: 5000, default: true };
@@ -814,18 +814,13 @@ nodeTest("Proxmox pack integration", async t => {
         ansible: { playbook_dir: playbookDir, allowed_playbooks: ["baseline.yml"] },
       });
       const det = json(await callInternalTool("ansible_run", { action: "detect" }));
-      assert.strictEqual(det.ansible.state, "ready", JSON.stringify(det.ansible));
+      assert.strictEqual(det.ansible.state, "execution_unavailable", JSON.stringify(det.ansible));
+      assert.strictEqual(det.ansible.execution_available, false);
       const run = json(await callInternalTool("ansible_run", { action: "run", playbook: "baseline.yml", hosts: [{ alias: "h1", host: "10.0.0.9" }] }));
-      assert.strictEqual(run.ok, true, JSON.stringify(run));
-      assert.deepStrictEqual(run.hosts, ["h1"]);
-      assert.deepStrictEqual(run.per_host.h1, { ok: 3, changed: 1, failures: 0, unreachable: 0 });
-      // Success came from parsed stats: a stats block reporting a failure must
-      // flip the verdict even though the process exits 0.
-      fs.writeFileSync(path.join(binDir, "ansible-playbook"), `#!/bin/sh\necho '${JSON.stringify({ stats: { h1: { ok: 1, changed: 0, failures: 1, unreachable: 0 } } })}'\nexit 0\n`, { mode: 0o755 });
-      const failed = json(await callInternalTool("ansible_run", { action: "run", playbook: "baseline.yml", hosts: [{ alias: "h1", host: "10.0.0.9" }] }));
-      assert.strictEqual(failed.ok, false);
-      assert.strictEqual(failed.code, "ansible_failed");
-      assert.strictEqual(failed.per_host.h1.failures, 1);
+      assert.strictEqual(run.ok, false);
+      assert.strictEqual(run.code, "capability_unavailable");
+      assert.match(run.message, /scoped network broker.*no command was executed/i);
+      assert.strictEqual(fs.existsSync(executedMarker), false, "no Ansible process can start without the scoped broker");
     } finally {
       process.env.PATH = previousPath;
       packLifecycle.configure("proxmox", { profiles: { main: mainProfile } });
