@@ -145,6 +145,7 @@ function requiredToolPermission(descriptor, args = {}) {
   }
   if (descriptor.name === "memory" && ["confirm", "correct"].includes(args.action)) return "tools.execute_critical";
   if (descriptor.name === "memory_manage" && args.action === "confirm") return "tools.execute_critical";
+  if (descriptor.name === "black_box" && ["list", "list_incidents", "get", "get_incident", "capture_status", "list_captures", "get_capture", "list_sources", "get_source", "search", "compare", "analyze", "analyze_async", "export", "storage_status", "purge_preview", "profiles"].includes(args.action || "list")) return "blackbox.read";
   if (descriptor.name === "sync_identity") return args.action === "get" ? "sync.read" : "sync.manage";
   if (["sync_export", "sync_diff"].includes(descriptor.name)) return args.project ? "memory.read" : "sync.read";
   if (descriptor.name === "sync_import") return args.project ? "memory.write" : "sync.manage";
