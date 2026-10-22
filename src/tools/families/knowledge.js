@@ -14,12 +14,45 @@ const { loadProcedures } = require("../../core/procedures-store");
 const { redactSensitiveKeysDeep } = require("../../redact");
 const { requireCanonicalInvocation } = require("../read-authorization");
 
+const MAX_KNOWLEDGE_PROVENANCE_BYTES = 16 * 1024;
+
 function refreshKnowledgeFts() {
   if (typeof dbStore.rebuildKnowledgeFts === "function") dbStore.rebuildKnowledgeFts();
 }
 
 function json(value) {
   return JSON.stringify(redactSensitiveKeysDeep(value));
+}
+
+function recordKnowledgeMutation(existing, execution, action, at) {
+  const principalId = execution.authIdentity?.principal_id;
+  if (typeof principalId !== "string" || !principalId.trim() || principalId.length > 200) {
+    throw new Error("Knowledge mutation requires a valid authenticated principal");
+  }
+  let prior = existing || {};
+  if (typeof prior === "string") {
+    if (Buffer.byteLength(prior, "utf8") > MAX_KNOWLEDGE_PROVENANCE_BYTES) throw new Error("Knowledge provenance exceeds its storage limit");
+    try { prior = JSON.parse(prior); } catch { throw new Error("Knowledge provenance is invalid"); }
+  }
+  if (!prior || typeof prior !== "object" || Array.isArray(prior)) prior = {};
+  const history = Array.isArray(prior.mutation_history) ? prior.mutation_history.slice(-19) : [];
+  const contextProject = typeof execution.project === "string" && execution.project.length <= 128
+    ? execution.project
+    : null;
+  history.push({
+    action,
+    actor_principal_id: principalId.trim(),
+    approval_id: execution.approvedExecution === true ? execution.approvalId || null : null,
+    approved_by_principal_id: execution.approvedExecution === true ? principalId : null,
+    at,
+    source: execution.source || null,
+    context_project: contextProject,
+  });
+  const serialized = json({ ...prior, mutation_history: history });
+  if (Buffer.byteLength(serialized, "utf8") > MAX_KNOWLEDGE_PROVENANCE_BYTES) {
+    throw new Error("Knowledge provenance exceeds its storage limit");
+  }
+  return serialized;
 }
 
 function promotedContent(sourceType, item) {
@@ -150,10 +183,12 @@ async function sidekick_knowledge({ action, id, category, title, content, tags, 
         return { content: [{ type: "text", text: "Error: category, title, and content are required for add" }], isError: true };
       }
 
+      const provenance = recordKnowledgeMutation(null, toolContext.getExecutionContext(), "add", now);
+
       const result = db.prepare(`
-        INSERT INTO knowledge (category, title, content, tags, enabled, version_added, updated_at)
-        VALUES (?, ?, ?, ?, 1, ?, ?)
-      `).run(category, title, content, tags || '', now, now);
+        INSERT INTO knowledge (category, title, content, tags, enabled, version_added, updated_at, provenance_json)
+        VALUES (?, ?, ?, ?, 1, ?, ?, ?)
+      `).run(category, title, content, tags || '', now, now, provenance);
       refreshKnowledgeFts();
 
       return { content: [{ type: "text", text: `Added knowledge entry with id: ${result.lastInsertRowid}` }] };
@@ -187,6 +222,7 @@ async function sidekick_knowledge({ action, id, category, title, content, tags, 
         approved_by: verifiedApprover,
         approved_at: now,
       };
+      const storedProvenance = recordKnowledgeMutation(provenance, execution, "promote", now);
       const result = db.prepare(`
         INSERT INTO knowledge (
           category, title, content, tags, enabled, version_added, updated_at,
@@ -202,7 +238,7 @@ async function sidekick_knowledge({ action, id, category, title, content, tags, 
         source,
         resolved.id,
         resolved.version,
-        json(provenance),
+        storedProvenance,
         verifiedApprover,
         now,
       );
@@ -225,11 +261,15 @@ async function sidekick_knowledge({ action, id, category, title, content, tags, 
         return { content: [{ type: "text", text: "Error: at least one field to update is required" }], isError: true };
       }
 
-      updates.push("updated_at = ?");
-      params.push(now);
-      params.push(id);
-
-      db.prepare(`UPDATE knowledge SET ${updates.join(", ")} WHERE id = ? AND enabled = 1`).run(...params);
+      const updated = db.transaction(() => {
+        const current = db.prepare("SELECT provenance_json FROM knowledge WHERE id = ? AND enabled = 1").get(id);
+        if (!current) return false;
+        const provenance = recordKnowledgeMutation(current.provenance_json, toolContext.getExecutionContext(), "update", now);
+        const updateFields = [...updates, "provenance_json = ?", "updated_at = ?"];
+        return db.prepare(`UPDATE knowledge SET ${updateFields.join(", ")} WHERE id = ? AND enabled = 1`)
+          .run(...params, provenance, now, id).changes > 0;
+      })();
+      if (!updated) return { content: [{ type: "text", text: "Error: knowledge entry not found" }], isError: true };
       refreshKnowledgeFts();
 
       return { content: [{ type: "text", text: `Updated knowledge entry ${id}` }] };
@@ -237,7 +277,14 @@ async function sidekick_knowledge({ action, id, category, title, content, tags, 
 
     if (action === "delete") {
       if (!id) return { content: [{ type: "text", text: "Error: id is required for delete" }], isError: true };
-      db.prepare("UPDATE knowledge SET enabled = 0, updated_at = ? WHERE id = ?").run(now, id);
+      const deleted = db.transaction(() => {
+        const current = db.prepare("SELECT provenance_json FROM knowledge WHERE id = ? AND enabled = 1").get(id);
+        if (!current) return false;
+        const provenance = recordKnowledgeMutation(current.provenance_json, toolContext.getExecutionContext(), "delete", now);
+        return db.prepare("UPDATE knowledge SET enabled = 0, updated_at = ?, provenance_json = ? WHERE id = ? AND enabled = 1")
+          .run(now, provenance, id).changes > 0;
+      })();
+      if (!deleted) return { content: [{ type: "text", text: "Error: knowledge entry not found" }], isError: true };
       refreshKnowledgeFts();
       return { content: [{ type: "text", text: `Soft-deleted knowledge entry ${id}` }] };
     }
