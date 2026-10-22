@@ -40,6 +40,9 @@ test("all Sidekick processes migrate shared state before restoring module entrie
     assert.match(unit, /^Requires=sidekick-mcp\.service$/m, `${file} requires the pack-attesting MCP service`);
     assert.match(unit, /^After=.*sidekick-mcp\.service/m, `${file} starts after MCP completes startup reconciliation`);
   }
+  const mcpUnit = source("systemd/sidekick-mcp.service");
+  assert.match(mcpUnit, /^ExecStartPost=\/usr\/bin\/node scripts\/wait-for-mcp-ready\.js$/m,
+    "MCP is not considered started until its health endpoint responds");
 });
 
 test("selected privileged handler boundaries retain exact canonical dispatch guards", () => {
