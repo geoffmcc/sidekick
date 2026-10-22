@@ -17,6 +17,40 @@ const { readSecret } = require("../../core/runtime-secrets");
 const toolContext = require("../context");
 const authorization = require("../../core/authorization");
 const { requireCanonicalInvocation, requireToolExecution } = require("../read-authorization");
+const MAX_NOTIFICATION_ERROR_BYTES = 64 * 1024;
+
+function readBoundedNotificationError(response, maxBytes = MAX_NOTIFICATION_ERROR_BYTES) {
+  return new Promise(resolve => {
+    const chunks = [];
+    let totalBytes = 0;
+    let truncated = false;
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      const text = Buffer.concat(chunks, totalBytes).toString("utf8");
+      resolve(truncated ? `${text} [truncated: response exceeded ${maxBytes} bytes]` : text);
+    };
+    response.on("data", chunk => {
+      if (truncated) return;
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      const available = Math.max(0, maxBytes - totalBytes);
+      if (buffer.byteLength > available) {
+        if (available) chunks.push(buffer.subarray(0, available));
+        totalBytes += Math.min(buffer.byteLength, available);
+        truncated = true;
+        try { response.destroy(); } catch {}
+        finish();
+        return;
+      }
+      chunks.push(buffer);
+      totalBytes += buffer.byteLength;
+    });
+    response.on("end", finish);
+    response.on("close", finish);
+    response.on("error", finish);
+  });
+}
 
 function loadWebhooks() {
   return dbStore.loadDocument("webhooks", []);
@@ -70,14 +104,13 @@ async function sidekick_notify({ channel, webhook_url, recipient, message, title
       requestOptions.headers.Host = urlObj.host;
       if (urlObj.protocol === "https:") requestOptions.servername = urlObj.hostname.replace(/^\[|\]$/g, "");
       const req = lib.request(requestOptions, (res) => {
-        let data = "";
-        res.on("data", (chunk) => data += chunk);
-        res.on("end", () => {
-          if (res.statusCode >= 200 && res.statusCode < 300) {
-            resolve({ content: [{ type: "text", text: "Sent to " + channel }] });
-          } else {
-            resolve({ content: [{ type: "text", text: "Failed: " + res.statusCode + " " + data }], isError: true });
-          }
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          res.resume();
+          res.on("end", () => resolve({ content: [{ type: "text", text: "Sent to " + channel }] }));
+          return;
+        }
+        readBoundedNotificationError(res).then(data => {
+          resolve({ content: [{ type: "text", text: "Failed: " + res.statusCode + " " + data }], isError: true });
         });
       });
       req.on("error", (err) => resolve({ content: [{ type: "text", text: "Error: " + err.message }], isError: true }));
@@ -117,8 +150,7 @@ async function sidekick_notify({ channel, webhook_url, recipient, message, title
         },
         timeout: 30000
       }, (res) => {
-        let data = "";
-        res.on("data", (chunk) => data += chunk);
+        res.resume();
         res.on("end", () => {
           resolve({ content: [{ type: "text", text: "Email sent to " + recipient }] });
         });
@@ -222,4 +254,4 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_notify, sidekick_webhook };
+module.exports = { descriptors, sidekick_notify, sidekick_webhook, readBoundedNotificationError, MAX_NOTIFICATION_ERROR_BYTES };

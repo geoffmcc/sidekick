@@ -41,6 +41,10 @@ GitHub API requests keep their existing 30-second timeout and cap each response
 at 8 MiB. CI status pagination is capped at 50 pages; reaching the cap returns
 an explicit error instead of silently presenting partial results as complete.
 
+Discord and Slack notification error bodies are capped at 64 KiB and truncated
+responses are closed. SMTP responses are drained without retaining their body;
+the existing 30-second SMTP deadline remains in effect.
+
 ## MCP authentication
 
 The MCP server requires an API key. Clients can send it as:
