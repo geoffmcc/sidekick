@@ -9,10 +9,11 @@ function harnessResponse() {
   return {
     statusCode: 200,
     chunks: [],
+    writeResult: true,
     status(code) { this.statusCode = code; return this; },
     json(body) { this.body = body; return this; },
     writeHead(code) { this.statusCode = code; },
-    write(chunk) { this.chunks.push(String(chunk)); },
+    write(chunk) { this.chunks.push(String(chunk)); return this.writeResult; },
     end() { this.ended = true; },
   };
 }
@@ -116,4 +117,45 @@ test("Blackbox capture stream ends and suppresses frames after permission revoca
   allowed = false;
   await new Promise(resolve => setTimeout(resolve, 1100));
   assert.equal(idleRes.ended, true, "periodic authorization polling closes an idle capture stream after revocation");
+});
+
+test("slow SSE clients are disconnected when event buffers apply backpressure", () => {
+  const { app, handlers } = makeApp();
+  let allowed = true;
+  let executionListener;
+  let executionUnsubscribed = false;
+  let blackboxSubscriptions = 0;
+  registerEvolveRoutes({
+    app,
+    evolveDashboardAction() {}, authenticatedUser() { return "viewer"; }, dbStore: { getGeneratedToolExecution() { return null; } },
+    shapeExecution: value => value, requireAttributedActor() {}, requireIdentityPermission: () => true,
+    hasIdentityPermission: () => allowed, crypto: {}, callDashboardTool() {}, dashboardExecutionMetadata() {}, redactSensitive: String,
+    auditLog() {}, dynamicTools: {
+      cancelExecution() {},
+      onExecutionEvent(callback) { executionListener = callback; return () => { executionUnsubscribed = true; }; },
+    },
+    logError() {}, errorResponse() {},
+  });
+  registerBlackboxRoutes({
+    app: { ...app, patch() {}, delete() {} },
+    blackbox: {
+      captureStatus: () => ({ state: "running" }),
+      subscribeCapture() { blackboxSubscriptions++; return () => {}; },
+    },
+    requireIdentityPermission: () => true, hasIdentityPermission: () => allowed,
+    blackboxJson() {}, governedDashboardMutation() {}, errorResponse() {},
+  });
+
+  const executionRes = harnessResponse();
+  executionRes.writeResult = false;
+  handlers.get("/api/evolve/executions/:executionId/stream")({ params: { executionId: "execution-slow" }, on() {} }, executionRes);
+  executionListener({ id: "execution-slow", state: "running" });
+  assert.equal(executionRes.ended, true);
+  assert.equal(executionUnsubscribed, true);
+
+  const captureRes = harnessResponse();
+  captureRes.writeResult = false;
+  handlers.get("/api/blackbox/captures/:id/stream")({ params: { id: "capture-slow" }, on() {} }, captureRes);
+  assert.equal(captureRes.ended, true);
+  assert.equal(blackboxSubscriptions, 0, "backpressured snapshot must not create a live subscription");
 });

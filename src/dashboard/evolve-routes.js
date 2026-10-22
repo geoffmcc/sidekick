@@ -142,7 +142,7 @@ function registerEvolveRoutes({
     const send = execution => {
       if (ended || execution.id !== req.params.executionId) return;
       if (!hasIdentityPermission(req, "dashboard.operations.read")) return close();
-      res.write(`event: execution\ndata: ${JSON.stringify(shapeExecution(execution))}\n\n`);
+      if (!res.write(`event: execution\ndata: ${JSON.stringify(shapeExecution(execution))}\n\n`)) close();
     };
     const current = dbStore.getGeneratedToolExecution(req.params.executionId);
     if (current) send(current);
