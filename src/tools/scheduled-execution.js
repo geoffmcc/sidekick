@@ -17,6 +17,10 @@ function getCurrentSource() {
 
 function createScheduledPlatformExecution(kind, item, options = {}) {
   try {
+    const authIdentity = toolContext.getExecutionContext().authIdentity || null;
+    const principalId = typeof authIdentity?.principal_id === "string" && authIdentity.principal_id.trim()
+      ? authIdentity.principal_id.trim()
+      : null;
     const projectId = options.projectId || toolContext.getExecutionContext().project || process.env.SIDEKICK_PROJECT || null;
     if (!options.allowConcurrent) {
       const guard = platformKernel.platformGuard(null, null, {
@@ -34,11 +38,11 @@ function createScheduledPlatformExecution(kind, item, options = {}) {
     const execution = platformKernel.createExecution({
       parent_execution_id: options.parentExecutionId || null,
       root_execution_id: options.rootExecutionId || options.parentExecutionId || undefined,
-      actor_id: options.actor || getCurrentSource() || "unknown",
-      requested_by_principal_id: options.requestedByPrincipalId || toolContext.getExecutionContext().authIdentity?.requested_by_principal_id || toolContext.getExecutionContext().authIdentity?.principal_id || null,
-      actor_principal_id: options.actorPrincipalId || toolContext.getExecutionContext().authIdentity?.principal_id || null,
-      acting_for_principal_id: options.actingForPrincipalId || toolContext.getExecutionContext().authIdentity?.acting_for_principal_id || null,
-      executed_by_principal_id: options.executedByPrincipalId || null,
+      actor_id: principalId || getCurrentSource() || "unknown",
+      requested_by_principal_id: authIdentity?.requested_by_principal_id || principalId,
+      actor_principal_id: principalId,
+      acting_for_principal_id: authIdentity?.acting_for_principal_id || null,
+      executed_by_principal_id: null,
       client_id: options.client || getCurrentSource() || null,
       trigger_type: options.triggerType || kind,
       operation_type: options.operationType || `${kind}_operation`,
@@ -61,7 +65,7 @@ function createScheduledPlatformExecution(kind, item, options = {}) {
     if (options.state && options.state !== "created") {
       platformKernel.transitionExecution(execution.execution_id, options.state, {
         source: options.source || kind,
-        actor_id: options.actor || getCurrentSource() || "unknown",
+        actor_id: principalId || getCurrentSource() || "unknown",
         reason: options.reason || `${kind} ${options.state}`,
         correlation_id: options.correlationId || item.id,
       });

@@ -22,6 +22,8 @@ const tools = require('../src/tools');
 const db = require('../src/db');
 const scheduledExecution = require('../src/tools/scheduled-execution');
 const { createDelayScheduler } = require('../src/agent/delay-scheduler');
+const toolContext = require('../src/tools/context');
+const { createServiceContext } = require('./helpers/authorized-context');
 
 const TOOLS = require('./helpers/authorized-context').withOwnerToolContext(tools.TOOLS, { source: 'mcp' });
 
@@ -95,6 +97,35 @@ console.log('Passed\n');
     });
     assert.strictEqual(other.project_id, 'project_b');
     assert.notStrictEqual(scheduled.project_id, other.project_id);
+    console.log('Passed\n');
+
+    console.log('Test SP.0b: scheduled execution identity comes only from the current context');
+    const serviceContext = createServiceContext({ role: 'operator', project: 'scheduled_identity_project' });
+    const trustedContext = toolContext.createInternalExecutionContext({ ...serviceContext, source: 'internal' });
+    const attributed = await toolContext.runWithContext(trustedContext, () => scheduledExecution.createScheduledPlatformExecution('cron', {
+      id: 'scheduled-trusted-attribution', tool: 'sidekick_respond',
+    }, {
+      projectId: 'scheduled_identity_project', allowConcurrent: true,
+      actorPrincipalId: 'forged_actor', requestedByPrincipalId: 'forged_requester',
+      actingForPrincipalId: 'forged_delegator', executedByPrincipalId: 'forged_executor',
+    }));
+    assert.equal(attributed.actor_principal_id, serviceContext.authIdentity.principal_id);
+    assert.equal(attributed.requested_by_principal_id, serviceContext.authIdentity.principal_id);
+    assert.equal(attributed.acting_for_principal_id, null);
+    assert.equal(attributed.executed_by_principal_id, null);
+
+    const anonymousContext = toolContext.createInternalExecutionContext({ source: 'internal', project: 'scheduled_anonymous_project' });
+    const anonymous = await toolContext.runWithContext(anonymousContext, () => scheduledExecution.createScheduledPlatformExecution('cron', {
+      id: 'scheduled-anonymous-attribution', tool: 'sidekick_respond',
+    }, {
+      projectId: 'scheduled_anonymous_project', allowConcurrent: true,
+      actorPrincipalId: 'forged_actor', requestedByPrincipalId: 'forged_requester',
+      actingForPrincipalId: 'forged_delegator', executedByPrincipalId: 'forged_executor',
+    }));
+    assert.equal(anonymous.actor_principal_id, null);
+    assert.equal(anonymous.requested_by_principal_id, null);
+    assert.equal(anonymous.acting_for_principal_id, null);
+    assert.equal(anonymous.executed_by_principal_id, null);
     console.log('Passed\n');
 
     if (process.platform !== 'linux') {
