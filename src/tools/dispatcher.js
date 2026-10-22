@@ -139,6 +139,10 @@ function requiredToolPermission(descriptor, args = {}) {
     if (args.action === "get") return "secrets.read";
     return "secrets.manage";
   }
+  if (descriptor.name === "compute_nodes") {
+    const readActions = new Set(["list", "get", "telemetry", "stats", "list_tokens"]);
+    return readActions.has(args.action) ? "compute.nodes.read" : "compute.nodes.manage";
+  }
   if (descriptor.name === "webhook") {
     return args.action === "clear" ? "webhooks.manage" : "webhooks.read";
   }
@@ -186,6 +190,7 @@ function sensitiveResultFactoryFor(descriptor, args, context) {
   // mint unredacted outputs. The dispatcher verifies the authenticated
   // principal and live request/session boundary before exposing either token.
   const oneTimeOperation = (descriptor.name === "compute_nodes" && args.action === "create_token")
+    || (descriptor.name === "compute_nodes" && args.action === "enroll")
     || (descriptor.name === "handoff" && args.action === "claim");
   if (!oneTimeOperation) return null;
   if (!context.authIdentity || (!context.authIdentity.principal_id && !context.authIdentity.principalId)) return null;

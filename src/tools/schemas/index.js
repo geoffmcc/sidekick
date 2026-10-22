@@ -23,7 +23,6 @@ const TOOL_SCHEMAS = {
     allowed_data_classifications: z.array(z.string()).optional().describe("Allowed data classifications for token"),
     max_concurrent_jobs: z.number().optional().describe("Maximum concurrent jobs for enrolled worker"),
     expires_in_ms: z.number().optional().describe("Enrollment token lifetime in milliseconds"),
-    created_by: z.string().optional().describe("Enrollment token creator"),
     re_enrollment_of: z.string().optional().describe("Node ID being re-enrolled"),
     reason: z.string().optional().describe("Revoke reason"),
     enable: z.boolean().optional().describe("Worker service state for maintenance action: true returns the worker to enabled service; false places it into maintenance"),
