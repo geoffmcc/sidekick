@@ -1,6 +1,50 @@
 const QDRANT_URL = process.env.SIDEKICK_QDRANT_URL || "http://127.0.0.1:6333";
 const COLLECTION_NAME = "sidekick_context";
 const EMBEDDING_DIM = 768; // nomic-embed-text dimension
+const REQUEST_TIMEOUT_MS = 15_000;
+const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
+
+async function qdrantRequest(url, options = {}) {
+  return fetch(url, {
+    ...options,
+    redirect: "error",
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+}
+
+async function readBoundedJson(response, maxBytes = MAX_RESPONSE_BYTES) {
+  const reader = response?.body?.getReader?.();
+  let text;
+  if (!reader) {
+    text = await response.text();
+    if (Buffer.byteLength(text, "utf8") > maxBytes) {
+      throw new Error("Qdrant response exceeded the configured size limit");
+    }
+  } else {
+    const chunks = [];
+    let totalBytes = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        totalBytes += value.byteLength;
+        if (totalBytes > maxBytes) {
+          await reader.cancel().catch(() => {});
+          throw new Error("Qdrant response exceeded the configured size limit");
+        }
+        chunks.push(Buffer.from(value));
+      }
+    } finally {
+      reader.releaseLock?.();
+    }
+    text = Buffer.concat(chunks, totalBytes).toString("utf8");
+  }
+  return JSON.parse(text);
+}
+
+async function discardResponseBody(response) {
+  try { await response?.body?.cancel?.(); } catch {}
+}
 
 class QdrantClient {
   constructor() {
@@ -9,7 +53,8 @@ class QdrantClient {
 
   async isAvailable() {
     try {
-      const response = await fetch(`${this.baseUrl}/`);
+      const response = await qdrantRequest(`${this.baseUrl}/`);
+      await discardResponseBody(response);
       return response.ok;
     } catch {
       return false;
@@ -18,11 +63,16 @@ class QdrantClient {
 
   async ensureCollection() {
     // Check if collection exists
-    const checkResponse = await fetch(`${this.baseUrl}/collections/${COLLECTION_NAME}`);
+    const checkResponse = await qdrantRequest(`${this.baseUrl}/collections/${COLLECTION_NAME}`);
+    if (checkResponse.ok) {
+      await discardResponseBody(checkResponse);
+      return;
+    }
+    await discardResponseBody(checkResponse);
     
     if (!checkResponse.ok) {
       // Create collection
-      const createResponse = await fetch(`${this.baseUrl}/collections/${COLLECTION_NAME}`, {
+      const createResponse = await qdrantRequest(`${this.baseUrl}/collections/${COLLECTION_NAME}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -36,13 +86,14 @@ class QdrantClient {
       if (!createResponse.ok) {
         throw new Error(`Failed to create collection: ${createResponse.statusText}`);
       }
+      await discardResponseBody(createResponse);
     }
   }
 
   async upsert(id, vector, payload) {
     await this.ensureCollection();
     
-    const response = await fetch(`${this.baseUrl}/collections/${COLLECTION_NAME}/points`, {
+    const response = await qdrantRequest(`${this.baseUrl}/collections/${COLLECTION_NAME}/points`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -57,8 +108,10 @@ class QdrantClient {
     });
     
     if (!response.ok) {
+      await discardResponseBody(response);
       throw new Error(`Failed to upsert point: ${response.statusText}`);
     }
+    await discardResponseBody(response);
   }
 
   async search(vector, limit = 10, filter = null) {
@@ -74,22 +127,22 @@ class QdrantClient {
       body.filter = filter;
     }
     
-    const response = await fetch(`${this.baseUrl}/collections/${COLLECTION_NAME}/points/search`, {
+    const response = await qdrantRequest(`${this.baseUrl}/collections/${COLLECTION_NAME}/points/search`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body)
     });
     
     if (!response.ok) {
+      await discardResponseBody(response);
       throw new Error(`Failed to search: ${response.statusText}`);
     }
-    
-    const data = await response.json();
+    const data = await readBoundedJson(response);
     return data.result || [];
   }
 
   async delete(id) {
-    const response = await fetch(`${this.baseUrl}/collections/${COLLECTION_NAME}/points/delete`, {
+    const response = await qdrantRequest(`${this.baseUrl}/collections/${COLLECTION_NAME}/points/delete`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -98,8 +151,10 @@ class QdrantClient {
     });
     
     if (!response.ok) {
+      await discardResponseBody(response);
       throw new Error(`Failed to delete point: ${response.statusText}`);
     }
+    await discardResponseBody(response);
   }
 
   // Convert string ID to numeric hash (Qdrant requires numeric IDs by default)
@@ -114,4 +169,9 @@ class QdrantClient {
   }
 }
 
-module.exports = new QdrantClient();
+module.exports = Object.assign(new QdrantClient(), {
+  qdrantRequest,
+  readBoundedJson,
+  REQUEST_TIMEOUT_MS,
+  MAX_RESPONSE_BYTES,
+});

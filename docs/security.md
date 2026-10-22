@@ -33,6 +33,10 @@ responses through a 5 MiB bound (error bodies are limited to 64 KiB). The
 configured Influx URL must still pass the explicit host allowlist, and metrics
 operations retain their action-specific identity and risk checks.
 
+Qdrant memory requests reject redirects and abort after 15 seconds. Semantic
+search responses are streamed through an 8 MiB bound, with oversized response
+bodies cancelled; the Qdrant endpoint remains an operator-configured service.
+
 ## MCP authentication
 
 The MCP server requires an API key. Clients can send it as:
