@@ -19,7 +19,7 @@ const fs = require("fs");
 const crypto = require("crypto");
 const os = require("os");
 const path = require("path");
-const { execFileSync, spawn } = require("child_process");
+const { execFile, execFileSync, spawn } = require("child_process");
 const { childProcessEnv } = require("../../security/child-process");
 const { z } = require("zod");
 const { enforcePathPolicy } = require("../path-policy");
@@ -200,6 +200,25 @@ function safeExecFileSync(command, args, options = {}) {
     maxBuffer: options.maxBuffer || 1024 * 1024,
     stdio: ["ignore", "pipe", "pipe"],
     env: childProcessEnv(options.env),
+  });
+}
+
+function safeExecFile(command, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, {
+      timeout: options.timeout || 30000,
+      encoding: options.encoding || "utf8",
+      maxBuffer: options.maxBuffer || 1024 * 1024,
+      windowsHide: true,
+      ...(options.signal ? { signal: options.signal } : {}),
+      env: childProcessEnv(options.env),
+    }, (error, stdout, stderr) => {
+      if (error) {
+        error.stdout = stdout;
+        error.stderr = stderr;
+        reject(error);
+      } else resolve(stdout);
+    });
   });
 }
 
@@ -709,10 +728,11 @@ async function sidekick_insight_report({ paths, title }) {
   }
 }
 
-async function sidekick_download({ url, output, format, audio_only }) {
+async function sidekick_download({ url, output, format, audio_only }, runtime = {}) {
   const denied = requireCanonicalInvocation("download");
   if (denied) return denied;
   let egressProxy = null;
+  let proxyUrl = null;
   try {
     if (!url) {
       return { content: [{ type: "text", text: "Error: url required" }], isError: true };
@@ -748,7 +768,7 @@ async function sidekick_download({ url, output, format, audio_only }) {
     };
     const policy = browserEgress.buildSessionPolicy({}, browserConfig());
     egressProxy = await browserEgress.createSessionProxy(policy, { credential: proxyCredential });
-    const proxyUrl = `http://${encodeURIComponent(proxyCredential.username)}:${encodeURIComponent(proxyCredential.password)}@127.0.0.1:${egressProxy.port}`;
+    proxyUrl = `http://${encodeURIComponent(proxyCredential.username)}:${encodeURIComponent(proxyCredential.password)}@127.0.0.1:${egressProxy.port}`;
 
     const maxDownloadBytes = Math.max(1 * 1024 * 1024, Math.min(2 * 1024 * 1024 * 1024, Number(process.env.SIDEKICK_MAX_DOWNLOAD_BYTES) || 512 * 1024 * 1024));
     const args = [
@@ -769,7 +789,7 @@ async function sidekick_download({ url, output, format, audio_only }) {
       args.push("-f", validDownloadFormat(format));
     }
     args.push("--paths", `temp:${path.dirname(outputTarget)}`, "-o", outputTarget, parsedUrl.href);
-    const result = safeExecFileSync(ytdlpCmd, args, { timeout: 300000, maxBuffer: 2 * 1024 * 1024 });
+    const result = await safeExecFile(ytdlpCmd, args, { timeout: 300000, maxBuffer: 2 * 1024 * 1024, signal: runtime.signal });
 
     // Prefer yt-dlp's post-move path, but retain the legacy destination line
     // for older versions. Revalidate the actual path before reading or
@@ -817,7 +837,8 @@ async function sidekick_download({ url, output, format, audio_only }) {
       log: result.substring(0, 500)
     }, null, 2) }] };
   } catch (e) {
-    return { content: [{ type: "text", text: "Error: " + e.message }], isError: true };
+    const message = String(e?.message || "Download failed").replace(proxyUrl || "\u0000", "[ephemeral egress proxy]").slice(0, 2000);
+    return { content: [{ type: "text", text: "Error: " + message }], isError: true };
   } finally {
     if (egressProxy) await egressProxy.close();
   }

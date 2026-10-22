@@ -219,11 +219,13 @@ Ambient yt-dlp configuration and plugin directories are disabled for the call.
 The tool also disables call-home/cache behavior, uses a socket timeout,
 restricts filenames, caps the download size (`SIDEKICK_MAX_DOWNLOAD_BYTES`,
 bounded to 1 MiB–2 GiB), and canonicalizes and revalidates the resulting file
-before custody registration. This is application-level proxy mediation; it is
-not an OS network sandbox. A compromised downloader or code path that ignores
-its explicit proxy option could still attempt direct egress. Deployments that
-need containment against a compromised downloader must apply an OS/network
-egress boundary as well.
+before custody registration. The downloader runs asynchronously, honors the
+dispatcher cancellation signal, and the temporary proxy is closed on success,
+failure, or cancellation. This is application-level proxy mediation; it is not
+an OS network sandbox. A compromised downloader or code path that ignores its
+explicit proxy option could still attempt direct egress. Deployments that need
+containment against a compromised downloader must apply an OS/network egress
+boundary as well.
 
 ## Approval queue
 
