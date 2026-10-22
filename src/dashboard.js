@@ -53,6 +53,7 @@ const { registerSummaryRoute } = require("./dashboard/summary-route");
 const { registerResearchSourceRoutes } = require("./dashboard/research-source-routes");
 const { registerNetworkScopeRoutes } = require("./dashboard/network-scope-routes");
 const { registerDatabaseRoutes } = require("./dashboard/database-routes");
+const { dashboardActor, createDashboardAuditEntry } = require("./dashboard/audit-identity");
 const { registerAgentProxyRoutes } = require("./dashboard/agent-proxy-routes");
 const { registerBlackboxRoutes } = require("./dashboard/blackbox-routes");
 const { registerPredictRoutes } = require("./dashboard/predict-routes");
@@ -297,28 +298,9 @@ function clearIdentityCookie(res, req = null) {
 // Audit logging
 const AUDIT_LOG = path.join(DATA_DIR, 'audit.jsonl');
 function auditLog(req, action, details, actor = null) {
-  const entry = {
-    timestamp: new Date().toISOString(),
-    action,
-    key: req.params.key || null,
-    ip: req.ip,
-    user: actor || (() => {
-      const auth = req.headers.authorization;
-      if (auth && auth.startsWith('Basic ')) {
-        return Buffer.from(auth.slice(6), 'base64').toString().split(':')[0];
-      }
-      return 'anonymous';
-    })(),
-    details
-  };
+  const entry = createDashboardAuditEntry(req, action, details, actor);
   const line = JSON.stringify(entry) + '\n';
   fs.appendFileSync(AUDIT_LOG, line);
-}
-
-function dashboardActor(req) {
-  const auth = req.headers.authorization;
-  if (auth && auth.startsWith('Basic ')) return Buffer.from(auth.slice(6), 'base64').toString().split(':')[0];
-  return 'anonymous';
 }
 
 function startDashboardExecution(req, action) {
