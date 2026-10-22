@@ -1191,6 +1191,7 @@ registerKvRoutes({
   valueSize,
   valueType,
   auditLog,
+  recordIdentityAudit: identity.recordAuditEvent,
   requireIdentityAdministrator,
   requireIdentityPermission,
   errorResponse: dashboardErrors.respond,
