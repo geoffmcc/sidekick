@@ -50,6 +50,13 @@ async function main() {
   assert.ok(capturedArgs.includes("--no-cache-dir"), "downloads must not persist an unbounded yt-dlp cache");
   assert.ok(capturedArgs.includes("--max-filesize"), "downloads must enforce a maximum file size");
   assert.ok(capturedArgs.includes("--socket-timeout"), "downloads must enforce a network socket timeout");
+  assert.ok(capturedArgs.includes("--proxy"), "all yt-dlp requests, including redirects and media segments, must use the governed egress proxy");
+  assert.ok(capturedArgs.includes("--ignore-config"), "downloads must not inherit user or system yt-dlp configuration");
+  assert.ok(capturedArgs.includes("--no-plugin-dirs"), "downloads must not load ambient yt-dlp plugins");
+  const proxyUrl = new URL(capturedArgs[capturedArgs.indexOf("--proxy") + 1]);
+  assert.strictEqual(proxyUrl.hostname, "127.0.0.1", "download proxy must be loopback-bound");
+  assert.ok(proxyUrl.username && proxyUrl.password, "download proxy must require an ephemeral credential");
+  assert.ok(Number(proxyUrl.port) > 0, "download proxy must use its ephemeral listener port");
 
   dns.promises.lookup = async () => [{ address: "127.0.0.1", family: 4 }];
   const refused = await callMcpTool("download", { url: "https://media.example/video" }, owner);

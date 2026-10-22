@@ -25,6 +25,8 @@ const { z } = require("zod");
 const { enforcePathPolicy } = require("../path-policy");
 const { requireToolExecution, requireCanonicalInvocation } = require("../read-authorization");
 const { validateOutboundUrl, resolveOutboundUrl } = require("../../security/outbound-url");
+const browserEgress = require("../../browser/egress");
+const { browserConfig } = require("../../browser/config");
 const { validDownloadFormat, validLangCode, validScale, validTimestamp, validWhisperModel } = require("../../core/command-validation");
 
 const YAML = require("yaml");
@@ -710,6 +712,7 @@ async function sidekick_insight_report({ paths, title }) {
 async function sidekick_download({ url, output, format, audio_only }) {
   const denied = requireCanonicalInvocation("download");
   if (denied) return denied;
+  let egressProxy = null;
   try {
     if (!url) {
       return { content: [{ type: "text", text: "Error: url required" }], isError: true };
@@ -735,8 +738,23 @@ async function sidekick_download({ url, output, format, audio_only }) {
     const venvPath = "/home/sidekick/.sidekick-tools/bin/yt-dlp";
     const ytdlpCmd = fs.existsSync(venvPath) ? venvPath : "yt-dlp";
 
+    // yt-dlp may follow redirects and fetch media from hosts other than the
+    // caller-supplied URL. Route those requests through the same DNS-pinning,
+    // public-only egress boundary used by browser sessions; validating only
+    // the initial URL does not constrain subsequent requests.
+    const proxyCredential = {
+      username: crypto.randomBytes(18).toString("base64url"),
+      password: crypto.randomBytes(32).toString("base64url"),
+    };
+    const policy = browserEgress.buildSessionPolicy({}, browserConfig());
+    egressProxy = await browserEgress.createSessionProxy(policy, { credential: proxyCredential });
+    const proxyUrl = `http://${encodeURIComponent(proxyCredential.username)}:${encodeURIComponent(proxyCredential.password)}@127.0.0.1:${egressProxy.port}`;
+
     const maxDownloadBytes = Math.max(1 * 1024 * 1024, Math.min(2 * 1024 * 1024 * 1024, Number(process.env.SIDEKICK_MAX_DOWNLOAD_BYTES) || 512 * 1024 * 1024));
     const args = [
+      "--ignore-config",
+      "--no-plugin-dirs",
+      "--proxy", proxyUrl,
       "--no-playlist",
       "--no-cache-dir",
       "--no-call-home",
@@ -800,6 +818,8 @@ async function sidekick_download({ url, output, format, audio_only }) {
     }, null, 2) }] };
   } catch (e) {
     return { content: [{ type: "text", text: "Error: " + e.message }], isError: true };
+  } finally {
+    if (egressProxy) await egressProxy.close();
   }
 }
 

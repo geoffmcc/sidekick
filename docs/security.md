@@ -211,15 +211,19 @@ The guard applies to direct path arguments on file, archive, search, diff, datab
 
 ### Media download egress
 
-The `download` tool performs a DNS preflight before invoking yt-dlp and refuses
-private, loopback, metadata, and link-local destinations unless the operator
-explicitly enables private fetches. It also disables yt-dlp call-home/cache
-behavior, uses a socket timeout, restricts filenames, caps the download size
-(`SIDEKICK_MAX_DOWNLOAD_BYTES`, bounded to 1 MiB–2 GiB), and canonicalizes and
-revalidates the resulting file before custody registration. yt-dlp remains a
-third-party downloader that may follow site-specific redirects or request
-additional CDN URLs; deployments requiring strict egress isolation must run it
-behind an OS/network-level egress policy or proxy.
+The `download` tool performs a DNS preflight and refuses private, loopback,
+metadata, and link-local destinations. It then gives yt-dlp an ephemeral,
+authenticated loopback proxy using the browser subsystem's pinned-DNS egress
+policy, so redirects and CDN requests receive the same destination checks.
+Ambient yt-dlp configuration and plugin directories are disabled for the call.
+The tool also disables call-home/cache behavior, uses a socket timeout,
+restricts filenames, caps the download size (`SIDEKICK_MAX_DOWNLOAD_BYTES`,
+bounded to 1 MiB–2 GiB), and canonicalizes and revalidates the resulting file
+before custody registration. This is application-level proxy mediation; it is
+not an OS network sandbox. A compromised downloader or code path that ignores
+its explicit proxy option could still attempt direct egress. Deployments that
+need containment against a compromised downloader must apply an OS/network
+egress boundary as well.
 
 ## Approval queue
 
