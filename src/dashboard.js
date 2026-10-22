@@ -132,6 +132,7 @@ app.use((req, res, next) => {
 app.use("/static", express.static(path.join(__dirname, "..", "static")));
 app.use(express.json({ limit: "1mb" }));
 const http = require("http");
+const { getJsonFromLocalService } = require("./dashboard/local-service-client");
 const AGENT_PORT = parseInt(process.env.SIDEKICK_AGENT_PORT || "4099", 10);
 
 // Interface enumeration is optional telemetry. A restricted runtime must not
@@ -350,39 +351,6 @@ function finishDashboardExecution(execution, state, details = {}) {
 
 function logError(url, status, error, page, userAgent, req = null) {
   return dashboardErrors.logError(req, error, { url, status, component: page, userAgent });
-}
-
-function getJsonFromLocalService(port, pathName, headers = {}, timeout = 3000) {
-  return new Promise((resolve, reject) => {
-    const req = http.request({
-      hostname: "127.0.0.1",
-      port,
-      path: pathName,
-      method: "GET",
-      headers,
-      timeout
-    }, (res) => {
-      let body = "";
-      res.setEncoding("utf8");
-      res.on("data", chunk => { body += chunk; });
-      res.on("end", () => {
-        if (res.statusCode < 200 || res.statusCode >= 300) {
-          reject(new Error("HTTP " + res.statusCode));
-          return;
-        }
-        try {
-          resolve(JSON.parse(body || "{}"));
-        } catch (e) {
-          reject(e);
-        }
-      });
-    });
-    req.on("timeout", () => {
-      req.destroy(new Error("request timed out"));
-    });
-    req.on("error", reject);
-    req.end();
-  });
 }
 
 // IP whitelist middleware

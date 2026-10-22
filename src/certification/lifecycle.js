@@ -62,8 +62,11 @@ async function boundedResponseText(response) {
         const next = await reader.read();
         if (next.done) break;
         const chunk = Buffer.from(next.value);
+        if (bytes + chunk.length > MAX_RESPONSE_BYTES) {
+          await reader.cancel().catch(() => {});
+          throw new Error("certification Agent response exceeds the size bound");
+        }
         bytes += chunk.length;
-        if (bytes > MAX_RESPONSE_BYTES) throw new Error("certification Agent response exceeds the size bound");
         chunks.push(chunk);
       }
     } finally {
@@ -71,9 +74,7 @@ async function boundedResponseText(response) {
     }
     return Buffer.concat(chunks).toString("utf8");
   }
-  const text = await response.text();
-  if (Buffer.byteLength(text, "utf8") > MAX_RESPONSE_BYTES) throw new Error("certification Agent response exceeds the size bound");
-  return text;
+  throw new Error("certification Agent response stream is unavailable");
 }
 
 function observation(taskId, projection, extra = {}) {
@@ -186,6 +187,7 @@ async function runAgentLifecycle(options) {
 module.exports = {
   TERMINAL_STATES,
   MAX_RESPONSE_BYTES,
+  boundedResponseText,
   createLifecycleExecutor,
   createLifecycleExecutorFromEnv,
   // Compatibility names kept inside the certification module while callers
