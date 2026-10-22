@@ -40,13 +40,17 @@ function registerConnectorRoutes({
   app.post("/api/connectors", (req, res) => {
     const actor = authenticatedUser(req);
     if (!actor || !requireIdentityPermission(req, res, "connectors.manage")) return;
+    try { auditLog(req, "connector.register.requested", { name: String(req.body?.name || "").slice(0, 120), type: String(req.body?.type || "").slice(0, 80), actor }); }
+    catch (error) { return errorResponse(req, res, error, { status: 503, code: "audit_unavailable", component: "connectors" }); }
     let execution = null;
     try {
       execution = startDashboardExecution(req, "connector.register");
       const connector = platformKernel.registerConnector({ ...req.body, source: "dashboard", actor_id: actor });
       finishDashboardExecution(execution, "completed", { result_status: "success", result_summary: `connector ${connector.name} registered` });
-      auditLog(req, "connector.register", { connector_id: connector.connector_id, name: connector.name, type: connector.type, actor });
-      res.json({ ok: true, connector });
+      let auditStatus = "complete";
+      try { auditLog(req, "connector.register", { connector_id: connector.connector_id, name: connector.name, type: connector.type, actor }); }
+      catch { auditStatus = "degraded"; }
+      res.json({ ok: true, connector, audit_status: auditStatus });
     } catch (error) {
       finishDashboardExecution(execution, "failed", { result_status: "failure", error_category: "connector_registration", result_summary: "connector registration failed" });
       return errorResponse(req, res, error, { status: 400, code: "invalid_request", component: "connectors" });
@@ -90,10 +94,15 @@ function registerConnectorRoutes({
     const actor = authenticatedUser(req);
     if (!actor || !requireIdentityPermission(req, res, "connectors.manage")) return;
     try {
-      const connector = platformKernel.configureConnector(req.params.connectorId, { ...req.body, source: "dashboard" });
-      auditLog(req, "connector.configure", { connector_id: connector.connector_id, actor, has_secret_ref: Boolean(connector.secret_ref) });
-      res.json({ ok: true, connector });
-    } catch (error) { return errorResponse(req, res, error, { status: 400, code: "invalid_request", component: "connectors" }); }
+      auditLog(req, "connector.configure.requested", { connector_id: req.params.connectorId, actor });
+    } catch (error) { return errorResponse(req, res, error, { status: 503, code: "audit_unavailable", component: "connectors" }); }
+    let connector;
+    try { connector = platformKernel.configureConnector(req.params.connectorId, { ...req.body, source: "dashboard", actor_id: actor }); }
+    catch (error) { return errorResponse(req, res, error, { status: 400, code: "invalid_request", component: "connectors" }); }
+    let auditStatus = "complete";
+    try { auditLog(req, "connector.configure", { connector_id: connector.connector_id, actor, has_secret_ref: Boolean(connector.secret_ref) }); }
+    catch { auditStatus = "degraded"; }
+    res.json({ ok: true, connector, audit_status: auditStatus });
   });
 
   app.post("/api/connectors/:connectorId/:action", (req, res) => {
@@ -102,11 +111,15 @@ function registerConnectorRoutes({
     const states = { enable: "enabled", disable: "disabled", retire: "retired" };
     const nextState = states[req.params.action];
     if (!nextState) return res.status(404).json({ ok: false, error: "unknown connector action" });
-    try {
-      const connector = platformKernel.transitionConnector(req.params.connectorId, nextState, { source: "dashboard", actor_id: actor });
-      auditLog(req, `connector.${req.params.action}`, { connector_id: connector.connector_id, actor });
-      res.json({ ok: true, connector });
-    } catch (error) { return errorResponse(req, res, error, { status: 400, code: "invalid_request", component: "connectors" }); }
+    try { auditLog(req, `connector.${req.params.action}.requested`, { connector_id: req.params.connectorId, actor }); }
+    catch (error) { return errorResponse(req, res, error, { status: 503, code: "audit_unavailable", component: "connectors" }); }
+    let connector;
+    try { connector = platformKernel.transitionConnector(req.params.connectorId, nextState, { source: "dashboard", actor_id: actor }); }
+    catch (error) { return errorResponse(req, res, error, { status: 400, code: "invalid_request", component: "connectors" }); }
+    let auditStatus = "complete";
+    try { auditLog(req, `connector.${req.params.action}`, { connector_id: connector.connector_id, actor }); }
+    catch { auditStatus = "degraded"; }
+    res.json({ ok: true, connector, audit_status: auditStatus });
   });
 }
 
