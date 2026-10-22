@@ -2,6 +2,19 @@
 
 Sidekick is powerful by design. It can execute commands, read and write files, manage services, store secrets, and call external APIs. Treat it like remote shell access to the host.
 
+## Shell command isolation
+
+Legacy shell commands used by cron jobs, runbooks, custom monitors, and health
+checks run through the OS-enforced Bubblewrap boundary. On Linux, Sidekick
+requires a verified Bubblewrap and `prlimit` installation; shell startup fails
+closed if either isolation setup or namespace creation fails. This legacy
+command path has no host workspace mounted and no network access. Commands that
+need project files or outbound access must use a governed execution path that
+grants those scopes explicitly. Windows and macOS currently have no equivalent
+backend for this path, so shell commands are rejected there rather than run
+directly on the host. Dedicated service and infrastructure tools remain the
+supported way to perform those operations.
+
 ## MCP authentication
 
 The MCP server requires an API key. Clients can send it as:

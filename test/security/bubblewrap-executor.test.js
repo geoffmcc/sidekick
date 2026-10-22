@@ -3,9 +3,11 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const http = require("node:http");
+const os = require("node:os");
 const path = require("node:path");
 const { after, test } = require("node:test");
 const executor = require("../../src/core/bubblewrap-executor");
+const { runBoundedShell } = require("../../src/security/command-execution");
 
 const envNames = ["SIDEKICK_ALLOWED_PATHS", "SIDEKICK_DENIED_PATHS", "SIDEKICK_MCP_ALLOWED_PATHS", "SIDEKICK_MCP_DENIED_PATHS", "BWRAP_SYNTHETIC_SECRET"];
 const originalEnv = new Map(envNames.map(name => [name, process.env[name]]));
@@ -58,6 +60,32 @@ test("bubblewrap starts only after namespace setup and clears inherited environm
   });
   assert.equal(result.exitCode, 0, result.stderr);
   assert.equal(result.stdout, "isolated-command-ok");
+});
+
+test("legacy bounded-shell callers get the OS boundary, no host filesystem, and no host network", { skip: process.platform !== "linux" || !fs.existsSync(executor.DEFAULT_BWRAP) }, async () => {
+  fixtureRoot = fs.mkdtempSync(path.join("/var/tmp", "sidekick-bounded-shell-"));
+  const outside = path.join(fixtureRoot, "outside.txt");
+  const isolatedWrite = path.join(os.tmpdir(), `sidekick-bounded-shell-${process.pid}-${Date.now()}`);
+  fs.writeFileSync(outside, "host-filesystem-secret");
+
+  assert.throws(() => runBoundedShell(`cat ${shellQuote(outside)}`), error => {
+    assert.doesNotMatch(String(error.stdout || "") + String(error.stderr || "") + error.message, /host-filesystem-secret/);
+    return true;
+  }, "an unscoped legacy shell caller must not read a host file");
+
+  assert.equal(runBoundedShell(`printf isolated > ${shellQuote(isolatedWrite)} && printf done`).trim(), "done");
+  assert.equal(fs.existsSync(isolatedWrite), false, "writes to the sandbox tmpfs must not alter host /tmp");
+
+  const server = http.createServer((_req, res) => res.end("host-network-visible"));
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  const port = server.address().port;
+  const client = `const net=require("node:net");const s=net.connect(${port},"127.0.0.1");s.setTimeout(500);s.on("connect",()=>{console.error("HOST_NETWORK_VISIBLE");process.exit(9)});s.on("error",()=>{console.log("NETWORK_ISOLATED")});s.on("timeout",()=>{console.error("NETWORK_TIMEOUT");process.exit(8)})`;
+  try {
+    assert.equal(runBoundedShell(`/usr/bin/node -e ${shellQuote(client)}`).trim(), "NETWORK_ISOLATED");
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+    try { fs.unlinkSync(isolatedWrite); } catch {}
+  }
 });
 
 test("command resource limits are kernel-enforced and cannot be raised by the sandbox child", { skip: process.platform !== "linux" || !fs.existsSync(executor.DEFAULT_BWRAP) }, async () => {
