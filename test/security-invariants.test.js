@@ -289,6 +289,29 @@ test("database diff bounds and validates imported snapshot files", async () => {
     const invalid = await dispatchTool({ name: "db_diff", args: { snapshot_a: malformed, snapshot_b: "current" }, context });
     assert.equal(invalid.isError, true);
     assert.match(invalid.content[0].text, /row arrays/);
+
+    const raced = path.join(directory, "raced.json");
+    const displaced = path.join(directory, "displaced.json");
+    fs.writeFileSync(raced, JSON.stringify({ tables: { users: [] } }));
+    const originalOpenSync = fs.openSync;
+    let replaced = false;
+    fs.openSync = function (filePath, ...args) {
+      if (!replaced && path.resolve(String(filePath)) === path.resolve(raced)) {
+        replaced = true;
+        fs.renameSync(raced, displaced);
+        fs.writeFileSync(raced, JSON.stringify({ tables: { users: [{ unexpected: true }] } }));
+      }
+      return originalOpenSync.call(this, filePath, ...args);
+    };
+    let raceResult;
+    try {
+      raceResult = await dispatchTool({ name: "db_diff", args: { snapshot_a: raced, snapshot_b: "current" }, context });
+    } finally {
+      fs.openSync = originalOpenSync;
+    }
+    assert.equal(replaced, true, "test must replace the path between its lstat and open");
+    assert.equal(raceResult.isError, true);
+    assert.match(raceResult.content[0].text, /changed while being opened/);
   } finally {
     if (previousAllowed === undefined) delete process.env.SIDEKICK_ALLOWED_PATHS;
     else process.env.SIDEKICK_ALLOWED_PATHS = previousAllowed;
