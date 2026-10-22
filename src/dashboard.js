@@ -133,6 +133,7 @@ app.use("/static", express.static(path.join(__dirname, "..", "static")));
 app.use(express.json({ limit: "1mb" }));
 const http = require("http");
 const { getJsonFromLocalService } = require("./dashboard/local-service-client");
+const { abortUpstreamOnDisconnect } = require("./dashboard/upstream-lifecycle");
 const AGENT_PORT = parseInt(process.env.SIDEKICK_AGENT_PORT || "4099", 10);
 
 // Interface enumeration is optional telemetry. A restricted runtime must not
@@ -505,6 +506,7 @@ app.use('/grafana', (req, res) => {
     }
     proxyRes.pipe(res);
   });
+  if (req.method === "GET" || req.method === "HEAD") abortUpstreamOnDisconnect(res, proxyReq);
   proxyReq.on('timeout', () => proxyReq.destroy(new Error('Grafana proxy timed out')));
   proxyReq.on('error', error => {
     if (!res.headersSent) dashboardErrors.respond(req, res, error, { status: 502, code: "upstream_unavailable", component: "grafana" });

@@ -1,5 +1,6 @@
 /** Browser-facing Agent relay. The Agent service owns task authorization and execution. */
 const { createAgentProxyHeaders } = require("../security/agent-proxy-auth");
+const { abortUpstreamOnDisconnect } = require("./upstream-lifecycle");
 
 function registerAgentProxyRoutes({ app, http, agentPort, agentProxySecret, errorResponse }) {
   function proxyAgent(req, res, method, body) {
@@ -20,9 +21,7 @@ function registerAgentProxyRoutes({ app, http, agentPort, agentProxySecret, erro
     if (method === "GET") {
       // GET relays, including SSE, are read-only. Tear down their upstream
       // socket when the browser leaves so abandoned streams cannot accumulate.
-      res.on("close", () => {
-        if (!res.writableEnded) upstream.destroy();
-      });
+      abortUpstreamOnDisconnect(res, upstream);
     }
     upstream.on("error", error => { if (!res.headersSent) errorResponse(req, res, error, { status: 502, code: "upstream_unavailable", component: "agent_proxy" }); else res.end(); });
     if (body) upstream.write(body);
