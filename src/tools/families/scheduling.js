@@ -28,6 +28,7 @@ const { runBoundedShell } = require("../../security/command-execution");
 const { generateId } = require("../../core/ids");
 const { readSecret } = require("../../core/runtime-secrets");
 const { createScheduledAuthority, verifyScheduledAuthority } = require("../../security/scheduled-authority");
+const { restoreScheduledContext, authorizeScheduledAgentDelay } = require("../../agent/delay-policy");
 const { resolveOutboundUrl } = require("../../security/outbound-url");
 const { checkEndpoint } = require("../../security/endpoint-probe");
 const networkScopes = require("../../security/network-scopes");
@@ -43,6 +44,18 @@ const {
   appendScheduledPlatformEvent,
   claimScheduledDefinition,
 } = require("../scheduled-execution");
+
+function getScheduledAgentDescriptor(name) {
+  // Resolve lazily to avoid a tools -> scheduling -> tools initialization cycle.
+  const tools = require("../index");
+  const { createAgentCatalog } = require("../../agent/catalog");
+  const catalog = createAgentCatalog({
+    getToolDefsForSource: tools.getToolDefsForSource,
+    getBuiltinRegistry: tools.getBuiltinRegistry,
+    crypto: require("crypto"),
+  });
+  return catalog.getLiveAgentDescriptor(name);
+}
 
 function getCurrentSource() {
   return toolContext.getExecutionSource() || "unknown";
@@ -497,6 +510,28 @@ async function sidekick_delay({ action, id, when, name, tool, args }) {
     if (!verifiedAuthority) {
       return { content: [{ type: "text", text: `Delay ${id} has no valid authority record and will not be executed` }], isError: true, code: "scheduled_authority_invalid" };
     }
+    let scheduledContext = null;
+    let authorityPolicy = null;
+    try {
+      scheduledContext = restoreScheduledContext(verifiedAuthority);
+      if (scheduledContext) authorityPolicy = authorizeScheduledAgentDelay(delay, scheduledContext, { getDescriptor: getScheduledAgentDescriptor });
+    } catch {}
+    if (!scheduledContext || !authorityPolicy?.ok) {
+      delay.status = "failed";
+      delay.completedAt = new Date().toISOString();
+      delay.error = "Scheduled authority is no longer valid or permitted";
+      transitionScheduledPlatformExecution("delay", delay, "failed", {
+        source: "delay",
+        actor: "delay",
+        reason: delay.error,
+        result_status: "failure",
+        error_category: "authorization_denied",
+        result_summary: delay.error,
+      });
+      appendScheduledPlatformEvent("delay", delay, "schedule.delay.failed", { error: delay.error }, { source: "delay", actor: "delay", severity: "error" });
+      saveDelays(delays);
+      return { content: [{ type: "text", text: `Delay ${id} cannot run because its scheduled authority is no longer valid or permitted` }], isError: true, code: "scheduled_authority_invalid" };
+    }
 
     // Fenced claim (Phase 4/B): of the agent timer and any MCP-side run, only
     // one claimant dispatches. Any claim failure refuses dispatch — a terminal
@@ -532,6 +567,13 @@ async function sidekick_delay({ action, id, when, name, tool, args }) {
         parentId: delay.platform_execution_id || null,
         rootExecutionId: delay.platform_execution_id || null,
         correlationId: delay.id,
+        project: scheduledContext.project || undefined,
+        taskId: scheduledContext.taskId || undefined,
+        authIdentity: scheduledContext.authIdentity,
+        agentAuthorityContext: scheduledContext.agentAuthorityContext || undefined,
+        authorityApprovalRequired: authorityPolicy.authorityApprovalRequired === true,
+        authorityRisk: authorityPolicy.authorityRisk || undefined,
+        authorityReason: authorityPolicy.authorityReason || undefined,
       });
       if (renewTimer) clearInterval(renewTimer);
       // Release before the completion write: a rejected release means this

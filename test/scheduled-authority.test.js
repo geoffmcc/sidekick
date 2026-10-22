@@ -176,11 +176,15 @@ test("due-time dispatch refuses a now-disallowed Agent authority envelope", asyn
 test("scheduled creation and Agent recovery wire the signed record into the governed dispatch", () => {
   const scheduling = fs.readFileSync(require.resolve("../src/tools/families/scheduling"), "utf8");
   const executor = fs.readFileSync(require.resolve("../src/agent/delay-execution"), "utf8");
+  const policy = fs.readFileSync(require.resolve("../src/agent/delay-policy"), "utf8");
   const agent = fs.readFileSync(require.resolve("../src/agent"), "utf8");
   assert.match(scheduling, /createScheduledAuthority\(/);
   assert.match(scheduling, /verifyScheduledAuthority\(/);
-  assert.match(executor, /authentication\.getCredential|const credential = getCredential/);
-  assert.match(executor, /credential\.revoked_at/);
+  assert.match(executor, /restoreScheduledContext\(/);
+  assert.match(policy, /getCredential\(stored\.credential_id\)/);
+  assert.match(policy, /credential\.revoked_at/);
   assert.match(executor, /const result = await callAgentTool\([\s\S]*?authIdentity: scheduledContext\.authIdentity/);
-  assert.match(agent, /authorizeScheduledDelay:[\s\S]*?decideAutonomy\(/);
+  assert.match(agent, /authorizeScheduledDelay:[\s\S]*?authorizeScheduledAgentDelay\(/);
+  assert.match(scheduling, /restoreScheduledContext\(verifiedAuthority\)/);
+  assert.match(scheduling, /authorizeScheduledAgentDelay\(delay, scheduledContext/);
 });

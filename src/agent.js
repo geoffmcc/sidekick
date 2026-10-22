@@ -12,6 +12,7 @@ const projectAccess = require("./core/project-access");
 const { createAgentCatalog } = require("./agent/catalog");
 const { persistedTaskAuthIdentity } = require("./agent/task-identity");
 const { authorizeRecoveredTask } = require("./agent/recovery-authorization");
+const { authorizeScheduledAgentDelay } = require("./agent/delay-policy");
 const { readSecret } = require("./core/runtime-secrets");
 const { verifyAgentProxyRequest, createSqliteNonceConsumer, assertDistinctProxySecret, assertDistinctAgentSchedulerSecret } = require("./security/agent-proxy-auth");
 const { taskBelongsToIdentity, canReviewUnownedTask, isAllowedServiceRoute } = require("./agent/task-access");
@@ -313,28 +314,7 @@ const executeDelay = createDelayExecution({
   claimExecution: platformKernel.claimExecution,
   releaseScheduledClaim, startScheduledLeaseRenewal,
   transitionScheduledPlatformExecution, appendScheduledPlatformEvent,
-  authorizeScheduledDelay: (delay, scheduledContext) => {
-    const authorityContext = scheduledContext.agentAuthorityContext;
-    if (!authorityContext) return { ok: true };
-    const descriptor = getLiveAgentDescriptor(delay.tool);
-    const decision = decideAutonomy({
-      descriptor,
-      args: delay.args || {},
-      envelope: authorityContext.envelope,
-      principalRef: authorityContext.principal_ref,
-      projectRef: scheduledContext.project || authorityContext.project_ref,
-      workspaceRef: authorityContext.workspace_ref,
-      repositoryRef: authorityContext.repository_ref,
-      capabilityRef: delay.tool,
-      descriptorVersion: descriptor?.version,
-    });
-    return {
-      ok: decision.decision !== "deny",
-      authorityApprovalRequired: decision.approval_required,
-      authorityRisk: decision.risk_class,
-      authorityReason: decision.reason,
-    };
-  },
+  authorizeScheduledDelay: (delay, scheduledContext) => authorizeScheduledAgentDelay(delay, scheduledContext, { getDescriptor: getLiveAgentDescriptor }),
   getDelayTimers: () => delayTimers, processId: process.pid,
 });
 ({ delayTimers, scheduleDelay, loadAndScheduleDelays } = createDelayScheduler({ loadDelays, executeDelay }));

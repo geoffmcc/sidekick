@@ -23,7 +23,7 @@ const db = require('../src/db');
 const scheduledExecution = require('../src/tools/scheduled-execution');
 const { createDelayScheduler } = require('../src/agent/delay-scheduler');
 const toolContext = require('../src/tools/context');
-const { createServiceContext } = require('./helpers/authorized-context');
+const { createOwnerContext, createServiceContext } = require('./helpers/authorized-context');
 
 const TOOLS = require('./helpers/authorized-context').withOwnerToolContext(tools.TOOLS, { source: 'mcp' });
 
@@ -126,6 +126,53 @@ console.log('Passed\n');
     assert.equal(anonymous.requested_by_principal_id, null);
     assert.equal(anonymous.acting_for_principal_id, null);
     assert.equal(anonymous.executed_by_principal_id, null);
+    console.log('Passed\n');
+
+    console.log('Test SP.0c: manual delay run preserves the signed Agent authority envelope');
+    const ownerContext = createOwnerContext({ source: 'mcp' });
+    const { createAuthorityEnvelope } = require('../src/agent/authority');
+    assert.ok(tools.getToolDefsForSource('agent').some(tool => tool.name === 'respond'), 'respond must be in the live Agent catalog for this regression');
+    const restrictedAgentContext = toolContext.createInternalExecutionContext({
+      ...ownerContext,
+      source: 'mcp',
+      agentAuthorityContext: {
+        envelope: createAuthorityEnvelope({ allowed_effects: ['read_only'], capability_restrictions: ['bash'] }),
+        principal_ref: ownerContext.authIdentity.principal_id,
+      },
+    });
+    const addedDelay = await toolContext.runWithContext(restrictedAgentContext, () => TOOLS.delay({
+      action: 'add', when: '1h', name: 'restricted agent fixture', tool: 'respond', args: { text: 'must not run outside signed envelope' },
+    }));
+    assert.equal(addedDelay.isError, undefined, addedDelay.content?.[0]?.text);
+    const restrictedDelay = tools.loadDelays().find(delay => delay.name === 'restricted agent fixture');
+    assert.ok(restrictedDelay, 'the scheduled fixture must be persisted');
+    const runResult = await toolContext.runWithContext(restrictedAgentContext, () => TOOLS.delay({ action: 'run', id: restrictedDelay.id }));
+    assert.equal(runResult.isError, true, runResult.content?.[0]?.text);
+    const afterManualRun = tools.loadDelays().find(delay => delay.id === restrictedDelay.id);
+    assert.equal(afterManualRun.status, 'failed');
+    assert.match(afterManualRun.error, /authority is no longer valid or permitted/);
+    console.log('Passed\n');
+
+    console.log('Test SP.0d: manual delay run intersects current credential scopes');
+    const manualCredential = require('../src/core/authentication').createCredential({
+      principalId: ownerContext.authIdentity.principal_id,
+      displayName: 'Manual delay scope fixture',
+      scopes: ['tools.execute', 'tools.execute_high'],
+    });
+    const manualAuthIdentity = require('../src/core/authentication').authenticateCredential(manualCredential.token);
+    const credentialContext = toolContext.createInternalExecutionContext({ source: 'mcp', authIdentity: manualAuthIdentity });
+    const credentialDelayResult = await toolContext.runWithContext(credentialContext, () => TOOLS.delay({
+      action: 'add', when: '1h', name: 'credential scope fixture', tool: 'respond', args: { text: 'must lose revoked execution scope' },
+    }));
+    assert.equal(credentialDelayResult.isError, undefined, credentialDelayResult.content?.[0]?.text);
+    const credentialDelay = tools.loadDelays().find(delay => delay.name === 'credential scope fixture');
+    assert.ok(credentialDelay);
+    db.getDb().prepare("UPDATE identity_credentials SET scopes_json = '[]' WHERE credential_id = ?").run(manualCredential.credential.credential_id);
+    const credentialRunResult = await toolContext.runWithContext(credentialContext, () => TOOLS.delay({ action: 'run', id: credentialDelay.id }));
+    assert.equal(credentialRunResult.isError, true, credentialRunResult.content?.[0]?.text);
+    const credentialDelayAfterRun = tools.loadDelays().find(delay => delay.id === credentialDelay.id);
+    assert.equal(credentialDelayAfterRun.status, 'failed');
+    assert.match(credentialDelayAfterRun.result, /Authorization denied/);
     console.log('Passed\n');
 
     if (process.platform !== 'linux') {
