@@ -1,10 +1,12 @@
 // Installed as /etc/polkit-1/rules.d/50-sidekick.rules.
-// This grants the Sidekick OS account unit-state operations only. It does not
-// grant unit-file enablement, daemon reload, environment changes, or general
-// administrative access.
+// This grants unit-state operations only to calls originating in the MCP
+// systemd service with NoNewPrivileges enabled. It does not grant unit-file
+// enablement, daemon reload, environment changes, or general administration.
 polkit.addRule(function(action, subject) {
   if (action.id !== "org.freedesktop.systemd1.manage-units" ||
-      subject.user !== "@SIDEKICK_USER@") {
+      subject.user !== "@SIDEKICK_USER@" ||
+      subject.system_unit !== "sidekick-mcp.service" ||
+      subject.no_new_privileges !== true) {
     return;
   }
 

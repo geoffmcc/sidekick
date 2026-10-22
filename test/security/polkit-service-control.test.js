@@ -11,7 +11,14 @@ const root = path.join(__dirname, "../..");
 const ruleTemplate = fs.readFileSync(path.join(root, "systemd/sidekick-polkit.rules"), "utf8");
 const ruleSource = ruleTemplate.replaceAll("@SIDEKICK_USER@", "sidekick");
 
-function evaluateRule({ id, unit, verb, user = "sidekick" }) {
+function evaluateRule({
+  id,
+  unit,
+  verb,
+  user = "sidekick",
+  systemUnit = "sidekick-mcp.service",
+  noNewPrivileges = true,
+}) {
   let registered;
   const polkit = {
     Result: { YES: "yes" },
@@ -21,7 +28,7 @@ function evaluateRule({ id, unit, verb, user = "sidekick" }) {
   assert.equal(typeof registered, "function", "rule registers with polkit");
   return registered(
     { id, lookup(key) { return key === "unit" ? unit : key === "verb" ? verb : undefined; } },
-    { user }
+    { user, system_unit: systemUnit, no_new_privileges: noNewPrivileges }
   );
 }
 
@@ -38,6 +45,11 @@ test("polkit denies other identities, units, verbs, and systemd privilege classe
   assert.equal(evaluateRule({ id: manageUnits, unit: "sshd.service", verb: "restart" }), undefined);
   assert.equal(evaluateRule({ id: manageUnits, unit: "sidekick-mcp.service", verb: "kill" }), undefined);
   assert.equal(evaluateRule({ id: manageUnits, unit: "sidekick-mcp.service", verb: "restart", user: "other" }), undefined);
+  assert.equal(evaluateRule({ id: manageUnits, unit: "sidekick-mcp.service", verb: "restart", systemUnit: "sidekick-agent.service" }), undefined);
+  assert.equal(evaluateRule({ id: manageUnits, unit: "sidekick-mcp.service", verb: "restart", systemUnit: "sidekick-dashboard.service" }), undefined);
+  assert.equal(evaluateRule({ id: manageUnits, unit: "sidekick-mcp.service", verb: "restart", systemUnit: null }), undefined);
+  assert.equal(evaluateRule({ id: manageUnits, unit: "sidekick-mcp.service", verb: "restart", noNewPrivileges: false }), undefined);
+  assert.equal(evaluateRule({ id: manageUnits, unit: "sidekick-mcp.service", verb: "restart", noNewPrivileges: null }), undefined);
   assert.equal(evaluateRule({ id: "org.freedesktop.systemd1.manage-unit-files", unit: "sidekick-mcp.service", verb: "enable" }), undefined);
   assert.equal(evaluateRule({ id: "org.freedesktop.systemd1.reload-daemon", unit: null, verb: null }), undefined);
 });
