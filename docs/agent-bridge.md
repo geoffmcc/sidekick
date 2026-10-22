@@ -329,8 +329,8 @@ breaking the follow-up.
 
 ## Watches
 
-`sidekick_watch` stores recurring watches. The Agent Bridge loads active watches at startup and checks them on intervals. Watch sources include services, processes, endpoints, and files. If a watch condition triggers, it can call another Sidekick tool with templated values such as source, target, status, and time.
+`sidekick_watch` stores recurring watches. The Agent Bridge loads active watches at startup and checks them on intervals. Watch sources include services, processes, endpoints, and files. Endpoint probes accept only HTTP(S), pin the resolved destination, disable ambient curl configuration, and do not follow redirects. Private targets require an operator-created network scope; the watch binds to the scope revision that was current when it was created, and a scope change or revocation stops the probe until the watch is recreated. If a watch condition triggers, it can call another Sidekick tool with templated values such as source, target, status, and time.
 
 ## Safety limits
 
-The main safety control is `SIDEKICK_MAX_ITERATIONS`, which defaults to 15. Tool-level safety still applies: dangerous shell commands are blocked by pattern checks, output redaction is applied, and tools return structured errors.
+The main safety control is `SIDEKICK_MAX_ITERATIONS`, which defaults to 15. Tool-level authorization and OS-enforced command isolation still apply; output redaction is applied, and tools return structured errors.

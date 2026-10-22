@@ -28,6 +28,9 @@ const { runBoundedShell } = require("../../security/command-execution");
 const { generateId } = require("../../core/ids");
 const { readSecret } = require("../../core/runtime-secrets");
 const { createScheduledAuthority, verifyScheduledAuthority } = require("../../security/scheduled-authority");
+const { resolveOutboundUrl } = require("../../security/outbound-url");
+const { checkEndpoint } = require("../../security/endpoint-probe");
+const networkScopes = require("../../security/network-scopes");
 const { reloadAgentScheduler } = require("../../agent/scheduler-reload");
 const { assertDistinctAgentSchedulerSecret } = require("../../security/agent-proxy-auth");
 const { callTool } = require("../dispatch-seam");
@@ -614,15 +617,6 @@ function checkProcess(processName) {
   }
 }
 
-function checkEndpoint(url) {
-  try {
-    const output = execFileSync("curl", ["-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "5", url], { encoding: "utf-8", timeout: 10000, env: childProcessEnv() }).trim();
-    return { status: parseInt(output), ok: output.startsWith("2") };
-  } catch {
-    return { status: 0, ok: false };
-  }
-}
-
 function checkFile(filePath, pattern) {
   try {
     const output = fs.readFileSync(filePath, "utf-8");
@@ -685,7 +679,7 @@ async function executeWatchAction(watch, checkResult, metadata = {}) {
   }
 }
 
-async function sidekick_watch({ action, id, name, source, target, condition, interval, action_tool, action_args, pause }) {
+async function sidekick_watch({ action, id, name, source, target, condition, interval, action_tool, action_args, pause, network_scope }) {
   const authorizationError = requireToolExecution({ tool: "watch", action: action || null, id: id || null }, "tools.execute_high", "watch");
   if (authorizationError) return authorizationError;
   const watches = loadWatches();
@@ -699,6 +693,24 @@ async function sidekick_watch({ action, id, name, source, target, condition, int
     const validSources = ["service", "process", "endpoint", "file"];
     if (!validSources.includes(source)) {
       return { content: [{ type: "text", text: `Invalid source. Use: ${validSources.join(", ")}` }], isError: true };
+    }
+    if (network_scope && source !== "endpoint") {
+      return { content: [{ type: "text", text: "network_scope is only valid for endpoint watches" }], isError: true };
+    }
+    let networkScopeRevision = null;
+    if (source === "endpoint") {
+      let scope = null;
+      if (network_scope) {
+        scope = networkScopes.get(network_scope);
+        if (!scope || !scope.enabled || !scope.is_current) {
+          return { content: [{ type: "text", text: "Endpoint watch network scope is missing, disabled, or superseded" }], isError: true, code: "network_scope_unavailable" };
+        }
+      }
+      const destination = await resolveOutboundUrl(target, "endpoint", scope ? { networkScope: scope } : {});
+      if (destination.refusal && !["dns_resolution_failed"].includes(destination.code)) {
+        return { content: [{ type: "text", text: `Endpoint watch target denied (${destination.code}): ${destination.refusal}` }], isError: true, code: destination.code };
+      }
+      networkScopeRevision = scope?.revision || null;
     }
     if (source === "file") {
       const policyError = enforcePathPolicy(target, "read");
@@ -719,6 +731,8 @@ async function sidekick_watch({ action, id, name, source, target, condition, int
       name,
       source,
       target,
+      network_scope: source === "endpoint" ? network_scope || null : null,
+      network_scope_revision: source === "endpoint" ? networkScopeRevision || null : null,
       condition,
       interval: interval || "60s",
       action_tool: action_tool || "sidekick_notify",
@@ -733,13 +747,13 @@ async function sidekick_watch({ action, id, name, source, target, condition, int
       operationType: "watch_monitor",
       state: "queued",
       risk: getToolRisk(watch.action_tool),
-      metadata: { source: watch.source, target: watch.target, condition: watch.condition, interval: watch.interval, action_tool: watch.action_tool },
+      metadata: { source: watch.source, target: watch.target, network_scope: watch.network_scope, network_scope_revision: watch.network_scope_revision, condition: watch.condition, interval: watch.interval, action_tool: watch.action_tool },
       reason: "watch scheduled",
     });
 
     watches.push(watch);
     saveWatches(watches);
-    appendScheduledPlatformEvent("watch", watch, "schedule.watch.added", { source: watch.source, target: watch.target, condition: watch.condition, interval: watch.interval });
+    appendScheduledPlatformEvent("watch", watch, "schedule.watch.added", { source: watch.source, target: watch.target, network_scope: watch.network_scope, network_scope_revision: watch.network_scope_revision, condition: watch.condition, interval: watch.interval });
 
     const reload = await reloadAgentScheduler("watches", { secret: agentSchedulerKey });
     const message = reload.ok
@@ -761,6 +775,7 @@ async function sidekick_watch({ action, id, name, source, target, condition, int
       for (const w of active) {
         output += `- **${w.id}**: ${w.name}\n`;
         output += `  - Source: ${w.source} ${w.target}\n`;
+        if (w.network_scope) output += `  - Network scope: ${w.network_scope}\n`;
         output += `  - Condition: ${w.condition}\n`;
         output += `  - Interval: ${w.interval}\n`;
         output += `  - Triggers: ${w.triggerCount}\n`;
@@ -879,19 +894,6 @@ async function sidekick_watch({ action, id, name, source, target, condition, int
     // lease fresh forever) and release the claim.
     const renewTimer = startScheduledLeaseRenewal(watch.platform_execution_id, checkClaim.claim);
     try {
-      let checkResult;
-      if (watch.source === "service") {
-        checkResult = checkService(watch.target);
-      } else if (watch.source === "process") {
-        checkResult = checkProcess(watch.target);
-      } else if (watch.source === "endpoint") {
-        checkResult = checkEndpoint(watch.target);
-      } else if (watch.source === "file") {
-        const policyError = enforcePathPolicy(watch.target, "read");
-        if (policyError) return policyError;
-        checkResult = checkFile(watch.target, watch.condition === "content_matches" ? watch.value : null);
-      }
-
       const checkExecution = createScheduledPlatformExecution("watch", watch, {
         attach: false,
         parentExecutionId: watch.platform_execution_id || null,
@@ -899,9 +901,44 @@ async function sidekick_watch({ action, id, name, source, target, condition, int
         operationType: "watch_check",
         state: "running",
         risk: getToolRisk(watch.action_tool),
-        metadata: { source: watch.source, target: watch.target, condition: watch.condition },
+        metadata: { source: watch.source, target: watch.target, network_scope: watch.network_scope || null, network_scope_revision: watch.network_scope_revision || null, condition: watch.condition },
         reason: "watch check started",
       });
+      let checkResult;
+      try {
+        if (watch.source === "service") {
+          checkResult = checkService(watch.target);
+        } else if (watch.source === "process") {
+          checkResult = checkProcess(watch.target);
+        } else if (watch.source === "endpoint") {
+          checkResult = await checkEndpoint(watch.target, watch.network_scope, watch.network_scope_revision);
+        } else if (watch.source === "file") {
+          const policyError = enforcePathPolicy(watch.target, "read");
+          if (policyError) {
+            platformKernel.transitionExecution(checkExecution.execution_id, "failed", {
+              source: "watch", actor_id: getCurrentSource() || "unknown",
+              reason: "watch file target denied by current path policy",
+              result_status: "failure", error_category: "path_policy_denied",
+              result_summary: "watch file target denied by current path policy", correlation_id: watch.id,
+            });
+            appendScheduledPlatformEvent("watch", watch, "schedule.watch.check_failed", { code: "path_policy_denied" }, { severity: "error", executionId: checkExecution?.execution_id, rootExecutionId: watch.platform_execution_id || checkExecution?.root_execution_id });
+            return policyError;
+          }
+          checkResult = checkFile(watch.target, watch.condition === "content_matches" ? watch.value : null);
+        }
+      } catch (error) {
+        const reason = error.policyDenied ? "watch check denied by current security policy" : "watch check failed";
+        if (checkExecution) platformKernel.transitionExecution(checkExecution.execution_id, "failed", {
+          source: "watch", actor_id: getCurrentSource() || "unknown", reason,
+          result_status: "failure", error_category: error.code || "watch_check_failed",
+          result_summary: reason, correlation_id: watch.id,
+        });
+        appendScheduledPlatformEvent("watch", watch, "schedule.watch.check_failed", {
+          code: String(error.code || "watch_check_failed").slice(0, 80),
+        }, { severity: "error", executionId: checkExecution?.execution_id, rootExecutionId: watch.platform_execution_id || checkExecution?.root_execution_id });
+        return { content: [{ type: "text", text: reason }], isError: true, code: error.code || "watch_check_failed" };
+      }
+
       const triggered = evaluateCondition(watch, checkResult);
 
       if (triggered) {
@@ -974,7 +1011,8 @@ const SCHEMAS = {
     id: z.string().optional().describe("Watch ID (required for remove/pause/check)"),
     name: z.string().optional().describe("Human-readable watch name"),
     source: z.string().optional().describe("Watch source: service, process, endpoint, or file"),
-    target: z.string().optional().describe("Watch target: service name, process name, URL, or file path"),
+    target: z.string().optional().describe("Watch target: service name, process name, HTTP(S) URL, or file path"),
+    network_scope: z.string().max(80).optional().describe("Operator-created network scope for private endpoint targets; revalidated on every check"),
     condition: z.string().optional().describe("Trigger condition: status!=active, not_running, status!=200, content_matches, exists, not_exists"),
     interval: z.string().optional().describe("Check interval: 30s, 5m, 1h (default: 60s)"),
     action_tool: z.string().optional().describe("Tool to call when triggered (default: notify)"),
@@ -1010,7 +1048,7 @@ const descriptors = Object.freeze([
     name: "watch",
     description: "Event-driven monitoring: watch services, processes, endpoints, or files and trigger actions on conditions",
     schema: SCHEMAS.watch,
-    args: { action: "string (add|list|remove|pause|check)", id: "string (optional, for remove/pause/check)", name: "string (optional, watch name)", source: "string (optional, service|process|endpoint|file)", target: "string (optional, service name, process name, URL, or file path)", condition: "string (optional, e.g. status!=active, not_running, status!=200, content_matches)", interval: "string (optional, e.g. 30s, 5m, 1h)", action_tool: "string (optional, tool to call when triggered)", action_args: "object (optional, args for action tool)", pause: "boolean (optional, true to pause, false to resume)" },
+    args: { action: "string (add|list|remove|pause|check)", id: "string (optional, for remove/pause/check)", name: "string (optional, watch name)", source: "string (optional, service|process|endpoint|file)", target: "string (optional, service name, process name, HTTP(S) URL, or file path)", network_scope: "string (optional; required for private endpoint targets)", condition: "string (optional, e.g. status!=active, not_running, status!=200, content_matches)", interval: "string (optional, e.g. 30s, 5m, 1h)", action_tool: "string (optional, tool to call when triggered)", action_args: "object (optional, args for action tool)", pause: "boolean (optional, true to pause, false to resume)" },
     risk: "high",
     category: "Monitoring",
     source: "builtin",
