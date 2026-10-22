@@ -56,6 +56,13 @@ outside the authorized workspace. The server authorizes a workspace by logical
 name and canonical root identity; the node independently resolves the local
 root before execution.
 
+Configured network-scope names are currently reported as node capabilities;
+they are not an OS-enforced destination policy. Therefore the node fails closed
+for Git clone, pull, and push even when such a name is configured. These actions
+remain unavailable on the node until a scoped egress broker enforces the
+destination, protocol, and port. Do not treat a configured scope label as a
+firewall rule.
+
 Writes and execution are disabled by default. They require explicit local
 configuration and the workspace permission granted by the server. Sensitive
 locations such as `.ssh`, `.config`, `.local/share/opencode`, `.sidekick`, and

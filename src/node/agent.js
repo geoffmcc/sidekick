@@ -128,7 +128,12 @@ function validateLocalArguments(descriptor, args) {
   if (safetyArguments && safetyArguments.some(key => Object.prototype.hasOwnProperty.call(rawArgs, key) && parsed.data[key] === undefined)) {
     throw new Error("stale tool schema: safety argument was stripped before local execution");
   }
-  if (descriptor.name === "git" && ["clone", "pull", "push"].includes(parsed.data.action) && networkScopes().length === 0) throw new Error("network scope is required for this Git operation");
+  if (descriptor.name === "git" && ["clone", "pull", "push"].includes(parsed.data.action)) {
+    // The node currently receives scope names, not an independently enforced
+    // destination policy. Treating any configured name as permission to use
+    // arbitrary node egress would misrepresent authorization as isolation.
+    throw new Error("network Git operations are unavailable: this execution node has no enforced scoped egress broker");
+  }
   for (const [key, value] of pathFields(parsed.data)) {
     const operation = ["destination", "output", "path_a", "path_b"].includes(key) ? "write" : "read";
     workspaceForPath(value, operation === "write" && descriptor.name !== "read" ? "write" : "read");
