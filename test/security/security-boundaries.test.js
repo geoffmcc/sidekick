@@ -16,6 +16,7 @@ process.env.SIDEKICK_APPROVAL_REQUIRED_TOOLS = "";
 process.env.SIDEKICK_SECRET_KEY = "security-boundaries-test-secret-key";
 
 const db = require("../../src/db");
+const legacyTools = require("../../src/tools-legacy");
 const identity = require("../../src/core/identity");
 const authorization = require("../../src/core/authorization");
 const securityAudit = require("../../src/core/security-audit");
@@ -36,6 +37,30 @@ before(() => {
     password: "boundary-owner-password",
     displayName: "Boundary Owner",
   });
+});
+
+test("critical shell execution requires approval when approval settings are omitted", () => {
+  const names = [
+    "SIDEKICK_APPROVAL_MODE",
+    "SIDEKICK_MCP_APPROVAL_MODE",
+    "SIDEKICK_APPROVAL_REQUIRED_TOOLS",
+    "SIDEKICK_MCP_APPROVAL_REQUIRED_TOOLS",
+    "SIDEKICK_APPROVAL_EXEMPT_TOOLS",
+    "SIDEKICK_MCP_APPROVAL_EXEMPT_TOOLS",
+  ];
+  const previous = new Map(names.map(name => [name, process.env[name]]));
+  try {
+    for (const name of names) delete process.env[name];
+    const decision = legacyTools.getApprovalDecision("bash", "mcp");
+    assert.equal(decision.mode, "strict");
+    assert.equal(decision.risk, "critical");
+    assert.equal(decision.required, true);
+  } finally {
+    for (const [name, value] of previous) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
 });
 
 after(() => {
