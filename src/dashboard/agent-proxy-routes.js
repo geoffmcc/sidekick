@@ -17,6 +17,13 @@ function registerAgentProxyRoutes({ app, http, agentPort, agentProxySecret, erro
     }));
     if (body) headers["Content-Length"] = Buffer.byteLength(body);
     const upstream = http.request({ hostname: "127.0.0.1", port: agentPort, path: req.originalUrl, method, headers }, response => { res.writeHead(response.statusCode, response.headers); response.pipe(res); });
+    if (method === "GET") {
+      // GET relays, including SSE, are read-only. Tear down their upstream
+      // socket when the browser leaves so abandoned streams cannot accumulate.
+      res.on("close", () => {
+        if (!res.writableEnded) upstream.destroy();
+      });
+    }
     upstream.on("error", error => { if (!res.headersSent) errorResponse(req, res, error, { status: 502, code: "upstream_unavailable", component: "agent_proxy" }); else res.end(); });
     if (body) upstream.write(body);
     upstream.end();
