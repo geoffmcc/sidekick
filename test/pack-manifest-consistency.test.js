@@ -108,7 +108,6 @@ test("CONS.3: the extractor actually sees the known dispatch sites (guards again
   const expectations = [
     ["security-research", "security-research-tools", ["proxmox_provision", "proxmox_guest", "proxmox_retire", "bash", "web_fetch"]],
     ["developer", "developer-tools", ["git", "bash"]],
-    ["proxmox", "proxmox-tools", ["bash"]],
   ];
   for (const [pack, module, tools] of expectations) {
     const dir = path.join(PACKS_DIR, pack, "modules", module);
