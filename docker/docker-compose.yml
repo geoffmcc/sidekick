@@ -121,7 +121,9 @@ services:
       - sidekick_grafana_admin_password
       - sidekick_influx_token
     ports:
-      - "0.0.0.0:3000:3000"
+      # Auth proxy trusts X-WEBAUTH-USER from its caller. Keep Grafana private
+      # to the host; browsers must enter through the authenticated Dashboard.
+      - "127.0.0.1:3000:3000"
     volumes:
       - ./data/grafana:/var/lib/grafana
       - ../grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro

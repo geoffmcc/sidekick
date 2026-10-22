@@ -183,6 +183,10 @@ Mission Control includes authenticated quick actions backed by `POST /api/quick-
 
 The Metrics tab embeds Grafana through the authenticated dashboard under `/grafana/*`; it does not require enabling anonymous Grafana access. The dashboard proxy authenticates to the local Grafana service with `SIDEKICK_GRAFANA_ADMIN_USER` (default `sidekick`) and `SIDEKICK_GRAFANA_ADMIN_PASSWORD`.
 
+Compose publishes Grafana on host loopback only (`127.0.0.1:3000`). Its auth
+proxy trusts the `X-WEBAUTH-USER` header, so do not expose port 3000 to other
+hosts. Use the authenticated Dashboard `/grafana/*` path for browser access.
+
 Metrics collection is handled by `sidekick-metrics.timer`, which runs `scripts/collect-metrics.js` every minute with `/home/sidekick/sidekick/.env` loaded. The timer writes to InfluxDB using `SIDEKICK_INFLUX_*` settings.
 
 `GET /api/dashboard-performance` exposes a bounded, authenticated RED view of
