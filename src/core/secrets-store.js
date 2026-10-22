@@ -10,6 +10,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "..", "data");
 fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -23,32 +24,59 @@ const SECRET_KEY_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$/;
 // must be visible without producing a log line per call.
 const reportedLoadFailures = new Set();
 
-function loadSecrets() {
-  // Missing file is the normal empty-store case: silent, no error.
-  if (!fs.existsSync(SECRETS_FILE)) return {};
+function existingRegularSecretsFile() {
   try {
-    const data = fs.readFileSync(SECRETS_FILE, "utf-8");
-    return JSON.parse(data);
+    const stat = fs.lstatSync(SECRETS_FILE);
+    if (stat.isSymbolicLink() || !stat.isFile()) throw new Error("encrypted secret store must be a regular file");
+    return stat;
   } catch (error) {
-    // The file EXISTS but cannot be read/parsed. Returning {} keeps boot and
-    // callers alive (their fallbacks apply), but silently mapping corruption
-    // onto "no secrets" hid real credential loss from the operator — so say
-    // so, loudly, distinguishing corrupt-existing from merely-missing.
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+function loadSecrets() {
+  // Missing file is the normal empty-store case. A corrupt, unreadable, or
+  // linked file is an error: mapping it to empty would let a later write
+  // silently replace the only copy of stored credentials.
+  if (!existingRegularSecretsFile()) return {};
+  try {
+    const noFollow = fs.constants.O_NOFOLLOW || 0;
+    const data = fs.readFileSync(SECRETS_FILE, { encoding: "utf-8", flag: fs.constants.O_RDONLY | noFollow });
+    const secrets = JSON.parse(data);
+    if (!secrets || typeof secrets !== "object" || Array.isArray(secrets)) throw new Error("secret store root must be an object");
+    return secrets;
+  } catch (error) {
     const message = String(error.message || error);
     if (!reportedLoadFailures.has(message)) {
       reportedLoadFailures.add(message);
       console.error(
         `[SecretsStore] FAILED to load existing secrets file ${SECRETS_FILE} ` +
         `(corrupt or unreadable, NOT missing): ${message}. ` +
-        `Treating the store as empty for this call; stored credentials are NOT gone from disk, but they are unavailable until this is fixed.`
+        `Refusing secret reads and writes until this is fixed.`
       );
     }
-    return {};
+    throw new Error("encrypted secret store is corrupt or unavailable", { cause: error });
   }
 }
 
 function saveSecrets(secrets) {
-  fs.writeFileSync(SECRETS_FILE, JSON.stringify(secrets, null, 2));
+  if (!secrets || typeof secrets !== "object" || Array.isArray(secrets)) throw new Error("secret store root must be an object");
+  existingRegularSecretsFile();
+  const tempFile = `${SECRETS_FILE}.${process.pid}.${crypto.randomBytes(8).toString("hex")}.tmp`;
+  let fd = null;
+  try {
+    fd = fs.openSync(tempFile, "wx", 0o600);
+    fs.writeFileSync(fd, JSON.stringify(secrets, null, 2), "utf-8");
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fd = null;
+    fs.renameSync(tempFile, SECRETS_FILE);
+  } catch (error) {
+    if (fd !== null) { try { fs.closeSync(fd); } catch {} }
+    try { fs.unlinkSync(tempFile); } catch {}
+    throw error;
+  }
 }
 
 function packSecretKey(packName, key) {
