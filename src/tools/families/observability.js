@@ -22,6 +22,7 @@ const { validateInfluxUrl } = require("../../influx-endpoint-policy");
 const { readSecret } = require("../../core/runtime-secrets");
 const { childProcessEnv } = require("../../security/child-process");
 const { runBoundedShell } = require("../../security/command-execution");
+const { checkEndpoint } = require("../../security/endpoint-probe");
 const { requireToolExecution, requireCanonicalInvocation } = require("../read-authorization");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "..", "..", "data");
@@ -586,7 +587,7 @@ function runNetDiagCommand(program, args, timeout = 5000) {
   }
 }
 
-async function sidekick_netdiag({ action, target, port_range, timeout, format }) {
+async function sidekick_netdiag({ action, target, port_range, timeout, format, network_scope, network_scope_revision }) {
   const authorizationError = requireToolExecution({ tool: "netdiag", action: action || null, target: target || null }, "tools.execute_high", "netdiag");
   if (authorizationError) return authorizationError;
   if (!target && action !== "listeners") {
@@ -595,6 +596,12 @@ async function sidekick_netdiag({ action, target, port_range, timeout, format })
   if (target) {
     const targetError = validateNetDiagTarget(target);
     if (targetError) return { content: [{ type: "text", text: targetError }], isError: true };
+  }
+  if (network_scope && (action !== "check" || !/^https?:\/\//i.test(target || ""))) {
+    return { content: [{ type: "text", text: "network_scope is only valid for HTTP(S) check targets" }], isError: true };
+  }
+  if (network_scope_revision != null && !network_scope) {
+    return { content: [{ type: "text", text: "network_scope_revision requires network_scope" }], isError: true };
   }
 
   const fmt = format || "detailed";
@@ -711,42 +718,51 @@ async function sidekick_netdiag({ action, target, port_range, timeout, format })
   if (action === "check") {
     let host = target;
     let url = null;
-    if (target.startsWith("http://") || target.startsWith("https://")) {
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(target) && !/^https?:\/\//i.test(target)) {
+      return { content: [{ type: "text", text: "target URL must use HTTP or HTTPS" }], isError: true };
+    }
+    if (/^https?:\/\//i.test(target)) {
       try {
         const parsed = new URL(target);
         host = parsed.hostname;
-        url = target;
-      } catch {}
+        url = parsed;
+      } catch {
+        return { content: [{ type: "text", text: "target must be a valid absolute HTTP(S) URL" }], isError: true };
+      }
     }
 
     const report = { target, host, timestamp: new Date().toISOString(), checks: {} };
 
     checkLimit();
-    const dnsResult = runNetDiagCommand("dig", ["+short", host, "A"], to);
-    report.checks.dns = dnsResult.output || "Failed";
-
-    checkLimit();
-    const pingResult = runNetDiagCommand("ping", ["-c", "2", "-W", "2", host], to);
-    report.checks.ping = pingResult.success && pingResult.output.includes("bytes from") ? "OK" : "Failed";
-
     if (url) {
       checkLimit();
-      const curlResult = runNetDiagCommand("curl", ["-s", "-o", "/dev/null", "-w", "%{http_code}|%{time_total}|%{ssl_verify_result}", "--max-time", String(Math.max(1, Math.ceil(to / 1000))), url], to);
-      if (curlResult.success) {
-        const parts = curlResult.output.split("|");
+      try {
+        const result = await checkEndpoint(target, network_scope || null, network_scope_revision || null, to);
+        report.checks.dns = result.error === "dns_resolution_failed" ? "Failed" : "Resolved and pinned";
         report.checks.http = {
-          status: parts[0] || "N/A",
-          time: parts[1] ? parseFloat(parts[1]).toFixed(3) + "s" : "N/A",
-          ssl: parts[2] === "0" ? "Valid" : "Invalid"
+          status: result.status || "N/A",
+          time: Number.isFinite(result.elapsed_ms) ? `${(result.elapsed_ms / 1000).toFixed(3)}s` : "N/A",
+          ssl: url.protocol === "https:" ? (result.status ? "Valid" : "Not verified") : "N/A",
         };
-      } else {
-        report.checks.http = "Failed";
+      } catch (error) {
+        const code = error.code || "endpoint_probe_failed";
+        return { content: [{ type: "text", text: `HTTP check denied or failed (${code}); current network policy must authorize the target.` }], isError: true, code };
       }
+      // URL checks use the governed HTTP probe only. Do not also send ICMP or
+      // SSH traffic to the parsed hostname outside that probe's scope.
+      report.checks.ping = "Not run for URL target";
+      report.checks.ssh = "Not run for URL target";
+    } else {
+      checkLimit();
+      const dnsResult = runNetDiagCommand("dig", ["+short", host, "A"], to);
+      report.checks.dns = dnsResult.output || "Failed";
+      checkLimit();
+      const pingResult = runNetDiagCommand("ping", ["-c", "2", "-W", "2", host], to);
+      report.checks.ping = pingResult.success && pingResult.output.includes("bytes from") ? "OK" : "Failed";
+      checkLimit();
+      const portResult = runNetDiagCommand("nc", ["-z", "-w", "2", host, "22"], 3000);
+      report.checks.ssh = portResult.success && !portResult.output.includes("failed") ? "Open" : "Closed";
     }
-
-    checkLimit();
-    const portResult = runNetDiagCommand("nc", ["-z", "-w", "2", host, "22"], 3000);
-    report.checks.ssh = portResult.success && !portResult.output.includes("failed") ? "Open" : "Closed";
 
     let result = `Network Diagnostic Report\n`;
     result += `Target: ${target}\n`;
@@ -1017,12 +1033,14 @@ const descriptors = Object.freeze([
     description: "Unified network diagnostics: DNS, routing, port scanning, connectivity checks, and local listeners.",
     schema: z.object({
       action: z.enum(["check", "dns", "route", "ports", "listeners", "connectivity"]),
-      target: z.string().describe("Host, URL, or IP to diagnose"),
+      target: z.string().describe("Host, IP, or HTTP(S) URL to diagnose; private URL checks require a network scope"),
+      network_scope: z.string().max(80).optional().describe("Current operator-created network scope for private HTTP(S) check targets"),
+      network_scope_revision: z.number().int().positive().optional().describe("Immutable current network-scope revision"),
       port_range: z.string().optional().describe("Port range for scan (e.g., '80-443')"),
       timeout: z.number().optional().default(5000),
       format: z.enum(["detailed", "compact", "json"]).optional().default("detailed"),
     }),
-    args: { action: "string (check|dns|route|ports|listeners|connectivity)", target: "string (host, URL, or IP to diagnose)", port_range: "string (optional, port range e.g. '80-443')", timeout: "number (optional, timeout in ms - default 5000)", format: "string (optional, detailed|compact|json - default detailed)" },
+    args: { action: "string (check|dns|route|ports|listeners|connectivity)", target: "string (host, IP, or HTTP(S) URL to diagnose)", network_scope: "string (optional; required for private HTTP(S) check targets)", network_scope_revision: "number (optional; immutable scope revision)", port_range: "string (optional, port range e.g. '80-443')", timeout: "number (optional, timeout in ms - default 5000)", format: "string (optional, detailed|compact|json - default detailed)" },
     risk: "high",
     category: "Monitoring",
     source: "builtin",

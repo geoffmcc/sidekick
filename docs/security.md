@@ -15,13 +15,18 @@ backend for this path, so shell commands are rejected there rather than run
 directly on the host. Dedicated service and infrastructure tools remain the
 supported way to perform those operations.
 
-Endpoint watches accept HTTP and HTTPS only. They disable curl configuration,
-pin DNS results to the connection, cap response size and duration, and do not
+Endpoint watches accept HTTP and HTTPS only. They use a direct Node HTTP client,
+pin DNS results to the connection, bound response headers and duration, and do not
 follow redirects. Public destinations use the default outbound policy; private
 destinations require an operator-created network scope. A watch stores the
 scope revision selected at creation and fails closed if that scope is changed,
 expired, or revoked. A denied scheduled check is audited as failed and cannot
 trigger its configured action.
+
+`netdiag` HTTP(S) checks use the same outbound probe and require a current
+network scope for private URL targets. URL checks do not also send ping or SSH
+probes to the hostname. Host-only diagnostic actions remain separately gated
+by the high-risk `netdiag` permission.
 
 ## MCP authentication
 

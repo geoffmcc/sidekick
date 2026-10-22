@@ -20,7 +20,7 @@ function createPinnedLookup(destination) {
 }
 
 function createEndpointProbe({ resolve = resolveOutboundUrl, request = requestEndpointStatus } = {}) {
-  async function checkEndpoint(target, networkScope = null, networkScopeRevision = null) {
+  async function checkEndpoint(target, networkScope = null, networkScopeRevision = null, timeoutMs = REQUEST_TIMEOUT_MS) {
     const destination = await resolve(
       target,
       "endpoint",
@@ -34,22 +34,24 @@ function createEndpointProbe({ resolve = resolveOutboundUrl, request = requestEn
       throw error;
     }
 
-    return request(destination.url, destination);
+    return request(destination.url, destination, timeoutMs);
   }
 
   return { checkEndpoint };
 }
 
-function requestEndpointStatus(url, destination) {
+function requestEndpointStatus(url, destination, timeoutMs = REQUEST_TIMEOUT_MS) {
   const transport = url.protocol === "https:" ? https : http;
+  const boundedTimeout = Math.max(1000, Math.min(Number(timeoutMs) || REQUEST_TIMEOUT_MS, 30_000));
   return new Promise(resolve => {
     let settled = false;
     let timer;
+    const startedAt = Date.now();
     const finish = result => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
-      resolve(result);
+      resolve({ ...result, elapsed_ms: Date.now() - startedAt });
     };
 
     const request = transport.request(url, {
@@ -69,7 +71,7 @@ function requestEndpointStatus(url, destination) {
     timer = setTimeout(() => {
       request.destroy(new Error("endpoint probe timed out"));
       finish({ status: 0, ok: false });
-    }, REQUEST_TIMEOUT_MS);
+    }, boundedTimeout);
     request.end();
   });
 }

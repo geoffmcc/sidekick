@@ -113,10 +113,14 @@ test("private endpoint probes require a live named network scope and do not foll
   try {
     await assert.rejects(probe.checkEndpoint(target), error => error.code === "network_scope_required");
     assert.equal(localRequests, 0, "a private target is denied before a socket is opened");
-    assert.deepEqual(await probe.checkEndpoint(target, scope), { status: 204, ok: true });
+    const scopedResult = await probe.checkEndpoint(target, scope);
+    assert.equal(scopedResult.status, 204);
+    assert.equal(scopedResult.ok, true);
+    assert.ok(scopedResult.elapsed_ms >= 0);
 
     const redirect = await probe.checkEndpoint(`http://127.0.0.1:${port}/redirect`, scope);
-    assert.deepEqual(redirect, { status: 302, ok: false });
+    assert.equal(redirect.status, 302);
+    assert.equal(redirect.ok, false);
     assert.equal(redirectRequests, 0, "redirects must not create an unvalidated second request");
   } finally {
     await Promise.all([
@@ -140,6 +144,11 @@ test("watch creation binds a private endpoint to the current scope revision and 
   const target = `http://127.0.0.1:${port}/health`;
 
   try {
+    const netdiagWithoutScope = await TOOLS.netdiag({ action: "check", target });
+    assert.equal(netdiagWithoutScope.isError, true);
+    assert.equal(netdiagWithoutScope.code, "network_scope_required");
+    assert.equal(requests, 0, "netdiag must apply endpoint scope before opening a private URL");
+
     const noScope = await TOOLS.watch({ action: "add", name: "private no scope", source: "endpoint", target, condition: "status=200" });
     assert.equal(noScope.isError, true);
     assert.equal(noScope.code, "network_scope_required");
@@ -152,6 +161,15 @@ test("watch creation binds a private endpoint to the current scope revision and 
       allowed_protocols: ["http"],
       allowed_ports: [port],
     }, "test-operator");
+    const scopedNetdiag = await TOOLS.netdiag({
+      action: "check", target, network_scope: scope.name, network_scope_revision: scope.revision,
+    });
+    assert.equal(scopedNetdiag.isError, undefined, scopedNetdiag.content?.[0]?.text);
+    assert.match(scopedNetdiag.content?.[0]?.text || "", /HTTP: 200/);
+    assert.match(scopedNetdiag.content?.[0]?.text || "", /Ping: Not run for URL target/);
+    assert.match(scopedNetdiag.content?.[0]?.text || "", /SSH \(22\): Not run for URL target/);
+    assert.equal(requests, 1, "scoped netdiag sends only its single governed HTTP request");
+
     const added = await TOOLS.watch({
       action: "add", name: "private scoped endpoint", source: "endpoint", target,
       condition: "status=200", network_scope: scope.name,
@@ -160,7 +178,7 @@ test("watch creation binds a private endpoint to the current scope revision and 
     const watch = tools.loadWatches()[0];
     assert.equal(watch.network_scope, scope.name);
     assert.equal(watch.network_scope_revision, scope.revision);
-    assert.equal(requests, 0, "creating a watch validates policy without opening the endpoint");
+    assert.equal(requests, 1, "creating a watch validates policy without opening the endpoint");
 
     networkScopes.update(scope.scope_id, {
       allow_private_addresses: true,
@@ -171,7 +189,7 @@ test("watch creation binds a private endpoint to the current scope revision and 
     const checked = await TOOLS.watch({ action: "check", id: watch.id });
     assert.equal(checked.isError, true);
     assert.equal(checked.code, "network_scope_denied");
-    assert.equal(requests, 0, "a revised scope invalidates the stored watch before the socket opens");
+    assert.equal(requests, 1, "a revised scope invalidates the stored watch before the socket opens");
     const failedCheck = db.getDb().prepare("SELECT state, result_status FROM platform_executions WHERE parent_execution_id = ? AND operation_type = 'watch_check' ORDER BY started_at DESC LIMIT 1").get(watch.platform_execution_id);
     assert.equal(failedCheck.state, "failed");
     assert.equal(failedCheck.result_status, "failure");
