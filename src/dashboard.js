@@ -40,6 +40,7 @@ const { registerWebhookRoute } = require("./dashboard/webhook-route");
 const { registerKvRoutes } = require("./dashboard/kv-routes");
 const { registerDashboardConfigRoute } = require("./dashboard/config-route");
 const { registerMemoryReadRoutes } = require("./dashboard/memory-read-routes");
+const { registerMemoryMutationRoutes } = require("./dashboard/memory-mutation-routes");
 const { registerSyncRoutes } = require("./dashboard/sync-routes");
 const { registerHandoffReadRoutes } = require("./dashboard/handoff-read-routes");
 const { registerComputeReadRoutes } = require("./dashboard/compute-read-routes");
@@ -1567,30 +1568,6 @@ function authorizeDashboardMemoryProject(req, res, access, requestedProject, aud
 app.post("/api/memories/:id/disable", (req, res) =>
   dispatchMemoryManage(req, res, { action: "disable", id: req.params.id }, "memory_disable"));
 
-app.post("/api/memories/:id/enable", (req, res) => {
-  // memory_manage has no "enable" action (its "restore" revives deleted or
-  // expired records, a different semantic), so this stays on dbStore directly
-  // — with audit and honest status codes.
-  try {
-    if (!req.authPrincipal?.principal_id) return res.status(401).json({ ok: false, error: "authenticated principal required", code: "unauthenticated" });
-    const memory = dbStore.getMemoryById(req.params.id, { includeDisabled: true });
-    if (!memory) return dashboardErrors.respond(req, res, null, { status: 404, code: "not_found", component: "memory" });
-    if (!projectAccess.hasProjectAccess(req.authPrincipal.principal_id, memory.project, "write", req.authPrincipal.scopes, req.authPrincipal.delegation_id || req.authPrincipal.delegationId || null)) {
-      auditLog(req, "memory_enable", { id: req.params.id, ok: false, denied: true });
-      // Keep inaccessible and nonexistent IDs indistinguishable to callers.
-      return dashboardErrors.respond(req, res, null, { status: 404, code: "not_found", component: "memory" });
-    }
-    const success = dbStore.enableMemory(req.params.id);
-    auditLog(req, "memory_enable", { id: req.params.id, ok: success });
-    if (!success) {
-      return dashboardErrors.respond(req, res, null, { status: 404, code: "not_found", component: "memory" });
-    }
-    res.json({ ok: true });
-  } catch (error) {
-    return dashboardErrors.respond(req, res, error, { status: 500, code: "service_unavailable", component: "memory" });
-  }
-});
-
 app.delete("/api/memories/:id", (req, res) =>
   dispatchMemoryManage(req, res, { action: "delete", id: req.params.id, reason: "dashboard_delete" }, "memory_delete"));
 
@@ -1666,24 +1643,7 @@ app.post("/api/memories/import", async (req, res) => {
   }
 });
 
-app.post("/api/memories/expire", (req, res) => {
-  // Bulk stale expiry has no memory_manage action (`expire` there takes a
-  // single id; `process_auto_expirations` is a different sweep), so this stays
-  // on dbStore directly — with audit and honest status codes.
-  try {
-    if (!requireIdentityAdministrator(req, res)) return;
-    const { stale_days } = req.body || {};
-    if (stale_days !== undefined && (!Number.isFinite(Number(stale_days)) || Number(stale_days) < 0)) {
-      return dashboardErrors.respond(req, res, null, { status: 400, code: "invalid_request", component: "memory" });
-    }
-    const result = dbStore.expireStaleMemories({ staleDays: stale_days });
-    auditLog(req, "memory_expire", { expired: result.expired, stale_days });
-    res.json({ ok: true, ...result });
-  } catch (error) {
-    return dashboardErrors.respond(req, res, error, { status: 500, code: "service_unavailable", component: "memory" });
-  }
-});
-
+registerMemoryMutationRoutes({ app, dbStore, projectAccess, requireIdentityAdministrator, auditLog, recordIdentityAudit: identity.recordAuditEvent, errorResponse: dashboardErrors.respond });
 registerHandoffReadRoutes({ app, dbStore, errorResponse: dashboardErrors.respond });
 
 registerSyncRoutes({ app, dbStore, requireIdentityPermission, projectAccess, auditLog, recordIdentityAudit: identity.recordAuditEvent, errorResponse: dashboardErrors.respond });
