@@ -16,6 +16,9 @@ const path = require("path");
 const { browserConfig, dataDir } = require("./config");
 const { redactSensitive } = require("../redact");
 
+const MAX_BROWSER_ARTIFACT_BYTES = 500 * 1024 * 1024;
+const ARTIFACT_COPY_BUFFER_BYTES = 64 * 1024;
+
 let platformKernel = null;
 try { platformKernel = require("../platform/kernel"); } catch { platformKernel = null; }
 
@@ -23,10 +26,79 @@ function newArtifactId() {
   return `bra_${crypto.randomBytes(10).toString("hex")}`;
 }
 
-function sha256File(filePath) {
+function sha256File(filePath, maxBytes = MAX_BROWSER_ARTIFACT_BYTES) {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new Error("Browser artifact read limit is invalid");
   const hash = crypto.createHash("sha256");
-  hash.update(fs.readFileSync(filePath));
-  return hash.digest("hex");
+  const noFollow = typeof fs.constants.O_NOFOLLOW === "number" ? fs.constants.O_NOFOLLOW : 0;
+  const nonBlocking = typeof fs.constants.O_NONBLOCK === "number" ? fs.constants.O_NONBLOCK : 0;
+  const fd = fs.openSync(filePath, fs.constants.O_RDONLY | noFollow | nonBlocking);
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile()) throw new Error("Browser artifact must be a regular file");
+    if (stat.size > maxBytes) throw new Error(`Browser artifact exceeds the ${maxBytes}-byte limit`);
+    const buffer = Buffer.allocUnsafe(ARTIFACT_COPY_BUFFER_BYTES);
+    let position = 0;
+    while (true) {
+      const count = fs.readSync(fd, buffer, 0, buffer.length, position);
+      if (count === 0) break;
+      position += count;
+      if (position > maxBytes) throw new Error(`Browser artifact exceeds the ${maxBytes}-byte limit`);
+      hash.update(buffer.subarray(0, count));
+    }
+    return { sha256: hash.digest("hex"), byteSize: position };
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function ensureArtifactDirectory(config, sessionId) {
+  const dataRoot = fs.realpathSync(dataDir());
+  fs.mkdirSync(config.artifactsDir, { recursive: true, mode: 0o750 });
+  const artifactRoot = fs.realpathSync(config.artifactsDir);
+  if (artifactRoot !== dataRoot && !artifactRoot.startsWith(dataRoot + path.sep)) {
+    throw new Error("Browser artifact directory resolves outside the data directory");
+  }
+  const sessionDir = path.join(artifactRoot, safeName(sessionId, "session"));
+  fs.mkdirSync(sessionDir, { recursive: true, mode: 0o750 });
+  const stat = fs.lstatSync(sessionDir);
+  if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error("Browser session artifact path is not a directory");
+  const resolved = fs.realpathSync(sessionDir);
+  if (resolved !== artifactRoot && !resolved.startsWith(artifactRoot + path.sep)) {
+    throw new Error("Browser session artifact directory escaped its storage root");
+  }
+  return resolved;
+}
+
+function copyArtifactFile(sourcePath, destination, maxBytes = MAX_BROWSER_ARTIFACT_BYTES) {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new Error("Browser artifact copy limit is invalid");
+  const noFollow = typeof fs.constants.O_NOFOLLOW === "number" ? fs.constants.O_NOFOLLOW : 0;
+  const nonBlocking = typeof fs.constants.O_NONBLOCK === "number" ? fs.constants.O_NONBLOCK : 0;
+  const sourceFd = fs.openSync(sourcePath, fs.constants.O_RDONLY | noFollow | nonBlocking);
+  let destinationFd = null;
+  let destinationCreated = false;
+  try {
+    const stat = fs.fstatSync(sourceFd);
+    if (!stat.isFile()) throw new Error("Browser artifact source must be a regular file");
+    if (stat.size > maxBytes) throw new Error(`Browser artifact exceeds the ${maxBytes}-byte limit`);
+    destinationFd = fs.openSync(destination, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL, 0o640);
+    destinationCreated = true;
+    const buffer = Buffer.allocUnsafe(ARTIFACT_COPY_BUFFER_BYTES);
+    let position = 0;
+    while (true) {
+      const count = fs.readSync(sourceFd, buffer, 0, buffer.length, position);
+      if (count === 0) break;
+      position += count;
+      if (position > maxBytes) throw new Error(`Browser artifact exceeds the ${maxBytes}-byte limit`);
+      let written = 0;
+      while (written < count) written += fs.writeSync(destinationFd, buffer, written, count - written);
+    }
+  } catch (error) {
+    if (destinationCreated) { try { fs.unlinkSync(destination); } catch {} }
+    throw error;
+  } finally {
+    if (destinationFd !== null) fs.closeSync(destinationFd);
+    fs.closeSync(sourceFd);
+  }
 }
 
 function safeName(name, fallback) {
@@ -54,21 +126,30 @@ function storeArtifact({
   const config = browserConfig();
   const artifactId = newArtifactId();
   const fileName = `${artifactId}-${safeName(name, kind)}`;
-  const sessionDir = path.join(config.artifactsDir, safeName(sessionId, "session"));
-  fs.mkdirSync(sessionDir, { recursive: true });
+  const sessionDir = ensureArtifactDirectory(config, sessionId);
   const destination = path.join(sessionDir, fileName);
 
   if (bytes !== null) {
-    fs.writeFileSync(destination, bytes, { mode: 0o640 });
+    const byteLength = typeof bytes === "string" ? Buffer.byteLength(bytes) : bytes?.byteLength;
+    if (!Number.isSafeInteger(byteLength) || byteLength > MAX_BROWSER_ARTIFACT_BYTES) {
+      throw new Error(`Browser artifact exceeds the ${MAX_BROWSER_ARTIFACT_BYTES}-byte limit`);
+    }
+    fs.writeFileSync(destination, bytes, { mode: 0o640, flag: "wx" });
   } else if (sourcePath) {
-    fs.copyFileSync(sourcePath, destination);
-    fs.chmodSync(destination, 0o640);
+    copyArtifactFile(sourcePath, destination);
   } else {
     throw new Error("storeArtifact requires bytes or sourcePath");
   }
 
-  const byteSize = fs.statSync(destination).size;
-  const sha256 = sha256File(destination);
+  let digest;
+  try {
+    digest = sha256File(destination);
+  } catch (error) {
+    try { fs.unlinkSync(destination); } catch {}
+    throw error;
+  }
+  const byteSize = digest.byteSize;
+  const sha256 = digest.sha256;
   const storageRef = path.relative(dataDir(), destination).split(path.sep).join("/");
 
   const record = {
@@ -162,4 +243,4 @@ function resolveArtifactFile(artifactId, { project = undefined } = {}) {
   return { path: resolved, artifact };
 }
 
-module.exports = { storeArtifact, resolveArtifactFile, newArtifactId };
+module.exports = { storeArtifact, resolveArtifactFile, newArtifactId, sha256File, copyArtifactFile, MAX_BROWSER_ARTIFACT_BYTES };
