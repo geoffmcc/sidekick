@@ -157,11 +157,20 @@ let server;
     fake = fakeDirect("project task completed");
     const denied = await request("POST", "/api/agent/run", { goal: "must not create an out-of-project task", project: "agent_test_project" }, { "X-Sidekick-Principal-ID": "principal_without_project_membership", "X-Sidekick-Principal-Scopes": JSON.stringify(["agent.tasks.read"]) });
     assert.strictEqual(denied.status, 403, "a signed principal without a real project grant cannot create a project-scoped task");
+    const inferredDenied = await request("POST", "/api/agent/run", { goal: "please work on project agent_test_project" }, { "X-Sidekick-Principal-ID": "principal_without_project_membership", "X-Sidekick-Principal-Scopes": JSON.stringify(["agent.tasks.read"]) });
+    assert.strictEqual(inferredDenied.status, 403, "goal text cannot select an inaccessible project during authenticated task creation");
     const created = await request("POST", "/api/agent/run", { goal: "create a task within the owned project", project: "agent_test_project" }, authenticatedTestHeaders);
     assert.strictEqual(created.status, 200);
     const detail = await request("GET", "/api/agent/tasks/" + created.data.taskId, null, authenticatedTestHeaders);
     assert.strictEqual(detail.status, 200, "the authorized task owner can read its project task");
     await waitForTranscript(created.data.taskId);
+
+    const inferredCreated = await request("POST", "/api/agent/run", { goal: "please work on project agent_test_project" }, authenticatedTestHeaders);
+    assert.strictEqual(inferredCreated.status, 200, "an authorized caller may infer project scope from the task goal");
+    const inferredDetail = await request("GET", "/api/agent/tasks/" + inferredCreated.data.taskId, null, authenticatedTestHeaders);
+    assert.strictEqual(inferredDetail.status, 200);
+    assert.strictEqual(inferredDetail.data.task.project_id, "agent_test_project", "the inferred project is persisted on the durable task");
+    await waitForTranscript(inferredCreated.data.taskId);
   });
 
   await ok("1c-service) Certification task submission stays read-only when the caller omits its envelope", async () => {
