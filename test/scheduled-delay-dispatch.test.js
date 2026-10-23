@@ -91,7 +91,7 @@ test("the real dispatcher denies a scheduled effect after its credential scope i
   assert.equal(calls[0].options.authIdentity.scopes.length, 0);
   assert.equal(calls[0].options.authIdentity.scopes.includes("tools.execute"), false);
   assert.equal(delay.status, "failed");
-  assert.equal(delay.result, "Authorization denied: forbidden");
+  assert.match(delay.result, /^Authorization denied: forbidden \(required permission: tools\.execute\)$/);
 });
 
 test("the real dispatcher denies a scheduled effect after its delegation is revoked", async () => {
