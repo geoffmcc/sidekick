@@ -33,12 +33,27 @@ global.fetch = async (_url, options) => {
 const tools = require('../src/tools');
 const rawObservability = require('../src/tools/families/observability');
 const TOOLS = require('./helpers/authorized-context').withOwnerToolContext(tools.TOOLS, { source: 'test' });
+const { dispatchTestTool } = require('../src/tools/dispatcher');
+const { createOwnerContext } = require('./helpers/authorized-context');
 
 console.log('Running Metrics Surface Tests...');
 
 (async () => {
   try {
     assert.strictEqual((await rawObservability.sidekick_metrics({ action: 'list_measurements' })).code, 'unauthenticated');
+    const ownerContext = createOwnerContext();
+    const identity = require('../src/core/identity');
+    const metricsPrincipal = identity.createPrincipal({ type: 'service', displayName: 'Synthetic metrics-only principal' });
+    identity.grantPrincipalPermission(metricsPrincipal.principal_id, 'tools.execute', ownerContext.authIdentity.principal_id);
+    identity.grantPrincipalPermission(metricsPrincipal.principal_id, 'tools.execute_high', ownerContext.authIdentity.principal_id);
+    const limitedContext = { source: 'test', authIdentity: { principal_id: metricsPrincipal.principal_id } };
+    const limited = await dispatchTestTool({
+      descriptor: rawObservability.descriptors.find(item => item.name === 'metrics'),
+      args: { action: 'list_measurements' },
+      context: limitedContext,
+    });
+    assert.equal(limited.code, 'forbidden', 'tool execution scope alone must not grant access to Influx secrets');
+    assert.equal(fetchCalls, 0, 'denied secret use must prevent outbound request');
     const measurements = await TOOLS.metrics({ action: 'list_measurements' });
     assert.ok(!measurements.isError, measurements.content?.[0]?.text);
     assert.deepStrictEqual(JSON.parse(measurements.content[0].text), ['system_health', 'tool_calls']);

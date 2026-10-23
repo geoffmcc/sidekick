@@ -48,4 +48,23 @@ function requireToolExecution(resource, permission = "tools.execute", expectedTo
   };
 }
 
-module.exports = Object.freeze({ requireCanonicalInvocation, requireToolExecution });
+function requirePermission(permission, resource = null) {
+  const context = toolContext.getExecutionContext();
+  const authIdentity = context.authIdentity || null;
+  const decision = require("../core/authorization").authorize({
+    principalId: authIdentity?.principal_id || null,
+    permission,
+    credentialScopes: authIdentity?.scopes,
+    delegationId: authIdentity?.delegation_id || authIdentity?.delegationId || null,
+    resource,
+  });
+  if (decision.ok) return null;
+  const unauthenticated = decision.code === "unauthenticated";
+  return {
+    content: [{ type: "text", text: unauthenticated ? "Authentication required" : "Required permission denied" }],
+    isError: true,
+    code: unauthenticated ? "unauthenticated" : "forbidden",
+  };
+}
+
+module.exports = Object.freeze({ requireCanonicalInvocation, requireToolExecution, requirePermission });

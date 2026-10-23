@@ -16,7 +16,7 @@ const { resolveOutboundUrl } = require("../../security/outbound-url");
 const { readSecret } = require("../../core/runtime-secrets");
 const toolContext = require("../context");
 const authorization = require("../../core/authorization");
-const { requireCanonicalInvocation, requireToolExecution } = require("../read-authorization");
+const { requireCanonicalInvocation, requireToolExecution, requirePermission } = require("../read-authorization");
 const MAX_NOTIFICATION_ERROR_BYTES = 64 * 1024;
 
 function readBoundedNotificationError(response, maxBytes = MAX_NOTIFICATION_ERROR_BYTES) {
@@ -69,6 +69,8 @@ async function sidekick_notify({ channel, webhook_url, recipient, message, title
   if (channel === "discord" || channel === "slack") {
     // Resolve the configured webhook only from the protected secret store.
     if (!webhook_url) {
+      const secretDenied = requirePermission("secrets.use", { tool: "notify", secret: channel === "discord" ? "DISCORD_WEBHOOK_URL" : "SLACK_WEBHOOK_URL" });
+      if (secretDenied) return secretDenied;
       webhook_url = channel === "discord" ? readSecret("DISCORD_WEBHOOK_URL") : readSecret("SLACK_WEBHOOK_URL");
     }
     if (!webhook_url) {
@@ -127,6 +129,8 @@ async function sidekick_notify({ channel, webhook_url, recipient, message, title
 
     const smtpHost = process.env.SMTP_HOST || "smtp.gmail.com";
     const smtpPort = parseInt(process.env.SMTP_PORT || "587", 10);
+    const secretDenied = requirePermission("secrets.use", { tool: "notify", secrets: ["SMTP_USER", "SMTP_PASS"] });
+    if (secretDenied) return secretDenied;
     const smtpUser = readSecret("SMTP_USER");
     const smtpPass = readSecret("SMTP_PASS");
 

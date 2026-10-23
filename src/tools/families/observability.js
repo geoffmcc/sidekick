@@ -23,7 +23,7 @@ const { readSecret } = require("../../core/runtime-secrets");
 const { childProcessEnv } = require("../../security/child-process");
 const { runBoundedShell } = require("../../security/command-execution");
 const { checkEndpoint } = require("../../security/endpoint-probe");
-const { requireToolExecution, requireCanonicalInvocation } = require("../read-authorization");
+const { requireToolExecution, requireCanonicalInvocation, requirePermission } = require("../read-authorization");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "..", "..", "data");
 fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -842,6 +842,8 @@ async function sidekick_metrics({ action, measurement, fields, tags, timestamp, 
   if (authorizationError) return authorizationError;
   try {
     const INFLUX_URL = process.env.SIDEKICK_INFLUX_URL || 'http://localhost:8086';
+    const secretDenied = requirePermission("secrets.use", { tool: "metrics", secret: "SIDEKICK_INFLUX_TOKEN" });
+    if (secretDenied) return secretDenied;
     const INFLUX_TOKEN = readSecret('SIDEKICK_INFLUX_TOKEN');
     const INFLUX_ORG = process.env.SIDEKICK_INFLUX_ORG || 'sidekick';
     const INFLUX_BUCKET = process.env.SIDEKICK_INFLUX_BUCKET || 'sidekick';
