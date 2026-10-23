@@ -15,7 +15,7 @@ const { createTaskExecutionContext } = require("./agent/task-execution-context")
 const { persistedTaskAuthIdentity } = require("./agent/task-identity");
 const { authorizeRecoveredTask } = require("./agent/recovery-authorization");
 const { authorizeScheduledAgentDelay } = require("./agent/delay-policy");
-const { validateEscalationApproval } = require("./agent/escalation-approval");
+const { createEscalationApprovalRef } = require("./agent/escalation-approval");
 const { readSecret } = require("./core/runtime-secrets");
 const { verifyAgentProxyRequest, createSqliteNonceConsumer, assertDistinctProxySecret, assertDistinctAgentSchedulerSecret } = require("./security/agent-proxy-auth");
 const { taskBelongsToIdentity, canReviewUnownedTask, isAllowedServiceRoute } = require("./agent/task-access");
@@ -2007,25 +2007,20 @@ app.post("/api/agent/tasks/:taskId/escalations/:escalationId/decision", (req, re
     if (!task || !escalation || escalation.task_id !== task.task_id) return res.status(404).json({ error: "escalation not found" });
     if (!requireTaskAccess(req, res, task)) return;
     const body = req.body || {};
-    if (Object.keys(body).some(key => !new Set(["decision", "reason", "approval_ref"]).has(key)) || !["approved", "denied", "resolved"].includes(body.decision)) return res.status(400).json({ error: "decision must be approved, denied, or resolved" });
+    if (Object.keys(body).some(key => !new Set(["decision", "reason"]).has(key)) || !["approved", "denied", "resolved"].includes(body.decision)) return res.status(400).json({ error: "decision must be approved, denied, or resolved" });
     const auth = requestAuthIdentity(req); const principal = auth && identity.getPrincipal(auth.principal_id);
     const grant = auth && authorization.authorize({ principalId: auth.principal_id, permission: "approvals.grant", credentialScopes: auth.scopes, delegationId: auth.delegation_id || null, resource: { kind: "agent_escalation", escalation_id: escalation.escalation_id, project: task.project_id } });
     if (!auth?.principal_id || !principal || principal.principal_type !== "human" || !grant?.ok) return res.status(403).json({ error: "human approvals.grant authorization is required" });
     const requester = task.actor_principal_id || task.requested_by_principal_id;
     if (requester && requester === auth.principal_id) return res.status(403).json({ error: "task requester cannot self-approve escalation" });
-    const approvalRef = body.approval_ref == null ? null : String(body.approval_ref);
-    if (approvalRef && !/^approval:[A-Za-z0-9_.:-]{1,180}$/.test(approvalRef)) return res.status(400).json({ error: "approval_ref must be a governed approval reference" });
-    if (body.decision === "approved" && !approvalRef) return res.status(400).json({ error: "approved escalation dispositions require an existing approval_ref" });
-    if (approvalRef) {
-      const approvalStore = require("./approvals/store");
-      approvalStore.ensureApprovalContinuationSchema();
-      const approval = approvalStore.getApproval(approvalRef);
-      const approvalCheck = validateEscalationApproval(approval, { taskId: task.task_id });
-      if (!approvalCheck.ok) return res.status(400).json({ error: "approval_ref must identify an unexpired approved approval for this task" });
-    }
+    // The authenticated human decision is bound to this exact escalation
+    // record. Never accept a caller-supplied tool approval reference here:
+    // approval records authorize a specific tool/argument digest and cannot
+    // be repurposed as task-wide approval for another operation.
+    const approvalRef = body.decision === "approved" ? createEscalationApprovalRef(escalation.escalation_id) : null;
     const updated = durableOperations.updateEscalation(escalation.escalation_id, body.decision, { decided_by_principal_id: auth.principal_id, approval_ref: approvalRef });
     durableTaskStore.recordGuidance(task.task_id, `Escalation ${escalation.escalation_id} ${body.decision}: ${redactSensitive(String(body.reason || "operator decision")).slice(0, 500)}`, auth.principal_id);
-    res.json({ ok: true, escalation: updated, approval: { decision: body.decision, principal_id: auth.principal_id, inherited: false } });
+    res.json({ ok: true, escalation: updated, approval: { decision: body.decision, reference: approvalRef, principal_id: auth.principal_id, inherited: false } });
   } catch (error) { res.status(409).json({ error: redactSensitive(error.message) }); }
 });
 

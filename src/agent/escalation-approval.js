@@ -1,13 +1,26 @@
 "use strict";
 
-/** Validate the minimum live approval provenance for an escalation decision. */
-function validateEscalationApproval(approval, { taskId, now = Date.now() } = {}) {
-  if (!approval || typeof approval !== "object") return { ok: false, reason: "approval_not_found" };
-  if (approval.task_id !== taskId) return { ok: false, reason: "approval_task_mismatch" };
-  if (approval.status !== "approved") return { ok: false, reason: "approval_not_approved" };
-  const expiresAt = Date.parse(approval.expires_at);
-  if (!Number.isFinite(expiresAt) || expiresAt <= now) return { ok: false, reason: "approval_expired" };
+const ESCALATION_ID = /^[A-Za-z0-9_.:-]{1,160}$/;
+
+/**
+ * An escalation decision is its own approval boundary. Its reference is
+ * derived from the immutable escalation record being decided; a task's
+ * unrelated tool approval must never be reusable as approval for an
+ * escalation.
+ */
+function createEscalationApprovalRef(escalationId) {
+  if (typeof escalationId !== "string" || !ESCALATION_ID.test(escalationId)) {
+    throw new Error("invalid escalation id");
+  }
+  return `approval:escalation:${escalationId}`;
+}
+
+function validateEscalationApprovalRef(approvalRef, escalationId) {
+  let expected;
+  try { expected = createEscalationApprovalRef(escalationId); }
+  catch { return { ok: false, reason: "invalid_escalation_id" }; }
+  if (approvalRef !== expected) return { ok: false, reason: "approval_escalation_mismatch" };
   return { ok: true };
 }
 
-module.exports = Object.freeze({ validateEscalationApproval });
+module.exports = Object.freeze({ createEscalationApprovalRef, validateEscalationApprovalRef });

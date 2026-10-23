@@ -11,6 +11,7 @@ fs.writeFileSync(process.env.SIDEKICK_SECRET_KEY_FILE, "test-only-key");
 const { createTask } = require("../src/agent/task-model");
 const tasks = require("../src/agent/task-store");
 const ops = require("../src/agent/durable-operations");
+const { createEscalationApprovalRef } = require("../src/agent/escalation-approval");
 try {
   const task = createTask({ task_id: "agt_ops01", objective: "inspect", profile: "standard", project_id: "project:test" });
   tasks.insertTask(task);
@@ -41,6 +42,12 @@ try {
   assert.strictEqual(normalizedEscalation.requested_scope, "single_operation");
   assert.strictEqual(normalizedEscalation.approval_mode, "single_operation");
   assert.throws(() => ops.updateEscalation(normalizedEscalation.escalation_id, "approved", { decided_by_principal_id: "principal:operator" }), /approval reference/);
+  const approvedEscalation = ops.updateEscalation(normalizedEscalation.escalation_id, "approved", {
+    decided_by_principal_id: "principal:operator",
+    approval_ref: createEscalationApprovalRef(normalizedEscalation.escalation_id),
+  });
+  assert.strictEqual(approvedEscalation.state, "approved");
+  assert.strictEqual(approvedEscalation.approval_ref, `approval:escalation:${normalizedEscalation.escalation_id}`);
   const resolvedEscalation = ops.updateEscalation(escalation.escalation_id, "resolved", { decided_by_principal_id: "principal:operator", approval_ref: "approval:test" });
   assert.strictEqual(resolvedEscalation.state, "resolved");
   assert.strictEqual(resolvedEscalation.decided_by_principal_id, "principal:operator");
