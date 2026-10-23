@@ -10,6 +10,9 @@ const { enforcePathPolicy } = require("../path-policy");
 const { childProcessEnv } = require("../../security/child-process");
 const { requireToolExecution } = require("../read-authorization");
 const { BoundedRegex } = require("../../core/bounded-regex");
+const { readTextBounded } = require("../../core/bounded-file-read");
+
+const MAX_MONITORING_FILE_BYTES = 10 * 1024 * 1024;
 
 function safeExecFileSync(program, args, options = {}) {
   return execFileSync(program, args, { ...options, env: childProcessEnv(options.env) });
@@ -52,7 +55,15 @@ async function sidekick_tail({ source, pattern, lines, since }) {
     if (!fs.existsSync(source)) {
       return { content: [{ type: "text", text: "File not found: " + source }], isError: true };
     }
-    const allLines = fs.readFileSync(source, "utf-8").split("\n");
+    let content;
+    try { content = readTextBounded(source, { maxBytes: MAX_MONITORING_FILE_BYTES, requireComplete: true }).content; }
+    catch (error) {
+      const message = error.code === "FILE_READ_TOO_LARGE"
+        ? `Log file exceeds the ${MAX_MONITORING_FILE_BYTES}-byte tail limit`
+        : `Unable to read log file: ${error.message}`;
+      return { content: [{ type: "text", text: message }], isError: true };
+    }
+    const allLines = content.split("\n");
     let filtered = allLines;
     if (re) filtered = allLines.filter(l => re.test(l));
     content = filtered.slice(-maxLines).join("\n");
