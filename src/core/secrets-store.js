@@ -11,11 +11,13 @@
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const { readTextBounded } = require("./bounded-file-read");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "..", "data");
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
 const SECRETS_FILE = path.join(DATA_DIR, "secrets.enc");
+const MAX_SECRET_STORE_BYTES = 10 * 1024 * 1024;
 const PACK_NAME_RE = /^[a-z][a-z0-9-]*$/;
 const SECRET_KEY_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$/;
 
@@ -41,8 +43,7 @@ function loadSecrets() {
   // silently replace the only copy of stored credentials.
   if (!existingRegularSecretsFile()) return {};
   try {
-    const noFollow = fs.constants.O_NOFOLLOW || 0;
-    const data = fs.readFileSync(SECRETS_FILE, { encoding: "utf-8", flag: fs.constants.O_RDONLY | noFollow });
+    const data = readTextBounded(SECRETS_FILE, { maxBytes: MAX_SECRET_STORE_BYTES, requireComplete: true, noFollow: true }).content;
     const secrets = JSON.parse(data);
     if (!secrets || typeof secrets !== "object" || Array.isArray(secrets)) throw new Error("secret store root must be an object");
     return secrets;
@@ -63,11 +64,13 @@ function loadSecrets() {
 function saveSecrets(secrets) {
   if (!secrets || typeof secrets !== "object" || Array.isArray(secrets)) throw new Error("secret store root must be an object");
   existingRegularSecretsFile();
+  const contents = JSON.stringify(secrets, null, 2);
+  if (Buffer.byteLength(contents, "utf-8") > MAX_SECRET_STORE_BYTES) throw new Error(`secret store exceeds the ${MAX_SECRET_STORE_BYTES}-byte limit`);
   const tempFile = `${SECRETS_FILE}.${process.pid}.${crypto.randomBytes(8).toString("hex")}.tmp`;
   let fd = null;
   try {
     fd = fs.openSync(tempFile, "wx", 0o600);
-    fs.writeFileSync(fd, JSON.stringify(secrets, null, 2), "utf-8");
+    fs.writeFileSync(fd, contents, "utf-8");
     fs.fsyncSync(fd);
     fs.closeSync(fd);
     fd = null;
@@ -110,6 +113,7 @@ function deletePackSecret(packName, key) {
 
 module.exports = {
   SECRETS_FILE,
+  MAX_SECRET_STORE_BYTES,
   loadSecrets,
   saveSecrets,
   packSecretKey,

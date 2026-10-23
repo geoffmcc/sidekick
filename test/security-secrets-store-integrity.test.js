@@ -53,3 +53,15 @@ test("secret store reads and writes reject symlinked secret files", { skip: proc
   assert.throws(() => store.saveSecrets({ overwritten: true }), /regular file/);
   assert.equal(fs.readFileSync(target, "utf-8"), content);
 });
+
+test("secret store reads and writes enforce the byte limit without replacing valid data", () => {
+  store.saveSecrets({ retained: "synthetic" });
+  fs.writeFileSync(store.SECRETS_FILE, Buffer.alloc(store.MAX_SECRET_STORE_BYTES + 1), { mode: 0o600 });
+  assert.throws(() => store.loadSecrets(), /encrypted secret store is corrupt or unavailable/);
+
+  store.saveSecrets({ retained: "synthetic" });
+  const restored = fs.readFileSync(store.SECRETS_FILE, "utf-8");
+  assert.throws(() => store.saveSecrets({ oversized: "x".repeat(store.MAX_SECRET_STORE_BYTES) }), /secret store exceeds/);
+  assert.equal(fs.readFileSync(store.SECRETS_FILE, "utf-8"), restored);
+  assert.equal(JSON.parse(restored).retained, "synthetic");
+});
