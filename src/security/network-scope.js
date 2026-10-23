@@ -163,7 +163,7 @@ function decision(scope, { host: rawHost, address: rawAddress, protocol, port, a
   if (scope.expires_at && Date.parse(scope.expires_at) <= Date.now()) return { ok: false, reason: "scope_expired" };
   const h = rawHost ? (rawHost.includes(":") || net.isIP(rawHost) ? String(rawHost).toLowerCase().replace(/^\[|\]$/g, "") : host(rawHost)) : null;
   const address = rawAddress || (h && (net.isIP(h) ? h : null));
-  const protectedReason = permanentDenial(address || h); if (protectedReason) return { ok: false, reason: protectedReason };
+  const protectedReason = permanentDenial(h) || permanentDenial(address); if (protectedReason) return { ok: false, reason: protectedReason };
   if (protocol && !scope.allowed_protocols.includes(String(protocol).toLowerCase().replace(":", ""))) return { ok: false, reason: "protocol_not_allowed" };
   if (port && !portAllowed(Number(port), scope.allowed_ports)) return { ok: false, reason: "port_not_allowed" };
   if (allowedHosts && (!h || !allowedHosts.some(p => patternMatches(h, normalizePattern(p))))) return { ok: false, reason: "session_host_not_allowed" };

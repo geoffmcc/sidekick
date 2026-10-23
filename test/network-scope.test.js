@@ -40,6 +40,8 @@ test("permanent denials and explicit denials override allows", () => {
   assert.strictEqual(policy.decision(scope, { host: "api.example.test", address: "192.0.2.10", protocol: "http", port: 80 }).ok, true);
   assert.strictEqual(policy.decision(scope, { host: "api.example.test", address: "192.0.2.10", protocol: "https", port: 443 }).reason, "protocol_not_allowed");
   assert.strictEqual(policy.decision(scope, { address: "fe80::1", protocol: "http", port: 80 }).reason, "permanent_denial");
+  assert.strictEqual(policy.decision(scope, { host: "metadata.google.internal", address: "93.184.216.34", protocol: "http", port: 80 }).reason, "permanent_denial", "a protected hostname remains denied when paired with a public resolved address");
+  assert.strictEqual(policy.decision(scope, { host: "localhost", address: "93.184.216.34", protocol: "http", port: 80 }).reason, "permanent_denial", "localhost remains denied when paired with a public resolved address");
 });
 
 test("private address decisions cover IPv4 and IPv6 policy branches", () => {
