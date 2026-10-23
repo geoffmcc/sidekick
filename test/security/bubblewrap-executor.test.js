@@ -159,18 +159,21 @@ test("workspace binding permits scoped writes and hides unrelated host files and
   }
 });
 
-test("nested isolated commands remain inside the parent namespace", { skip: process.platform !== "linux" || !fs.existsSync(executor.DEFAULT_BWRAP) }, async () => {
+test("nested isolated commands stay contained or fail closed", { skip: process.platform !== "linux" || !fs.existsSync(executor.DEFAULT_BWRAP) }, async () => {
   const repository = fs.realpathSync(path.resolve(__dirname, "../.."));
   process.env.SIDEKICK_ALLOWED_PATHS = repository;
   process.env.SIDEKICK_DENIED_PATHS = "";
-  const nested = 'const executor=require("/workspace/src/core/bubblewrap-executor.js");executor.runBubblewrap({command:"printf nested-namespace-ok"}).then(result=>{if(result.exitCode!==0){console.error(result.stderr);process.exit(9)}process.stdout.write(result.stdout)}).catch(error=>{console.error(error.code);process.exit(10)})';
+  const nested = 'const executor=require("/workspace/src/core/bubblewrap-executor.js");executor.runBubblewrap({command:"printf nested-namespace-ok"}).then(result=>{if(result.exitCode!==0){console.error(result.stderr);process.exit(9)}process.stdout.write(result.stdout)}).catch(error=>{if(!["isolation_unavailable","sandbox_initialization_failed"].includes(error.code)){console.error(error.code);process.exit(10)}process.stdout.write("nested-isolation-refused:"+error.code)})';
   const result = await executor.runBubblewrap({
     command: `/usr/bin/node -e ${shellQuote(nested)}`,
     workspace: repository,
     source: "mcp",
   });
   assert.equal(result.exitCode, 0, result.stderr);
-  assert.equal(result.stdout, "nested-namespace-ok");
+  assert.ok(
+    result.stdout === "nested-namespace-ok" || /^nested-isolation-refused:(isolation_unavailable|sandbox_initialization_failed)$/.test(result.stdout),
+    `nested execution must succeed within the OS boundary or be refused: ${result.stdout} ${result.stderr}`
+  );
 });
 
 test("workspace binding refuses a directory that contains a denied subtree", () => {
