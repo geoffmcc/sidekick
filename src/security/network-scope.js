@@ -7,8 +7,7 @@ const crypto = require("crypto");
 const net = require("net");
 const dns = require("dns").promises;
 const { domainToASCII } = require("url");
-const { METADATA_HOSTS } = require("../compute/endpoint-guard");
-const { isNonUnicastAddress } = require("./ip-address-policy");
+const { isLinkLocal, isMetadataAddress, isNonUnicastAddress, isPrivateAddress } = require("./ip-address-policy");
 
 const MAX_LIST = 256;
 const MAX_HOST = 253;
@@ -150,15 +149,13 @@ function cidrContains(cidr, address) {
 function patternMatches(value, pattern) { return pattern.startsWith("*.") ? value.endsWith(pattern.slice(1)) && value.length > pattern.length - 1 : value === pattern; }
 function permanentDenial(value) {
   const text = String(value || "").toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
-  if (METADATA_HOSTS.has(text) || text === "localhost" || text.endsWith(".localhost")) return PERMANENT_REASON;
-  if (isNonUnicastAddress(text)) return PERMANENT_REASON;
+  if (text === "localhost" || text.endsWith(".localhost") || isMetadataAddress(text) || isLinkLocal(text) || isNonUnicastAddress(text)) return PERMANENT_REASON;
   let address; try { address = parseAddress(text); } catch { return null; }
-  if (address.value === 0n || (address.bits === 32 && ((address.value >> 24n) & 255n) === 255n)) return PERMANENT_REASON;
-  if (address.bits === 32 && ((address.value >> 24n) & 255n) === 169n && ((address.value >> 16n) & 255n) === 254n) return PERMANENT_REASON;
-   if (address.bits === 128 && (((address.value >> 120n) & 0xffn) === 0xffn || (address.value >> 118n) === 0x3fan)) return PERMANENT_REASON;
+  if (address.value === 0n) return PERMANENT_REASON;
+  if (address.bits === 128 && (address.value >> 108n) === 0x3fff0n) return PERMANENT_REASON;
   return null;
 }
-function isPrivate(value) { let a; try { a = parseAddress(value); } catch { return false; } if (a.bits === 32) { const n = a.value; const first = Number(n >> 24n), second = Number((n >> 16n) & 255n); return first === 10 || first === 127 || first === 0 || (first === 172 && second >= 16 && second <= 31) || (first === 192 && second === 168) || (first === 100 && second >= 64 && second <= 127); } return ((a.value >> 121n) & 0x7fn) === 0x7en || a.value === 1n; }
+function isPrivate(value) { return isPrivateAddress(String(value || "")); }
 function portAllowed(port, ranges) { return !ranges.length || ranges.some(range => { const [a, b] = String(range).split("-").map(Number); return port >= a && port <= (b || a); }); }
 function decision(scope, { host: rawHost, address: rawAddress, protocol, port, allowedHosts = null } = {}) {
    if (!scope || !scope.enabled) return { ok: false, reason: "scope_disabled" };

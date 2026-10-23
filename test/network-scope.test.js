@@ -50,9 +50,20 @@ test("private address decisions cover IPv4 and IPv6 policy branches", () => {
   assert.strictEqual(policy.isPrivate("not-an-address"), false, "malformed address parsing fails closed without throwing");
   assert.strictEqual(policy.decision(disabled, { address: "fd00::2", protocol: "https", port: 443 }).reason, "private_address_not_enabled");
   assert.strictEqual(policy.decision(disabled, { address: "::1", protocol: "https", port: 443 }).reason, "private_address_not_enabled");
+  for (const address of ["64:ff9b::a0a:401", "2002:0a0a:0401::"]) {
+    assert.strictEqual(policy.isPrivate(address), true, `${address} must inherit its embedded private IPv4 classification`);
+    assert.strictEqual(policy.decision(disabled, { address, protocol: "https", port: 443 }).reason, "private_address_not_enabled");
+  }
 
   const enabled = policy.normalizeScope({ name: "private_enabled", allowed_cidrs: ["10.0.0.0/8"], allowed_protocols: ["https"], allow_private_addresses: true });
   assert.strictEqual(policy.decision(enabled, { address: "10.4.0.2", protocol: "https", port: 443 }).ok, true);
+});
+
+test("translated link-local and metadata endpoints remain permanently denied", () => {
+  const scope = policy.normalizeScope({ name: "translated_permanent_denial", allowed_cidrs: ["::/0"], allowed_protocols: ["https"], allow_private_addresses: true });
+  for (const address of ["64:ff9b::a9fe:a9fe", "2002:a9fe:a9fe::", "64:ff9b::a9fe:0101"]) {
+    assert.strictEqual(policy.decision(scope, { address, protocol: "https", port: 443 }).reason, "permanent_denial", `${address} must remain permanently denied`);
+  }
 });
 
 test("named scopes persist immutable revisions and disable live authority", () => {
