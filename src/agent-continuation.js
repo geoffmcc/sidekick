@@ -32,6 +32,7 @@
 const path = require("path");
 const fs = require("fs");
 const { redactSensitive } = require("./redact");
+const { readTextBounded } = require("./core/bounded-file-read");
 
 // Central limits. Keep every bound here rather than scattered as magic numbers
 // through route/UI code. Values are conservative defaults; environment override
@@ -62,10 +63,11 @@ const CONTINUATION_LIMITS = Object.freeze({
 });
 
 // The real generated task id is `crypto.randomUUID().slice(0, 8)` — 8 lowercase
-// hex characters. Accept exactly that shape; this rejects slashes, backslashes,
+// hex characters. The fixed `task_` legacy form is also supported. Both forms
+// reject slashes and backslashes,
 // "..", URL-encoded traversal, absolute paths, null bytes, and unexpected
 // lengths in a single strict check.
-const TASK_ID_PATTERN = /^[0-9a-f]{8}$/;
+const TASK_ID_PATTERN = /^(?:[0-9a-f]{8}|task_[0-9a-f]{8})$/;
 
 // Statuses a task may hold once it has been persisted. A transcript is only ever
 // written when the task reaches one of these, so "transcript exists" implies
@@ -147,6 +149,9 @@ function resolveTranscriptPath(convDir, taskId) {
 function loadTranscript(convDir, taskId, deps = {}) {
   const lstatSync = deps.lstatSync || fs.lstatSync;
   const readFileSync = deps.readFileSync || fs.readFileSync;
+  const boundedReader = deps.readTextBounded || readTextBounded;
+  const injectedReader = typeof deps.readTextBounded === "function" ||
+    (typeof deps.readFileSync === "function" && deps.readFileSync !== fs.readFileSync);
   const limits = deps.limits || CONTINUATION_LIMITS;
   const p = resolveTranscriptPath(convDir, taskId);
 
@@ -170,8 +175,16 @@ function loadTranscript(convDir, taskId, deps = {}) {
 
   let raw;
   try {
-    raw = readFileSync(p, "utf-8");
-  } catch {
+    if (injectedReader && typeof deps.readTextBounded !== "function") {
+      raw = readFileSync(p, "utf-8");
+    } else {
+      const result = boundedReader(p, { maxBytes: limits.MAX_TRANSCRIPT_BYTES, requireComplete: true, noFollow: true });
+      raw = result.content;
+    }
+  } catch (error) {
+    if (error?.code === "FILE_READ_TOO_LARGE") {
+      throw new ContinuationError("transcript_too_large", "Task record is too large to continue", 422);
+    }
     throw new ContinuationError("not_found", "Task not found", 404);
   }
   if (typeof raw === "string" && raw.length > limits.MAX_TRANSCRIPT_BYTES) {

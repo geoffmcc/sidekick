@@ -1,5 +1,5 @@
-const fs = require("fs");
-const path = require("path");
+const { resolveTranscriptPath, loadTranscript } = require("../agent-continuation");
+const { writeJsonFile } = require("../core/json-file-store");
 
 // Deliver a resumed approval task's terminal outcome to the durable transcript
 // and platform execution ledger. Dependencies are injected so recovery stays a
@@ -11,10 +11,11 @@ function createResumedTaskFinalizer({ convDir, emit, platformKernel, redactSensi
     const mapped = terminalStates[state];
     if (!mapped) return { ok: false, reason: "not_terminal", state };
 
-    const transcriptPath = path.join(convDir, taskId + ".json");
+    let transcriptPath;
     let record = {};
     try {
-      record = JSON.parse(fs.readFileSync(transcriptPath, "utf-8"));
+      transcriptPath = resolveTranscriptPath(convDir, taskId);
+      record = loadTranscript(convDir, taskId);
     } catch {
       return { ok: false, reason: "transcript_unreadable" };
     }
@@ -32,12 +33,9 @@ function createResumedTaskFinalizer({ convDir, emit, platformKernel, redactSensi
       brain: { ...(record.brain || {}), state, resumed: true, awaiting_approval: null, error: failure },
     };
 
-    const temporaryTranscriptPath = `${transcriptPath}.${process.pid}.${Date.now()}.tmp`;
     try {
-      fs.writeFileSync(temporaryTranscriptPath, JSON.stringify(merged), { encoding: "utf-8", mode: 0o600 });
-      fs.renameSync(temporaryTranscriptPath, transcriptPath);
+      writeJsonFile(transcriptPath, merged, { maxBytes: 5 * 1024 * 1024 });
     } catch {
-      try { fs.unlinkSync(temporaryTranscriptPath); } catch {}
       return { ok: false, reason: "transcript_unwritable" };
     }
 

@@ -60,6 +60,7 @@ const P = (id) => path.join(CONV, id + ".json");
 ok("validateTaskId accepts real 8-hex id", () => {
   assert.strictEqual(C.validateTaskId("a1b2c3d4"), true);
   assert.strictEqual(C.validateTaskId("00000000"), true);
+  assert.strictEqual(C.validateTaskId("task_00000001"), true, "fixed legacy transcript ids remain supported");
 });
 
 ok("validateTaskId rejects traversal/slash/backslash/encoded/null/length/case", () => {
@@ -95,6 +96,16 @@ ok("loadTranscript rejects oversized transcript before parsing", () => {
 ok("loadTranscript rejects malformed JSON safely", () => {
   const fs = fakeFs({ [P("aaaaaaaa")]: { content: "{ not json " } });
   assert.throws(() => C.loadTranscript(CONV, "aaaaaaaa", fs), (e) => e.code === "malformed_transcript");
+});
+
+ok("loadTranscript uses a bounded no-follow read after its path check", () => {
+  const fake = fakeFs({ [P("aaaaaaaa")]: { content: "{}" } });
+  let readOptions;
+  fake.readTextBounded = (_filePath, options) => { readOptions = options; return { content: "{}" }; };
+  assert.deepStrictEqual(C.loadTranscript(CONV, "aaaaaaaa", fake), {});
+  assert.strictEqual(readOptions.maxBytes, C.CONTINUATION_LIMITS.MAX_TRANSCRIPT_BYTES);
+  assert.strictEqual(readOptions.requireComplete, true);
+  assert.strictEqual(readOptions.noFollow, true);
 });
 
 ok("loadTranscript rejects non-object JSON (array) safely", () => {
