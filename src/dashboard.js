@@ -15,6 +15,7 @@ const identity = require("./core/identity");
 const authentication = require("./core/authentication");
 const { AuthRateLimiter } = require("./core/auth-rate-limit");
 const { BoundedRateLimiter } = require("./core/bounded-rate-limiter");
+const { parseTrustedProxyConfig } = require("./security/trusted-proxies");
 const authorization = require("./core/authorization");
 const { allowedActions } = require("./evolve/lifecycle");
 const { redactSensitive } = require("./redact");
@@ -67,7 +68,7 @@ const { addCorrelationMiddleware, createDashboardErrorBoundary, requestCorrelati
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const PORT = parseInt(process.env.SIDEKICK_DASHBOARD_PORT || "4098", 10);
 const BIND_HOST = process.env.SIDEKICK_DASHBOARD_BIND_HOST || "127.0.0.1";
-const TRUST_PROXY = process.env.SIDEKICK_DASHBOARD_TRUST_PROXY === "true";
+const TRUST_PROXY = parseTrustedProxyConfig(process.env.SIDEKICK_DASHBOARD_TRUST_PROXY);
 const ERROR_LOG = path.join(DATA_DIR, "dashboard-errors.log");
 if (["0.0.0.0", "::"].includes(BIND_HOST) && process.env.SIDEKICK_ALLOW_PUBLIC_BIND !== "1") {
   throw new Error("wildcard Dashboard bind requires SIDEKICK_ALLOW_PUBLIC_BIND=1");
