@@ -22,6 +22,9 @@ assert.strictEqual(filtered.SAFE_OVERRIDE, "ok");
 const credentialEnvKeys = [
   "AWS_ACCESS_KEY_ID", "DOCKER_AUTH_CONFIG", "SSH_AUTH_SOCK", "KUBECONFIG",
   "NPM_CONFIG_USERCONFIG", "PIP_CONFIG_FILE", "AWS_CONFIG_FILE", "AZURE_CONFIG_DIR",
+  "AWS_PROFILE", "AWS_DEFAULT_PROFILE", "GH_CONFIG_DIR", "HELM_REGISTRY_CONFIG",
+  "TF_CLI_CONFIG_FILE", "TERRAFORM_CLI_CONFIG_FILE", "NETRC", "CURL_HOME", "WGETRC",
+  "GNUPGHOME", "GPG_AGENT_INFO", "BOTO_CONFIG", "NUGET_CREDENTIALPROVIDERS_PATH",
 ];
 const previousCredentialEnv = new Map(credentialEnvKeys.map(key => [key, process.env[key]]));
 for (const key of credentialEnvKeys) process.env[key] = "attacker-controlled-credential-reference";
