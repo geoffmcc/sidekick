@@ -40,6 +40,21 @@ for (const [key, value] of previousCredentialEnv) {
   else process.env[key] = value;
 }
 
+const previousUrlCredentials = new Map(["DATABASE_URL", "PIP_INDEX_URL"].map(key => [key, process.env[key]]));
+process.env.DATABASE_URL = "postgres://service:synthetic-secret@db.internal/app";
+process.env.PIP_INDEX_URL = "https://user:synthetic-secret@packages.internal/simple";
+const filteredCredentialUrls = childProcessEnv({
+  DATABASE_URL: "postgres://service:synthetic-secret@db.internal/app",
+  PROXY_URL: "http://proxy.internal:8080",
+});
+assert.strictEqual(filteredCredentialUrls.DATABASE_URL, undefined, "URL userinfo must not cross a child-process boundary");
+assert.strictEqual(filteredCredentialUrls.PIP_INDEX_URL, undefined, "URL userinfo must be filtered regardless of the variable name");
+assert.strictEqual(filteredCredentialUrls.PROXY_URL, "http://proxy.internal:8080", "credential-free URLs remain available to child processes");
+for (const [key, value] of previousUrlCredentials) {
+  if (value === undefined) delete process.env[key];
+  else process.env[key] = value;
+}
+
 for (const args of [
   "-c core.sshCommand=sh -c evil",
   "--config-env=core.sshCommand=EVIL",

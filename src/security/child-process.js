@@ -34,10 +34,20 @@ function isCredentialLocatorEnvKey(key) {
   return CREDENTIAL_LOCATOR_ENV_KEYS.has(String(key || "").toUpperCase());
 }
 
+function containsCredentialUrl(value) {
+  if (typeof value !== "string" || !value.includes("://")) return false;
+  try {
+    const parsed = new URL(value);
+    return Boolean(parsed.username || parsed.password);
+  } catch {
+    return false;
+  }
+}
+
 function childProcessEnv(overrides = {}) {
   const env = {};
   for (const [key, value] of Object.entries(process.env)) {
-    if (SECRET_ENV_KEY.test(key) || isCredentialLocatorEnvKey(key) || isLoaderEnvKey(key)) continue;
+    if (SECRET_ENV_KEY.test(key) || isCredentialLocatorEnvKey(key) || isLoaderEnvKey(key) || containsCredentialUrl(value)) continue;
     // Windows exposes this key as `Path` in some launch environments while
     // Unix and our child-process callers conventionally use `PATH`. Normalize
     // it so filtered environments retain executable discovery consistently.
@@ -45,7 +55,12 @@ function childProcessEnv(overrides = {}) {
   }
   for (const [key, value] of Object.entries(overrides || {})) {
     if (value == null) delete env[key];
-    else if (!SECRET_ENV_KEY.test(key) && !isCredentialLocatorEnvKey(key) && !isLoaderEnvKey(key)) env[key] = String(value);
+    else {
+      const text = String(value);
+      if (!SECRET_ENV_KEY.test(key) && !isCredentialLocatorEnvKey(key) && !isLoaderEnvKey(key) && !containsCredentialUrl(text)) {
+        env[key] = text;
+      }
+    }
   }
   return env;
 }
