@@ -1,12 +1,14 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const path = require("node:path");
 const { test, before, after } = require("node:test");
 const { startFixture, launchBrowser, withDiagnostics, waitFor } = require("./dashboard-e2e-testkit");
 
 let fixture;
 let browser;
 let page;
+let dbStore;
 
 before(async () => {
   fixture = await startFixture();
@@ -16,7 +18,43 @@ before(async () => {
 
 after(async () => {
   await browser?.close();
+  try { dbStore?.closeDatabase(); } catch {}
   await fixture?.close();
+});
+
+test("persisted tool-log text cannot create executable Dashboard markup", async () => {
+  process.env.SIDEKICK_DATA_DIR = fixture.dataDir;
+  process.env.SIDEKICK_DB_FILE = path.join(fixture.dataDir, "sidekick.db");
+  dbStore = require("../../src/db");
+  dbStore.clearToolLogs();
+  const payload = '<img src=x onerror="window.__sidekickStoredLogXss=1">';
+  dbStore.appendToolLog({
+    n: payload,
+    t: new Date().toISOString(),
+    ok: false,
+    s: payload,
+    src: "e2e-untrusted-tool-output",
+  });
+  assert.equal(dbStore.readToolLogs(1)[0]?.s, payload, "the synthetic content is persisted as tool-log text");
+  const summary = await fixture.request("GET", "/api/dashboard-summary");
+  assert.equal(summary.status, 200, JSON.stringify(summary.body));
+  assert.equal(summary.body.recentErrors[0]?.summary, payload, "Dashboard API returns the persisted value for rendering");
+
+  await page.addInitScript(() => { window.__sidekickStoredLogXss = 0; });
+  await withDiagnostics(page, fixture, "stored-tool-log-text", async () => {
+    await page.goto(`${fixture.baseUrl}/`, { waitUntil: "domcontentloaded" });
+    await page.locator("#missionRecentActivity .mission-activity").first().waitFor({ state: "visible" });
+    assert.equal(await page.locator("#missionRecentActivity img").count(), 0, "persisted strings must not create Mission markup");
+    assert.equal(await page.evaluate(() => window.__sidekickStoredLogXss), 0, "persisted strings must not run handlers");
+    assert.match(await page.locator("#missionRecentActivity").textContent(), /<img src=x onerror=/, "the error remains visible as text");
+
+    await page.goto(`${fixture.baseUrl}/#system`, { waitUntil: "domcontentloaded" });
+    await page.locator("#page-system.active").waitFor({ state: "attached" });
+    await page.locator("#recentErrors .summary-error").waitFor({ state: "visible" });
+    assert.equal(await page.locator("#recentErrors img").count(), 0, "persisted strings must not create System markup");
+    assert.equal(await page.evaluate(() => window.__sidekickStoredLogXss), 0, "System rendering must not run persisted handlers");
+    assert.match(await page.locator("#recentErrors").textContent(), /<img src=x onerror=/, "System errors also retain the value as text");
+  });
 });
 
 test("memory import is visible in the real Memory workspace", async () => {
