@@ -95,6 +95,28 @@ async function run() {
         try {
           db.runPendingMigrations();
           provisionCertificationPacks();
+          if (certificationEnvironment.temporary) {
+            // The CLI created a brand-new scratch directory for this
+            // run. Bootstrap its one-time Owner there so certification can
+            // authorize its bounded service identity without touching the
+            // operator's configured Sidekick database.
+            const identity = require("./core/identity");
+            if (!identity.listPrincipals({ type: "human" }).some(principal => principal.enabled && principal.roles.includes("owner"))) {
+              const crypto = require("crypto");
+              identity.bootstrapOwner({
+                username: `certification-${crypto.randomBytes(12).toString("hex")}`,
+                password: crypto.randomBytes(32).toString("hex"),
+                displayName: "Ephemeral certification authority",
+                metadata: { service: "certification", ephemeral: true },
+              });
+            }
+            // Certification's repository fixtures need read access to this
+            // checkout. Keep the grant source-specific and honor an explicit
+            // certification allow-list supplied by the operator.
+            if (process.env.SIDEKICK_CERTIFICATION_ALLOWED_PATHS === undefined) {
+              process.env.SIDEKICK_CERTIFICATION_ALLOWED_PATHS = path.resolve(__dirname, "..");
+            }
+          }
           certificationIdentity = require("./certification/identity").createCertificationIdentity();
           const { runCertification, formatCertificationText, createLifecycleExecutorFromEnv } = require("./certification");
           const live = process.argv.includes("--live");

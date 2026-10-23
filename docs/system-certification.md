@@ -21,6 +21,17 @@ node test/certification-lifecycle.test.js
 The Agent Bridge lifecycle scenarios are required separately because they need
 the durable loopback task runtime rather than direct MCP tool descriptors; run
 `node test/certification-lifecycle.test.js` for that surface.
+
+When `SIDEKICK_CERTIFICATION_DATA_DIR` is unset or empty, the CLI creates a
+fresh temporary data directory, bootstraps a one-time Owner in that isolated
+database, and uses it to authorize the bounded ephemeral certification service
+identity. The temporary directory is removed after the run. The operator's
+configured Sidekick database is not initialized or modified. If a certification
+data directory is explicitly configured, certification does not bootstrap an
+Owner and requires an enabled Owner already present there. For the temporary
+mode only, the CLI adds the current checkout as a certification-source path
+allow-list when no `SIDEKICK_CERTIFICATION_ALLOWED_PATHS` value is supplied;
+deny rules continue to apply.
 Provider and lab-dependent scenarios are separate live scenarios and are
 reported as `skipped` when their prerequisites are unavailable. A skipped or
 blocked scenario is not a pass, and a report containing either status has an
