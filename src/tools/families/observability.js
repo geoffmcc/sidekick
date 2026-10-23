@@ -23,6 +23,7 @@ const { readSecret } = require("../../core/runtime-secrets");
 const { childProcessEnv } = require("../../security/child-process");
 const { runBoundedShell } = require("../../security/command-execution");
 const { checkEndpoint } = require("../../security/endpoint-probe");
+const { requestPinnedHttp } = require("../../security/pinned-http");
 const { requireToolExecution, requireCanonicalInvocation, requirePermission } = require("../read-authorization");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "..", "..", "data");
@@ -38,10 +39,15 @@ const INFLUX_REQUEST_TIMEOUT_MS = 15_000;
 const MAX_INFLUX_RESPONSE_BYTES = 5 * 1024 * 1024;
 
 async function requestInflux(url, options = {}) {
-  return fetch(url, {
+  const target = new URL(url);
+  validateInfluxUrl(target.origin);
+  return requestPinnedHttp(url, {
     ...options,
-    redirect: "error",
-    signal: AbortSignal.timeout(INFLUX_REQUEST_TIMEOUT_MS),
+    signal: options.signal || AbortSignal.timeout(INFLUX_REQUEST_TIMEOUT_MS),
+  }, {
+    label: "Influx endpoint",
+    allowPrivate: true,
+    timeoutMs: INFLUX_REQUEST_TIMEOUT_MS,
   });
 }
 

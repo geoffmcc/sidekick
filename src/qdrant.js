@@ -1,7 +1,4 @@
-const http = require("node:http");
-const https = require("node:https");
-const { Readable } = require("node:stream");
-const { resolveOutboundUrl } = require("./security/outbound-url");
+const { requestPinnedHttp } = require("./security/pinned-http");
 
 const QDRANT_URL = process.env.SIDEKICK_QDRANT_URL || "http://127.0.0.1:6333";
 const COLLECTION_NAME = "sidekick_context";
@@ -10,37 +7,10 @@ const REQUEST_TIMEOUT_MS = 15_000;
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 
 async function qdrantRequest(url, options = {}) {
-  const target = new URL(url);
-  const destination = await resolveOutboundUrl(target.href, "Qdrant endpoint", { allowPrivate: true });
-  if (destination.refusal) throw new Error(destination.refusal);
-
-  const signal = options.signal || AbortSignal.timeout(REQUEST_TIMEOUT_MS);
-  if (signal.aborted) throw signal.reason || new Error("Qdrant request aborted");
-  const transport = target.protocol === "https:" ? https : http;
-  const requestOptions = {
-    hostname: destination.address,
-    port: target.port || (target.protocol === "https:" ? 443 : 80),
-    path: target.pathname + target.search,
-    method: options.method || "GET",
-    headers: { "Accept-Encoding": "identity", Host: target.host, ...(options.headers || {}) },
-    ...(target.protocol === "https:" ? { servername: target.hostname.replace(/^\[|\]$/g, "") } : {}),
-  };
-
-  return new Promise((resolve, reject) => {
-    const request = transport.request(requestOptions, response => {
-      const body = [204, 304].includes(response.statusCode) ? null : Readable.toWeb(response);
-      resolve(new Response(body, {
-        status: response.statusCode,
-        statusText: response.statusMessage,
-        headers: response.headers,
-      }));
-    });
-    const onAbort = () => request.destroy(signal.reason || new Error("Qdrant request aborted"));
-    signal.addEventListener("abort", onAbort, { once: true });
-    request.on("close", () => signal.removeEventListener("abort", onAbort));
-    request.on("error", reject);
-    if (options.body !== undefined && options.body !== null) request.write(options.body);
-    request.end();
+  return requestPinnedHttp(url, options, {
+    label: "Qdrant endpoint",
+    allowPrivate: true,
+    timeoutMs: REQUEST_TIMEOUT_MS,
   });
 }
 
