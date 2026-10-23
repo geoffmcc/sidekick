@@ -28,6 +28,7 @@ const packLifecycle = require("../../src/packs/lifecycle");
 const { redactSensitive, redactSensitiveKeysDeep } = require("../../src/redact");
 const { normalizeResult } = require("../../src/tools/result");
 const { buildSearchArgs } = require("../../src/tools/families/filesystem");
+const { descriptors: monitoringDescriptors, resolveSnapshotPath } = require("../../src/tools/families/monitoring");
 
 let owner;
 
@@ -169,6 +170,18 @@ test("filesystem search patterns cannot become ripgrep or grep options", () => {
     assert.ok(separator >= 0, `${executable} arguments must terminate options`);
     assert.deepEqual(args.slice(separator), ["--", hostilePattern, "/workspace"]);
   }
+});
+
+test("snapshot names cannot escape the snapshot storage directory", () => {
+  const descriptor = monitoringDescriptors.find(item => item.name === "snapshot");
+  assert.ok(descriptor);
+  for (const name of ["../outside", "nested/name", "nested\\name", "..", "name.", "name ", "bad\nname"]) {
+    assert.equal(resolveSnapshotPath(name), null, `unsafe snapshot name accepted: ${JSON.stringify(name)}`);
+    assert.equal(descriptor.schema.safeParse({ action: "capture", name }).success, false);
+  }
+  const safePath = resolveSnapshotPath("release baseline.v1");
+  assert.ok(safePath);
+  assert.equal(path.dirname(safePath), path.resolve(process.env.SIDEKICK_DATA_DIR, "snapshots"));
 });
 
 test("workflow definitions reject forward references, executable syntax, and duplicate steps", () => {

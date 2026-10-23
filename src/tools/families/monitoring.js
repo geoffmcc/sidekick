@@ -66,7 +66,18 @@ const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "..
 
 const SNAPSHOTS_DIR = path.join(DATA_DIR, "snapshots");
 if (!fs.existsSync(SNAPSHOTS_DIR)) {
-  fs.mkdirSync(SNAPSHOTS_DIR, { recursive: true });
+  fs.mkdirSync(SNAPSHOTS_DIR, { recursive: true, mode: 0o700 });
+}
+
+const SNAPSHOT_NAME_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9 ._-]{0,126}[A-Za-z0-9_-])?$/;
+
+function resolveSnapshotPath(name) {
+  if (typeof name !== "string" || !SNAPSHOT_NAME_PATTERN.test(name)) return null;
+  const root = path.resolve(SNAPSHOTS_DIR);
+  const resolved = path.resolve(root, `${name}.json`);
+  const relative = path.relative(root, resolved);
+  if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return null;
+  return resolved;
 }
 
 function captureProcesses() {
@@ -182,6 +193,10 @@ async function sidekick_snapshot({ action, name, capture, compare }) {
     if (!name) {
       return { content: [{ type: "text", text: "name required" }], isError: true };
     }
+    const snapshotPath = resolveSnapshotPath(name);
+    if (!snapshotPath) {
+      return { content: [{ type: "text", text: "Snapshot name must be 1–128 letters or numbers, spaces, periods, underscores, or hyphens; it must start with a letter or number and end with a letter, number, underscore, or hyphen" }], isError: true };
+    }
 
     const types = capture ? capture.split(",").map(t => t.trim()) : ["processes", "services", "disk"];
     const snapshot = { name, date: now, types, data: {} };
@@ -207,7 +222,6 @@ async function sidekick_snapshot({ action, name, capture, compare }) {
       }
     }
 
-    const snapshotPath = path.join(SNAPSHOTS_DIR, `${name}.json`);
     fs.writeFileSync(snapshotPath, JSON.stringify(snapshot, null, 2));
 
     return { content: [{ type: "text", text: `Captured snapshot: ${name}\nTypes: ${types.join(", ")}\nDate: ${now}` }] };
@@ -218,8 +232,11 @@ async function sidekick_snapshot({ action, name, capture, compare }) {
       return { content: [{ type: "text", text: "name and compare required" }], isError: true };
     }
 
-    const snapshotPath = path.join(SNAPSHOTS_DIR, `${name}.json`);
-    const comparePath = path.join(SNAPSHOTS_DIR, `${compare}.json`);
+    const snapshotPath = resolveSnapshotPath(name);
+    const comparePath = resolveSnapshotPath(compare);
+    if (!snapshotPath || !comparePath) {
+      return { content: [{ type: "text", text: "Invalid snapshot name" }], isError: true };
+    }
 
     if (!fs.existsSync(snapshotPath)) {
       return { content: [{ type: "text", text: `Snapshot not found: ${name}` }], isError: true };
@@ -332,7 +349,10 @@ async function sidekick_snapshot({ action, name, capture, compare }) {
       return { content: [{ type: "text", text: "name required" }], isError: true };
     }
 
-    const snapshotPath = path.join(SNAPSHOTS_DIR, `${name}.json`);
+    const snapshotPath = resolveSnapshotPath(name);
+    if (!snapshotPath) {
+      return { content: [{ type: "text", text: "Invalid snapshot name" }], isError: true };
+    }
     if (!fs.existsSync(snapshotPath)) {
       return { content: [{ type: "text", text: `Snapshot not found: ${name}` }], isError: true };
     }
@@ -738,9 +758,9 @@ async function sidekick_baseline({ action, metric_name, value, source, command, 
 const EXTRA_SCHEMAS = {
   snapshot: z.object({
     action: z.enum(["capture", "compare", "list", "delete"]).describe("Snapshot action: capture (save state), compare (detect drift), list (show all), delete (remove)"),
-    name: z.string().optional().describe("Snapshot name"),
+    name: z.string().max(128).regex(SNAPSHOT_NAME_PATTERN).optional().describe("Snapshot name (letters, numbers, spaces, periods, underscores, or hyphens)"),
     capture: z.string().optional().describe("What to capture: processes,services,disk,packages,network,files:/path (comma-separated)"),
-    compare: z.string().optional().describe("Baseline snapshot name for compare action")
+    compare: z.string().max(128).regex(SNAPSHOT_NAME_PATTERN).optional().describe("Baseline snapshot name for compare action")
   }),
   timeline: z.object({
     action: z.enum(["build", "filter", "export"]),
@@ -819,4 +839,4 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_tail, sidekick_snapshot, sidekick_timeline, sidekick_baseline };
+module.exports = { descriptors, sidekick_tail, sidekick_snapshot, sidekick_timeline, sidekick_baseline, resolveSnapshotPath, SNAPSHOT_NAME_PATTERN };
