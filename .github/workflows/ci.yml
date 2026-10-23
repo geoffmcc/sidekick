@@ -198,6 +198,17 @@ jobs:
       - name: Require a stable package lock
         run: git diff --exit-code -- package-lock.json
       - run: npm audit --omit=dev --audit-level=moderate
+      - name: Generate CycloneDX software bill of materials
+        run: npm sbom --package-lock-only --sbom-format=cyclonedx --sbom-type=application > sidekick.cdx.json
+      - name: Validate generated software bill of materials
+        run: node -e "const bom = require('./sidekick.cdx.json'); if (bom.bomFormat !== 'CycloneDX' || !Array.isArray(bom.components) || !Array.isArray(bom.dependencies) || bom.components.length === 0) process.exit(1)"
+      - name: Publish software bill of materials artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1, Node 24
+        with:
+          name: sidekick-cyclonedx-sbom
+          path: sidekick.cdx.json
+          if-no-files-found: error
+          retention-days: 14
       - run: npm run package:worker
       - run: npm pack --dry-run
 
