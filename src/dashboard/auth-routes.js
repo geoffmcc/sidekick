@@ -136,6 +136,9 @@ function registerAuthRoutes({
   function identityPermissionDecision(req, permission) {
     const principalId = req.authPrincipal?.principal_id;
     const principal = req.authPrincipal;
+    if (principal?.session_id && (!authentication || typeof authentication.isSessionActive !== "function" || !authentication.isSessionActive(principal.session_id))) {
+      return { ok: false, code: "unauthenticated" };
+    }
     return authorization.authorize({
       principalId,
       permission,
@@ -145,8 +148,6 @@ function registerAuthRoutes({
   }
 
   function hasIdentityPermission(req, permission) {
-    const principal = req.authPrincipal;
-    if (principal?.session_id && (!authentication || typeof authentication.isSessionActive !== "function" || !authentication.isSessionActive(principal.session_id))) return false;
     return identityPermissionDecision(req, permission).ok;
   }
 
@@ -316,8 +317,29 @@ function registerAuthRoutes({
 
   app.post("/api/auth/credentials", (req, res) => {
     if (!requireIdentityPermission(req, res, "credentials.create")) return;
+    const actorId = req.authPrincipal.principal_id;
+    const principalId = req.body?.principal_id || actorId;
+    if (principalId !== actorId) {
+      return res.status(403).json({ error: "Generic credentials may only be created for the initiating principal", code: "credential_target_forbidden" });
+    }
+    const scopes = req.body?.scopes === undefined ? [] : req.body.scopes;
+    if (!Array.isArray(scopes) || scopes.some(scope => typeof scope !== "string" || !scope.trim() || scope.length > 160)) {
+      return res.status(400).json({ error: "scopes must be a bounded permission array", code: "invalid_request" });
+    }
+    const uniqueScopes = [...new Set(scopes.map(scope => scope.trim()))];
+    for (const scope of uniqueScopes) {
+      const decision = identityPermissionDecision(req, scope);
+      if (!decision.ok) return res.status(403).json({ error: "Credential scopes exceed the initiating identity's current authority", code: "forbidden", permission: scope });
+    }
     try {
-      const created = authentication.createCredential({ principalId: req.body?.principal_id, displayName: req.body?.display_name, scopes: req.body?.scopes, expiresAt: req.body?.expires_at, createdByPrincipalId: req.authPrincipal.principal_id });
+      let created;
+      dbStore.getDb().transaction(() => {
+        if (!identityPermissionDecision(req, "credentials.create").ok) throw new Error("Credential creation authority was revoked");
+        for (const scope of uniqueScopes) {
+          if (!identityPermissionDecision(req, scope).ok) throw new Error(`Credential scope authority was revoked: ${scope}`);
+        }
+        created = authentication.createCredential({ principalId: actorId, displayName: req.body?.display_name, scopes: uniqueScopes, expiresAt: req.body?.expires_at, createdByPrincipalId: actorId });
+      })();
       res.status(201).json({ credential: created.credential, token: created.token });
     } catch (error) {
       return errorResponse(req, res, error, { status: 400, code: "invalid_request", component: "auth" });
@@ -435,11 +457,24 @@ function registerAuthRoutes({
 
   app.post("/api/auth/credentials/:id/revoke", (req, res) => {
     if (!requireIdentityPermission(req, res, "credentials.revoke")) return;
+    const credential = authentication.getCredential(req.params.id);
+    if (credential && credential.principal_id !== req.authPrincipal.principal_id) {
+      return res.status(403).json({ error: "Credentials may only be revoked by their owning principal", code: "credential_target_forbidden" });
+    }
     res.json({ revoked: authentication.revokeCredential(req.params.id, req.authPrincipal?.principal_id || null) });
   });
 
   app.post("/api/auth/credentials/:id/rotate", (req, res) => {
     if (!requireIdentityPermission(req, res, "credentials.revoke")) return;
+    const credential = authentication.getCredential(req.params.id);
+    if (!credential) return res.status(404).json({ error: "Credential not found", code: "not_found" });
+    if (credential.principal_id !== req.authPrincipal.principal_id) {
+      return res.status(403).json({ error: "Credentials may only be rotated by their owning principal", code: "credential_target_forbidden" });
+    }
+    for (const scope of credential.scopes) {
+      const decision = identityPermissionDecision(req, scope);
+      if (!decision.ok) return res.status(403).json({ error: "Credential scopes exceed the initiating identity's current authority", code: "forbidden", permission: scope });
+    }
     try {
       const replacement = authentication.rotateCredential(req.params.id, req.authPrincipal.principal_id);
       res.status(201).json({ credential: replacement.credential, token: replacement.token });

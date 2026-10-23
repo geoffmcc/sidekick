@@ -16,6 +16,7 @@ test("Dashboard authorization preserves credential and delegation attenuation", 
   const decisions = [];
   let createdDelegations = 0;
   let revokedDelegations = 0;
+  let credentialReads = 0;
   let sessionActive = true;
   const app = Object.fromEntries(["get", "post", "put", "patch", "delete"].map(method => [method, (route, handler) => handlers.set(`${method.toUpperCase()} ${route}`, handler)]));
   app.use = () => {};
@@ -31,7 +32,7 @@ test("Dashboard authorization preserves credential and delegation attenuation", 
     revokeDelegation() { revokedDelegations++; return {}; },
   };
   const { hasIdentityPermission } = registerAuthRoutes({
-    app, dbStore: {}, identity: {}, authentication: { isSessionActive: () => sessionActive }, authorization,
+    app, dbStore: {}, identity: {}, authentication: { isSessionActive: () => sessionActive, listCredentials: () => { credentialReads++; return []; } }, authorization,
     timingSafeCompare: () => false, dashboardUser: "", dashboardPass: "",
     bootstrapCompleted: () => false, authAttemptKeys: () => [], rejectIfAuthThrottled: () => false,
     recordAuthFailure() {}, clearAuthFailures() {}, legacyDashboardPrincipal: () => null,
@@ -45,6 +46,12 @@ test("Dashboard authorization preserves credential and delegation attenuation", 
   assert.equal(hasIdentityPermission({ authPrincipal: streamPrincipal }, "dashboard.operations.read"), true);
   sessionActive = false;
   assert.equal(hasIdentityPermission({ authPrincipal: streamPrincipal }, "dashboard.operations.read"), false, "invalidated server-side sessions cannot retain long-lived stream access");
+  const expiredRoute = response();
+  handlers.get("GET /api/auth/credentials")({
+    authPrincipal: { ...streamPrincipal, scopes: ["credentials.read"] }, query: {},
+  }, expiredRoute);
+  assert.equal(expiredRoute.statusCode, 401, "route authorization revalidates the server-side session");
+  assert.equal(credentialReads, 0, "an invalidated session is denied before credential metadata is read");
   sessionActive = true;
   const credentialRead = response();
   handlers.get("GET /api/auth/credentials")({ authPrincipal: principal, query: {} }, credentialRead);
