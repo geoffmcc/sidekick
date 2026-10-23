@@ -9,6 +9,7 @@ const http = require("http");
 const https = require("https");
 const workerConfig = require("../compute/worker-config");
 const credentialStore = require("../compute/worker-credential");
+const { readSecret } = require("../core/runtime-secrets");
 const { getCanonicalRegistry } = require("../tools/canonical-registry");
 const toolContext = require("../tools/context");
 const { createRegistry } = require("../tools/registry");
@@ -41,7 +42,15 @@ function boundedInt(value, fallback, min, max) { const n = Number(value || fallb
 function log(message) { process.stderr.write(`[sidekick-node] ${new Date().toISOString()} ${redact(message)}\n`); }
 function redact(value) { return String(value || "").replace(/(?:wksec_|enroll_)[A-Za-z0-9_-]+/g, "[REDACTED]").replace(/(token|secret|password|api[_-]?key)=?[^\s,;]+/gi, "$1=[REDACTED]"); }
 function loadConfig() { try { const parsed = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8")); if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("configuration must be an object"); return parsed; } catch (e) { if (e.code === "ENOENT") return {}; throw new Error(`invalid node configuration: ${e.message}`); } }
-function token() { const file = process.env.SIDEKICK_NODE_ENROLL_TOKEN_FILE || path.join(os.homedir(), ".config", "sidekick", "node-enrollment-token"); try { const value = fs.readFileSync(file, "utf8").trim(); return value || process.env.SIDEKICK_NODE_ENROLL_TOKEN; } catch { return process.env.SIDEKICK_NODE_ENROLL_TOKEN; } }
+function token() {
+  const file = process.env.SIDEKICK_NODE_ENROLL_TOKEN_FILE || path.join(os.homedir(), ".config", "sidekick", "node-enrollment-token");
+  // Missing enrollment material is a normal pre-enrollment state. When the
+  // file exists, use the shared secret reader so permissions, ACLs, symlinks,
+  // race replacement, and size are validated before its contents are read.
+  if (!fs.existsSync(file)) return "";
+  process.env.SIDEKICK_NODE_ENROLL_TOKEN_FILE = file;
+  return readSecret("SIDEKICK_NODE_ENROLL_TOKEN");
+}
 function nodeId() { return process.env.SIDEKICK_NODE_ID || workerConfig.generateStableNodeId(); }
 function networkScopes() {
   const configured = Array.isArray(nodeConfig.networkScopes) ? nodeConfig.networkScopes : [];

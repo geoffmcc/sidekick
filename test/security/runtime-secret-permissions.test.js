@@ -31,10 +31,14 @@ test("runtime secret reader and deploy preflight reject world-readable credentia
     NODE_ENV: process.env.NODE_ENV,
     SIDEKICK_SECRET_DIR: process.env.SIDEKICK_SECRET_DIR,
     SIDEKICK_API_KEY_FILE: process.env.SIDEKICK_API_KEY_FILE,
+    SIDEKICK_NODE_ENROLL_TOKEN: process.env.SIDEKICK_NODE_ENROLL_TOKEN,
+    SIDEKICK_NODE_ENROLL_TOKEN_FILE: process.env.SIDEKICK_NODE_ENROLL_TOKEN_FILE,
   };
   process.env.NODE_ENV = "production";
   process.env.SIDEKICK_SECRET_DIR = secretDirectory;
   delete process.env.SIDEKICK_API_KEY_FILE;
+  delete process.env.SIDEKICK_NODE_ENROLL_TOKEN_FILE;
+  delete process.env.SIDEKICK_NODE_ENROLL_TOKEN;
   t.after(() => {
     for (const [name, value] of Object.entries(previous)) {
       if (value === undefined) delete process.env[name];
@@ -43,6 +47,10 @@ test("runtime secret reader and deploy preflight reject world-readable credentia
   });
 
   assert.equal(readSecret("SIDEKICK_API_KEY"), "synthetic-api-key");
+  const nodeTokenPath = path.join(secretDirectory, "sidekick_node_enroll_token");
+  fs.writeFileSync(nodeTokenPath, "synthetic-node-enrollment-token\n", { mode: 0o600 });
+  fs.chmodSync(nodeTokenPath, 0o600);
+  assert.equal(readSecret("SIDEKICK_NODE_ENROLL_TOKEN"), "synthetic-node-enrollment-token");
   assert.equal(verifyRequiredRuntimeSecrets(secretDirectory), true);
   assert.equal(readWorkerSecret("SIDEKICK_ENROLL_TOKEN"), "");
 
@@ -57,6 +65,8 @@ test("runtime secret reader and deploy preflight reject world-readable credentia
 
   fs.chmodSync(apiKeyPath, 0o644);
   assert.throws(() => readSecret("SIDEKICK_API_KEY"), /secret file is readable by other users/);
+  fs.chmodSync(nodeTokenPath, 0o644);
+  assert.throws(() => readSecret("SIDEKICK_NODE_ENROLL_TOKEN"), /secret file is readable by other users/);
   assert.throws(() => verifyRequiredRuntimeSecrets(secretDirectory), /SIDEKICK_API_KEY secret file is readable by other users/);
   fs.chmodSync(enrollmentPath, 0o644);
   assert.equal(readWorkerSecret("SIDEKICK_ENROLL_TOKEN"), "");

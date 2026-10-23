@@ -28,6 +28,7 @@ const FILE_SECRET_NAMES = new Set([
   "SMTP_USER",
   "SMTP_PASS",
   "SIDEKICK_ENROLL_TOKEN",
+  "SIDEKICK_NODE_ENROLL_TOKEN",
   "COMPUTE_TOKEN",
   "SIDEKICK_COMPUTE_LIVE_API_KEY",
   "SIDEKICK_BOOTSTRAP_TOKEN"
@@ -53,6 +54,7 @@ const SECRET_FILE_NAMES = Object.freeze({
   SMTP_USER: "smtp_user",
   SMTP_PASS: "smtp_pass",
   SIDEKICK_ENROLL_TOKEN: "sidekick_enroll_token",
+  SIDEKICK_NODE_ENROLL_TOKEN: "sidekick_node_enroll_token",
   COMPUTE_TOKEN: "compute_token",
   SIDEKICK_COMPUTE_LIVE_API_KEY: "sidekick_compute_live_api_key",
   SIDEKICK_BOOTSTRAP_TOKEN: "sidekick_bootstrap_token"

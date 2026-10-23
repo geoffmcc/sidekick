@@ -109,7 +109,6 @@ function startNode(port, command = "run") {
       SIDEKICK_URL: `http://127.0.0.1:${port}`,
       SIDEKICK_NODE_CONFIG: configPath,
       SIDEKICK_NODE_CREDENTIAL: credentialPath,
-      SIDEKICK_NODE_ENROLL_TOKEN: token,
       SIDEKICK_NODE_ENROLL_TOKEN_FILE: path.join(fixture, "enrollment-token"),
       SIDEKICK_NODE_ID: nodeId,
       SIDEKICK_NODE_NAME: "protocol-fixture",
