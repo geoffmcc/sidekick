@@ -37,9 +37,13 @@ function registerWebhookRoute({ app, dbStore, requireIdentityPermission, auditLo
         retainedBytes += entryBytes;
       }
       retained.reverse();
+      try { auditLog(req, "webhook.received.requested", { id: webhook.id, source, payload_bytes: payloadBytes }); }
+      catch (error) { return errorResponse(req, res, error, { status: 503, code: "audit_unavailable", component: "webhook" }); }
       saveWebhooks(retained);
-      auditLog(req, "webhook.received", { id: webhook.id, source });
-      res.json({ ok: true, id: webhook.id });
+      let auditStatus = "complete";
+      try { auditLog(req, "webhook.received", { id: webhook.id, source }); }
+      catch { auditStatus = "degraded"; }
+      res.json({ ok: true, id: webhook.id, audit_status: auditStatus });
     } catch (error) { return errorResponse(req, res, error, { status: 400, code: "invalid_request", component: "webhook" }); }
   });
 }

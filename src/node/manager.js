@@ -254,13 +254,13 @@ function nodeRow(row) {
   };
 }
 
-function register(workerId, { protocolVersion = "1", descriptorSetHash = "", capabilities = {}, workspaces = [], networkScopes = [], limits = {} } = {}) {
+function register(workerId, { protocolVersion = "1", descriptorSetHash = "", capabilities = {}, limits = {} } = {}) {
   ensureSchema();
   const db = dbStore.getDb();
   db.prepare(`INSERT INTO execution_nodes (worker_id, protocol_version, descriptor_set_hash, capabilities_json, authorized_workspaces_json, authorized_network_scopes_json, local_limits_json, capability_state, capability_checked_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 'healthy', ?, ?)
-    ON CONFLICT(worker_id) DO UPDATE SET protocol_version=excluded.protocol_version, descriptor_set_hash=excluded.descriptor_set_hash, capabilities_json=excluded.capabilities_json, authorized_workspaces_json=excluded.authorized_workspaces_json, authorized_network_scopes_json=excluded.authorized_network_scopes_json, local_limits_json=excluded.local_limits_json, capability_state='healthy', capability_checked_at=excluded.capability_checked_at, updated_at=excluded.updated_at`)
-    .run(workerId, String(protocolVersion), String(descriptorSetHash), json(capabilities), json(workspaces, []), json(networkScopes, []), json(limits), now(), now());
+    VALUES (?, ?, ?, ?, '[]', '[]', ?, 'healthy', ?, ?)
+    ON CONFLICT(worker_id) DO UPDATE SET protocol_version=excluded.protocol_version, descriptor_set_hash=excluded.descriptor_set_hash, capabilities_json=excluded.capabilities_json, local_limits_json=excluded.local_limits_json, capability_state='healthy', capability_checked_at=excluded.capability_checked_at, updated_at=excluded.updated_at`)
+    .run(workerId, String(protocolVersion), String(descriptorSetHash), json(capabilities), json(limits), now(), now());
   return get(workerId);
 }
 

@@ -14,13 +14,13 @@ function assertDistinctProxySecret(mcpApiKey, proxyKey) {
   return true;
 }
 
-function assertDistinctAgentSchedulerSecret(mcpApiKey, proxyKey, schedulerKey) {
+function assertDistinctAgentSchedulerSecret(proxyKey, schedulerKey) {
   if (typeof schedulerKey !== "string" || !schedulerKey) {
     throw new Error("SIDEKICK_AGENT_SCHEDULER_KEY must be configured for authenticated Agent scheduler reloads");
   }
-  const values = [mcpApiKey, proxyKey, schedulerKey];
+  const values = [proxyKey, schedulerKey];
   if (values.some(value => typeof value !== "string" || !value) || new Set(values).size !== values.length) {
-    throw new Error("SIDEKICK_AGENT_SCHEDULER_KEY must be distinct from SIDEKICK_API_KEY and SIDEKICK_AGENT_PROXY_KEY");
+    throw new Error("SIDEKICK_AGENT_SCHEDULER_KEY must differ from SIDEKICK_AGENT_PROXY_KEY");
   }
   return true;
 }

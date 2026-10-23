@@ -62,9 +62,10 @@ required to use the pack.
   optionally the exact disposable marker), no configured or Proxmox
   protection, policy approval, UPID completion, and post-delete absence
   verification. There are no force or bypass arguments.
-- **Optional Ansible execution** (`ansible_run`): detect / dry_run / run of
-  allowlisted playbooks against a generated inventory through the governed
-  shell, with per-host results parsed from Ansible's JSON output.
+- **Optional Ansible planning** (`ansible_run`): detect and dry-run planning
+  for allowlisted playbooks against a generated inventory. Actual execution is
+  unavailable until a scoped network broker and isolated workspace are
+  implemented; run requests fail closed before starting Ansible.
 - Read-only operational workflows for environment recon, cluster compliance,
   storage and backup audits, guest and cluster health, capacity, upgrade
   readiness, guest inventory/readiness/configuration, and backup coverage and
@@ -164,17 +165,16 @@ secret.
 | `proxmox_provision` (alias `pve_provision`) | **high** (mutating) | create_vm, create_lxc, clone, configure, snapshot_create, convert_template; `dry_run` for explain. |
 | `proxmox_migrate` (alias `pve_migrate`) | **high** (change) | governed same-cluster migration with resolved facts, UPID monitoring and target verification. |
 | `proxmox_retire` (alias `pve_retire`) | **critical** (destructive) | guarded deletion of a proven Sidekick-managed guest; disabled unless `allow_destroy: true`. |
-| `ansible_run` (alias `ansible_playbook`) | **high** | detect / dry_run / run of allowlisted playbooks (optional; run dispatches the governed `bash` tool). |
+| `ansible_run` (alias `ansible_playbook`) | **high** | detect / dry_run planning of allowlisted playbooks; run currently fails closed pending scoped network mediation. |
 
 Operations are split into **separate tools by risk class** because a module
 tool's risk is fixed per tool and cannot be lowered per action — reads stay
 `low`, mutations stay `high`, destruction stays `critical` — so approval policy
 sees each correctly. The pack declares the `bash` dispatch permission at
-**critical** risk because Ansible execution uses it. That permission remains
-part of the pack's declared authority when Ansible is unconfigured; the
-integration then reports unavailable. `ansible_run` is high risk, and every
-actual shell execution still goes through the normal dispatcher policy and
-approval path. All Proxmox API actions use HTTPS directly, resolving
+**critical** risk because Ansible execution previously used it. That permission
+has been removed while command execution remains unavailable. `ansible_run`
+reports the missing broker explicitly and does not dispatch a shell command.
+All Proxmox API actions use HTTPS directly, resolving
 credentials through Sidekick's secret resolver in-process; they do not dispatch
 `bash`.
 
@@ -281,7 +281,7 @@ notes this.
 | Ceph | Health/detection read (`detected` / `not_detected` / `permission_limited`). No Ceph ops. |
 | ZFS / storage types | Normalized detection of dir, LVM/LVM-thin, ZFS, NFS, CIFS, iSCSI, Ceph/RBD, PBS, etc. None required. |
 | SDN | `configured` / `not_configured` detection. |
-| Ansible / nodex / SSH / OpenTofu / Terraform | Ansible supports allowlisted playbook execution through governed `bash`; nodex, SSH, and OpenTofu/Terraform remain detection-only. |
+| Ansible / nodex / SSH / OpenTofu / Terraform | Ansible detects and plans allowlisted playbooks, but execution is unavailable until scoped network mediation exists; nodex, SSH, and OpenTofu/Terraform remain detection-only. |
 
 Optional providers require their software; installing anything on the Sidekick
 host is an operator action. Detection is execution-free (PATH scan) and needs no

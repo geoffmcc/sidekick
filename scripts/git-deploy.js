@@ -167,7 +167,12 @@ function ensureComposeIdentity(envPath = path.join(APP_DIR, '.env')) {
 }
 
 function service(action, name) {
-  return run('sudo', ['systemctl', action, name], { timeout: 30000, maxBuffer: 1024 * 1024 });
+  // The MCP service calls systemctl directly under its narrow Polkit rule.
+  // SSH deployment runs outside that unit and uses the exact sudoers entries.
+  const inMcpService = process.env.SIDEKICK_DEPLOY_SKIP_MCP_LIFECYCLE === '1';
+  return inMcpService
+    ? run('systemctl', [action, name], { timeout: 30000, maxBuffer: 1024 * 1024 })
+    : run('sudo', ['systemctl', action, name], { timeout: 30000, maxBuffer: 1024 * 1024 });
 }
 
 function deploymentServices() {

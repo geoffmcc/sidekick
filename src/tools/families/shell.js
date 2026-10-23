@@ -10,11 +10,9 @@
 // surface (src/tools/policy.js and test/security.test.js consume it there);
 // tools-legacy re-imports it from this family.
 
-const { exec } = require("child_process");
-const { promisify } = require("util");
 const { z } = require("zod");
 const { redactSensitive } = require("../../redact");
-const { childProcessEnv } = require("../../security/child-process");
+const { runBubblewrap } = require("../../core/bubblewrap-executor");
 const { requireToolExecution } = require("../read-authorization");
 
 const DANGEROUS_PATTERNS = [
@@ -33,15 +31,13 @@ function isDangerous(cmd) {
   return DANGEROUS_PATTERNS.some(p => p.test(cmd));
 }
 
-const execAsync = promisify(exec);
-
 const DEFAULT_TIMEOUT_MS = 60000;
 // Ceiling for a caller-supplied deadline. Callers that legitimately run long
 // work (project test suites, Ansible plays, research probes) declare their own
 // budget; this only stops a caller from removing the bound entirely.
 const MAX_TIMEOUT_MS = 3600000;
 
-async function sidekick_bash({ command }, runtime = {}) {
+async function sidekick_bash({ command, cwd }, runtime = {}) {
   const authError = requireToolExecution({ tool: "bash" }, "tools.execute_critical", "bash");
   if (authError) return authError;
   if (isDangerous(command)) {
@@ -59,22 +55,44 @@ async function sidekick_bash({ command }, runtime = {}) {
     ? Math.max(1000, Math.min(requested, MAX_TIMEOUT_MS) - 250)
     : DEFAULT_TIMEOUT_MS;
   try {
-    const { stdout } = await execAsync(command, { timeout, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024, env: childProcessEnv() });
-    return { content: [{ type: "text", text: redactSensitive(stdout || "(empty output)") }] };
+    const result = await runBubblewrap({
+      command,
+      workspace: cwd,
+      source: runtime?.context?.source || "mcp",
+      timeoutMs: timeout,
+      signal: runtime?.signal,
+      maxBuffer: 10 * 1024 * 1024,
+    });
+    if (result.timedOut) {
+      return { content: [{ type: "text", text: redactSensitive(`Timed out after ${timeout}ms; the isolated process tree was stopped`) }], isError: true, code: "command_timed_out" };
+    }
+    if (result.outputExceeded) {
+      return { content: [{ type: "text", text: "Command output exceeded the configured limit; the isolated process tree was stopped" }], isError: true, code: "output_limit_exceeded" };
+    }
+    if (result.cancelled) {
+      return { content: [{ type: "text", text: "Shell execution cancelled; the isolated process tree was stopped" }], isError: true, code: "cancelled" };
+    }
+    if (result.exitCode !== 0) {
+      const text = `Exit code: ${result.exitCode}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`;
+      return { content: [{ type: "text", text: redactSensitive(text) }], isError: true, code: "command_failed" };
+    }
+    return { content: [{ type: "text", text: redactSensitive(result.stdout || "(empty output)") }] };
   } catch (e) {
-    const text = e.killed || e.signal || e.code === "ETIMEDOUT"
-      ? "Timed out after " + timeout + "ms (killed by " + (e.signal || "timeout") + ")"
-      : "Exit code: " + e.code + "\nstdout: " + (e.stdout || "") + "\nstderr: " + (e.stderr || "");
-    return { content: [{ type: "text", text: redactSensitive(text) }], isError: true };
+    const knownCodes = new Set(["workspace_invalid", "workspace_denied", "command_invalid", "isolation_unavailable", "isolation_configuration_invalid", "sandbox_initialization_failed"]);
+    const code = knownCodes.has(e.code) ? e.code : "sandbox_execution_failed";
+    return { content: [{ type: "text", text: redactSensitive(e.message || "OS sandbox execution failed; command was not run") }], isError: true, code };
   }
 }
 
 const descriptors = Object.freeze([
   Object.freeze({
     name: "bash",
-    description: "Execute a shell command on the remote machine",
-    schema: z.object({ command: z.string().describe("Shell command to execute") }),
-    args: { command: "string" },
+    description: "Execute a shell command in an OS-isolated environment with no network access and an optional authorized workspace",
+    schema: z.object({
+      command: z.string().min(1).max(65536).describe("Shell command to execute in the isolated environment"),
+      cwd: z.string().optional().describe("Absolute existing workspace path; must be covered by filesystem allow-path policy. Only this directory is mounted writable."),
+    }),
+    args: { command: "string", cwd: "string?" },
     risk: "critical",
     category: "Core",
     source: "builtin",

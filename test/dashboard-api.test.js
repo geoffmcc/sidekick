@@ -303,6 +303,24 @@ setTimeout(async () => {
       console.log('Passed\n');
     }
 
+    console.log('Test 3.0b3: Grafana proxy requires the operations-read permission');
+    {
+      const owner = dbStore.getDb().prepare("SELECT principal_id FROM principals WHERE json_extract(metadata_json, '$.legacy_dashboard_username') = 'test-user' LIMIT 1").get();
+      assert.ok(owner?.principal_id, 'Dashboard test identity should exist');
+      const identity = require('../src/core/identity');
+      const authentication = require('../src/core/authentication');
+      const viewer = require('./helpers/authorized-identity').createHumanUser(identity, { username: 'grafana-viewer', password: 'synthetic-viewer-password', displayName: 'Grafana Viewer', actorPrincipalId: owner.principal_id });
+      identity.assignRole(viewer.principal_id, 'viewer', owner);
+      const session = authentication.createSession(viewer.principal_id, { userAgent: 'security-test', ipAddress: '127.0.0.1' });
+      const response = await makeRequest('GET', '/grafana/api/health', null, {
+        headers: { Cookie: `sidekick_identity=${session.token}` }
+      });
+      assert.strictEqual(response.status, 403, 'Viewer must not receive access through the privileged Grafana proxy');
+      assert.strictEqual(response.data.permission, 'dashboard.operations.read');
+      authentication.invalidateSession(session.token, owner.principal_id);
+      console.log('Passed\n');
+    }
+
     // Test 3.0c: dashboard database endpoints honor tool policy
     console.log('Test 3.0c: dashboard database endpoints honor tool policy');
     {
@@ -1003,6 +1021,30 @@ setTimeout(async () => {
       assert.notStrictEqual(unknown.data.error, 'maturity unavailable', 'Unknown packs must not use the generic maturity error');
       await makeRequest('POST', '/api/capabilities/api-engineering/uninstall', {});
       console.log('✓ Passed\n');
+    }
+
+    console.log('Test 3.9: legacy Dashboard onboarding verifies Basic Auth and uses an Owner actor');
+    {
+      const identity = require('../src/core/identity');
+      const owner = dbStore.getDb().prepare("SELECT principal_id FROM principals WHERE json_extract(metadata_json, '$.legacy_dashboard_username') = 'test-user' LIMIT 1").get();
+      assert.ok(owner?.principal_id, 'Initial legacy Dashboard login should have established the Owner');
+      const rejected = await makeRequest('POST', '/api/auth/login', { username: 'test-user', password: 'wrong-password' });
+      assert.equal(rejected.status, 401, 'identity onboarding must reject a wrong configured password');
+
+      const ownerPrincipal = identity.getPrincipal(owner.principal_id);
+      identity.updateUsername(owner.principal_id, 'existing-owner', ownerPrincipal);
+      identity.updatePrincipal(owner.principal_id, {
+        metadata: { ...ownerPrincipal.metadata, legacy_dashboard_username: undefined },
+      }, ownerPrincipal);
+
+      const accepted = await makeRequest('POST', '/api/auth/login', { username: 'test-user', password: 'test-pass' });
+      assert.equal(accepted.status, 200, 'verified legacy Basic Auth should create the compatibility administrator');
+      assert.deepEqual(accepted.data.principal.roles, ['administrator']);
+      const roleEvent = dbStore.getDb().prepare("SELECT actor_principal_id FROM identity_audit_events WHERE event_type = 'role.assigned' AND principal_id = ? ORDER BY created_at DESC LIMIT 1").get(accepted.data.principal.principal_id);
+      assert.equal(roleEvent?.actor_principal_id, owner.principal_id, 'legacy role assignment must be authorized and attributed to the enabled Owner');
+      const rejectedAgain = await makeRequest('POST', '/api/auth/login', { username: 'test-user', password: 'wrong-password' });
+      assert.equal(rejectedAgain.status, 401, 'wrong credentials must not re-enter legacy onboarding');
+      console.log('Legacy Dashboard onboarding authorization passed');
     }
 
     dbStore.closeDatabase?.();

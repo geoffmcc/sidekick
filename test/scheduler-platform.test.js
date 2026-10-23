@@ -22,6 +22,8 @@ const tools = require('../src/tools');
 const db = require('../src/db');
 const scheduledExecution = require('../src/tools/scheduled-execution');
 const { createDelayScheduler } = require('../src/agent/delay-scheduler');
+const toolContext = require('../src/tools/context');
+const { createOwnerContext, createServiceContext } = require('./helpers/authorized-context');
 
 const TOOLS = require('./helpers/authorized-context').withOwnerToolContext(tools.TOOLS, { source: 'mcp' });
 
@@ -97,8 +99,93 @@ console.log('Passed\n');
     assert.notStrictEqual(scheduled.project_id, other.project_id);
     console.log('Passed\n');
 
+    console.log('Test SP.0b: scheduled execution identity comes only from the current context');
+    const serviceContext = createServiceContext({ role: 'operator', project: 'scheduled_identity_project' });
+    const trustedContext = toolContext.createInternalExecutionContext({ ...serviceContext, source: 'internal' });
+    const attributed = await toolContext.runWithContext(trustedContext, () => scheduledExecution.createScheduledPlatformExecution('cron', {
+      id: 'scheduled-trusted-attribution', tool: 'sidekick_respond',
+    }, {
+      projectId: 'scheduled_identity_project', allowConcurrent: true,
+      actorPrincipalId: 'forged_actor', requestedByPrincipalId: 'forged_requester',
+      actingForPrincipalId: 'forged_delegator', executedByPrincipalId: 'forged_executor',
+    }));
+    assert.equal(attributed.actor_principal_id, serviceContext.authIdentity.principal_id);
+    assert.equal(attributed.requested_by_principal_id, serviceContext.authIdentity.principal_id);
+    assert.equal(attributed.acting_for_principal_id, null);
+    assert.equal(attributed.executed_by_principal_id, null);
+
+    const anonymousContext = toolContext.createInternalExecutionContext({ source: 'internal', project: 'scheduled_anonymous_project' });
+    const anonymous = await toolContext.runWithContext(anonymousContext, () => scheduledExecution.createScheduledPlatformExecution('cron', {
+      id: 'scheduled-anonymous-attribution', tool: 'sidekick_respond',
+    }, {
+      projectId: 'scheduled_anonymous_project', allowConcurrent: true,
+      actorPrincipalId: 'forged_actor', requestedByPrincipalId: 'forged_requester',
+      actingForPrincipalId: 'forged_delegator', executedByPrincipalId: 'forged_executor',
+    }));
+    assert.equal(anonymous.actor_principal_id, null);
+    assert.equal(anonymous.requested_by_principal_id, null);
+    assert.equal(anonymous.acting_for_principal_id, null);
+    assert.equal(anonymous.executed_by_principal_id, null);
+    console.log('Passed\n');
+
+    console.log('Test SP.0c: manual delay run preserves the signed Agent authority envelope');
+    const ownerContext = createOwnerContext({ source: 'mcp' });
+    const { createAuthorityEnvelope } = require('../src/agent/authority');
+    assert.ok(tools.getToolDefsForSource('agent').some(tool => tool.name === 'respond'), 'respond must be in the live Agent catalog for this regression');
+    const restrictedAgentContext = toolContext.createInternalExecutionContext({
+      ...ownerContext,
+      source: 'mcp',
+      agentAuthorityContext: {
+        envelope: createAuthorityEnvelope({ allowed_effects: ['read_only'], capability_restrictions: ['bash'] }),
+        principal_ref: ownerContext.authIdentity.principal_id,
+      },
+    });
+    const addedDelay = await toolContext.runWithContext(restrictedAgentContext, () => TOOLS.delay({
+      action: 'add', when: '1h', name: 'restricted agent fixture', tool: 'respond', args: { text: 'must not run outside signed envelope' },
+    }));
+    assert.equal(addedDelay.isError, undefined, addedDelay.content?.[0]?.text);
+    const restrictedDelay = tools.loadDelays().find(delay => delay.name === 'restricted agent fixture');
+    assert.ok(restrictedDelay, 'the scheduled fixture must be persisted');
+    const runResult = await toolContext.runWithContext(restrictedAgentContext, () => TOOLS.delay({ action: 'run', id: restrictedDelay.id }));
+    assert.equal(runResult.isError, true, runResult.content?.[0]?.text);
+    const afterManualRun = tools.loadDelays().find(delay => delay.id === restrictedDelay.id);
+    assert.equal(afterManualRun.status, 'failed');
+    assert.match(afterManualRun.error, /authority is no longer valid or permitted/);
+    console.log('Passed\n');
+
+    console.log('Test SP.0d: manual delay run intersects current credential scopes');
+    const manualCredential = require('../src/core/authentication').createCredential({
+      principalId: ownerContext.authIdentity.principal_id,
+      displayName: 'Manual delay scope fixture',
+      scopes: ['tools.execute', 'tools.execute_high'],
+      createdByPrincipalId: ownerContext.authIdentity.principal_id,
+      actorContext: { principal_id: ownerContext.authIdentity.principal_id },
+    });
+    const manualAuthIdentity = require('../src/core/authentication').authenticateCredential(manualCredential.token);
+    const credentialContext = toolContext.createInternalExecutionContext({ source: 'mcp', authIdentity: manualAuthIdentity });
+    const credentialDelayResult = await toolContext.runWithContext(credentialContext, () => TOOLS.delay({
+      action: 'add', when: '1h', name: 'credential scope fixture', tool: 'respond', args: { text: 'must lose revoked execution scope' },
+    }));
+    assert.equal(credentialDelayResult.isError, undefined, credentialDelayResult.content?.[0]?.text);
+    const credentialDelay = tools.loadDelays().find(delay => delay.name === 'credential scope fixture');
+    assert.ok(credentialDelay);
+    db.getDb().prepare("UPDATE identity_credentials SET scopes_json = '[]' WHERE credential_id = ?").run(manualCredential.credential.credential_id);
+    const credentialRunResult = await toolContext.runWithContext(credentialContext, () => TOOLS.delay({ action: 'run', id: credentialDelay.id }));
+    assert.equal(credentialRunResult.isError, true, credentialRunResult.content?.[0]?.text);
+    const credentialDelayAfterRun = tools.loadDelays().find(delay => delay.id === credentialDelay.id);
+    assert.equal(credentialDelayAfterRun.status, 'failed');
+    assert.match(credentialDelayAfterRun.result, /Authorization denied/);
+    console.log('Passed\n');
+
+    if (process.platform !== 'linux') {
+      console.log('Shell-backed scheduler integration scenarios skipped: this platform has no OS-enforced command isolation backend.');
+      db.getDb().close();
+      fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+      process.exit(0);
+    }
+
     console.log('Test SP.1: cron add/run mirrors platform executions');
-    let result = await TOOLS.cron({ action: 'add', name: 'platform cron', schedule: '* * * * *', command: process.platform === 'win32' ? 'echo cron-ok' : 'printf cron-ok' });
+    let result = await TOOLS.cron({ action: 'add', name: 'platform cron', schedule: '* * * * *', command: 'printf cron-ok' });
     assert.strictEqual(result.isError, undefined);
     const cronJob = db.loadDocument('cron', [])[0];
     assert.ok(cronJob.platform_execution_id);
@@ -114,15 +201,16 @@ console.log('Passed\n');
     console.log('Passed\n');
 
     console.log('Test SP.2: delay add/run mirrors lifecycle and child tool execution');
-    result = await TOOLS.delay({ action: 'add', when: '1h', name: 'platform delay', tool: 'sidekick_respond', args: { text: 'delay-ok' } });
+    result = await toolContext.runWithContext(ownerContext, () => TOOLS.delay({ action: 'add', when: '1h', name: 'platform delay', tool: 'sidekick_respond', args: { text: 'delay-ok' } }));
     assert.strictEqual(result.isError, undefined);
-    const delay = tools.loadDelays()[0];
+    const delay = tools.loadDelays().find(item => item.name === 'platform delay');
+    assert.ok(delay, 'the platform delay fixture must be selected explicitly');
     assert.ok(delay.platform_execution_id);
     let delayExecution = db.getDb().prepare('SELECT * FROM platform_executions WHERE execution_id = ?').get(delay.platform_execution_id);
     assert.strictEqual(delayExecution.operation_type, 'delay_task');
     assert.strictEqual(delayExecution.state, 'queued');
-    result = await TOOLS.delay({ action: 'run', id: delay.id });
-    assert.strictEqual(result.isError, undefined);
+    result = await toolContext.runWithContext(ownerContext, () => TOOLS.delay({ action: 'run', id: delay.id }));
+    assert.strictEqual(result.isError, undefined, result.content?.[0]?.text || "delay run should succeed");
     delayExecution = db.getDb().prepare('SELECT * FROM platform_executions WHERE execution_id = ?').get(delay.platform_execution_id);
     assert.strictEqual(delayExecution.state, 'completed');
     assert.strictEqual(delayExecution.result_status, 'success');
@@ -134,7 +222,7 @@ console.log('Passed\n');
     console.log('Test SP.3: watch add/check mirrors monitor and check execution');
     const watchedFile = path.join(TEST_DATA_DIR, 'watched.txt');
     fs.writeFileSync(watchedFile, 'trigger me', 'utf-8');
-    result = await TOOLS.watch({ action: 'add', name: 'platform watch', source: 'file', target: watchedFile, condition: 'exists', action_tool: 'sidekick_respond', action_args: { text: 'watch-ok' } });
+    result = await TOOLS.watch({ action: 'add', name: 'platform watch', source: 'file', target: watchedFile, condition: 'content_matches', value: 'trigger me', action_tool: 'sidekick_respond', action_args: { text: 'watch-ok' } });
     assert.strictEqual(result.isError, undefined, result.content?.[0]?.text || "watch add should succeed");
     const watch = tools.loadWatches()[0];
     assert.ok(watch.platform_execution_id);
@@ -150,6 +238,8 @@ console.log('Passed\n');
     assert.strictEqual(watchCheck.result_status, 'success');
     const triggeredEvent = db.getDb().prepare("SELECT * FROM platform_execution_events WHERE event_type = 'schedule.watch.triggered' AND subject_id = ?").get(watch.id);
     assert.ok(triggeredEvent);
+    assert.deepEqual(JSON.parse(triggeredEvent.payload_json).check_result, { exists: true, matches: true });
+    assert.equal(result.content[0].text.includes('trigger me'), false, 'file bytes must not be returned in the watch result');
     console.log('Passed\n');
 
     console.log('Test SP.4: runbook start mirrors execution and step events');
@@ -411,10 +501,10 @@ console.log('Passed\n');
     assert.strictEqual(platformKernel.getExecutionClaim(cronJobForClaim.platform_execution_id).claimed_by, null);
     console.log('Passed\n');
 
-    console.log('Test SP.14: cross-process cancel request stops an autonomous runbook at the next step boundary');
-    // Step 1 requests the cancel from a separate node process (the real
-    // cross-process topology: another service writing to the shared DB);
-    // step 2 must never dispatch.
+    console.log('Test SP.14: runbook shell cannot load an executable from the host temporary directory');
+    // The isolated command receives no host /tmp mount. Loading a helper from
+    // the host path (which could otherwise access Sidekick's database) must
+    // fail before it can request cancellation or start the next step.
     const cancelScript = path.join(TEST_DATA_DIR, 'request-mid-run-cancel.js');
     const cancelMarker = path.join(TEST_DATA_DIR, 'cancelled-step-ran.txt');
     fs.writeFileSync(cancelScript, [
@@ -431,16 +521,16 @@ console.log('Passed\n');
     assert.strictEqual(result.isError, undefined);
     const cancelRbId = result.content[0].text.match(/Runbook created: (\S+)/)[1];
     result = await TOOLS.runbook({ action: 'start', runbook_id: cancelRbId, mode: 'autonomous' });
-    assert.strictEqual(result.isError, undefined, result.content?.[0]?.text || "autonomous runbook should start");
-    assert.ok(result.content[0].text.includes('Cancel requested'));
+    assert.strictEqual(result.isError, true);
+    assert.match(result.content[0].text, /Cannot find module/);
     assert.ok(!fs.existsSync(cancelMarker));
-    const cancelledRun = latestExecution("operation_type = 'runbook_execution' AND state = 'cancelled'");
-    assert.ok(cancelledRun);
-    assert.strictEqual(cancelledRun.result_status, 'cancelled');
-    assert.strictEqual(platformKernel.getExecutionClaim(cancelledRun.execution_id).claimed_by, null);
-    const cancelledInstance = Object.values(JSON.parse(fs.readFileSync(RB_FILE, 'utf8')).instances).find(i => i.platform_execution_id === cancelledRun.execution_id);
-    assert.strictEqual(cancelledInstance.status, 'cancelled');
-    assert.strictEqual(cancelledInstance.currentStep, 1);
+    const isolatedRun = latestExecution("operation_type = 'runbook_execution' AND state = 'failed'");
+    assert.ok(isolatedRun);
+    assert.strictEqual(isolatedRun.result_status, 'failure');
+    assert.strictEqual(platformKernel.getExecutionClaim(isolatedRun.execution_id).claimed_by, null);
+    const isolatedInstance = Object.values(JSON.parse(fs.readFileSync(RB_FILE, 'utf8')).instances).find(i => i.platform_execution_id === isolatedRun.execution_id);
+    assert.strictEqual(isolatedInstance.status, 'failed');
+    assert.strictEqual(isolatedInstance.currentStep, 0);
     console.log('Passed\n');
 
     db.getDb().close();

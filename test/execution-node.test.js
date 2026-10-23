@@ -58,11 +58,23 @@ const db = require("../src/db").getDb();
 db.prepare("INSERT INTO compute_workers (worker_id, node_id, display_name, platform, state, connection_state, credential_state) VALUES (?, ?, ?, ?, 'online', 'online', 'active')").run("wk_test_node", "node_test", "test", "linux");
 const identity = require("../src/core/identity");
 const authentication = require("../src/core/authentication");
-const initiator = identity.createPrincipal({ type: "service", displayName: "execution-node test initiator" });
-identity.assignRole(initiator.principal_id, "operator");
-const initiatorCredential = authentication.createCredential({ principalId: initiator.principal_id, displayName: "synthetic test credential", scopes: ["tools.execute"] });
+const fixtureOwner = identity.bootstrapOwner({ username: "execution_node_owner", password: "synthetic execution node owner password" });
+const initiator = require('./helpers/authorized-identity').createPrincipal(identity, { type: "service", displayName: "execution-node test initiator" });
+identity.assignRole(initiator.principal_id, "operator", fixtureOwner);
+const initiatorCredential = authentication.createCredential({ principalId: initiator.principal_id, displayName: "synthetic test credential", scopes: ["tools.execute"], createdByPrincipalId: fixtureOwner.principal_id, actorContext: fixtureOwner });
 manager.register("wk_test_node", { descriptorSetHash: "hash", capabilities: { workspaces: [{ name: "security-research", root, permissions: { read: true, write: true } }] } });
 manager.authorizeWorkspace("wk_test_node", { workspaceId: "ws_test", name: "security-research", rootIdentity: configured.rootIdentity, permissions: { read: true } });
+const nodeAuthorityBeforeHeartbeat = manager.get("wk_test_node");
+manager.register("wk_test_node", {
+  descriptorSetHash: "heartbeat-hash",
+  capabilities: { networkScopes: ["node-claimed-scope"], workspaces: ["node-claimed-workspace"] },
+  networkScopes: ["untrusted-scope-argument"],
+  workspaces: ["untrusted-workspace-argument"],
+});
+const nodeAfterHeartbeat = manager.get("wk_test_node");
+assert.deepStrictEqual(nodeAfterHeartbeat.authorizedWorkspaces, nodeAuthorityBeforeHeartbeat.authorizedWorkspaces, "node registration and heartbeat telemetry cannot grant or replace workspace authority");
+assert.deepStrictEqual(nodeAfterHeartbeat.authorizedNetworkScopes, nodeAuthorityBeforeHeartbeat.authorizedNetworkScopes, "node registration and heartbeat telemetry cannot grant or replace network-scope authority");
+assert.deepStrictEqual(nodeAfterHeartbeat.capabilities.networkScopes, ["node-claimed-scope"], "reported capability labels remain telemetry separate from Core authorization");
 const job = manager.enqueue({ workerId: "wk_test_node", requestId: "req_test", toolName: "read", descriptor: { name: "read", version: "1", placement: { nodeSafe: true, locations: ["node"] } }, args: { path: path.join(root, "file") }, workspaceId: "ws_test", idempotencyKey: "idem_test" });
 assert.strictEqual(manager.enqueue({ workerId: "wk_test_node", requestId: "req_other", toolName: "read", descriptor: { name: "read", version: "1", placement: { nodeSafe: true, locations: ["node"] } }, args: { path: path.join(root, "file") }, workspaceId: "ws_test", idempotencyKey: "idem_test" }).jobId, job.jobId);
 assert.throws(() => manager.enqueue({ workerId: "wk_test_node", requestId: "req_changed_args", toolName: "read", descriptor: { name: "read", version: "1", placement: { nodeSafe: true, locations: ["node"] } }, args: { path: path.join(root, "other-file") }, workspaceId: "ws_test", idempotencyKey: "idem_test" }), /different execution scope or operation/);
@@ -80,26 +92,26 @@ assert.strictEqual(orderedRetryClaim.jobId, orderedRetry.jobId);
 manager.fail(orderedRetry.jobId, "wk_test_node", orderedRetryClaim.leaseId, "test_cleanup", "test cleanup");
 const nodeAuthorization = { principalId: initiator.principal_id, permission: "tools.execute", credentialScopes: ["tools.execute"], resource: { tool: "read", source: "mcp" } };
 const revokedInitiatorJob = manager.enqueue({ workerId: "wk_test_node", requestId: "req_revoked_initiator", toolName: "read", descriptor: { name: "read", version: "1", placement: { nodeSafe: true, locations: ["node"] } }, args: {}, context: { authIdentity: { principal_id: initiator.principal_id, credential_id: initiatorCredential.credential.credential_id, authentication_method: "scoped_credential" }, nodeAuthorization }, workspaceId: "ws_test" });
-assert.strictEqual(authentication.revokeCredential(initiatorCredential.credential.credential_id), true);
+assert.strictEqual(authentication.revokeCredential(initiatorCredential.credential.credential_id, fixtureOwner), true);
 assert.strictEqual(manager.claim("wk_test_node", 10000), null, "a queued remote job is not leased after its initiating credential is revoked");
 assert.strictEqual(manager.getJob(revokedInitiatorJob.jobId).errorCode, "initiator_authority_revoked");
-const activeInitiatorCredential = authentication.createCredential({ principalId: initiator.principal_id, displayName: "active synthetic test credential", scopes: ["tools.execute"] });
+const activeInitiatorCredential = authentication.createCredential({ principalId: initiator.principal_id, displayName: "active synthetic test credential", scopes: ["tools.execute"], createdByPrincipalId: fixtureOwner.principal_id, actorContext: fixtureOwner });
 const activeInitiatorJob = manager.enqueue({ workerId: "wk_test_node", requestId: "req_active_initiator", toolName: "read", descriptor: { name: "read", version: "1", placement: { nodeSafe: true, locations: ["node"] } }, args: {}, context: { authIdentity: { principal_id: initiator.principal_id, credential_id: activeInitiatorCredential.credential.credential_id, authentication_method: "scoped_credential" }, nodeAuthorization: { ...nodeAuthorization, credentialScopes: activeInitiatorCredential.credential.scopes } }, workspaceId: "ws_test" });
 const activeInitiatorClaim = manager.claim("wk_test_node", 10000);
 assert.strictEqual(activeInitiatorClaim.jobId, activeInitiatorJob.jobId, "a currently active initiating credential preserves authorized remote execution");
-assert.strictEqual(authentication.revokeCredential(activeInitiatorCredential.credential.credential_id), true);
+assert.strictEqual(authentication.revokeCredential(activeInitiatorCredential.credential.credential_id, fixtureOwner), true);
 assert.strictEqual(manager.cancellation(activeInitiatorJob.jobId, "wk_test_node", activeInitiatorClaim.leaseId).requested, true, "an active remote operation is asked to cancel after its credential is revoked");
 assert.strictEqual(manager.fail(activeInitiatorJob.jobId, "wk_test_node", activeInitiatorClaim.leaseId, "node_execution_cancelled", "authority revoked").state, "cancelled");
-const roleCredential = authentication.createCredential({ principalId: initiator.principal_id, displayName: "role-revocation test credential", scopes: ["tools.execute"] });
+const roleCredential = authentication.createCredential({ principalId: initiator.principal_id, displayName: "role-revocation test credential", scopes: ["tools.execute"], createdByPrincipalId: fixtureOwner.principal_id, actorContext: fixtureOwner });
 const revokedRoleJob = manager.enqueue({ workerId: "wk_test_node", requestId: "req_revoked_role", toolName: "read", descriptor: { name: "read", version: "1", placement: { nodeSafe: true, locations: ["node"] } }, args: {}, context: { authIdentity: { principal_id: initiator.principal_id, credential_id: roleCredential.credential.credential_id, authentication_method: "scoped_credential" }, nodeAuthorization: { ...nodeAuthorization, credentialScopes: roleCredential.credential.scopes } }, workspaceId: "ws_test" });
-identity.removeRole(initiator.principal_id, "operator");
+identity.removeRole(initiator.principal_id, "operator", fixtureOwner);
 assert.strictEqual(manager.claim("wk_test_node", 10000), null, "a queued job is not leased after its initiating role grant is removed");
 assert.strictEqual(manager.getJob(revokedRoleJob.jobId).errorCode, "initiator_authority_revoked");
-identity.assignRole(initiator.principal_id, "operator");
+identity.assignRole(initiator.principal_id, "operator", fixtureOwner);
 const roleLeaseJob = manager.enqueue({ workerId: "wk_test_node", requestId: "req_role_revoked_during_execution", toolName: "read", descriptor: { name: "read", version: "1", placement: { nodeSafe: true, locations: ["node"] } }, args: {}, context: { authIdentity: { principal_id: initiator.principal_id, credential_id: roleCredential.credential.credential_id, authentication_method: "scoped_credential" }, nodeAuthorization: { ...nodeAuthorization, credentialScopes: roleCredential.credential.scopes } }, workspaceId: "ws_test" });
 const roleLease = manager.claim("wk_test_node", 10000);
 assert.strictEqual(roleLease.jobId, roleLeaseJob.jobId);
-identity.removeRole(initiator.principal_id, "operator");
+identity.removeRole(initiator.principal_id, "operator", fixtureOwner);
 assert.throws(() => manager.renew(roleLeaseJob.jobId, "wk_test_node", roleLease.leaseId, 10000), /authority/);
 assert.strictEqual(manager.cancellation(roleLeaseJob.jobId, "wk_test_node", roleLease.leaseId).requested, true, "a running remote operation is asked to cancel after its required role is removed");
 assert.strictEqual(manager.fail(roleLeaseJob.jobId, "wk_test_node", roleLease.leaseId, "node_execution_cancelled", "authority revoked").state, "cancelled");
@@ -109,14 +121,14 @@ assert.strictEqual(manager.claim("wk_test_node", 10000), null, "a queued job is 
 assert.strictEqual(manager.getJob(revokedWorkspaceJob.jobId).errorCode, "execution_resource_authority_revoked");
 db.prepare("UPDATE execution_node_workspaces SET permissions_json = ? WHERE workspace_id = ?").run(JSON.stringify({ read: true }), "ws_test");
 
-identity.assignRole(initiator.principal_id, "operator");
-const projectOwner = identity.createPrincipal({ type: "service", displayName: "execution-node project owner" });
-identity.assignRole(projectOwner.principal_id, "administrator");
+identity.assignRole(initiator.principal_id, "operator", fixtureOwner);
+const projectOwner = require('./helpers/authorized-identity').createPrincipal(identity, { type: "service", displayName: "execution-node project owner" });
+identity.assignRole(projectOwner.principal_id, "administrator", fixtureOwner);
 const projectAccess = require("../src/core/project-access");
 const platformKernel = require("../src/platform/kernel");
 platformKernel.registerProject({ project_id: "node_project", owner_actor_id: projectOwner.principal_id });
 projectAccess.grantProjectAccess({ actorPrincipalId: projectOwner.principal_id, principalId: initiator.principal_id, project: "node_project", accessLevel: "read" });
-const projectCredential = authentication.createCredential({ principalId: initiator.principal_id, displayName: "project-scoped node test credential", scopes: ["tools.execute"] });
+const projectCredential = authentication.createCredential({ principalId: initiator.principal_id, displayName: "project-scoped node test credential", scopes: ["tools.execute"], createdByPrincipalId: fixtureOwner.principal_id, actorContext: fixtureOwner });
 const projectNodeContext = {
   authIdentity: { principal_id: initiator.principal_id, credential_id: projectCredential.credential.credential_id, authentication_method: "scoped_credential" },
   nodeAuthorization: { ...nodeAuthorization, credentialScopes: projectCredential.credential.scopes },

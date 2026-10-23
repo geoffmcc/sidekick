@@ -21,7 +21,8 @@ const runBash = (command) => dispatcher.callInternalTool('bash', { command }, ow
 
 console.log('Running Bash Tool Tests...\n');
 
-const nodeExecutable = process.platform === 'win32' ? `"${process.execPath}"` : process.execPath;
+const nodeExecutable = process.platform === 'win32' ? `"${process.execPath}"` : 'node';
+const sandboxAvailable = process.platform === 'linux' && fs.existsSync('/usr/bin/bwrap');
 
 (async () => {
   try {
@@ -37,16 +38,24 @@ const nodeExecutable = process.platform === 'win32' ? `"${process.execPath}"` : 
 
     console.log('Test 1: returns stdout on success');
     const ok = await runBash(`${nodeExecutable} -e "process.stdout.write('hello-from-bash')"`);
-    assert.strictEqual(ok.isError, undefined, 'should not be an error');
-    assert.ok(ok.content[0].text.includes('hello-from-bash'), 'stdout should be returned');
+    if (sandboxAvailable) {
+      assert.strictEqual(ok.isError, undefined, 'should not be an error');
+      assert.ok(ok.content[0].text.includes('hello-from-bash'), 'stdout should be returned');
+    } else {
+      assert.strictEqual(ok.code, 'isolation_unavailable', 'unsupported platforms must refuse instead of running a host shell');
+    }
     console.log('✓ Passed\n');
 
     console.log('Test 2: reports non-zero exit code with output');
     const err = await runBash(`${nodeExecutable} -e "process.stdout.write('out'); process.stderr.write('err'); process.exit(7)"`);
-    assert.strictEqual(err.isError, true, 'should be an error');
-    assert.ok(err.content[0].text.includes('Exit code: 7'), 'should report exit code');
-    assert.ok(err.content[0].text.includes('out'), 'should include stdout');
-    assert.ok(err.content[0].text.includes('err'), 'should include stderr');
+    if (sandboxAvailable) {
+      assert.strictEqual(err.isError, true, 'should be an error');
+      assert.ok(err.content[0].text.includes('Exit code: 7'), 'should report exit code');
+      assert.ok(err.content[0].text.includes('out'), 'should include stdout');
+      assert.ok(err.content[0].text.includes('err'), 'should include stderr');
+    } else {
+      assert.strictEqual(err.code, 'isolation_unavailable', 'unsupported platforms must fail closed');
+    }
     console.log('✓ Passed\n');
 
     console.log('Test 3: blocks dangerous patterns');
@@ -61,10 +70,15 @@ const nodeExecutable = process.platform === 'win32' ? `"${process.execPath}"` : 
     const port = server.address().port;
     try {
       const started = Date.now();
-      const result = await runBash(`${nodeExecutable} -e "require('http').get('http://127.0.0.1:${port}/ping', r => { let b=''; r.on('data', c => b += c); r.on('end', () => console.log(b)); })"`);
+      const result = await runBash(`${nodeExecutable} -e "require('http').get('http://127.0.0.1:${port}/ping', r => { let b=''; r.on('data', c => b += c); r.on('end', () => console.log(b)); }).on('error', () => console.log('network-isolated'))"`);
       const elapsed = Date.now() - started;
-      assert.ok(!result.isError, `expected success, got: ${result.content[0].text}`);
-      assert.ok(result.content[0].text.includes('pong'), `expected pong, got: ${result.content[0].text}`);
+      if (sandboxAvailable) {
+        assert.ok(!result.isError, `expected isolated network refusal to be handled, got: ${result.content[0].text}`);
+        assert.ok(result.content[0].text.includes('network-isolated'), `host loopback should not be reachable from the isolated shell: ${result.content[0].text}`);
+        assert.ok(!result.content[0].text.includes('pong'), 'host loopback response must not cross the network namespace');
+      } else {
+        assert.strictEqual(result.code, 'isolation_unavailable', 'network operation must not fall back to an unrestricted host shell');
+      }
       assert.ok(elapsed < 5000, `round-trip should be fast, took ${elapsed}ms`);
     } finally {
       await new Promise(resolve => server.close(resolve));

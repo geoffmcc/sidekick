@@ -39,6 +39,13 @@ installation-wide API-key clients remain an explicit compatibility path while
 they migrate to named scoped credentials; it is not the long-term identity
 model.
 
+Legacy Dashboard Basic Auth is checked again by its identity-adoption helper.
+If no Owner exists, the first verified legacy login can complete the one-time
+Owner bootstrap. If an enabled Owner already exists and the configured Basic
+Auth identity has not yet been adopted, that Owner authorizes creation of a
+separate Administrator principal. Legacy metadata alone cannot grant a role;
+the Core role service requires `roles.manage` for Administrator assignment.
+
 Unauthenticated Owner bootstrap is available without a token only for a
 loopback Dashboard that is not configured to trust a reverse proxy. A
 non-loopback bind or `SIDEKICK_DASHBOARD_TRUST_PROXY=true` requires the
@@ -70,6 +77,19 @@ permissions are intersected with the delegator's current authority, so a
 delegator cannot grant authority it does not currently possess. Delegates do
 not inherit the delegator's entire role set. Owner promotion/demotion requires
 `roles.manage`, and the final usable Owner cannot be disabled or removed.
+
+Core principal creation requires an authenticated identity context with
+`principals.manage`; human account creation requires `users.manage`. Both
+permissions are revalidated inside the write transaction, including credential
+scopes and delegation. Principal creator attribution is bound to that actor and
+cannot be supplied for another identity. The initial Owner is created only
+through the separate one-time `bootstrapOwner` path.
+
+All other identity mutations also require an identity context object. Bare
+principal ID strings are rejected so they cannot erase credential scopes or
+delegation context before authorization. Context objects supplied by
+same-process callers are not an unforgeable boundary against compromised Core
+code.
 
 Database schema and statistics reads use the dedicated medium-risk
 `database.inspect` permission rather than generic `tools.execute`. Migration

@@ -58,7 +58,7 @@
       "name": "update",
       "title": "Apply the bounded update through the package manager",
       "tool": "bash",
-      "args": { "command": "cd ${inputs.path} && ${inputs.update_command}" },
+      "args": { "command": "${inputs.update_command}", "cwd": "${inputs.path}" },
       "expect": "text",
       "on_error": "fail"
     },

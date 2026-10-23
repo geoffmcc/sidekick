@@ -26,7 +26,10 @@ function childProcessEnv(overrides = {}) {
   const env = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (SECRET_ENV_KEY.test(key) || isLoaderEnvKey(key) || /(?:_FILE|_PATH)$/i.test(key) && SECRET_ENV_KEY.test(key)) continue;
-    env[key] = value;
+    // Windows exposes this key as `Path` in some launch environments while
+    // Unix and our child-process callers conventionally use `PATH`. Normalize
+    // it so filtered environments retain executable discovery consistently.
+    env[key.toUpperCase() === "PATH" ? "PATH" : key] = value;
   }
   for (const [key, value] of Object.entries(overrides || {})) {
     if (value == null) delete env[key];

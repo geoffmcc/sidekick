@@ -19,6 +19,9 @@ INSTALL_TOOLS=false
 SSH_PUB_KEY=""
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/apt-repository.sh"
+source "$SCRIPT_DIR/lib/polkit.sh"
+source "$SCRIPT_DIR/lib/sudoers.sh"
+source "$SCRIPT_DIR/lib/bubblewrap.sh"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -104,7 +107,7 @@ apt-get update -qq
 
 # Install required packages
 log "Installing required packages..."
-apt-get install -y -qq curl ca-certificates gnupg build-essential python3 make g++ git openssl > /dev/null
+apt-get install -y -qq curl ca-certificates gnupg build-essential python3 make g++ git openssl polkitd sudo bubblewrap util-linux > /dev/null
 
 # Create user if doesn't exist
 if id "$USERNAME" &>/dev/null; then
@@ -134,19 +137,9 @@ if [ -f "$WRAPPER_SOURCE" ]; then
 fi
 
 cat > /etc/sudoers.d/sidekick << 'EOF'
-# Sidekick user permissions - core services
-sidekick ALL=(ALL) NOPASSWD: /usr/bin/systemctl start sidekick-mcp, /usr/bin/systemctl stop sidekick-mcp, /usr/bin/systemctl restart sidekick-mcp, /usr/bin/systemctl status sidekick-mcp
-sidekick ALL=(ALL) NOPASSWD: /usr/bin/systemctl start sidekick-dashboard, /usr/bin/systemctl stop sidekick-dashboard, /usr/bin/systemctl restart sidekick-dashboard, /usr/bin/systemctl status sidekick-dashboard
-sidekick ALL=(ALL) NOPASSWD: /usr/bin/systemctl start sidekick-agent, /usr/bin/systemctl stop sidekick-agent, /usr/bin/systemctl restart sidekick-agent, /usr/bin/systemctl status sidekick-agent
+# Sidekick user permissions - journal access
 sidekick ALL=(ALL) NOPASSWD: /usr/bin/journalctl -u sidekick-mcp, /usr/bin/journalctl -u sidekick-dashboard, /usr/bin/journalctl -u sidekick-agent
 
-# Sidekick Docker wrapper services
-sidekick ALL=(ALL) NOPASSWD: /usr/bin/systemctl start sidekick-postgres, /usr/bin/systemctl stop sidekick-postgres, /usr/bin/systemctl restart sidekick-postgres, /usr/bin/systemctl status sidekick-postgres
-sidekick ALL=(ALL) NOPASSWD: /usr/bin/systemctl start sidekick-redis, /usr/bin/systemctl stop sidekick-redis, /usr/bin/systemctl restart sidekick-redis, /usr/bin/systemctl status sidekick-redis
-sidekick ALL=(ALL) NOPASSWD: /usr/bin/systemctl start sidekick-qdrant, /usr/bin/systemctl stop sidekick-qdrant, /usr/bin/systemctl restart sidekick-qdrant, /usr/bin/systemctl status sidekick-qdrant
-sidekick ALL=(ALL) NOPASSWD: /usr/bin/systemctl start sidekick-influxdb, /usr/bin/systemctl stop sidekick-influxdb, /usr/bin/systemctl restart sidekick-influxdb, /usr/bin/systemctl status sidekick-influxdb
-sidekick ALL=(ALL) NOPASSWD: /usr/bin/systemctl start sidekick-grafana, /usr/bin/systemctl stop sidekick-grafana, /usr/bin/systemctl restart sidekick-grafana, /usr/bin/systemctl status sidekick-grafana
-sidekick ALL=(ALL) NOPASSWD: /usr/bin/systemctl start sidekick-metrics.timer, /usr/bin/systemctl stop sidekick-metrics.timer, /usr/bin/systemctl restart sidekick-metrics.timer, /usr/bin/systemctl status sidekick-metrics.timer
 sidekick ALL=(ALL) NOPASSWD: /usr/bin/journalctl -u sidekick-postgres, /usr/bin/journalctl -u sidekick-redis, /usr/bin/journalctl -u sidekick-qdrant, /usr/bin/journalctl -u sidekick-influxdb, /usr/bin/journalctl -u sidekick-grafana
 
 # UFW
@@ -156,13 +149,16 @@ sidekick ALL=(ALL) NOPASSWD: /usr/sbin/ufw allow 4097/tcp, /usr/sbin/ufw allow 4
 sidekick ALL=(ALL) NOPASSWD: /usr/local/sbin/sidekick-wg
 
 # Nginx
-sidekick ALL=(ALL) NOPASSWD: /usr/sbin/nginx -t, /usr/bin/systemctl start nginx, /usr/bin/systemctl stop nginx, /usr/bin/systemctl restart nginx, /usr/bin/systemctl reload nginx, /usr/bin/systemctl status nginx
+sidekick ALL=(ALL) NOPASSWD: /usr/sbin/nginx -t
 
 # Data directory
 sidekick ALL=(ALL) NOPASSWD: /usr/bin/chown -R sidekick\:sidekick /home/sidekick/sidekick/data/, /usr/bin/chmod -R 700 /home/sidekick/sidekick/data/
 EOF
 
 chmod 440 /etc/sudoers.d/sidekick
+visudo -cf /etc/sudoers.d/sidekick
+install_sidekick_deploy_sudoers "$USERNAME" "$SCRIPT_DIR"
+install_sidekick_polkit_rule "$USERNAME" "$SCRIPT_DIR"
 log "Sudoers configured"
 
 install_nodesource_repository() {
@@ -354,6 +350,12 @@ fi
 
 if ! command -v node &> /dev/null; then
   error "Node.js not found after installation"
+fi
+
+if sidekick_bubblewrap_smoke_test "$USERNAME"; then
+  log "Linux command isolation verified for $USERNAME under NoNewPrivileges"
+else
+  warn "Bubblewrap isolation is unavailable for $USERNAME; isolated shell calls will fail closed until the host supports the required user namespace and limits"
 fi
 
 if [ ! -d "$USER_HOME/sidekick" ]; then

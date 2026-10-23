@@ -11,7 +11,10 @@ check protections and current state, monitor the Proxmox UPID to completion,
 and verify postconditions. Migration is same-cluster only. Retirement is not a
 general delete: it requires administrator enablement, positive Sidekick-managed
 provenance, no protection, and disposable-resource policy. Optional Ansible is
-limited to configured allowlisted playbooks and hosts.
+limited to configured allowlisted playbooks and hosts for planning. `detect`
+and `dry_run` are available; `run` returns `capability_unavailable` until a
+scoped network broker and isolated workspace are implemented. Do not enable
+host networking on the general shell as a workaround.
 
 For a node maintenance window, run `proxmox/maintenance-plan` with a configured
 profile and node name. It assesses up to 25 guests against up to four online

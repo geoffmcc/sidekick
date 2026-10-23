@@ -24,10 +24,13 @@ const { createScheduledAuthority } = require("../src/security/scheduled-authorit
 const { createDelayExecution } = require("../src/agent/delay-execution");
 
 const owner = identity.bootstrapOwner({ username: "schedule-owner", password: "correct horse battery staple", displayName: "Schedule Owner" });
+const ownerContext = { principal_id: owner.principal_id };
 const machineCredential = authentication.createCredential({
   principalId: owner.principal_id,
   displayName: "Scoped scheduled executor",
   scopes: ["tools.execute"],
+  createdByPrincipalId: owner.principal_id,
+  actorContext: ownerContext,
 });
 const initialIdentity = authentication.authenticateCredential(machineCredential.token);
 
@@ -92,16 +95,19 @@ test("the real dispatcher denies a scheduled effect after its credential scope i
 });
 
 test("the real dispatcher denies a scheduled effect after its delegation is revoked", async () => {
-  const delegate = identity.createPrincipal({ type: "service", displayName: "Scheduled delegate" });
+  const delegate = require('./helpers/authorized-identity').createPrincipal(identity, { type: "service", displayName: "Scheduled delegate" });
   const delegation = authorization.createDelegation({
     delegatorPrincipalId: owner.principal_id,
     delegatePrincipalId: delegate.principal_id,
     permissions: ["tools.execute"],
+    actorContext: owner,
   });
   const credential = authentication.createCredential({
     principalId: delegate.principal_id,
     displayName: "Delegated scheduled executor",
     scopes: ["tools.execute"],
+    createdByPrincipalId: owner.principal_id,
+    actorContext: ownerContext,
   });
   const delegatedIdentity = {
     ...authentication.authenticateCredential(credential.token),
@@ -113,7 +119,7 @@ test("the real dispatcher denies a scheduled effect after its delegation is revo
     context: { authIdentity: delegatedIdentity, project: "scheduled-project", taskId: delay.id, source: "agent" },
     secret: process.env.SIDEKICK_SECRET_KEY,
   });
-  authorization.revokeDelegation(delegation.delegation_id, owner.principal_id);
+  authorization.revokeDelegation(delegation.delegation_id, owner);
 
   const calls = [];
   const { execute } = runner(delay, calls);

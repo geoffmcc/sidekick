@@ -12,6 +12,7 @@ function registerKvRoutes({
   valueSize,
   valueType,
   auditLog,
+  recordIdentityAudit,
   requireIdentityAdministrator,
   requireIdentityPermission,
   errorResponse,
@@ -22,6 +23,13 @@ function registerKvRoutes({
       return false;
     }
     return requireIdentityAdministrator(req, res);
+  }
+  function recordMutationAudit(eventType, actorId, details) {
+    try {
+      recordIdentityAudit(eventType, null, actorId, details);
+    } catch (cause) {
+      throw Object.assign(new Error("durable audit write failed"), { code: "AUDIT_UNAVAILABLE", cause });
+    }
   }
   const shapeKvEntry = (key, entry) => {
     const isEnvelope = entry && typeof entry === "object" && !Array.isArray(entry) && Object.prototype.hasOwnProperty.call(entry, "value");
@@ -72,14 +80,33 @@ function registerKvRoutes({
 
   app.put("/api/kv/:key", (req, res) => {
     if (!requireAdmin(req, res)) return;
+    const actorId = req.authPrincipal?.principal_id;
+    if (!actorId) return res.status(401).json({ ok: false, error: "authenticated principal required", code: "unauthenticated" });
+    const { value, project } = req.body || {};
+    const details = { key: req.params.key, value_length: typeof value === "string" ? value.length : null, project: project ?? null };
     try {
-      const { value, project } = req.body || {};
-      const existing = dbStore.getKV(req.params.key);
-      const effectiveProject = project !== undefined ? project : (existing?.project || null);
-      dbStore.setKV(req.params.key, value, effectiveProject, "dashboard", existing?.category || "system");
-      auditLog(req, "kv.update", { value_length: value?.length, project });
-      res.json({ ok: true });
-    } catch (error) { return errorResponse(req, res, error, { status: 400, code: "invalid_body", component: "kv" }); }
+      // The file audit is a write-ahead record. If it cannot be written, no
+      // KV state change is attempted. The durable identity audit below is
+      // committed in the same SQLite transaction as the mutation.
+      auditLog(req, "kv.update.requested", { value_length: details.value_length, project });
+    } catch (error) {
+      return errorResponse(req, res, error, { status: 503, code: "audit_unavailable", component: "kv" });
+    }
+    try {
+      dbStore.getDb().transaction(() => {
+        const existing = dbStore.getKV(req.params.key);
+        const effectiveProject = project !== undefined ? project : (existing?.project || null);
+        dbStore.setKV(req.params.key, value, effectiveProject, "dashboard", existing?.category || "system");
+        recordMutationAudit("dashboard.kv.updated", actorId, details);
+      })();
+    } catch (error) {
+      const auditFailure = error?.code === "AUDIT_UNAVAILABLE";
+      return errorResponse(req, res, error, { status: auditFailure ? 503 : 400, code: auditFailure ? "audit_unavailable" : "invalid_body", component: "kv" });
+    }
+    let auditStatus = "complete";
+    try { auditLog(req, "kv.update", { value_length: details.value_length, project }); }
+    catch { auditStatus = "degraded"; }
+    res.json({ ok: true, audit_status: auditStatus });
   });
 
   app.get("/api/kv/projects", (req, res) => {
@@ -90,14 +117,31 @@ function registerKvRoutes({
 
   app.delete("/api/kv/:key", (req, res) => {
     if (!requireAdmin(req, res)) return;
-    const existed = dbStore.hasKV(req.params.key);
-    if (!existed) {
-      auditLog(req, "kv.delete", { key: req.params.key, deleted: false });
-      return errorResponse(req, res, null, { status: 404, code: "not_found", component: "kv", publicMessage: "key not found", extra: { deleted: false } });
+    const actorId = req.authPrincipal?.principal_id;
+    if (!actorId) return res.status(401).json({ ok: false, error: "authenticated principal required", code: "unauthenticated" });
+    const details = { key: req.params.key };
+    try {
+      auditLog(req, "kv.delete.requested", details);
+    } catch (error) {
+      return errorResponse(req, res, error, { status: 503, code: "audit_unavailable", component: "kv" });
     }
-    dbStore.deleteKV(req.params.key);
-    auditLog(req, "kv.delete", { key: req.params.key, deleted: true });
-    res.json({ ok: true, deleted: true });
+    let existed;
+    try {
+      existed = dbStore.getDb().transaction(() => {
+        const present = dbStore.hasKV(req.params.key);
+        if (present) dbStore.deleteKV(req.params.key);
+        recordMutationAudit(present ? "dashboard.kv.deleted" : "dashboard.kv.delete_not_found", actorId, { ...details, deleted: present });
+        return present;
+      })();
+    } catch (error) {
+      const auditFailure = error?.code === "AUDIT_UNAVAILABLE";
+      return errorResponse(req, res, error, { status: auditFailure ? 503 : 500, code: auditFailure ? "audit_unavailable" : "storage_unavailable", component: "kv" });
+    }
+    let auditStatus = "complete";
+    try { auditLog(req, "kv.delete", { ...details, deleted: existed }); }
+    catch { auditStatus = "degraded"; }
+    if (!existed) return errorResponse(req, res, null, { status: 404, code: "not_found", component: "kv", publicMessage: "key not found", extra: { deleted: false } });
+    res.json({ ok: true, deleted: true, audit_status: auditStatus });
   });
 }
 

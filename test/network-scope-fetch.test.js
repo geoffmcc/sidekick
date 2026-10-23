@@ -23,15 +23,15 @@ const scopePolicy = require("../src/security/network-scope");
 const authContext = createOwnerContext({ project: "network-fetch-test" });
 
 (async () => {
-  const server = http.createServer((_req, res) => res.end("scoped-fetch"));
+  const server = http.createServer((req, res) => res.end(`scoped-fetch:${req.headers["x-trace"] || "none"}`));
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   const port = server.address().port;
   const scope = scopes.create({ name: "fetch_fixture", allowed_cidrs: ["127.0.0.0/8"], allowed_protocols: ["http"], allowed_ports: [port], allow_private_addresses: true }, "test-operator");
   try {
     const directCall = await require("../src/tools/context").runWithContext(authContext, () => sidekick_web_fetch({ url: `http://127.0.0.1:${port}/` }));
     assert.strictEqual(directCall.code, "canonical_dispatch_required", "raw handler calls must not bypass outbound policy or audit");
-    const allowed = await callInternalTool("web_fetch", { url: `http://127.0.0.1:${port}/`, network_scope: "fetch_fixture", network_scope_revision: scope.revision }, authContext);
-    assert.match(allowed.content[0].text, /scoped-fetch/);
+    const allowed = await callInternalTool("web_fetch", { url: `http://127.0.0.1:${port}/`, headers: JSON.stringify({ "X-Trace": "trace-1" }), network_scope: "fetch_fixture", network_scope_revision: scope.revision }, authContext);
+    assert.match(allowed.content[0].text, /scoped-fetch:trace-1/, "bounded request policy preserves ordinary caller headers");
     const denied = await callInternalTool("web_fetch", { url: "http://169.254.169.254/", network_scope: "fetch_fixture", network_scope_revision: scope.revision }, authContext);
     assert.strictEqual(denied.isError, true);
     assert.match(denied.content[0].text, /network scope|permanent|denied/i);

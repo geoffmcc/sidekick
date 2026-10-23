@@ -121,6 +121,8 @@ The scripts use SSH. On a fresh host they may prompt for the initial user's pass
 Assuming the app lives at `/home/sidekick/sidekick` and runs as the `sidekick` user:
 
 ```bash
+sudo apt-get update
+sudo apt-get install -y polkitd
 sudo useradd --system --create-home --shell /bin/bash sidekick
 sudo mkdir -p /home/sidekick/sidekick
 sudo chown -R sidekick:sidekick /home/sidekick/sidekick
@@ -143,10 +145,34 @@ sudo cp systemd/sidekick-dashboard.service /etc/systemd/system/
 sudo cp systemd/sidekick-agent.service /etc/systemd/system/
 sudo cp systemd/sidekick-sudoers /etc/sudoers.d/sidekick
 sudo chmod 440 /etc/sudoers.d/sidekick
+sudo bash ./scripts/install-polkit-policy.sh sidekick
 
 sudo systemctl daemon-reload
 sudo systemctl enable --now sidekick-mcp sidekick-dashboard sidekick-agent
 ```
+
+The bundled Core systemd units set `SIDEKICK_SECRET_DIR=/etc/sidekick/secrets`,
+matching the directory provisioned by `scripts/bootstrap.sh`. Keep runtime
+credentials in that protected directory; do not add credentials to the app's
+`.env` file. The shared `sidekick` service account currently means the Core
+services can read one another's secret files; separate per-service credential
+isolation is a documented hardening limitation and is not provided by this
+directory setting.
+
+The installer creates `/etc/sudoers.d/sidekick-deploy` for the SSH deployment
+scripts, limited to start, stop, restart, and status for the three Sidekick
+services. Calls made by the running Core service use the narrower Polkit
+policy, which also requires the caller to be `sidekick-mcp.service` with
+`NoNewPrivileges=true`. Neither mechanism grants unit enablement, daemon
+reload, or arbitrary systemd commands.
+
+WireGuard status/peer changes and Nginx site-file changes/config tests still
+depend on `sudo` and are not yet mediated for Sidekick services running with
+`NoNewPrivileges=true`. They fail before making a change and report that a
+narrow privileged broker is required. Keep `NoNewPrivileges` enabled; these
+operations need a separate reviewed broker implementation before they can be
+used from the hardened services. Nginx status and reload use the scoped
+systemd Polkit path.
 
 Check services:
 

@@ -8,11 +8,12 @@
 // health, and fallback; this family no longer reaches Ollama/Groq directly for
 // inference (the `ollama` handler remains a direct model-management surface,
 // which is administration, not inference). Risk classifications (llm medium,
-// embed/ollama low) are preserved from src/tools/metadata.js; policy, redaction
+// embed low, ollama high) are preserved from the built-in descriptors; policy, redaction
 // and audit are applied by the dispatcher. sidekick_llm is exported for the
 // legacy handlers that call it (teach, fresheyes, changelog, black_box).
 
 const { z } = require("zod");
+const OllamaProvider = require("../../providers/ollama-provider");
 
 function configuredModel(value) {
   const model = String(value || "").trim();
@@ -22,11 +23,48 @@ const compute = require("../../compute");
 const toolContext = require("../context");
 const { resolveOutputTokenBudget } = require("../../compute/token-budget");
 const { requireToolExecution, requireCanonicalInvocation } = require("../read-authorization");
+const { captureExecutionAuthority } = require("../../compute/job-authority");
 
 let inferenceService = null;
 try { inferenceService = require("../../compute/inference-service"); } catch {}
 
 const OPENVINO_EMBEDDING_MODEL = "qwen3-embedding-0.6b-int8";
+const MAX_OLLAMA_RESPONSE_BYTES = 8 * 1024 * 1024;
+const MAX_OLLAMA_ERROR_BYTES = 16 * 1024;
+
+async function readOllamaResponseText(response, maxBytes = MAX_OLLAMA_RESPONSE_BYTES, { truncate = false } = {}) {
+  const reader = response.body?.getReader?.();
+  if (!reader) throw new Error("Ollama response stream is unavailable");
+  const chunks = [];
+  let bytes = 0;
+  let wasTruncated = false;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const chunk = Buffer.from(value);
+    const remaining = maxBytes - bytes;
+    if (chunk.length > remaining) {
+      if (!truncate) {
+        await reader.cancel().catch(() => {});
+        throw new Error(`Ollama response exceeded ${maxBytes} bytes`);
+      }
+      if (remaining > 0) chunks.push(chunk.subarray(0, remaining));
+      bytes = maxBytes;
+      wasTruncated = true;
+      await reader.cancel().catch(() => {});
+      break;
+    }
+    chunks.push(chunk);
+    bytes += chunk.length;
+  }
+  return { text: Buffer.concat(chunks, bytes).toString("utf8"), truncated: wasTruncated };
+}
+
+async function readOllamaResponseJson(response) {
+  const { text } = await readOllamaResponseText(response);
+  try { return JSON.parse(text); }
+  catch { throw new Error("Ollama returned invalid JSON"); }
+}
 
 async function runOpenVinoEmbeddingJob({ text, model, device, context }) {
   compute.initialize();
@@ -96,34 +134,32 @@ async function sidekick_embed({ text, model, device }) {
   }
 }
 
-async function sidekick_ollama({ action, model }) {
+async function sidekick_ollama({ action, model }, runtime = {}) {
   const authorizationError = requireToolExecution({ tool: "ollama", action: action || null, model: model || null }, "tools.execute_high", "ollama");
   if (authorizationError) return authorizationError;
   try {
-    const ollamaUrl = process.env.OLLAMA_URL || "http://127.0.0.1:11434";
+    const actionTimeoutMs = action === "pull" ? 600000 : 15000;
+    const callerTimeoutMs = Number(runtime.context?.timeoutMs);
+    const timeoutMs = callerTimeoutMs > 0 ? Math.max(1, Math.min(actionTimeoutMs, callerTimeoutMs)) : actionTimeoutMs;
+    const provider = new OllamaProvider({
+      endpoint: process.env.OLLAMA_URL || "http://127.0.0.1:11434",
+      timeout: timeoutMs,
+    });
 
     if (action === "list") {
-      const response = await fetch(`${ollamaUrl}/api/tags`);
-      if (!response.ok) {
-        return { content: [{ type: "text", text: `Error: Failed to list models (${response.status})` }], isError: true };
-      }
-      const data = await response.json();
-      const models = (data.models || []).map(m => ({
+      const listed = await provider.listModels();
+      const models = listed.map(m => ({
         name: m.name,
         size: m.size,
-        modified_at: m.modified_at,
+        modified_at: m.modifiedAt,
         digest: m.digest?.substring(0, 12)
       }));
       return { content: [{ type: "text", text: JSON.stringify(models, null, 2) }] };
     }
 
     if (action === "ps") {
-      const response = await fetch(`${ollamaUrl}/api/ps`);
-      if (!response.ok) {
-        return { content: [{ type: "text", text: `Error: Failed to list running models (${response.status})` }], isError: true };
-      }
-      const data = await response.json();
-      const models = (data.models || []).map(m => ({
+      const loaded = await provider.loadedModels();
+      const models = loaded.map(m => ({
         name: m.name,
         size: m.size,
         digest: m.digest?.substring(0, 12),
@@ -136,15 +172,7 @@ async function sidekick_ollama({ action, model }) {
       if (!model) {
         return { content: [{ type: "text", text: "Error: model name required" }], isError: true };
       }
-      const response = await fetch(`${ollamaUrl}/api/pull`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: model, stream: false }),
-      });
-      if (!response.ok) {
-        const errText = await response.text();
-        return { content: [{ type: "text", text: `Error: Failed to pull model (${response.status}): ${errText}` }], isError: true };
-      }
+      await provider.pullModel(model, { timeout: timeoutMs });
       return { content: [{ type: "text", text: `Successfully pulled model: ${model}` }] };
     }
 
@@ -152,15 +180,7 @@ async function sidekick_ollama({ action, model }) {
       if (!model) {
         return { content: [{ type: "text", text: "Error: model name required" }], isError: true };
       }
-      const response = await fetch(`${ollamaUrl}/api/show`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: model }),
-      });
-      if (!response.ok) {
-        return { content: [{ type: "text", text: `Error: Failed to show model (${response.status})` }], isError: true };
-      }
-      const data = await response.json();
+      const data = await provider.getModelInfo(model);
       return { content: [{ type: "text", text: JSON.stringify({
         name: data.details?.family,
         parameter_size: data.details?.parameter_size,
@@ -202,6 +222,7 @@ async function runLlm({ prompt, system, temperature, async: asyncMode, timeout_m
         source: context.source,
         project: context.project,
         requestingActor: context.actor,
+        executionAuthority: captureExecutionAuthority(context.authIdentity, "tools.execute"),
         rootExecutionId: context.rootExecutionId,
         parentExecutionId: context.executionId,
         taskId: context.taskId,
@@ -292,7 +313,7 @@ const descriptors = Object.freeze([
     description: "Manage Ollama models: list, ps, pull, show",
     schema: z.object({
       action: z.enum(["list", "ps", "pull", "show"]).describe("Ollama action"),
-      model: z.string().optional().describe("Model name (required for pull/show)"),
+      model: z.string().max(256).optional().describe("Model name (required for pull/show; maximum 256 characters)"),
     }),
     args: { action: "string (list|ps|pull|show)", model: "string (optional, model name for pull/show)" },
     risk: "high",
@@ -303,4 +324,4 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_llm, runLlm, sidekick_embed, sidekick_ollama };
+module.exports = { descriptors, sidekick_llm, runLlm, sidekick_embed, sidekick_ollama, readOllamaResponseText, readOllamaResponseJson, MAX_OLLAMA_RESPONSE_BYTES, MAX_OLLAMA_ERROR_BYTES };

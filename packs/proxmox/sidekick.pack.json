@@ -111,11 +111,9 @@
   ],
   "requires": {
     "tools": [],
-    "optional_tools": ["secret", "netdiag", "bash"]
+    "optional_tools": ["secret", "netdiag"]
   },
-  "permissions": [
-    { "tool": "bash", "risk": "critical" }
-  ],
+  "permissions": [],
   "configuration": {
     "schema": {
       "type": "object",
@@ -140,7 +138,7 @@
         },
         "ansible": {
           "type": "object",
-          "description": "Optional Ansible integration. Absent or unconfigured means Ansible is simply unavailable. Point playbook_dir at an administrator-controlled directory of allowlisted playbooks on the Sidekick host.",
+          "description": "Optional Ansible planner. Configure playbook_dir to an administrator-controlled directory of allowlisted playbooks. Detect/dry_run work; run fails closed until a scoped network broker and isolated workspace are configured.",
           "properties": {
             "playbook_dir": { "type": "string" },
             "allowed_playbooks": { "type": "array", "items": { "type": "string" } },

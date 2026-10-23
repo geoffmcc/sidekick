@@ -23,7 +23,6 @@ const { callTool } = require("./tools/dispatch-seam");
 const { generateId } = require("./core/ids");
 const { PROCEDURES_FILE, loadProcedures, saveProcedures } = require("./core/procedures-store");
 const { SECRETS_FILE, loadSecrets, saveSecrets } = require("./core/secrets-store");
-const { readSecret } = require("./core/runtime-secrets");
 const { createScheduledPlatformExecution, transitionScheduledPlatformExecution, releaseScheduledClaim, startScheduledLeaseRenewal, appendScheduledPlatformEvent, claimScheduledDefinition } = require("./tools/scheduled-execution");
 const {
   recordPlatformApprovalQueued,
@@ -49,7 +48,6 @@ const { recoverStrandedRunbooks } = require("./tools/families/runbook");
 const { buildPolicyInspection, summarizePolicyInspection } = require("./tools/families/tool-catalog");
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const OLLAMA_URL = process.env.OLLAMA_URL || "http://127.0.0.1:11434";
-const GROQ_API_KEY = readSecret("GROQ_API_KEY");
 const GROQ_MODEL = process.env.GROQ_MODEL || "llama-3.1-8b-instant";
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -188,7 +186,6 @@ module.exports = {
   setSource,
   DATA_DIR,
   OLLAMA_URL,
-  GROQ_API_KEY,
   GROQ_MODEL,
   loadProcedures,
   loadDelays,

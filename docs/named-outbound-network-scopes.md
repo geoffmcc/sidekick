@@ -2,7 +2,7 @@
 
 Sidekick named outbound-network scopes are operator-created, versioned
 allowlists for governed outbound HTTP, WebSocket, Browser, Browser Automation,
-and Security Research traffic. A scope is reachability authority only. It does
+Security Research, and scoped host-form network diagnostics. A scope is reachability authority only. It does
 not authorize testing a target, create a route, configure a VLAN, or change a
 firewall.
 
@@ -77,4 +77,10 @@ digest, protocol, port, DNS/policy decision and reason code, never credentials,
 cookies, authorization headers, query secrets, or page bodies.
 
 Use least privilege: list only the required CIDRs/hosts, protocols, and ports.
-Committed defaults contain no real private network.
+For host-form `netdiag` probes, choose only the needed `tcp`, `udp`, or `icmp`
+protocols. TCP/UDP diagnostics require an explicit allowed port or port range;
+an empty port list does not grant any TCP/UDP diagnostic port. Each hostname is
+resolved once, every answer is checked, and the selected address is pinned for
+the actual probe. Private/local destinations require a current scope revision.
+The high-risk `netdiag` tool still requires `tools.execute_high`; default strict
+approval remains in force. Committed defaults contain no real private network.

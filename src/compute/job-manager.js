@@ -56,6 +56,7 @@ function ensureSchema() {
       root_execution_id TEXT,
       parent_execution_id TEXT,
       requesting_actor TEXT,
+      execution_authority_json TEXT NOT NULL DEFAULT '{}',
       data_classification TEXT NOT NULL DEFAULT 'private',
       protocol_version TEXT NOT NULL DEFAULT '1',
       capability_requirements_json TEXT NOT NULL DEFAULT '{}',
@@ -160,6 +161,7 @@ function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_compute_artifacts_type ON compute_artifacts(artifact_type);
   `);
   ensureColumn("compute_jobs", "cancel_requested_at", "TEXT");
+  ensureColumn("compute_jobs", "execution_authority_json", "TEXT NOT NULL DEFAULT '{}'");
   ensureColumn("compute_jobs", "cancel_requested_by", "TEXT");
   ensureColumn("compute_jobs", "cancel_acknowledged_at", "TEXT");
   ensureColumn("compute_jobs", "cancel_acknowledged_by", "TEXT");
@@ -363,6 +365,7 @@ function validateTransition(currentStatus, newStatus) {
 function createJob({
   jobType, capability, source, project, taskId, sessionId,
   rootExecutionId, parentExecutionId, requestingActor,
+  executionAuthority = null,
   dataClassification = "private",
   capabilityRequirements = {}, routingPreferences = {},
   retryPolicy = {}, resourceRequirements = {}, artifactExpectations = [], outputLimits = {},
@@ -409,16 +412,16 @@ function createJob({
   db.prepare(`
     INSERT INTO compute_jobs (
       job_id, job_type, capability, source, project, task_id, session_id,
-      root_execution_id, parent_execution_id, requesting_actor,
+      root_execution_id, parent_execution_id, requesting_actor, execution_authority_json,
       data_classification, protocol_version, capability_requirements_json, routing_preferences_json,
       retry_policy_json, resource_requirements_json, artifact_expectations_json, output_limits_json,
       request_payload_json, priority, expires_at, max_attempts, status, approval_required, input_hash, timeout_ms,
       idempotency_key
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     jobId, jobType, capability, source || null, project || null,
     taskId || null, sessionId || null, rootExecutionId || null,
-    parentExecutionId || null, requestingActor || null,
+    parentExecutionId || null, requestingActor || null, json(executionAuthority),
     dataClassification, protocolVersion, json(capabilityRequirements), json(routingPreferences),
     json(retryPolicy), json(resourceRequirements), json(artifactExpectations), json(outputLimits),
     json(requestPayload), priority, expiresAt || null, maxAttempts, initialStatus,
@@ -1456,6 +1459,15 @@ function getJobStatsLegacy() {
   };
 }
 
+// This private authorization projection is deliberately omitted from rowToJob
+// so worker claims, Dashboard responses, and ordinary job reads do not expose it.
+function getExecutionAuthority(jobId) {
+  ensureSchema();
+  const row = dbStore.getDb().prepare("SELECT execution_authority_json FROM compute_jobs WHERE job_id = ?").get(jobId);
+  const value = row ? parseJson(row.execution_authority_json, null) : null;
+  return value && typeof value === "object" && !Array.isArray(value) && value.version === 1 ? value : null;
+}
+
 const jobQuery = createJobQuery({ ensureSchema, db: () => dbStore.getDb(), rowToJob, rowToAttempt });
 const { getJob, listJobs, listAttempts, getJobStats } = jobQuery;
 
@@ -1479,6 +1491,7 @@ module.exports = {
   releaseRetryWaitJobs,
   startLeasedJob,
   updateProgress,
+  getExecutionAuthority,
   completeJob,
   failJob,
   cancelJob,

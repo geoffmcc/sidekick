@@ -40,6 +40,7 @@ function makeHarness(register, overrides = {}) {
   register({
     app, dbStore, platformKernel,
     authenticatedUser: () => "viewer",
+    recordIdentityAudit: () => {},
     requireIdentityPermission,
     projectAccess: { hasGlobalProjectAccess: () => false, hasGlobalMemoryAccess: () => false, hasProjectAccess: () => false, listAccessibleProjects: () => [] },
     memoryCategory: () => "fact",
@@ -319,7 +320,7 @@ test("sync export and import enforce memory action permission and project member
     projectAccess,
     dbStore: {
       exportForSync: options => { calls.push(["export", options]); return { count: 1, memories: [] }; },
-      importFromSync: (_data, options) => { calls.push(["import", options]); return { imported: 0, conflicts: 0, skipped: 0 }; },
+      importFromSync: (_data, options) => { calls.push(["import", options]); options.audit({ imported: 0, updated: 0, skipped: 0, conflicts: 0 }); return { imported: 0, conflicts: 0, skipped: 0 }; },
     },
   });
 
@@ -347,7 +348,7 @@ test("sync import constrains writes to its authorized project and diff requires 
       hasProjectAccess: (_principalId, project, access) => project === "allowed_project" && access === "write",
     },
     dbStore: {
-      importFromSync: (_data, options) => { calls.push(options); return { imported: 0, conflicts: 0, skipped: 2 }; },
+      importFromSync: (_data, options) => { calls.push(options); options.audit({ imported: 0, updated: 0, skipped: 2, conflicts: 0 }); return { imported: 0, conflicts: 0, skipped: 2 }; },
       getSyncDiff: () => { throw new Error("must not expose unscoped sync diff"); },
     },
   });
@@ -606,6 +607,99 @@ test("KV reads require an explicit permission before loading stored records", ()
   assert.equal(reads, 0);
 });
 
+test("KV writes commit with actor audit and require write-ahead audit availability", () => {
+  const handlers = new Map();
+  const events = [];
+  const state = new Map([["existing", { value: "before", project: "project-a", category: "system" }]]);
+  let failRequestAudit = false;
+  let failCompletionAudit = false;
+  let failIdentityAudit = false;
+  const db = {
+    transaction(fn) {
+      return () => {
+        const snapshot = new Map(state);
+        try { return fn(); }
+        catch (error) { state.clear(); for (const [key, value] of snapshot) state.set(key, value); throw error; }
+      };
+    },
+  };
+  const dbStore = {
+    getDb: () => db,
+    getKV: key => { events.push("storage:get"); return state.get(key) || null; },
+    setKV: (key, value, project, source, category) => { events.push("storage:set"); state.set(key, { value, project, source, category }); },
+    hasKV: key => { events.push("storage:has"); return state.has(key); },
+    deleteKV: key => { events.push("storage:delete"); state.delete(key); },
+  };
+  const app = Object.fromEntries(["get", "put", "delete"].map(method => [method, (route, handler) => handlers.set(`${method.toUpperCase()} ${route}`, handler)]));
+  const errorResponse = (_req, res, _error, options) => res.status(options.status).json({ code: options.code });
+  registerKvRoutes({
+    app, dbStore, safeString: String, summarizeValue: String, inferNamespace: () => "test",
+    valueSize: () => 0, valueType: () => "string",
+    auditLog: (_req, action) => {
+      events.push(`file:${action}`);
+      if (failRequestAudit && action.endsWith(".requested")) throw new Error("audit unavailable");
+      if (failCompletionAudit && !action.endsWith(".requested")) throw new Error("completion audit unavailable");
+    },
+    recordIdentityAudit: (eventType, _principalId, actorId, details) => {
+      events.push(`identity:${eventType}:${actorId}`);
+      assert.equal(details.key, "existing");
+      if (failIdentityAudit) throw new Error("durable audit unavailable");
+    },
+    requireIdentityAdministrator: () => true,
+    requireIdentityPermission: () => true,
+    errorResponse,
+  });
+
+  const request = { params: { key: "existing" }, body: { value: "after" }, authPrincipal: { principal_id: "owner-1" } };
+  const updated = invoke(handlers.get("PUT /api/kv/:key"), request);
+  assert.equal(updated.statusCode, 200);
+  assert.deepEqual(events, [
+    "file:kv.update.requested", "storage:get", "storage:set",
+    "identity:dashboard.kv.updated:owner-1", "file:kv.update",
+  ]);
+  assert.deepEqual(state.get("existing").value, "after");
+
+  events.length = 0;
+  const deleted = invoke(handlers.get("DELETE /api/kv/:key"), { params: { key: "existing" }, authPrincipal: { principal_id: "owner-1" } });
+  assert.equal(deleted.statusCode, 200);
+  assert.deepEqual(events, [
+    "file:kv.delete.requested", "storage:has", "storage:delete",
+    "identity:dashboard.kv.deleted:owner-1", "file:kv.delete",
+  ]);
+  assert.equal(state.has("existing"), false);
+
+  state.set("existing", { value: "before", project: "project-a" });
+  failCompletionAudit = true;
+  const completedWithDegradedFileAudit = invoke(handlers.get("PUT /api/kv/:key"), request);
+  assert.equal(completedWithDegradedFileAudit.statusCode, 200);
+  assert.equal(completedWithDegradedFileAudit.body.audit_status, "degraded");
+  assert.equal(state.get("existing").value, "after", "a successful durable transaction must not be reported as an ambiguous failed mutation");
+  failCompletionAudit = false;
+  state.set("existing", { value: "before", project: "project-a" });
+
+  for (const [route, invokeRequest] of [
+    ["PUT /api/kv/:key", () => invoke(handlers.get("PUT /api/kv/:key"), request)],
+    ["DELETE /api/kv/:key", () => invoke(handlers.get("DELETE /api/kv/:key"), { params: { key: "existing" }, authPrincipal: { principal_id: "owner-1" } })],
+  ]) {
+    failRequestAudit = true;
+    events.length = 0;
+    const denied = invokeRequest();
+    assert.equal(denied.statusCode, 503, route);
+    assert.equal(denied.body.code, "audit_unavailable", route);
+    assert.equal(state.has("existing"), true, `${route} must not mutate when write-ahead audit fails`);
+    assert.equal(events.filter(event => event.startsWith("storage:")).length, 0, `${route} must not reach storage when audit fails`);
+    failRequestAudit = false;
+
+    failIdentityAudit = true;
+    events.length = 0;
+    const rolledBack = invokeRequest();
+    assert.equal(rolledBack.statusCode, 503, route);
+    assert.equal(rolledBack.body.code, "audit_unavailable", route);
+    assert.deepEqual(state.get("existing").value, "before", `${route} must roll back if durable actor audit fails`);
+    failIdentityAudit = false;
+  }
+});
+
 test("tool logs require audit.read before querying stored arguments and results", () => {
   const harness = makeHarness(registerLogsRoute);
   const response = invoke(harness.handlers.get("GET /api/logs"));
@@ -748,11 +842,12 @@ test("database backup requires an attributable audit record before export", asyn
     dataDir: "C:/sidekick-test-data", path: require("node:path"), fs: { mkdirSync() {} },
     callDashboardTool: async () => ({}), dashboardExecutionMetadata: () => ({}), authenticatedUser: () => "backup-actor",
     requireDashboardTool: () => true, auditLog,
-    errorResponse: (_req, res, error, options) => res.status(options.status).json({ error: error?.message || "audit failed" }),
+    errorResponse: (_req, res, error, options) => res.status(options.status).json({ error: error?.message || "audit failed", code: options.code }),
   });
   register((req, action) => { events.push(action); if (action === "db.backup.requested") throw new Error("audit unavailable"); });
   await handlers.get("/api/db/backup")(request, response);
-  assert.equal(response.statusCode, 500);
+  assert.equal(response.statusCode, 503);
+  assert.equal(response.body.code, "audit_unavailable");
   assert.equal(backups, 0, "backup must not be exported when the request audit cannot be stored");
 
   events.length = 0;
@@ -762,4 +857,13 @@ test("database backup requires an attributable audit record before export", asyn
   assert.equal(response.statusCode, 200);
   assert.deepEqual(events, ["db.backup.requested", "backup", "db.backup.completed"]);
   assert.equal(backups, 1);
+
+  events.length = 0;
+  response.statusCode = 200;
+  register((req, action) => { events.push(action); if (action === "db.backup.completed") throw new Error("completion audit unavailable"); });
+  await handlers.get("/api/db/backup")(request, response);
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.body.audit_status, "degraded");
+  assert.deepEqual(events, ["db.backup.requested", "backup", "db.backup.completed"]);
+  assert.equal(backups, 2);
 });

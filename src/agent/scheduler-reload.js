@@ -40,10 +40,10 @@ function reloadAgentScheduler(kind, options = {}) {
         },
         agent: false,
       }, response => {
-        response.resume();
         finish(response.statusCode >= 200 && response.statusCode < 300
           ? { ok: true }
           : { ok: false, code: "agent_reload_rejected", status: response.statusCode });
+        response.destroy();
       });
       request.setTimeout(timeoutMs, () => request.destroy(new Error("Agent reload timed out")));
       request.on("error", () => finish({ ok: false, code: "agent_unavailable" }));

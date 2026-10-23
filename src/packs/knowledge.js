@@ -34,7 +34,7 @@ function installAsset(packName, packVersion, asset, filePath) {
   const content = fs.readFileSync(filePath, "utf-8");
   const now = new Date().toISOString();
   const existing = db
-    .prepare("SELECT id, tags FROM knowledge WHERE category = ? AND title = ?")
+    .prepare("SELECT id, tags FROM knowledge WHERE category = ? AND title = ? AND project_id IS NULL")
     .get(asset.category, asset.title);
   if (existing) {
     const existingTags = String(existing.tags || "").split(",").filter(Boolean);
@@ -47,7 +47,7 @@ function installAsset(packName, packVersion, asset, filePath) {
     return { id: existing.id, replaced: true, bytes: Buffer.byteLength(content) };
   }
   const result = db
-    .prepare("INSERT INTO knowledge (category, title, content, tags, enabled, version_added, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)")
+    .prepare("INSERT INTO knowledge (category, title, content, tags, enabled, version_added, updated_at, project_id) VALUES (?, ?, ?, ?, 1, ?, ?, NULL)")
     .run(asset.category, asset.title, content, tagString(packName, asset.tags), packVersion, now);
   refreshKnowledgeFts();
   return { id: result.lastInsertRowid, replaced: false, bytes: Buffer.byteLength(content) };

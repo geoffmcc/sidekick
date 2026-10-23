@@ -14,6 +14,8 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const { z } = require("zod");
+const { performance } = require("node:perf_hooks");
+const { BoundedRegex } = require("../../core/bounded-regex");
 const { redactSensitive } = require("../../redact");
 const { enforcePathPolicy, getPathPolicyDecision } = require("../path-policy");
 const { scanSecurityConfig } = require("../../security-scan");
@@ -167,20 +169,18 @@ function anonymizeText(text, consistency, customPatterns) {
   });
 
   if (customPatterns && customPatterns.length > 0) {
+    const regexDeadline = performance.now() + 500;
     for (const cp of customPatterns) {
-      try {
-        const regex = new RegExp(cp.pattern, "g");
-        result = result.replace(regex, cp.replacement);
-      } catch {}
+      const regex = new BoundedRegex(cp.pattern, "", { deadline: regexDeadline });
+      result = regex.replace(result, cp.replacement);
     }
   }
 
   const stored = loadAnonymizePatterns();
+  const regexDeadline = performance.now() + 500;
   for (const sp of stored.patterns) {
-    try {
-      const regex = new RegExp(sp.pattern, "g");
-      result = result.replace(regex, sp.replacement);
-    } catch {}
+    const regex = new BoundedRegex(sp.pattern, "", { deadline: regexDeadline });
+    result = regex.replace(result, sp.replacement);
   }
 
   result = redactSensitive(result);
@@ -227,7 +227,7 @@ async function sidekick_anonymize({ action, input, format, custom_patterns, cons
     for (const cp of custom_patterns) {
       if (!cp.pattern || !cp.replacement) continue;
       try {
-        new RegExp(cp.pattern);
+        new BoundedRegex(cp.pattern);
       } catch (e) {
         return { content: [{ type: "text", text: `Invalid regex pattern: ${cp.pattern} (${e.message})` }], isError: true };
       }
@@ -503,9 +503,9 @@ const SCHEMAS = {
     input: z.string().optional().describe("Text to anonymize"),
     format: z.enum(["text", "json", "yaml"]).optional().default("text"),
     custom_patterns: z.array(z.object({
-      pattern: z.string(),
-      replacement: z.string()
-    })).optional(),
+      pattern: z.string().max(512),
+      replacement: z.string().max(4096)
+    })).max(20).optional(),
     consistency: z.boolean().optional().default(true).describe("Same input always maps to same output")
   }),
   sandbox: z.object({

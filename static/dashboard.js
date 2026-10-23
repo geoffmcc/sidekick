@@ -2363,7 +2363,17 @@ function loadDurableAgentTask(taskId){
     if (verification) { const outcomes = data.verification_outcomes || []; const recipes = data.verification_recipes || data.verification || []; const recipeById = Object.fromEntries(recipes.map(recipe => [String(recipe.recipe_id), recipe])); const outcomeFresh = outcome => { if (outcome.freshness_state !== 'fresh' || !outcome.observed_at) return outcome.freshness_state === 'fresh'; const recipe = recipeById[String(outcome.recipe_id)]; const age = Date.now() - Date.parse(outcome.observed_at); const windowMs = Number(recipe && recipe.freshness_ms); return Number.isFinite(age) && age >= 0 && (!Number.isFinite(windowMs) || age <= windowMs); }; const successful = outcomes.filter(o => o.observation_state === 'successful').length; const fresh = outcomes.filter(o => outcomeFresh(o) && o.independence_state === 'independent').length; verification.textContent = 'Verification: ' + ((task.verification && task.verification.status) || (task.result && task.result.status) || 'pending') + ' · Gates: ' + recipes.length + ' · Evidence outcomes: ' + outcomes.length + ' (' + successful + ' successful, ' + fresh + ' fresh independent) · Checkpoint: ' + ((task.checkpoint && task.checkpoint.safe_boundary) || 'none') + ' · Workspace: ' + (task.workspace_ref || 'none') + ' · Lineage: ' + (task.parent_task_id ? 'child of ' + task.parent_task_id + ' · root ' + (task.root_task_id || 'unknown') : 'root'); }
     if (work) { const packages = data.work_packages || []; const receipts = data.receipts || []; const active = packages.filter(p => p.state === 'running').length; const completed = packages.filter(p => p.state === 'completed').length; const current = receipts.find(r => r.outcome_state === 'dispatched'); work.textContent = 'Work: milestone=' + (task.current_milestone || 'none') + ' · package=' + (task.active_work_package || 'none') + ' · packages=' + packages.length + ' (' + active + ' active, ' + completed + ' completed) · concurrency=' + (((task.authority_envelope || {}).concurrency_limit) || 1) + ' · current operation=' + (current ? (current.capability || 'operation') + ' [' + current.receipt_id + ']' : 'none'); }
     if (evidence) { const outcomes = data.verification_outcomes || []; const artifacts = task.artifact_refs || []; evidence.textContent = 'Evidence and custody: outcomes=' + outcomes.length + ' · successful=' + outcomes.filter(o => o.observation_state === 'successful').length + ' · failed=' + outcomes.filter(o => o.observation_state === 'failed').length + ' · contradictory=' + outcomes.filter(o => o.observation_state === 'contradictory').length + ' · artifacts=' + artifacts.length + ' · fresh evidence is required for verified status.'; }
-    if (escalation) { const rows = data.escalations || []; escalation.textContent = rows.length ? 'Needs attention: ' + rows.slice(0, 4).map(row => (row.requested_operation || 'operation') + ' — ' + (row.reason || 'review required')).join(' · ') : 'Approval, information, and escalation needs: none recorded.'; }
+    if (escalation) {
+      const rows = data.escalations || [];
+      escalation.innerHTML = rows.length ? '<strong>Escalation review</strong>' + rows.slice(0, 8).map(row => {
+        const open = row.state === 'open';
+        return '<section class="agent-escalation-review"><strong>' + esc(row.requested_operation || 'Operation') + '</strong>' +
+          '<div>' + esc(row.reason || 'Review required') + '</div>' +
+          '<div class="sub">Target: ' + esc(row.target_ref || 'not specified') + ' · Risk: ' + esc(row.risk_class || 'unknown') + ' · Effect: ' + esc(row.effect_class || 'unknown') + ' · State: ' + esc(row.state || 'unknown') + '</div>' +
+          (open ? '<div class="control-row"><button class="btn btn-sm" type="button" data-dashboard-action="agent" data-handler="decideAgentEscalation" data-id="' + attr(row.escalation_id) + '" data-value="approved" data-index="' + attr(task.task_id) + '">Approve this request</button><button class="btn btn-sm btn-outline" type="button" data-dashboard-action="agent" data-handler="decideAgentEscalation" data-id="' + attr(row.escalation_id) + '" data-value="denied" data-index="' + attr(task.task_id) + '">Deny</button></div>' : '') +
+          '</section>';
+      }).join('') : 'Approval, information, and escalation needs: none recorded.';
+    }
     if (result) { let structured = task.result; try { structured = structured == null ? null : JSON.stringify(structured); } catch (_) { structured = '[unavailable]'; } result.textContent = 'Structured result: ' + (structured || 'not available') + ' · stopping reason: ' + (task.stopping_reason || 'none'); }
     if (continuationActions) {
       const terminal = ['completed', 'partial', 'failed', 'blocked', 'interrupted', 'waiting'].includes(task.state);
@@ -2391,6 +2401,25 @@ function startAgentContinuation(kind) {
     if (!ok || !data.taskId) throw new Error(data.error || 'Continuation failed');
     streamAgentTask(data.taskId, { reset: false, parentTaskId: id, announce: true });
   }).catch(error => appendLog('<span class="agent-err">Continuation failed: ' + esc(dashboardSafeErrorMessage(error)) + '</span>'));
+}
+
+async function decideAgentEscalation(escalationId, decision, taskId) {
+  if (!taskId || !escalationId || !['approved', 'denied'].includes(decision)) return;
+  const action = decision === 'approved' ? 'approve' : 'deny';
+  if (!window.confirm('Review the escalation details above. Do you want to ' + action + ' this specific request?')) return;
+  try {
+    const response = await authFetch('/api/agent/tasks/' + encodeURIComponent(taskId) + '/escalations/' + encodeURIComponent(escalationId) + '/decision', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decision, reason: 'Reviewed and decided in Dashboard' }),
+    });
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.error || 'Escalation decision was rejected');
+    showToast('Escalation ' + decision + '.', 'success');
+    await loadDurableAgentTask(taskId);
+  } catch (error) {
+    showToast('Escalation decision failed: ' + dashboardSafeErrorMessage(error), 'error');
+  }
 }
 
 function loadAgentLearningCandidates(projectRef) {

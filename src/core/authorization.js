@@ -89,26 +89,48 @@ function authorize({ principalId, permission, credentialScopes = null, delegatio
   return result;
 }
 
-function createDelegation({ delegatorPrincipalId, delegatePrincipalId, permissions, expiresAt = null, actorPrincipalId = null } = {}) {
-  const delegator = identity.getPrincipal(text(delegatorPrincipalId, "delegator_principal_id"));
-  const delegate = identity.getPrincipal(text(delegatePrincipalId, "delegate_principal_id"));
-  if (!delegator || !delegate) throw new Error("delegator and delegate principals are required");
-  if (!delegator.enabled || !delegate.enabled) throw new Error("disabled principals cannot delegate");
-  if (delegator.principal_id === delegate.principal_id) throw new Error("a principal cannot delegate to itself");
+function delegationActorContext(actorContext) {
+  const principalId = actorContext?.principal_id || actorContext?.principalId;
+  if (typeof principalId !== "string" || !principalId.trim()) throw new Error("delegation mutations require an authenticated identity context");
+  const scopes = actorContext.scopes ?? actorContext.credentialScopes;
+  if (scopes !== undefined && scopes !== null && !Array.isArray(scopes)) throw new Error("delegation authority scopes are invalid");
+  return {
+    principalId: principalId.trim(),
+    credentialScopes: Array.isArray(scopes) ? scopes : null,
+    delegationId: actorContext.delegation_id || actorContext.delegationId || null,
+  };
+}
+
+function createDelegation({ delegatorPrincipalId, delegatePrincipalId, permissions, expiresAt = null, actorContext = null } = {}) {
+  const delegatorId = text(delegatorPrincipalId, "delegator_principal_id");
+  const delegateId = text(delegatePrincipalId, "delegate_principal_id");
   if (!Array.isArray(permissions) || permissions.length === 0) throw new Error("delegation permissions are required");
   const unique = [...new Set(permissions.map(permissionName))];
   for (const permission of unique) {
     if (!knownPermission(permission)) throw new Error(`Unknown permission: ${permission}`);
-    const check = authorize({ principalId: delegator.principal_id, permission });
-    if (!check.ok) throw new Error(`Delegator lacks permission: ${permission}`);
   }
   const expiry = expiresAt == null ? null : new Date(expiresAt).toISOString();
   if (expiry && expiry <= now()) throw new Error("expires_at must be in the future");
   const delegationId = id("dlg");
   const db = dbStore.getDb();
   db.transaction(() => {
-    db.prepare(`INSERT INTO identity_delegations (delegation_id, delegator_principal_id, delegate_principal_id, permissions_json, created_at, expires_at, created_by_principal_id) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(delegationId, delegator.principal_id, delegate.principal_id, JSON.stringify(unique), now(), expiry, actorPrincipalId || delegator.principal_id);
-    identity.recordAuditEvent("delegation.created", delegate.principal_id, actorPrincipalId || delegator.principal_id, { delegation_id: delegationId, delegator_principal_id: delegator.principal_id, permissions: unique, expires_at: expiry });
+    const actor = delegationActorContext(actorContext);
+    const delegator = identity.getPrincipal(delegatorId);
+    const delegate = identity.getPrincipal(delegateId);
+    if (!delegator || !delegate) throw new Error("delegator and delegate principals are required");
+    if (!delegator.enabled || !delegate.enabled) throw new Error("disabled principals cannot delegate");
+    if (delegator.principal_id === delegate.principal_id) throw new Error("a principal cannot delegate to itself");
+    if (actor.principalId !== delegator.principal_id && !authorize({ ...actor, permission: "principals.manage" }).ok) {
+      throw new Error("delegation must be created by the delegator or an authorized administrator");
+    }
+    for (const permission of unique) {
+      if (actor.principalId === delegator.principal_id && !authorize({ ...actor, permission }).ok) {
+        throw new Error(`Delegator lacks permission: ${permission}`);
+      }
+      if (!authorize({ principalId: delegator.principal_id, permission }).ok) throw new Error(`Delegator lacks permission: ${permission}`);
+    }
+    db.prepare(`INSERT INTO identity_delegations (delegation_id, delegator_principal_id, delegate_principal_id, permissions_json, created_at, expires_at, created_by_principal_id) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(delegationId, delegator.principal_id, delegate.principal_id, JSON.stringify(unique), now(), expiry, actor.principalId);
+    identity.recordAuditEvent("delegation.created", delegate.principal_id, actor.principalId, { delegation_id: delegationId, delegator_principal_id: delegator.principal_id, permissions: unique, expires_at: expiry });
   })();
   return getDelegation(delegationId);
 }
@@ -119,18 +141,24 @@ function getDelegation(delegationId) {
   return Object.freeze({ delegation_id: row.delegation_id, delegator_principal_id: row.delegator_principal_id, delegate_principal_id: row.delegate_principal_id, permissions: parseJson(row.permissions_json, []), created_at: row.created_at, expires_at: row.expires_at || null, revoked_at: row.revoked_at || null, created_by_principal_id: row.created_by_principal_id || null });
 }
 
-function revokeDelegation(delegationId, actorPrincipalId = null) {
-  const delegation = getDelegation(delegationId);
-  if (!delegation) throw new Error("delegation not found");
-  if (delegation.revoked_at) return delegation;
-  const actor = actorPrincipalId || delegation.delegator_principal_id;
-  if (actor !== delegation.delegator_principal_id && !authorize({ principalId: actor, permission: "principals.manage" }).ok) throw new Error("only the delegator or an authorized administrator may revoke delegation");
+function revokeDelegation(delegationId, actorContext = null) {
+  const delegationKey = text(delegationId, "delegation_id");
   const db = dbStore.getDb();
-  db.transaction(() => {
-    db.prepare("UPDATE identity_delegations SET revoked_at = ? WHERE delegation_id = ? AND revoked_at IS NULL").run(now(), delegation.delegation_id);
-    identity.recordAuditEvent("delegation.revoked", delegation.delegate_principal_id, actor, { delegation_id: delegation.delegation_id });
+  return db.transaction(() => {
+    const actor = delegationActorContext(actorContext);
+    const actorPrincipal = identity.getPrincipal(actor.principalId);
+    const delegation = getDelegation(delegationKey);
+    if (!delegation) throw new Error("delegation not found");
+    if (!actorPrincipal?.enabled) throw new Error("delegation actor must be an enabled principal");
+    if (actor.principalId !== delegation.delegator_principal_id && !authorize({ ...actor, permission: "principals.manage" }).ok) {
+      throw new Error("only the delegator or an authorized administrator may revoke delegation");
+    }
+    if (delegation.revoked_at) return delegation;
+    const result = db.prepare("UPDATE identity_delegations SET revoked_at = ? WHERE delegation_id = ? AND revoked_at IS NULL").run(now(), delegation.delegation_id);
+    if (result.changes !== 1) throw new Error("delegation changed during revocation");
+    identity.recordAuditEvent("delegation.revoked", delegation.delegate_principal_id, actor.principalId, { delegation_id: delegation.delegation_id });
+    return getDelegation(delegation.delegation_id);
   })();
-  return getDelegation(delegation.delegation_id);
 }
 
 module.exports = Object.freeze({ RISK_ORDER, knownPermission, rolePermissions, effectivePermissions, authorize, createDelegation, getDelegation, revokeDelegation });

@@ -1,0 +1,6 @@
+# Managed by Sidekick installation; local edits require a reviewed migration.
+# SSH deployment control only: exact service actions required by deploy.sh,
+# deploy.ps1, and the out-of-unit Git deployment helper.
+@SIDEKICK_USER@ ALL=(ALL) NOPASSWD: /usr/bin/systemctl start sidekick-mcp, /usr/bin/systemctl stop sidekick-mcp, /usr/bin/systemctl restart sidekick-mcp, /usr/bin/systemctl status sidekick-mcp
+@SIDEKICK_USER@ ALL=(ALL) NOPASSWD: /usr/bin/systemctl start sidekick-dashboard, /usr/bin/systemctl stop sidekick-dashboard, /usr/bin/systemctl restart sidekick-dashboard, /usr/bin/systemctl status sidekick-dashboard
+@SIDEKICK_USER@ ALL=(ALL) NOPASSWD: /usr/bin/systemctl start sidekick-agent, /usr/bin/systemctl stop sidekick-agent, /usr/bin/systemctl restart sidekick-agent, /usr/bin/systemctl status sidekick-agent

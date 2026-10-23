@@ -116,6 +116,19 @@ variables are rejected; production and development runtimes require a
 configured file. The test harness may inject synthetic fixtures only for
 isolated tests.
 
+Both deployment scripts validate the required MCP and Agent Bridge credentials
+before restarting services. If a required file is absent, unsafe, or contains
+the same value as the other credential, deployment stops with the file name
+and reason. It does not generate replacement credentials because doing so
+would invalidate existing clients or service trust; provision distinct
+protected files, then rerun the deploy.
+
+After restarting, both deployment scripts wait up to 220 seconds for MCP,
+Agent, and Dashboard to report `active`. A timeout fails the deploy and prints
+the current service states plus the `journalctl` command to inspect startup.
+The check uses the existing per-service `systemctl status` sudo grants; it
+does not require broader service-control privileges.
+
 Local MCP stdio calls use a scoped principal credential from
 `sidekick_mcp_credential` (or an explicit `SIDEKICK_MCP_CREDENTIAL_FILE` path).
 The credential is revalidated for each tool call, so revocation, expiry, or

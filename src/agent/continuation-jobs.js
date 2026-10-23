@@ -1,6 +1,6 @@
 const { persistedTaskAuthIdentity } = require("./task-identity");
 
-function createContinuationJobStarter({ brain, callLLM, callAgentTool, redactSensitive, inferProjectFromText, finalizeResumedTask, stepTimeoutMs, getLiveAgentToolDefs = () => [], getTask = () => null }) {
+function createContinuationJobStarter({ brain, callLLM, callAgentTool, redactSensitive, finalizeResumedTask, stepTimeoutMs, getLiveAgentToolDefs = () => [], getTask = () => null }) {
   return function startApprovalContinuationJobs() {
     if (!brain || !brain.isEnabled()) return { started: false, reason: "brain_disabled" };
     let sweeper;
@@ -9,14 +9,12 @@ function createContinuationJobStarter({ brain, callLLM, callAgentTool, redactSen
       sweeper = require("../approvals/sweeper").startSweeper();
       scheduler = require("../brain/scheduler").startResumeScheduler({
         buildDeps: async (taskId, checkpoint) => {
-          let project = null;
           const durableTask = getTask(taskId) || null;
+          // Recovery scope comes from the durable task record. Approval
+          // checkpoints and their goal text are persisted content, not
+          // authority-bearing project selectors.
+          const project = durableTask?.project_id || null;
           const authIdentity = persistedTaskAuthIdentity(durableTask);
-          try {
-            const store = require("../approvals/store");
-            const goal = checkpoint ? store.decryptJson(checkpoint.goal_encrypted) : null;
-            if (typeof goal === "string" && goal) project = inferProjectFromText(goal) || null;
-          } catch {}
           return brain.makeResumeDeps({
             callLLM: (messages, options) => callLLM(messages, options),
             callTool: (name, args) => callAgentTool(name, args, {

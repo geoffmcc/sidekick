@@ -11,6 +11,7 @@ db.runPendingMigrations();
 const identity = require("../src/core/identity");
 
 let passed = 0;
+let bootstrapOwner;
 function test(name, fn) { fn(); passed++; console.log(`  ✓ ${name}`); }
 
 try {
@@ -29,6 +30,7 @@ try {
   });
   test("bootstrap creates exactly one Owner and no password-bearing DTO", () => {
     const owner = identity.bootstrapOwner({ username: "geoff", password: "correct horse battery staple", displayName: "Geoffrey" });
+    bootstrapOwner = owner;
     assert.strictEqual(owner.principal_type, "human");
     assert.deepStrictEqual(owner.roles, ["owner"]);
     assert.strictEqual(Object.prototype.hasOwnProperty.call(owner, "password_hash"), false);
@@ -41,23 +43,23 @@ try {
     assert.throws(() => identity.createPrincipal({ type: "root", displayName: "bad" }), /Unsupported principal type/);
   });
   test("human lifecycle preserves stable identity through rename-independent disable/enable", () => {
-    const user = identity.createHumanUser({ username: "alice", password: "another correct password", displayName: "Alice" });
-    const renamed = identity.updatePrincipal(user.principal_id, { displayName: "Alice Renamed" }, user.principal_id);
+    const user = require("./helpers/authorized-identity").createHumanUser(identity, { username: "alice", password: "another correct password", displayName: "Alice" });
+    const renamed = identity.updatePrincipal(user.principal_id, { displayName: "Alice Renamed" }, bootstrapOwner);
     assert.strictEqual(renamed.principal_id, user.principal_id);
     assert.strictEqual(renamed.display_name, "Alice Renamed");
-    assert.strictEqual(identity.updateUsername(user.principal_id, "alice-renamed", user.principal_id).principal_id, user.principal_id);
-    const disabled = identity.setPrincipalEnabled(user.principal_id, false, user.principal_id);
+    assert.strictEqual(identity.updateUsername(user.principal_id, "alice-renamed", bootstrapOwner).principal_id, user.principal_id);
+    const disabled = identity.setPrincipalEnabled(user.principal_id, false, bootstrapOwner);
     assert.strictEqual(disabled.principal_id, user.principal_id);
     assert.strictEqual(disabled.enabled, false);
     assert.strictEqual(identity.verifyUserPassword("alice-renamed", "another correct password"), null);
-    const enabled = identity.setPrincipalEnabled(user.principal_id, true, user.principal_id);
+    const enabled = identity.setPrincipalEnabled(user.principal_id, true, bootstrapOwner);
     assert.strictEqual(enabled.principal_id, user.principal_id);
     assert.ok(identity.verifyUserPassword("alice-renamed", "another correct password"));
   });
   test("non-human principals are typed and roles are explicit", () => {
-    const agent = identity.createPrincipal({ type: "agent", displayName: "Claude Code" });
+    const agent = require("./helpers/authorized-identity").createPrincipal(identity, { type: "agent", displayName: "Claude Code" });
     assert.strictEqual(agent.principal_type, "agent");
-    assert.deepStrictEqual(identity.assignRole(agent.principal_id, "operator", agent.principal_id).roles, ["operator"]);
+    assert.throws(() => identity.assignRole(agent.principal_id, "operator", agent), /roles.manage/);
     assert.throws(() => identity.assignRole(agent.principal_id, "root"), /Unsupported role/);
   });
   test("lifecycle audit contains stable principal IDs and no password material", () => {

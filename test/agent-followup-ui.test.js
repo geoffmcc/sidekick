@@ -149,6 +149,21 @@ ok("control room exposes typed governed continuation actions", () => {
   assert.match(dashServer, /app\.post\("\/api\/agent\/tasks\/:taskId\/act-on"/, "Dashboard proxies act-on");
 });
 
+ok("Dashboard renders actionable escalation review and submits a confirmed scoped decision", () => {
+  const detail = fnBody(clientJs, "loadDurableAgentTask");
+  assert.match(detail, /agent-escalation-review/, "escalations render as review cards rather than status-only text");
+  assert.match(detail, /Approve this request/, "open requests have an explicit approval control");
+  assert.match(detail, /data-value=\"denied\"/, "open requests have an explicit denial control");
+  assert.match(detail, /row\.state === 'open'/, "decisions are offered only for open requests");
+  const decision = fnBody(clientJs, "decideAgentEscalation");
+  assert.match(decision, /window\.confirm/, "a human confirms the selected request before deciding");
+  assert.match(decision, /\/api\/agent\/tasks\/.*\/escalations\/.*\/decision/, "decision is sent to the authenticated Agent decision endpoint");
+  assert.match(decision, /JSON\.stringify\(\{ decision, reason:/, "only the decision and bounded reason are submitted");
+  assert.match(decision, /loadDurableAgentTask\(taskId\)/, "the authoritative status is reloaded after the decision");
+  const controls = fs.readFileSync(path.join(__dirname, "..", "static", "dashboard-controls.js"), "utf-8");
+  assert.match(controls, /decideAgentEscalation/, "dashboard handler is explicitly allowlisted");
+});
+
 ok("durable control room renders bounded resources, work, evidence, and plan gates", () => {
   const detail = fnBody(clientJs, "loadDurableAgentTask");
   assert.match(detail, /Resources used\/remaining/, "resource usage includes remaining allowance");

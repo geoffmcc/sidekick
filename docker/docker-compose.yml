@@ -97,8 +97,9 @@ services:
     restart: unless-stopped
     user: "${SIDEKICK_UID:?set SIDEKICK_UID}:${SIDEKICK_GID:?set SIDEKICK_GID}"
     environment:
-      GF_SECURITY_ADMIN_USER: sidekick
       GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/sidekick_grafana_admin_password
+      GF_SECURITY_ADMIN_USER: ${SIDEKICK_GRAFANA_ADMIN_USER:-sidekick}
+      GF_AUTH_BASIC_ENABLED: "true"
       GF_SERVER_HTTP_PORT: "3000"
       GF_INSTALL_PLUGINS: "grafana-clock-panel"
       # The image's bundled plugins live in a read-only layer when Grafana
@@ -107,10 +108,6 @@ services:
       GF_SECURITY_ALLOW_EMBEDDING: "true"
       GF_SERVER_ROOT_URL: ${SIDEKICK_GRAFANA_ROOT_URL:-http://localhost:4098/grafana/}
       GF_SERVER_SERVE_FROM_SUB_PATH: "true"
-      GF_AUTH_PROXY_ENABLED: "true"
-      GF_AUTH_PROXY_HEADER_NAME: "X-WEBAUTH-USER"
-      GF_AUTH_PROXY_HEADER_PROPERTY: "username"
-      GF_AUTH_PROXY_AUTO_SIGN_UP: "true"
       # Grafana Live rejects websocket requests whose browser origin is not
       # explicitly allowed. Keep the default origins narrow; deployments with
       # a different dashboard host should override this variable in .env.
@@ -121,7 +118,9 @@ services:
       - sidekick_grafana_admin_password
       - sidekick_influx_token
     ports:
-      - "0.0.0.0:3000:3000"
+      # Grafana is accessed through the Dashboard's Basic-authenticated proxy.
+      # Keep this service private to the host.
+      - "127.0.0.1:3000:3000"
     volumes:
       - ./data/grafana:/var/lib/grafana
       - ../grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro

@@ -54,6 +54,41 @@ function Restart-SidekickService {
   param([string]$Name)
   Write-Host "  restarting $Name..." -ForegroundColor Yellow
   Run-Remote "sudo systemctl restart $Name" | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "Failed to restart $Name" }
+}
+
+function Wait-SidekickServices {
+  $timeoutSeconds = 220
+  $intervalSeconds = 5
+  $services = @("sidekick-mcp", "sidekick-agent", "sidekick-dashboard")
+  for ($elapsed = 0; $elapsed -le $timeoutSeconds; $elapsed += $intervalSeconds) {
+    $states = @()
+    $allActive = $true
+    foreach ($service in $services) {
+      $state = Run-Remote "sudo systemctl status $service 2>&1 | grep 'Active:' | awk '{print `$2}'"
+      $state = ($state -join "").Trim()
+      $stateLabel = if ($state) { $state } else { "unknown" }
+      $states += "$service=$stateLabel"
+      if ($state -ne "active") { $allActive = $false }
+    }
+    if ($allActive) { return }
+    if ($elapsed -lt $timeoutSeconds) { Start-Sleep -Seconds $intervalSeconds }
+  }
+
+  throw "Sidekick services did not all become active within $timeoutSeconds seconds. Current states: $($states -join ', '). Inspect logs with separate commands: sudo journalctl -u sidekick-mcp; sudo journalctl -u sidekick-agent; sudo journalctl -u sidekick-dashboard."
+}
+
+function Sync-SidekickSystemdUnits {
+  Write-Host "  installing updated Sidekick systemd units..." -ForegroundColor Yellow
+  $units = @("sidekick-mcp.service", "sidekick-agent.service", "sidekick-dashboard.service")
+  foreach ($unit in $units) {
+    $source = "$REMOTE_DIR/systemd/$unit"
+    $target = "/etc/systemd/system/$unit"
+    Run-Remote "sudo install -o root -g root -m 0644 $source $target" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Failed to install $unit" }
+  }
+  Run-Remote "sudo systemctl daemon-reload" | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "Failed to reload systemd after updating Sidekick units" }
 }
 
 function Ensure-SecretConfig {
@@ -439,6 +474,11 @@ try {
     Run-Remote "chmod 700 $REMOTE_DIR/scripts/ensure-secret-config.sh" | Out-Null
     $changed += "ensure-secret-config.sh"
 
+    if (-not (Copy-ToVPS (Join-Path $PROJECT_DIR "scripts\verify-runtime-secrets.js") "$REMOTE_DIR/scripts/verify-runtime-secrets.js")) {
+      throw "Failed to copy verify-runtime-secrets.js"
+    }
+    $changed += "verify-runtime-secrets.js"
+
     if (-not (Copy-ToVPS (Join-Path $PROJECT_DIR "docs\knowledge-seed.sql") "$REMOTE_DIR/docs/knowledge-seed.sql")) {
       throw "Failed to copy knowledge-seed.sql"
     }
@@ -508,6 +548,7 @@ try {
 
   Repair-OptionalTools
   Ensure-SecretConfig
+  Sync-SidekickSystemdUnits
 
   # Generate version.json from local git
   Write-Host "  Generating version.json..." -ForegroundColor Green
@@ -553,8 +594,10 @@ try {
 
   if ($gitModeUsed) {
     Write-Host ""
-    Write-Host "--- Restarting MCP ---" -ForegroundColor Cyan
+    Write-Host "--- Restarting Services ---" -ForegroundColor Cyan
     Restart-SidekickService "sidekick-mcp"
+    Restart-SidekickService "sidekick-agent"
+    Restart-SidekickService "sidekick-dashboard"
   } else {
     Write-Host ""
     Write-Host "--- Installing Dependencies ---" -ForegroundColor Cyan
@@ -581,10 +624,13 @@ try {
 
     Write-Host ""
     Write-Host "--- Starting Services ---" -ForegroundColor Cyan
+    Restart-SidekickService "sidekick-mcp"
     Restart-SidekickService "sidekick-agent"
     Restart-SidekickService "sidekick-dashboard"
-    Restart-SidekickService "sidekick-mcp"
   }
+
+  Write-Host "  waiting for MCP, Agent, and Dashboard readiness..." -ForegroundColor Yellow
+  Wait-SidekickServices
 
   Write-Host ""
   Write-Host "=== Deploy complete ===" -ForegroundColor Cyan
@@ -601,7 +647,7 @@ try {
       throw "$svc service unit missing"
     }
     $status = Run-Remote "sudo systemctl status $svc 2>&1 | grep 'Active:' | awk '{print `$2}'"
-    $color = if ($status -match "active") { "Green" } else { "Red" }
+    $color = if ($status.Trim() -eq "active") { "Green" } else { "Red" }
     Write-Host ("  $svc : ".PadRight(30)) -NoNewline
     Write-Host $status -ForegroundColor $color
   }

@@ -2,6 +2,49 @@
 
 Sidekick is powerful by design. It can execute commands, read and write files, manage services, store secrets, and call external APIs. Treat it like remote shell access to the host.
 
+## Shell command isolation
+
+Legacy shell commands used by cron jobs, runbooks, custom monitors, and health
+checks run through the OS-enforced Bubblewrap boundary. On Linux, Sidekick
+requires a verified Bubblewrap and `prlimit` installation; shell startup fails
+closed if either isolation setup or namespace creation fails. This legacy
+command path has no host workspace mounted and no network access. Commands that
+need project files or outbound access must use a governed execution path that
+grants those scopes explicitly. Windows and macOS currently have no equivalent
+backend for this path, so shell commands are rejected there rather than run
+directly on the host. Dedicated service and infrastructure tools remain the
+supported way to perform those operations.
+
+Endpoint watches accept HTTP and HTTPS only. They use a direct Node HTTP client,
+pin DNS results to the connection, bound response headers and duration, and do not
+follow redirects. Public destinations use the default outbound policy; private
+destinations require an operator-created network scope. A watch stores the
+scope revision selected at creation and fails closed if that scope is changed,
+expired, or revoked. A denied scheduled check is audited as failed and cannot
+trigger its configured action.
+
+`netdiag` HTTP(S) checks use the same outbound probe and require a current
+network scope for private URL targets. URL checks do not also send ping or SSH
+probes to the hostname. Host-only diagnostic actions remain separately gated
+by the high-risk `netdiag` permission.
+
+InfluxDB metrics requests reject redirects, abort after 15 seconds, and stream
+responses through a 5 MiB bound (error bodies are limited to 64 KiB). The
+configured Influx URL must still pass the explicit host allowlist, and metrics
+operations retain their action-specific identity and risk checks.
+
+Qdrant memory requests reject redirects and abort after 15 seconds. Semantic
+search responses are streamed through an 8 MiB bound, with oversized response
+bodies cancelled; the Qdrant endpoint remains an operator-configured service.
+
+GitHub API requests keep their existing 30-second timeout and cap each response
+at 8 MiB. CI status pagination is capped at 50 pages; reaching the cap returns
+an explicit error instead of silently presenting partial results as complete.
+
+Discord and Slack notification error bodies are capped at 64 KiB and truncated
+responses are closed. SMTP responses are drained without retaining their body;
+the existing 30-second SMTP deadline remains in effect.
+
 ## MCP authentication
 
 The MCP server requires an API key. Clients can send it as:
@@ -12,7 +55,9 @@ Authorization: Bearer YOUR_SIDEKICK_API_KEY
 
 Query-string API keys are not supported because URLs are routinely exposed in logs, browser history, proxy metadata, and referrer headers.
 
-Set `SIDEKICK_API_KEY` to a strong non-placeholder value before starting the MCP server or dashboard.
+Set `SIDEKICK_API_KEY` to a strong non-placeholder value before starting the MCP server. Dashboard and Agent do not load this installation-wide client credential. MCP startup validates that its API key differs from the Dashboard-to-Agent proxy key and that any configured scheduler key differs from the proxy key. Agent independently rejects scheduler/proxy key reuse before serving requests.
+
+The Dashboard summary obtains protected MCP session diagnostics with the current authenticated Dashboard identity session. MCP authorizes those details using `dashboard.operations.read` (or `system.configure`); the Dashboard does not use the global MCP API key as an internal service credential.
 
 The Dashboard-to-Agent Bridge uses a separate file-backed
 `SIDEKICK_AGENT_PROXY_KEY` (`sidekick_agent_proxy_key`). Generate a distinct
@@ -22,7 +67,9 @@ services require the secret before startup outside test mode.
 
 MCP scheduling tools use `SIDEKICK_AGENT_SCHEDULER_KEY`
 (`sidekick_agent_scheduler_key`) for timer reloads. It must be distinct from
-both the MCP API key and Dashboard proxy key. The Agent accepts this identity
+the Dashboard proxy key; MCP startup also verifies that the proxy key differs
+from the MCP API key, which makes the three configured values distinct. MCP
+and Agent both reject scheduler/proxy key reuse. The Agent accepts this identity
 only on the exact delay/watch reload POST routes; absent configuration blocks
 new delay/watch definitions before they are persisted.
 
@@ -93,6 +140,17 @@ dispatcher. Create a scoped credential for an enabled principal with the
 required permission and project grant. Explicit low-risk inventory remains
 available under the configured source policy. Direct API routes must enforce
 their own permission checks and are audited separately.
+
+MCP HTTP bearer authentication also accepts an active Dashboard identity
+session token. The session is resolved against current server-side state on
+each request, so expiration, logout, and principal disablement take effect
+immediately. It carries the principal's current role authority without
+machine-credential scope attenuation; use a named scoped service credential
+for unattended MCP clients. Keep browser session tokens in the HttpOnly
+Dashboard cookie and do not copy them into client configuration, logs, or
+persistent machine settings. This bearer support does not itself route
+Dashboard or Agent tool dispatch through MCP; those processes still use local
+dispatch in the current architecture.
 
 For integrations that need a durable machine identity, the first-run Dashboard
 opens Identity after Owner setup and offers **Connect an MCP client**. The flow
@@ -207,19 +265,25 @@ Paths are canonicalized before they are compared, so a symlink is judged by wher
 
 Three limits are worth stating plainly. A hard link is not a symlink and has no separate target to resolve, so a hard link created inside an allowed root to a file outside it reads as an ordinary file in that root and is permitted; keep allowed roots on filesystems where untrusted users cannot create links to sensitive files. Comparison is case-sensitive, so on a case-insensitive filesystem — a `/mnt/c` DrvFS mount under WSL, for example — a differently-cased spelling of a denied root is not recognised; keep roots on a case-sensitive filesystem where this matters. And this is a check on the path, performed before the operation: it does not close the window between the check and the subsequent filesystem access, so a path that is replaced in that interval can still be followed.
 
-The guard applies to direct path arguments on file, archive, search, diff, database export/backup/restore, media, watch, snapshot, changelog, and ops tools. It does not parse arbitrary commands passed to shell-capable tools, so keep `bash`, deploy workflows, and other high-power tools behind tool policy and approval. The `sandbox` tool's `exec` action is disabled because backups and rollback do not provide OS-enforced isolation; it returns `isolation_unavailable` before execution.
+The guard applies to direct path arguments on file, archive, search, diff, database export/backup/restore, media, watch, snapshot, changelog, and ops tools. It does not parse arbitrary commands passed to shell-capable tools. On Linux, canonical `bash` execution uses Bubblewrap namespaces, a cleared environment, read-only system mounts, no network namespace access, an optional explicitly authorized workspace, and kernel-enforced per-process limits through `prlimit`. Missing or unusable isolation blocks execution before the command starts. Windows and macOS currently have no supported shell isolation backend and therefore fail closed. These controls contain commands; they do not isolate trusted first-party capability modules, which still execute in the Core process. Install `bubblewrap` and `util-linux` (for `/usr/bin/prlimit`) through `scripts/bootstrap.sh` or `scripts/setup-tools.sh`; existing deployments need those packages installed before shell execution can work. Aggregate cgroup quotas and brokered host administration remain open. Keep high-power tools behind policy and approval. The `sandbox` tool's `exec` action remains disabled because its backup/rollback implementation does not provide OS-enforced isolation.
 
 ### Media download egress
 
-The `download` tool performs a DNS preflight before invoking yt-dlp and refuses
-private, loopback, metadata, and link-local destinations unless the operator
-explicitly enables private fetches. It also disables yt-dlp call-home/cache
-behavior, uses a socket timeout, restricts filenames, caps the download size
-(`SIDEKICK_MAX_DOWNLOAD_BYTES`, bounded to 1 MiB–2 GiB), and canonicalizes and
-revalidates the resulting file before custody registration. yt-dlp remains a
-third-party downloader that may follow site-specific redirects or request
-additional CDN URLs; deployments requiring strict egress isolation must run it
-behind an OS/network-level egress policy or proxy.
+The `download` tool performs a DNS preflight and refuses private, loopback,
+metadata, and link-local destinations. It then gives yt-dlp an ephemeral,
+authenticated loopback proxy using the browser subsystem's pinned-DNS egress
+policy, so redirects and CDN requests receive the same destination checks.
+Ambient yt-dlp configuration and plugin directories are disabled for the call.
+The tool also disables call-home/cache behavior, uses a socket timeout,
+restricts filenames, caps the download size (`SIDEKICK_MAX_DOWNLOAD_BYTES`,
+bounded to 1 MiB–2 GiB), and canonicalizes and revalidates the resulting file
+before custody registration. The downloader runs asynchronously, honors the
+dispatcher cancellation signal, and the temporary proxy is closed on success,
+failure, or cancellation. This is application-level proxy mediation; it is not
+an OS network sandbox. A compromised downloader or code path that ignores its
+explicit proxy option could still attempt direct egress. Deployments that need
+containment against a compromised downloader must apply an OS/network egress
+boundary as well.
 
 ## Approval queue
 
@@ -303,7 +367,7 @@ The supplied sudoers file allows the `sidekick` user to run specific systemctl a
 
 ## Dashboard permissions
 
-Dashboard sign-in establishes identity; it does not by itself grant access to every operation. Direct sync endpoints enforce `sync.read` for identity, diff, and export, and `sync.manage` for identity changes and imports. Direct event delivery endpoints enforce `events.read` for listing and `events.manage` for subscription and delivery mutations. Migration `081_dashboard_sync_event_permissions.sql` grants these permissions to administrators; auditors receive event-read access only. Other Dashboard routes continue to use their dispatcher or route-specific authorization and remain subject to the platform authorization review.
+Dashboard sign-in establishes identity; it does not by itself grant access to every operation. Sync identity reads and changes always require `sync.read` and `sync.manage`. Unscoped sync import, export, and diff also require those dedicated grants. A project-scoped transfer instead requires `memory.read` or `memory.write` and current membership in that project; the dispatcher tools and Dashboard routes enforce the same split. Migration `081_dashboard_sync_event_permissions.sql` grants global sync permissions to owners and administrators; auditors receive event-read access only. Direct event delivery endpoints enforce `events.read` for listing and `events.manage` for subscription and delivery mutations. Other Dashboard routes continue to use their dispatcher or route-specific authorization and remain subject to the platform authorization review.
 
 Direct connector endpoints enforce `connectors.read` for connector records, health probes, and lifecycle events, and `connectors.manage` for registration, configuration, and lifecycle changes. Migration `084_dashboard_connector_permissions.sql` grants these permissions to owners and administrators. Connector routes check permission before accessing the platform kernel or starting a health probe.
 

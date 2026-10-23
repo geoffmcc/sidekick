@@ -139,6 +139,16 @@ function requiredToolPermission(descriptor, args = {}) {
     if (args.action === "get") return "secrets.read";
     return "secrets.manage";
   }
+  if (descriptor.name === "compute_nodes") {
+    const readActions = new Set(["list", "get", "telemetry", "stats", "list_tokens"]);
+    return readActions.has(args.action) ? "compute.nodes.read" : "compute.nodes.manage";
+  }
+  if (descriptor.name === "memory" && ["confirm", "correct"].includes(args.action)) return "tools.execute_critical";
+  if (descriptor.name === "memory_manage" && args.action === "confirm") return "tools.execute_critical";
+  if (descriptor.name === "black_box" && ["list", "list_incidents", "get", "get_incident", "capture_status", "list_captures", "get_capture", "list_sources", "get_source", "search", "compare", "analyze", "analyze_async", "export", "storage_status", "purge_preview", "profiles"].includes(args.action || "list")) return "blackbox.read";
+  if (descriptor.name === "sync_identity") return args.action === "get" ? "sync.read" : "sync.manage";
+  if (["sync_export", "sync_diff"].includes(descriptor.name)) return args.project ? "memory.read" : "sync.read";
+  if (descriptor.name === "sync_import") return args.project ? "memory.write" : "sync.manage";
   if (descriptor.name === "webhook") {
     return args.action === "clear" ? "webhooks.manage" : "webhooks.read";
   }
@@ -186,6 +196,7 @@ function sensitiveResultFactoryFor(descriptor, args, context) {
   // mint unredacted outputs. The dispatcher verifies the authenticated
   // principal and live request/session boundary before exposing either token.
   const oneTimeOperation = (descriptor.name === "compute_nodes" && args.action === "create_token")
+    || (descriptor.name === "compute_nodes" && args.action === "enroll")
     || (descriptor.name === "handoff" && args.action === "claim");
   if (!oneTimeOperation) return null;
   if (!context.authIdentity || (!context.authIdentity.principal_id && !context.authIdentity.principalId)) return null;
@@ -239,6 +250,7 @@ async function executeResolvedTool(descriptor, args, context, requestedName = de
     dev_change_summary: ["include_ignored"],
     semantic_repo: ["include", "exclude", "relevant_files"],
     dev_repo_profile: ["include", "exclude"],
+    netdiag: ["network_scope", "network_scope_revision"],
   }[descriptor.name];
   if (safetyArguments && safetyArguments.some(key => Object.prototype.hasOwnProperty.call(rawArgs, key) && parsed.data[key] === undefined)) {
     return errorResult(`Tool ${descriptor.name} is using a stale schema; refresh the executing capability before retrying`, "stale_tool_schema");
@@ -265,6 +277,12 @@ async function executeResolvedTool(descriptor, args, context, requestedName = de
         details: { tool: descriptor.name, risk: effectiveRisk, code: "unauthenticated" },
       });
     } catch {}
+    if (context.authIdentity?.authentication_method === "legacy_api_key") {
+      return errorResult(
+        `This connection uses the legacy installation API key, which does not identify a principal and cannot authorize ${descriptor.name}. In Dashboard, open Identity → Connect an MCP client, create a service credential with the permissions this client needs, then configure the MCP client to reconnect with that credential.`,
+        "unauthenticated",
+      );
+    }
     return errorResult(`Authentication required for ${descriptor.name} operations`, "unauthenticated");
   }
 
@@ -488,7 +506,19 @@ async function executeAuthorizedTaskStep(toolName, args, meta = {}) {
   });
 }
 
-async function executeApprovedTool({ approvalId, reviewer = "system", reviewerPrincipalId = null, source } = {}) {
+async function executeApprovedTool({ approvalId, reviewer = "system", reviewerPrincipalId = null, reviewerAuthIdentity = null, source } = {}) {
+  if (reviewerAuthIdentity?.principal_id && reviewerPrincipalId && reviewerAuthIdentity.principal_id !== reviewerPrincipalId) {
+    return errorResult("Approval reviewer identity does not match the authenticated principal", "authorization_denied");
+  }
+  const effectiveReviewerPrincipalId = reviewerAuthIdentity?.principal_id || reviewerPrincipalId;
+  const effectiveReviewerIdentity = effectiveReviewerPrincipalId
+    ? {
+      principal_id: effectiveReviewerPrincipalId,
+      principal_type: reviewerAuthIdentity?.principal_type || "human",
+      ...(Array.isArray(reviewerAuthIdentity?.scopes) ? { scopes: reviewerAuthIdentity.scopes } : {}),
+      ...(reviewerAuthIdentity?.delegation_id ? { delegation_id: reviewerAuthIdentity.delegation_id } : {}),
+    }
+    : null;
   // ADR §1: an approval authorizes an action, it never performs one. For a
   // TASK-ORIGINATED approval this call is a STATE TRANSITION (T2) — mark the
   // approval approved and the task runnable, atomically — and returns. The task
@@ -512,7 +542,13 @@ async function executeApprovedTool({ approvalId, reviewer = "system", reviewerPr
 
   if (taskApproval) {
     const { approve } = require("../approvals/continuation");
-    const outcome = approve({ approvalId, approverIdentity: reviewer, approverPrincipalId: reviewerPrincipalId });
+    const outcome = approve({
+      approvalId,
+      approverIdentity: reviewer,
+      approverPrincipalId: effectiveReviewerPrincipalId,
+      credentialScopes: effectiveReviewerIdentity?.scopes ?? null,
+      delegationId: effectiveReviewerIdentity?.delegation_id || null,
+    });
     if (!outcome.ok) {
       const message = outcome.code === "task_not_waiting"
         ? `Approval ${approvalId} was decided, but its task is no longer waiting for it`
@@ -567,8 +603,8 @@ async function executeApprovedTool({ approvalId, reviewer = "system", reviewerPr
       args: claim.args,
       context: createApprovalExecutionContext({
         actor: reviewer,
-        authIdentity: reviewerPrincipalId ? { principal_id: reviewerPrincipalId, principal_type: "human" } : null,
-        provenance: { approved_by: reviewerPrincipalId, executed_by: reviewerPrincipalId },
+        authIdentity: effectiveReviewerIdentity,
+        provenance: { approved_by: effectiveReviewerPrincipalId, executed_by: effectiveReviewerPrincipalId },
         approvalId,
         operationId: claim.operationId,
         idempotencyKey: claim.idempotencyKey,

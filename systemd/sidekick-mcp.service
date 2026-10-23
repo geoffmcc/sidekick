@@ -6,14 +6,17 @@ After=network.target
 Type=simple
 WorkingDirectory=/home/sidekick/sidekick
 ExecStart=/usr/bin/node src/index.js
+ExecStartPost=/usr/bin/node scripts/wait-for-mcp-ready.js
 Restart=always
 RestartSec=10
+TimeoutStartSec=190
 TimeoutStopSec=30
 KillMode=mixed
 NoNewPrivileges=true
 User=sidekick
 Group=sidekick
 Environment=NODE_ENV=production
+Environment=SIDEKICK_SECRET_DIR=/etc/sidekick/secrets
 EnvironmentFile=-/etc/sidekick/sidekick.env
 
 [Install]

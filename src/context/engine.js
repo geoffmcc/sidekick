@@ -39,7 +39,7 @@ function normalizeMemory(row) {
 
 function normalizeKnowledge(row) {
   return {
-    source: "knowledge", sourceId: String(row.id), type: "knowledge", project: null,
+    source: "knowledge", sourceId: String(row.id), type: "knowledge", project: row.project_id || null,
     title: row.title, category: row.category, summary: row.title, content: row.content,
     tags: row.tags, confidence: 0.9, authority: row.source_type || "curated",
     createdAt: row.version_added, updatedAt: row.updated_at,
@@ -76,7 +76,7 @@ function createContextEngine({ dbStore = dbStoreDefault, db = dbStoreDefault.get
     return [project];
   }
 
-  function queryKnowledge(query, limit) {
+  function queryKnowledge(query, limit, project) {
     if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='knowledge'").get()) return [];
     const terms = String(query || "").trim().split(/\s+/).filter(Boolean).slice(0, 12);
     // OR is deliberate here: relevance/ranking performs the final matching.
@@ -84,11 +84,14 @@ function createContextEngine({ dbStore = dbStoreDefault, db = dbStoreDefault.get
     // for natural-language questions containing stop words or live-state
     // qualifiers that are absent from a curated entry.
     const fts = terms.map(term => `"${term.replace(/"/g, "\"\"").slice(0, 80)}"`).join(" OR ");
+    const projectClause = project ? "(k.project_id IS NULL OR k.project_id = ?)" : "k.project_id IS NULL";
     try {
-      return db.prepare(`SELECT k.id, k.category, k.title, k.content, k.tags, k.updated_at, k.version_added, k.source_type, k.source_id FROM knowledge k JOIN knowledge_fts f ON f.rowid = k.id WHERE k.enabled = 1 AND knowledge_fts MATCH ? ORDER BY bm25(knowledge_fts), k.updated_at DESC LIMIT ?`).all(fts || "\"\"", limit).map(normalizeKnowledge);
+      const params = project ? [fts || "\"\"", project, limit] : [fts || "\"\"", limit];
+      return db.prepare(`SELECT k.id, k.category, k.title, k.content, k.tags, k.updated_at, k.version_added, k.source_type, k.source_id, k.project_id FROM knowledge k JOIN knowledge_fts f ON f.rowid = k.id WHERE k.enabled = 1 AND knowledge_fts MATCH ? AND ${projectClause} ORDER BY bm25(knowledge_fts), k.updated_at DESC LIMIT ?`).all(...params).map(normalizeKnowledge);
     } catch {
       const like = `%${String(query || "").slice(0, 200)}%`;
-      return db.prepare("SELECT id, category, title, content, tags, updated_at, version_added, source_type, source_id FROM knowledge WHERE enabled = 1 AND (title LIKE ? OR content LIKE ? OR tags LIKE ?) ORDER BY updated_at DESC LIMIT ?").all(like, like, like, limit).map(normalizeKnowledge);
+      const params = project ? [like, like, like, project, limit] : [like, like, like, limit];
+      return db.prepare(`SELECT id, category, title, content, tags, updated_at, version_added, source_type, source_id, project_id FROM knowledge WHERE enabled = 1 AND (title LIKE ? OR content LIKE ? OR tags LIKE ?) AND ${project ? "(project_id IS NULL OR project_id = ?)" : "project_id IS NULL"} ORDER BY updated_at DESC LIMIT ?`).all(...params).map(normalizeKnowledge);
     }
   }
 
@@ -209,7 +212,7 @@ function createContextEngine({ dbStore = dbStoreDefault, db = dbStoreDefault.get
         candidates.push(row); count++;
       }
     };
-    add("knowledge", queryKnowledge(query, budget.maxPerSource * 3));
+    add("knowledge", queryKnowledge(query, budget.maxPerSource * 3, scope.project));
     if (typeof semanticProvider === "function") {
       try { add("repository_semantic", await semanticProvider(query, { limit: budget.maxPerSource, maxChars: Math.min(6000, budget.maxChars) })); }
       catch (error) { excluded.push({ source: "repository_semantic", sourceId: null, reasonCodes: ["SEMANTIC_RETRIEVAL_FAILED"] }); }

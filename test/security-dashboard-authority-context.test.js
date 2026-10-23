@@ -16,6 +16,7 @@ test("Dashboard authorization preserves credential and delegation attenuation", 
   const decisions = [];
   let createdDelegations = 0;
   let revokedDelegations = 0;
+  let credentialReads = 0;
   let sessionActive = true;
   const app = Object.fromEntries(["get", "post", "put", "patch", "delete"].map(method => [method, (route, handler) => handlers.set(`${method.toUpperCase()} ${route}`, handler)]));
   app.use = () => {};
@@ -31,7 +32,7 @@ test("Dashboard authorization preserves credential and delegation attenuation", 
     revokeDelegation() { revokedDelegations++; return {}; },
   };
   const { hasIdentityPermission } = registerAuthRoutes({
-    app, dbStore: {}, identity: {}, authentication: { isSessionActive: () => sessionActive }, authorization,
+    app, dbStore: {}, identity: {}, authentication: { isSessionActive: () => sessionActive, listCredentials: () => { credentialReads++; return []; } }, authorization,
     timingSafeCompare: () => false, dashboardUser: "", dashboardPass: "",
     bootstrapCompleted: () => false, authAttemptKeys: () => [], rejectIfAuthThrottled: () => false,
     recordAuthFailure() {}, clearAuthFailures() {}, legacyDashboardPrincipal: () => null,
@@ -45,6 +46,12 @@ test("Dashboard authorization preserves credential and delegation attenuation", 
   assert.equal(hasIdentityPermission({ authPrincipal: streamPrincipal }, "dashboard.operations.read"), true);
   sessionActive = false;
   assert.equal(hasIdentityPermission({ authPrincipal: streamPrincipal }, "dashboard.operations.read"), false, "invalidated server-side sessions cannot retain long-lived stream access");
+  const expiredRoute = response();
+  handlers.get("GET /api/auth/credentials")({
+    authPrincipal: { ...streamPrincipal, scopes: ["credentials.read"] }, query: {},
+  }, expiredRoute);
+  assert.equal(expiredRoute.statusCode, 401, "route authorization revalidates the server-side session");
+  assert.equal(credentialReads, 0, "an invalidated session is denied before credential metadata is read");
   sessionActive = true;
   const credentialRead = response();
   handlers.get("GET /api/auth/credentials")({ authPrincipal: principal, query: {} }, credentialRead);
@@ -70,4 +77,92 @@ test("Dashboard authorization preserves credential and delegation attenuation", 
   }, revokeResponse);
   assert.equal(revokeResponse.statusCode, 403);
   assert.equal(revokedDelegations, 0, "attenuated authority cannot revoke another principal's delegation");
+});
+
+test("user creation cannot assign a role without roles.manage", () => {
+  const handlers = new Map();
+  let createdUsers = 0;
+  let assignedRoles = 0;
+  const app = Object.fromEntries(["get", "post", "put", "patch", "delete"].map(method => [method, (route, handler) => handlers.set(`${method.toUpperCase()} ${route}`, handler)]));
+  app.use = () => {};
+  const authorization = {
+    authorize({ permission }) {
+      return { ok: permission === "users.manage", code: permission === "users.manage" ? "allowed" : "forbidden" };
+    },
+  };
+  registerAuthRoutes({
+    app,
+    dbStore: {},
+    identity: {
+      createHumanUser() { createdUsers++; return { principal_id: "new-user" }; },
+      assignRole() { assignedRoles++; },
+    },
+    authentication: { isSessionActive: () => true },
+    authorization,
+    timingSafeCompare: () => false,
+    dashboardUser: "",
+    dashboardPass: "",
+    bootstrapCompleted: () => true,
+    authAttemptKeys: () => [],
+    rejectIfAuthThrottled: () => false,
+    recordAuthFailure() {},
+    clearAuthFailures() {},
+    legacyDashboardPrincipal: () => null,
+    setIdentityCookie() {},
+    clearIdentityCookie() {},
+    requestCookie: () => null,
+    bootstrapToken: null,
+    errorResponse: (_req, res, _error, options) => res.status(options.status).json({ code: options.code }),
+  });
+
+  const res = {
+    statusCode: 200,
+    status(code) { this.statusCode = code; return this; },
+    json(body) { this.body = body; return this; },
+    set() { return this; },
+  };
+  handlers.get("POST /api/auth/users")({
+    authPrincipal: { principal_id: "limited-admin", principal_type: "human", scopes: null },
+    body: { username: "new-admin", password: "synthetic sufficiently long password", role: "administrator" },
+  }, res);
+
+  assert.equal(res.statusCode, 403);
+  assert.equal(createdUsers, 0, "authorization is checked before account creation");
+  assert.equal(assignedRoles, 0, "unauthorized role assignment never executes");
+});
+
+test("adopted Dashboard owner promotion bypass applies only before first Owner setup", () => {
+  const handlers = new Map();
+  let assignedRoles = 0;
+  const app = Object.fromEntries(["get", "post", "put", "patch", "delete"].map(method => [method, (route, handler) => handlers.set(`${method.toUpperCase()} ${route}`, handler)]));
+  app.use = () => {};
+  registerAuthRoutes({
+    app,
+    dbStore: {},
+    identity: {
+      canCompleteFirstOwnerSetup: () => false,
+      assignRole() { assignedRoles++; return {}; },
+    },
+    authentication: { isSessionActive: () => true },
+    authorization: { authorize: () => ({ ok: false, code: "forbidden" }) },
+    timingSafeCompare: () => false,
+    dashboardUser: "", dashboardPass: "", bootstrapCompleted: () => true,
+    authAttemptKeys: () => [], rejectIfAuthThrottled: () => false,
+    recordAuthFailure() {}, clearAuthFailures() {}, legacyDashboardPrincipal: () => null,
+    setIdentityCookie() {}, clearIdentityCookie() {}, requestCookie: () => null,
+    bootstrapToken: null,
+    errorResponse: (_req, res, _error, options) => res.status(options.status).json({ code: options.code }),
+  });
+
+  const res = response();
+  handlers.get("POST /api/auth/principals/:id/roles")({
+    authPrincipal: {
+      principal_id: "adopted-user", principal_type: "human",
+      metadata: { adopted_legacy_dashboard: true },
+    },
+    params: { id: "adopted-user" },
+    body: { role: "owner" },
+  }, res);
+  assert.equal(res.statusCode, 403, "legacy metadata cannot bypass roles.manage after Owner setup");
+  assert.equal(assignedRoles, 0, "denied self-promotion must not reach the identity mutation");
 });

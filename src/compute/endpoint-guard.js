@@ -13,36 +13,7 @@
 // remain forbidden, and redirects are not followed. Keeping both checks is
 // intentional: registry policy rejects unsafe configuration while the HTTP
 // layer closes DNS-rebinding and post-registration resolution gaps.
-const net = require("net");
-
-// Hostnames that serve cloud instance credentials. Reaching any of these from
-// a provider endpoint is never a legitimate inference call.
-const METADATA_HOSTS = new Set([
-  "169.254.169.254",          // AWS / Azure / OpenStack / DigitalOcean
-  "fd00:ec2::254",            // AWS IMDSv2 over IPv6
-  "100.100.100.200",          // Alibaba Cloud
-  "metadata.google.internal",
-  "metadata.goog",
-  "metadata.azure.com",
-  "instance-data",
-]);
-
-function stripBrackets(hostname) {
-  return hostname.startsWith("[") && hostname.endsWith("]")
-    ? hostname.slice(1, -1)
-    : hostname;
-}
-
-function isLinkLocal(host) {
-  const version = net.isIP(host);
-  if (version === 4) return /^169\.254\./.test(host);
-  if (version === 6) {
-    const normalized = host.toLowerCase();
-    // fe80::/10 spans fe80 through febf.
-    return /^fe[89ab]/.test(normalized);
-  }
-  return false;
-}
+const { METADATA_HOSTS, stripBrackets, isLinkLocal, isMetadataAddress } = require("../security/ip-address-policy");
 
 // Returns an error message, or null when the endpoint is acceptable.
 function validateEndpoint(value) {
@@ -65,7 +36,7 @@ function validateEndpoint(value) {
   if (isLinkLocal(host)) {
     return `Invalid base_url host "${host}": link-local addresses are not valid provider endpoints`;
   }
-  if (METADATA_HOSTS.has(host)) {
+  if (isMetadataAddress(host)) {
     return `Invalid base_url host "${host}": cloud metadata endpoints are not valid provider endpoints`;
   }
   return null;

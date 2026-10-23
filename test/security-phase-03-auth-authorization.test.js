@@ -23,17 +23,20 @@ try {
     password: "correct horse battery staple",
     displayName: "Phase 3 Owner"
   });
-  const operator = identity.createHumanUser({
-    username: "phase3-operator",
-    password: "another correct password",
-    displayName: "Phase 3 Operator"
+  const operator = require('./helpers/authorized-identity').createPrincipal(identity, {
+    type: "service",
+    displayName: "Phase 3 Operator",
+    createdByPrincipalId: owner.principal_id,
+    actorPrincipalId: owner.principal_id,
   });
-  identity.assignRole(operator.principal_id, "operator", owner.principal_id);
+  identity.assignRole(operator.principal_id, "operator", owner);
 
   const scoped = authentication.createCredential({
     principalId: operator.principal_id,
     displayName: "Phase 3 scoped credential",
-    scopes: ["workflows.execute"]
+    scopes: ["workflows.execute"],
+    createdByPrincipalId: owner.principal_id,
+    actorContext: owner,
   });
   assert.strictEqual(
     authorization.authorize({
@@ -46,7 +49,7 @@ try {
   );
   assert.strictEqual(authentication.authenticateCredential(scoped.token).principal_id, operator.principal_id);
 
-  identity.setPrincipalEnabled(operator.principal_id, false, owner.principal_id);
+  identity.setPrincipalEnabled(operator.principal_id, false, owner);
   assert.strictEqual(authentication.authenticateCredential(scoped.token), null);
   assert.strictEqual(
     authorization.authorize({ principalId: operator.principal_id, permission: "workflows.execute" }).code,

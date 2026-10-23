@@ -10,18 +10,20 @@ const authorization = require("./core/authorization");
 const identity = require("./core/identity");
 const projectAccess = require("./core/project-access");
 const { createAgentCatalog } = require("./agent/catalog");
+const { runWithContext } = require("./tools/context");
+const { createTaskExecutionContext } = require("./agent/task-execution-context");
 const { persistedTaskAuthIdentity } = require("./agent/task-identity");
 const { authorizeRecoveredTask } = require("./agent/recovery-authorization");
+const { authorizeScheduledAgentDelay } = require("./agent/delay-policy");
+const { createEscalationApprovalRef } = require("./agent/escalation-approval");
 const { readSecret } = require("./core/runtime-secrets");
-const { verifyAgentProxyRequest, createSqliteNonceConsumer, assertDistinctProxySecret, assertDistinctAgentSchedulerSecret } = require("./security/agent-proxy-auth");
+const { verifyAgentProxyRequest, createSqliteNonceConsumer, assertDistinctAgentSchedulerSecret } = require("./security/agent-proxy-auth");
 const { taskBelongsToIdentity, canReviewUnownedTask, isAllowedServiceRoute } = require("./agent/task-access");
-const mcpApiKey = readSecret("SIDEKICK_API_KEY", { required: process.env.NODE_ENV !== "test" });
 const agentProxySecret = process.env.NODE_ENV === "test"
-  ? (readSecret("SIDEKICK_AGENT_PROXY_KEY") || mcpApiKey)
+  ? (readSecret("SIDEKICK_AGENT_PROXY_KEY") || "test-agent-proxy-key")
   : readSecret("SIDEKICK_AGENT_PROXY_KEY", { required: true });
-if (process.env.NODE_ENV !== "test") assertDistinctProxySecret(mcpApiKey, agentProxySecret);
 const agentSchedulerSecret = readSecret("SIDEKICK_AGENT_SCHEDULER_KEY");
-if (agentSchedulerSecret) assertDistinctAgentSchedulerSecret(mcpApiKey, agentProxySecret, agentSchedulerSecret);
+if (agentSchedulerSecret) assertDistinctAgentSchedulerSecret(agentProxySecret, agentSchedulerSecret);
 
 const {
   getLiveAgentToolDefs,
@@ -135,15 +137,6 @@ async function prepareTaskBranch({ task, repoPath, statusEvidence, options = {},
   }
 }
 
-try {
-  const builtinModules = require("./modules/builtin-modules");
-  builtinModules.provisionBuiltinModules();
-  builtinModules.startModuleHealthChecks();
-  builtinModules.startModuleReconciliation();
-} catch (error) {
-  console.error("[Modules] Builtin module provisioning failed:", error.message);
-}
-
 const { recordAgentTaskMemory, inferProjectFromText } = require("./memory");
 const { assembleContext } = require("./context");
 const { classifyEvidenceRequirement } = require("./agent-protocol");
@@ -168,6 +161,7 @@ const { createTaskRunner } = require("./agent/task-run");
 const { createHandoffContinuity } = require("./agent/handoff-continuity");
 const { createResumedTaskFinalizer } = require("./agent/recovery");
 const { createContinuationJobStarter } = require("./agent/continuation-jobs");
+const { resolveTaskProjectScope, taskProjectForExecution } = require("./agent/project-scope");
 const { createDelayScheduler } = require("./agent/delay-scheduler");
 const { createDelayExecution } = require("./agent/delay-execution");
 const { createWatchRuntime } = require("./agent/watch-runtime");
@@ -178,6 +172,17 @@ const dbStore = require("./db");
 // The Agent owns a separate process in deployments. Migrate before exposing
 // health or accepting tasks so readiness never depends on lazy store access.
 dbStore.runPendingMigrations();
+// This process has an independent module registry. Restore it only after
+// schema migration; the MCP service performs verified bundled-pack provenance
+// reconciliation before the dependent systemd units start.
+try {
+  const builtinModules = require("./modules/builtin-modules");
+  builtinModules.provisionBuiltinModules();
+  builtinModules.startModuleHealthChecks();
+  builtinModules.startModuleReconciliation();
+} catch (error) {
+  console.error("[Modules] Builtin module provisioning failed:", String(error?.message || error).slice(0, 300));
+}
 const consumeAgentProxyNonce = createSqliteNonceConsumer(dbStore.getDb());
 const durableReceiptStore = require("./agent/receipt-store");
 const durableWorkspaceTransactions = require("./agent/workspace-transactions");
@@ -311,28 +316,7 @@ const executeDelay = createDelayExecution({
   claimExecution: platformKernel.claimExecution,
   releaseScheduledClaim, startScheduledLeaseRenewal,
   transitionScheduledPlatformExecution, appendScheduledPlatformEvent,
-  authorizeScheduledDelay: (delay, scheduledContext) => {
-    const authorityContext = scheduledContext.agentAuthorityContext;
-    if (!authorityContext) return { ok: true };
-    const descriptor = getLiveAgentDescriptor(delay.tool);
-    const decision = decideAutonomy({
-      descriptor,
-      args: delay.args || {},
-      envelope: authorityContext.envelope,
-      principalRef: authorityContext.principal_ref,
-      projectRef: scheduledContext.project || authorityContext.project_ref,
-      workspaceRef: authorityContext.workspace_ref,
-      repositoryRef: authorityContext.repository_ref,
-      capabilityRef: delay.tool,
-      descriptorVersion: descriptor?.version,
-    });
-    return {
-      ok: decision.decision !== "deny",
-      authorityApprovalRequired: decision.approval_required,
-      authorityRisk: decision.risk_class,
-      authorityReason: decision.reason,
-    };
-  },
+  authorizeScheduledDelay: (delay, scheduledContext) => authorizeScheduledAgentDelay(delay, scheduledContext, { getDescriptor: getLiveAgentDescriptor }),
   getDelayTimers: () => delayTimers, processId: process.pid,
 });
 ({ delayTimers, scheduleDelay, loadAndScheduleDelays } = createDelayScheduler({ loadDelays, executeDelay }));
@@ -817,7 +801,7 @@ Return ONLY valid JSON.`;
   }
 }
 
-async function runAgent(goal, taskId, parentContext = null, cancelController = null, resumeState = null) {
+async function runAgentImpl(goal, taskId, parentContext = null, cancelController = null, resumeState = null) {
   const steps = [];
   // Cooperative cancellation. The controller is aborted by the cancel route;
   // the derived flag is consumed by the tool loop and Brain between steps, and
@@ -827,10 +811,11 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
   const cancelFlag = { get aborted() { return !!(cancelSignal && cancelSignal.aborted); } };
   // A follow-up child inherits the parent's project identity when the child's
   // own goal doesn't infer one, so a thread stays scoped consistently.
-  const inferredProject = inferProjectFromText(goal) || (parentContext && parentContext.project) || null;
-  const durableProfile = durableTaskStore.getTask(taskId)?.profile || "standard";
+  const durableTask = durableTaskStore.getTask(taskId);
+  const inferredProject = taskProjectForExecution(durableTask, { goal, parentProject: parentContext && parentContext.project, principalId: parentContext?.authIdentity?.principal_id, inferProjectFromText });
+  const durableProfile = durableTask?.profile || "standard";
   const profileRuntime = PROFILE_RUNTIME[durableProfile] || PROFILE_RUNTIME.standard;
-  const durableGoal = durableTaskStore.getTask(taskId)?.goal || {};
+  const durableGoal = durableTask?.goal || {};
   let cognitiveRuntime = null;
   let taskSpec = null;
   try {
@@ -1684,6 +1669,15 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
   }
 }
 
+// Agent inference, procedure suggestions, and other async work must execute
+// under the same authenticated task identity as governed tool dispatch. The
+// identity comes only from the authenticated request path or recovery gate;
+// absent identity remains absent and provider-secret use still fails closed.
+async function runAgent(goal, taskId, parentContext = null, cancelController = null, resumeState = null) {
+  const executionContext = createTaskExecutionContext(parentContext, taskId);
+  return runWithContext(executionContext, () => runAgentImpl(goal, taskId, parentContext, cancelController, resumeState));
+}
+
 const beginTaskRun = createTaskRunner({
   taskEmitters,
   taskCancels,
@@ -1841,6 +1835,11 @@ function requireTaskAccess(req, res, task) {
   res.status(404).json({ error: "task not found" });
   return false;
 }
+function requireTaskReviewAccess(req, res, task) {
+  if (taskBelongsToRequest(req, task) || canReviewUnownedTask(requestAuthIdentity(req), task)) return true;
+  res.status(404).json({ error: "task not found" });
+  return false;
+}
 function legacyTaskAccessible(req, taskId) {
   const auth = requestAuthIdentity(req);
   if (!auth) return true;
@@ -1875,6 +1874,12 @@ function enforceTaskRouteAccess(req, res, next) {
   // do not turn their existing 422/stream-specific errors into an IDOR-shaped
   // 404 before the route can inspect the authoritative source.
   if (!task) return next();
+  const routePath = `${req.baseUrl || ""}${req.path || ""}`;
+  const approvalReviewRoute = (req.method === "GET"
+      && (routePath === `/api/agent/tasks/${req.params.taskId}` || routePath === `/api/agent/tasks/${req.params.taskId}/control-room`))
+    || (req.method === "POST"
+      && new RegExp(`^/api/agent/tasks/${req.params.taskId}/escalations/[A-Za-z0-9_.:-]{1,180}/decision$`).test(routePath));
+  if (approvalReviewRoute && canReviewUnownedTask(requestAuthIdentity(req), task)) return next();
   if (!requireTaskAccess(req, res, task)) return;
   next();
 }
@@ -1932,7 +1937,8 @@ app.post("/api/agent/run", (req, res) => {
         if (goalSpec.authority_boundary !== undefined && (typeof goalSpec.authority_boundary !== "string" || goalSpec.authority_boundary.length > 1000)) return res.status(400).json({ error: "goal_spec.authority_boundary is invalid" });
       }
       const authIdentity = requestAuthIdentity(req);
-      if (requestedProject && authIdentity && !projectAccess.hasProjectPermission(authIdentity.principal_id, requestedProject, "agent.tasks.read", "read", authIdentity.scopes, authIdentity.delegation_id || null)) {
+      const taskProject = resolveTaskProjectScope({ requestedProject, goal: goalCheck.goal, principalId: authIdentity?.principal_id, inferProjectFromText });
+      if (taskProject && authIdentity && !projectAccess.hasProjectPermission(authIdentity.principal_id, taskProject, "agent.tasks.read", "read", authIdentity.scopes, authIdentity.delegation_id || null)) {
         return res.status(403).json({ error: "active Agent task access to the requested project is required" });
       }
       const requestedEnvelope = body.authority_envelope || {};
@@ -1947,14 +1953,15 @@ app.post("/api/agent/run", (req, res) => {
   const effectiveRequestedEnvelope = serviceIdentity
     ? { allowed_effects: ["read_only"], changes_allowed: false, external_effects_allowed: false, production_allowed: false, child_task_count: 0 }
     : (body.authority_envelope || {});
-  beginTaskRun(res, { goal: goalCheck.goal, goalSpec, profile: body.profile || "standard", workspaceRef: body.workspace_ref || null, authorityEnvelope: effectiveRequestedEnvelope, handoffId: body.handoff_id || null, parentContext: (authIdentity || requestedProject || serviceIdentity) ? { ...(requestedProject ? { project: requestedProject } : {}), ...(serviceIdentity ? { serviceIdentity } : {}), ...(authIdentity ? { requestedByPrincipalId: authIdentity.principal_id, actorPrincipalId: authIdentity.principal_id, authIdentity } : {}) } : null });
+  beginTaskRun(res, { goal: goalCheck.goal, goalSpec, profile: body.profile || "standard", workspaceRef: body.workspace_ref || null, authorityEnvelope: effectiveRequestedEnvelope, handoffId: body.handoff_id || null, parentContext: (authIdentity || taskProject || serviceIdentity) ? { ...(taskProject ? { project: taskProject } : {}), ...(serviceIdentity ? { serviceIdentity } : {}), ...(authIdentity ? { requestedByPrincipalId: authIdentity.principal_id, actorPrincipalId: authIdentity.principal_id, authIdentity } : {}) } : null });
 });
 
 // Durable control-room projection. This is a read surface over the task store;
 // the transient SSE stream is never authoritative.
 app.get("/api/agent/tasks", (req, res) => {
   try {
-    const tasks = durableTaskStore.listTasks({ project_id: req.query && req.query.project, state: req.query && req.query.state, limit: req.query && req.query.limit, offset: req.query && req.query.offset }).filter(task => taskBelongsToRequest(req, task));
+    const reviewIdentity = requestAuthIdentity(req);
+    const tasks = durableTaskStore.listTasks({ project_id: req.query && req.query.project, state: req.query && req.query.state, limit: req.query && req.query.limit, offset: req.query && req.query.offset }).filter(task => taskBelongsToRequest(req, task) || canReviewUnownedTask(reviewIdentity, task));
     res.json({ tasks, count: tasks.length, source: "durable_task_store" });
   } catch { res.status(503).json({ error: "durable task state unavailable" }); }
 });
@@ -1964,7 +1971,7 @@ app.get("/api/agent/tasks/:taskId", (req, res) => {
   try {
     const task = durableTaskStore.getTask(req.params.taskId);
     if (!task) return res.status(404).json({ error: "task not found" });
-    if (!requireTaskAccess(req, res, task)) return;
+    if (!requireTaskReviewAccess(req, res, task)) return;
       res.json({ task, plans: durableTaskStore.listPlans(task.task_id), hierarchical_plans: durableOperations.listPlans(task.task_id), failures: durableTaskStore.listFailures(task.task_id), repairs: durableOperations.listRepairs(task.task_id), work_packages: durableOperations.listWorkPackages(task.task_id), workspace_transactions: durableWorkspaceTransactions.listTransactions(task.task_id), events: durableTaskStore.listEvents(task.task_id), receipts: durableReceiptStore.listReceipts(task.task_id), verification_recipes: durableReceiptStore.listRecipes(task.task_id), verification_outcomes: durableReceiptStore.listOutcomes(task.task_id), escalations: durableOperations.listEscalations(task.task_id), brain_v3: { task_specs: brainRuntime.listSpecs(task.task_id), belief: brainRuntime.latestBelief(task.task_id), traces: brainRuntime.listTraces(task.task_id, 4), graph: brainRuntime.listGraph(task.task_id) } });
   } catch { res.status(503).json({ error: "durable task state unavailable" }); }
 });
@@ -1976,7 +1983,7 @@ app.get("/api/agent/tasks/:taskId/control-room", (req, res) => {
   try {
     const task = durableTaskStore.getTask(req.params.taskId);
     if (!task) return res.status(404).json({ error: "task not found" });
-    if (!requireTaskAccess(req, res, task)) return;
+    if (!requireTaskReviewAccess(req, res, task)) return;
       res.json({ ok: true, source: "durable_task_store", task, plan: durableTaskStore.listPlans(task.task_id), hierarchical_plans: durableOperations.listPlans(task.task_id), failures: durableTaskStore.listFailures(task.task_id), repairs: durableOperations.listRepairs(task.task_id), work_packages: durableOperations.listWorkPackages(task.task_id), workspace_transactions: durableWorkspaceTransactions.listTransactions(task.task_id), receipts: durableReceiptStore.listReceipts(task.task_id), verification: durableReceiptStore.listRecipes(task.task_id), verification_outcomes: durableReceiptStore.listOutcomes(task.task_id), escalations: durableOperations.listEscalations(task.task_id), events: durableTaskStore.listEvents(task.task_id), brain_v3: { task_specs: brainRuntime.listSpecs(task.task_id), belief: brainRuntime.latestBelief(task.task_id), traces: brainRuntime.listTraces(task.task_id, 4), graph: brainRuntime.listGraph(task.task_id) } });
   } catch { res.status(503).json({ error: "durable task state unavailable" }); }
 });
@@ -2011,26 +2018,22 @@ app.post("/api/agent/tasks/:taskId/escalations/:escalationId/decision", (req, re
     const task = durableTaskStore.getTask(req.params.taskId);
     const escalation = durableOperations.getEscalation(req.params.escalationId);
     if (!task || !escalation || escalation.task_id !== task.task_id) return res.status(404).json({ error: "escalation not found" });
-    if (!requireTaskAccess(req, res, task)) return;
+    if (!requireTaskReviewAccess(req, res, task)) return;
     const body = req.body || {};
-    if (Object.keys(body).some(key => !new Set(["decision", "reason", "approval_ref"]).has(key)) || !["approved", "denied", "resolved"].includes(body.decision)) return res.status(400).json({ error: "decision must be approved, denied, or resolved" });
+    if (Object.keys(body).some(key => !new Set(["decision", "reason"]).has(key)) || !["approved", "denied", "resolved"].includes(body.decision)) return res.status(400).json({ error: "decision must be approved, denied, or resolved" });
     const auth = requestAuthIdentity(req); const principal = auth && identity.getPrincipal(auth.principal_id);
     const grant = auth && authorization.authorize({ principalId: auth.principal_id, permission: "approvals.grant", credentialScopes: auth.scopes, delegationId: auth.delegation_id || null, resource: { kind: "agent_escalation", escalation_id: escalation.escalation_id, project: task.project_id } });
     if (!auth?.principal_id || !principal || principal.principal_type !== "human" || !grant?.ok) return res.status(403).json({ error: "human approvals.grant authorization is required" });
     const requester = task.actor_principal_id || task.requested_by_principal_id;
     if (requester && requester === auth.principal_id) return res.status(403).json({ error: "task requester cannot self-approve escalation" });
-    const approvalRef = body.approval_ref == null ? null : String(body.approval_ref);
-    if (approvalRef && !/^approval:[A-Za-z0-9_.:-]{1,180}$/.test(approvalRef)) return res.status(400).json({ error: "approval_ref must be a governed approval reference" });
-    if (body.decision === "approved" && !approvalRef) return res.status(400).json({ error: "approved escalation dispositions require an existing approval_ref" });
-    if (approvalRef) {
-      const approvalStore = require("./approvals/store");
-      approvalStore.ensureApprovalContinuationSchema();
-      const approval = approvalStore.getApproval(approvalRef);
-      if (!approval || (approval.task_id && approval.task_id !== task.task_id)) return res.status(400).json({ error: "approval_ref is not an existing approval for this task" });
-    }
-    const updated = durableOperations.updateEscalation(escalation.escalation_id, body.decision, { decided_by_principal_id: auth.principal_id, approval_ref: approvalRef });
+    // The authenticated human decision is bound to this exact escalation
+    // record. Never accept a caller-supplied tool approval reference here:
+    // approval records authorize a specific tool/argument digest and cannot
+    // be repurposed as task-wide approval for another operation.
+    const approvalRef = body.decision === "approved" ? createEscalationApprovalRef(escalation.escalation_id) : null;
+    const updated = durableOperations.updateEscalation(escalation.escalation_id, body.decision, { decided_by_principal_id: `principal:${auth.principal_id}`, approval_ref: approvalRef });
     durableTaskStore.recordGuidance(task.task_id, `Escalation ${escalation.escalation_id} ${body.decision}: ${redactSensitive(String(body.reason || "operator decision")).slice(0, 500)}`, auth.principal_id);
-    res.json({ ok: true, escalation: updated, approval: { decision: body.decision, principal_id: auth.principal_id, inherited: false } });
+    res.json({ ok: true, escalation: updated, approval: { decision: body.decision, reference: approvalRef, principal_id: auth.principal_id, inherited: false } });
   } catch (error) { res.status(409).json({ error: redactSensitive(error.message) }); }
 });
 
@@ -2600,7 +2603,6 @@ const startApprovalContinuationJobs = createContinuationJobStarter({
   callLLM,
   callAgentTool,
   redactSensitive,
-  inferProjectFromText,
   finalizeResumedTask,
   stepTimeoutMs: BRAIN_STEP_TIMEOUT_MS,
   getLiveAgentToolDefs,

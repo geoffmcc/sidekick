@@ -63,7 +63,17 @@ function isManagedRecord(record) {
  * Core-owned pack registry; package manifests cannot claim either designation.
  */
 function assertExecutionIsolation(record, candidateProvenance = null) {
-  if (record && record.source === "builtin") return;
+  if (record && record.source === "builtin") {
+    // Builtin code ships in the read-only Sidekick repository and is resolved
+    // from the compiled-in builtin entry map. A managed install path alongside
+    // this mutable source label is inconsistent and must not grant in-process
+    // execution authority to persisted package code.
+    if (!isManagedRecord(record)) return;
+    throw new ModuleLoadError(
+      LOAD_FAILURES.ISOLATION_UNAVAILABLE,
+      `Module "${record.name || "unknown"}" cannot execute: a managed package cannot claim the builtin trust class`
+    );
+  }
   // A bundled first-party capability pack has an explicit exception in SI-3:
   // its release provenance is independently recorded by the pack lifecycle.
   // Do not trust the module's provenance string alone; cross-check the parent

@@ -36,11 +36,15 @@ test("fresh Agent process parks an orphaned task when its credential was revoked
     const taskStore = require("../src/agent/task-store");
     const taskModel = require("../src/agent/task-model");
     const kernel = require("../src/platform/kernel");
-    const principal = identity.createPrincipal({ type: "human", displayName: "Synthetic restart recovery principal" });
+    const owner = identity.bootstrapOwner({ username: "restart_recovery_owner", password: "synthetic restart recovery owner password" });
+    const principal = require('./helpers/authorized-identity').createPrincipal(identity, { type: "service", displayName: "Synthetic restart recovery principal", createdByPrincipalId: owner.principal_id, actorPrincipalId: owner.principal_id });
+    identity.assignRole(principal.principal_id, "operator", owner);
     const credential = authentication.createCredential({
       principalId: principal.principal_id,
       displayName: "Synthetic restart recovery credential",
       scopes: ["agent.tasks.read", "tools.execute"],
+      createdByPrincipalId: owner.principal_id,
+      actorContext: owner,
     }).credential;
 
     const task = taskModel.createTask({
@@ -63,7 +67,7 @@ test("fresh Agent process parks an orphaned task when its credential was revoked
     assert.equal(kernel.claimExecution({ execution_id: executionId, claimed_by: "synthetic-crashed-process", lease_ms: 10_000 }).ok, true);
     db.getDb().prepare("UPDATE platform_execution_claims SET lease_expires_at=? WHERE execution_id=?")
       .run(new Date(Date.now() - 1000).toISOString(), executionId);
-    assert.equal(authentication.revokeCredential(credential.credential_id), true);
+    assert.equal(authentication.revokeCredential(credential.credential_id, owner), true);
     db.closeDatabase();
 
     const script = `

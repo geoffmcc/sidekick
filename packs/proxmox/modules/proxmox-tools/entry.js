@@ -511,7 +511,7 @@ const entry = {
         name: "ansible_run",
         aliases: ["ansible_playbook"],
         description:
-          "Optionally configure reachable hosts by running an ALLOWLISTED Ansible playbook against a structured inventory. Provider-agnostic (composes with, but does not depend on, Proxmox provisioning). Actions: detect (report availability/configuration), dry_run (return the exact resolved command, generated inventory, and extra-var keys without executing), run (execute through Sidekick's governed shell and report per-host results parsed from Ansible's JSON output). A model cannot supply a playbook path, role, ad-hoc module, inventory script, or command arguments; only an allowlisted playbook name, validated hosts, and structured scalar extra-vars. Host key checking stays enabled. Ansible is optional; when absent this reports not_installed.",
+          "Plan optional Ansible jobs against administrator-allowlisted playbooks and structured host records. Actions: detect (report provider and execution availability), dry_run (show a plan without executing), run (currently fails closed until a scoped network broker and isolated workspace are configured). No command is run by run today. A model cannot supply a playbook path, role, ad-hoc module, inventory script, or command arguments; only an allowlisted playbook name, validated hosts, and structured scalar extra-vars. Ansible is optional; when absent this reports not_installed.",
         schema: z.object({
           action: z.enum(["detect", "dry_run", "run"]).describe("The Ansible operation"),
           playbook: z.string().max(128).optional().describe("Allowlisted playbook file name (e.g. baseline.yml), for run/dry_run"),

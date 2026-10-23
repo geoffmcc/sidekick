@@ -61,7 +61,8 @@ provenance, no configured or Proxmox protection, and (for disposable research
 cleanup) an exact recorded test marker. It waits for task completion and
 verifies absence. There is no force or provenance-bypass argument.
 
-SSH remains detection-only; governed Ansible remains optional and allowlisted.
+SSH remains detection-only; Ansible planning remains optional and allowlisted,
+while execution is unavailable until scoped network mediation is implemented.
 Direct PBS API access is not yet a first-class provider; PVE-side backup/PBS
 storage detection remains available.
 
@@ -75,8 +76,9 @@ storage detection remains available.
 - guest-agent counts (guests with the agent enabled), confirmed reachable only
   on demand via `guest_status`
 - `installed` / `not_installed` for optional local automation (Ansible, nodex,
-  SSH, OpenTofu/Terraform); Ansible reports `execution: governed` because it
-  runs through `ansible_run`, while the other providers remain detection-only
+  SSH, OpenTofu/Terraform); Ansible reports `execution_available: false` until
+  a scoped network broker is implemented; the other providers remain
+  detection-only
 
 An absent subsystem (`Ceph: not_detected`) is a normal answer, never an error.
 

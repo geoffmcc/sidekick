@@ -33,9 +33,22 @@ const compute = require("../src/compute");
 const jobManager = require("../src/compute/job-manager");
 const inferenceService = require("../src/compute/inference-service");
 const directJobRunner = require("../src/compute/direct-job-runner");
+const identity = require("../src/core/identity");
+const authentication = require("../src/core/authentication");
+const authorization = require("../src/core/authorization");
+const { captureExecutionAuthority } = require("../src/compute/job-authority");
+const { getExecutionContext } = require("../src/tools/context");
 
+dbStore.runPendingMigrations();
 compute.initialize();
 compute.stopReconciliation(); // stop timers; every pass below is driven manually
+
+const directRunnerOwner = identity.bootstrapOwner({
+  username: `direct_runner_owner_${process.pid}`,
+  password: "synthetic-direct-runner-owner-password",
+  displayName: "Synthetic direct runner owner",
+});
+const directRunnerAuthority = captureExecutionAuthority({ principal_id: directRunnerOwner.principal_id }, "tools.execute");
 
 const db = dbStore.getDb();
 
@@ -68,6 +81,7 @@ function makeAsyncChatJob(extraPayload = {}, extra = {}) {
     project: "direct-runner-test",
     dataClassification: "private",
     requestPayload: { async: true, prompt: "hello", ...extraPayload },
+    executionAuthority: directRunnerAuthority,
     timeoutMs: 86400000, // the async tool default that produced ~24h leases
     maxAttempts: 1,
     ...extra,
@@ -184,6 +198,97 @@ function makeAsyncChatJob(extraPayload = {}, extra = {}) {
       return j.status === "completed" ? j : null;
     }, 3000, "job completion");
     assert.strictEqual(done.result.content, "direct answer");
+  });
+
+  await test("direct job authority is stored privately and omitted from public job projections", async () => {
+    const job = makeAsyncChatJob();
+    const projected = jobManager.getJob(job.jobId);
+    assert.equal(Object.hasOwn(projected, "executionAuthority"), false);
+    assert.equal(Object.hasOwn(projected, "execution_authority_json"), false);
+    const stored = jobManager.getExecutionAuthority(job.jobId);
+    assert.equal(stored.principal_id, directRunnerOwner.principal_id);
+    assert.equal(stored.permission, "tools.execute");
+    assert.equal(JSON.stringify(stored).includes("skc_"), false, "authority snapshot stores no bearer credential");
+    jobManager.cancelJob(job.jobId, { actor: "test" });
+  });
+
+  await test("legacy direct jobs without an authority snapshot fail before inference", async () => {
+    const job = makeAsyncChatJob({}, { executionAuthority: null });
+    let dispatches = 0;
+    inferenceService.chat = async () => { dispatches++; return { content: "must not run" }; };
+    directJobRunner.runOnce();
+    const failedJob = await waitFor(() => jobManager.getJob(job.jobId).status === "failed" ? jobManager.getJob(job.jobId) : null, 3000, "legacy direct job denial");
+    assert.strictEqual(failedJob.errorCategory, "AUTHORIZATION_REVOKED");
+    assert.strictEqual(dispatches, 0);
+  });
+
+  await test("runner restores the initiating credential identity into inference dispatch", async () => {
+    const credential = authentication.createCredential({
+      principalId: directRunnerOwner.principal_id,
+      displayName: "synthetic direct inference credential",
+      scopes: ["tools.execute"],
+      createdByPrincipalId: directRunnerOwner.principal_id,
+      actorContext: directRunnerOwner,
+    });
+    const authority = captureExecutionAuthority({
+      principal_id: directRunnerOwner.principal_id,
+      credential_id: credential.credential.credential_id,
+      scopes: credential.credential.scopes,
+    }, "tools.execute");
+    inferenceService.chat = async () => {
+      const auth = getExecutionContext().authIdentity;
+      assert.strictEqual(auth.principal_id, directRunnerOwner.principal_id);
+      assert.deepStrictEqual(auth.scopes, ["tools.execute"]);
+      assert.strictEqual(auth.credential_id, credential.credential.credential_id);
+      return { content: "authority restored", model: "m", finishReason: "stop" };
+    };
+    const job = makeAsyncChatJob({}, { executionAuthority: authority });
+    directJobRunner.runOnce();
+    const done = await waitFor(() => jobManager.getJob(job.jobId).status === "completed" ? jobManager.getJob(job.jobId) : null, 3000, "authorized direct inference completion");
+    assert.strictEqual(done.result.content, "authority restored");
+  });
+
+  await test("revoked credential blocks recovered direct inference before provider dispatch", async () => {
+    const credential = authentication.createCredential({
+      principalId: directRunnerOwner.principal_id,
+      displayName: "synthetic revoked direct inference credential",
+      scopes: ["tools.execute"],
+      createdByPrincipalId: directRunnerOwner.principal_id,
+      actorContext: directRunnerOwner,
+    });
+    const authority = captureExecutionAuthority({
+      principal_id: directRunnerOwner.principal_id,
+      credential_id: credential.credential.credential_id,
+      scopes: credential.credential.scopes,
+    }, "tools.execute");
+    const job = makeAsyncChatJob({}, { executionAuthority: authority });
+    authentication.revokeCredential(credential.credential.credential_id, directRunnerOwner);
+    let dispatches = 0;
+    inferenceService.chat = async () => { dispatches++; return { content: "must not run" }; };
+    directJobRunner.runOnce();
+    const failedJob = await waitFor(() => jobManager.getJob(job.jobId).status === "failed" ? jobManager.getJob(job.jobId) : null, 3000, "revoked direct job denial");
+    assert.strictEqual(failedJob.errorCategory, "AUTHORIZATION_REVOKED");
+    assert.strictEqual(dispatches, 0);
+  });
+
+  await test("revoked delegation blocks recovered direct inference before provider dispatch", async () => {
+    const delegate = require('./helpers/authorized-identity').createPrincipal(identity, { type: "agent", displayName: "Synthetic inference delegate", actorPrincipalId: directRunnerOwner.principal_id });
+    const delegation = authorization.createDelegation({
+      delegatorPrincipalId: directRunnerOwner.principal_id,
+      delegatePrincipalId: delegate.principal_id,
+      permissions: ["tools.execute"],
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      actorContext: directRunnerOwner,
+    });
+    const authority = captureExecutionAuthority({ principal_id: delegate.principal_id, delegation_id: delegation.delegation_id }, "tools.execute");
+    const job = makeAsyncChatJob({}, { executionAuthority: authority });
+    authorization.revokeDelegation(delegation.delegation_id, directRunnerOwner);
+    let dispatches = 0;
+    inferenceService.chat = async () => { dispatches++; return { content: "must not run" }; };
+    directJobRunner.runOnce();
+    const failedJob = await waitFor(() => jobManager.getJob(job.jobId).status === "failed" ? jobManager.getJob(job.jobId) : null, 3000, "revoked delegation denial");
+    assert.strictEqual(failedJob.errorCategory, "AUTHORIZATION_REVOKED");
+    assert.strictEqual(dispatches, 0);
   });
 
   await test("cancel during generation: result discarded cleanly, two-phase ack, no failure noise", async () => {

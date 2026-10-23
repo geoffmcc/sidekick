@@ -23,7 +23,7 @@ const authorization = require("../core/authorization");
 
 /**
  * Resolve the API key for a provider, or null when none is configured/resolvable.
- * Never throws and never logs secret material.
+ * Never logs secret material. Missing or unauthorized identity fails before decryption.
  */
 function resolveProviderApiKey(provider) {
   if (!provider || !provider.providerId) return null;
@@ -34,14 +34,24 @@ function resolveProviderApiKey(provider) {
   let ref = null;
   try { ref = providerRegistry.getAuthSecretRef(provider.providerId); } catch { ref = null; }
   if (ref) {
-    const principalId = getExecutionContext()?.authIdentity?.principal_id || null;
-    if (principalId) {
-      const decision = authorization.authorize({ principalId, permission: "secrets.use", resource: ref });
-      if (!decision.ok) {
-        const error = new Error("provider credential use is not authorized");
-        error.code = decision.code;
-        throw error;
-      }
+    const authIdentity = getExecutionContext()?.authIdentity || null;
+    const principalId = authIdentity?.principal_id || null;
+    if (!principalId) {
+      const error = new Error("provider credential use requires an authenticated principal");
+      error.code = "unauthenticated";
+      throw error;
+    }
+    const decision = authorization.authorize({
+      principalId,
+      permission: "secrets.use",
+      credentialScopes: authIdentity.scopes,
+      delegationId: authIdentity.delegation_id || authIdentity.delegationId || null,
+      resource: ref,
+    });
+    if (!decision.ok) {
+      const error = new Error("provider credential use is not authorized");
+      error.code = decision.code;
+      throw error;
     }
     try {
       const { loadSecrets } = require("../core/secrets-store");

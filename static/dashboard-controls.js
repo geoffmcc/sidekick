@@ -9,7 +9,7 @@
     selectResearchRepository, showResearchSnapshot, researchSelect, researchVerify,
     researchIndex, researchArchive, researchRemove, loadMoreLogs, copyText,
     copySelectedKVValue, openEditModal, deleteKV, disableMemory, enableMemory,
-    deleteMemory, startAgentContinuation, submitFollowup, reviewAgentLearningCandidate,
+    deleteMemory, startAgentContinuation, decideAgentEscalation, submitFollowup, reviewAgentLearningCandidate,
     pauseAgentTask,
     resumeAgentTask, stopAgent, newAgentTask, runAgent, clearAgent, sendAgentGuidance,
     toggleHistory, validateEvolve, approveEvolve, promoteEvolve, runEvolveTrial,

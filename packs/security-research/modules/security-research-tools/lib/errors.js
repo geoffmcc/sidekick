@@ -60,6 +60,11 @@ function classifyDispatchFailure(code) {
     case "unknown_tool":
       return "dependency_missing";
     case "module_disabled":
+    case "isolation_unavailable":
+    case "isolation_configuration_invalid":
+    case "sandbox_initialization_failed":
+    case "workspace_invalid":
+    case "workspace_denied":
       return "capability_unavailable";
     case "approval_required":
       return "policy_denied";

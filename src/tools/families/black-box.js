@@ -14,6 +14,8 @@
 const { z } = require("zod");
 const blackbox = require("../../blackbox");
 const toolContext = require("../context");
+const authorization = require("../../core/authorization");
+const { recordSecurityEvent } = require("../../core/security-audit");
 const { runLlm } = require("./inference");
 const { requireCanonicalInvocation } = require("../read-authorization");
 
@@ -25,6 +27,18 @@ async function sidekick_black_box(args = {}) {
   const denied = requireCanonicalInvocation("black_box");
   if (denied) return denied;
   const action = args.action || "list";
+  const context = toolContext.getExecutionContext();
+  const readDecision = authorization.authorize({
+    principalId: context.authIdentity?.principal_id || null,
+    permission: "blackbox.read",
+    credentialScopes: context.authIdentity?.scopes,
+    delegationId: context.authIdentity?.delegation_id || context.authIdentity?.delegationId || null,
+    resource: { tool: "black_box", action },
+  });
+  if (!readDecision.ok) {
+    try { recordSecurityEvent("authorization.denied", { context, principalId: context.authIdentity?.principal_id || null, details: { tool: "black_box", action, permission: "blackbox.read", code: readDecision.code } }); } catch {}
+    return { content: [{ type: "text", text: "Authorization denied: blackbox.read is required for Black Box operations" }], isError: true, code: "authorization_denied", authorization: readDecision };
+  }
   try {
     if (action === "list" || action === "list_incidents") {
       const incidents = blackbox.listIncidents(args);

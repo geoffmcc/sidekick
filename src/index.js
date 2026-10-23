@@ -13,7 +13,8 @@ const dbStore = require("./db");
 const authentication = require("./core/authentication");
 const identity = require("./core/identity");
 const authorization = require("./core/authorization");
-const { projectStartupFailures } = require("./security/health-disclosure");
+const { projectMcpSessionHealth, projectStartupFailures } = require("./security/health-disclosure");
+const { assertDistinctProxySecret, assertDistinctAgentSchedulerSecret } = require("./security/agent-proxy-auth");
 const packageJson = require("../package.json");
 const { createMcpServer } = require("./mcp/server");
 const { createSessionManager } = require("./mcp/session-manager");
@@ -35,6 +36,12 @@ const IS_LOCAL = process.env.SIDEKICK_LOCAL === "1";
 const API_KEY = IS_LOCAL ? "" : readSecret("SIDEKICK_API_KEY", { required: true });
 if (!IS_LOCAL && (!API_KEY || API_KEY === "sk-sidekick-local-dev" || API_KEY === "sk-your-key-here")) {
   throw new Error("SIDEKICK_API_KEY must be set to a non-placeholder value");
+}
+if (!IS_LOCAL && process.env.NODE_ENV !== "test") {
+  const agentProxyKey = readSecret("SIDEKICK_AGENT_PROXY_KEY", { required: true });
+  assertDistinctProxySecret(API_KEY, agentProxyKey);
+  const agentSchedulerKey = readSecret("SIDEKICK_AGENT_SCHEDULER_KEY");
+  if (agentSchedulerKey) assertDistinctAgentSchedulerSecret(agentProxyKey, agentSchedulerKey);
 }
 const PORT = parseInt(process.env.SIDEKICK_PORT || "4097", 10);
 const BIND_HOST = process.env.SIDEKICK_BIND_HOST || "127.0.0.1";
@@ -109,12 +116,21 @@ app.get("/health", (req, res) => {
   const uptimeStr = `${hours}h ${minutes}m ${seconds}s`;
 
   const token = getBearerToken(req);
-  const credential = authentication.authenticateCredential(token);
-  const includeDetails = timingSafeCompare(token, API_KEY) || Boolean(credential && authorization.authorize({
-    principalId: credential.principal_id,
-    permission: "system.configure",
-    credentialScopes: credential.scopes,
-  }).ok);
+  const authIdentity = authentication.authenticateBearerIdentity(token);
+  const sessionSnapshot = sessionManager.getHealthSnapshot();
+  const includeDetails = timingSafeCompare(token, API_KEY) || Boolean(authIdentity && (
+    authorization.authorize({
+      principalId: authIdentity.principal_id,
+      permission: "system.configure",
+      credentialScopes: authIdentity.scopes,
+      delegationId: authIdentity.delegation_id || null,
+    }).ok || authorization.authorize({
+      principalId: authIdentity.principal_id,
+      permission: "dashboard.operations.read",
+      credentialScopes: authIdentity.scopes,
+      delegationId: authIdentity.delegation_id || null,
+    }).ok
+  ));
 
   const payload = {
     // Keep this endpoint live even when a critical startup dependency failed;
@@ -122,7 +138,7 @@ app.get("/health", (req, res) => {
     status: Object.keys(startupFailures).length ? "degraded" : "healthy",
     uptime: uptimeSeconds,
     uptimeHuman: uptimeStr,
-    ...sessionManager.getHealthSnapshot(),
+    ...projectMcpSessionHealth(sessionSnapshot, includeDetails),
     version: APP_VERSION,
     runtime: {
       node: process.version,
@@ -134,10 +150,6 @@ app.get("/health", (req, res) => {
     ready: Object.keys(startupFailures).length === 0,
     failures: projectStartupFailures(startupFailures, includeDetails),
   };
-
-  if (includeDetails) {
-    payload.sessionDetails = sessionManager.getHealthSnapshot().sessionDetails;
-  }
 
   res.json(payload);
 });
@@ -151,11 +163,12 @@ app.get("/privacy", (req, res) => {
 app.get("/readiness", (req, res) => {
   const ready = Object.keys(startupFailures).length === 0;
   const token = getBearerToken(req);
-  const credential = authentication.authenticateCredential(token);
-  const includeDetails = timingSafeCompare(token, API_KEY) || Boolean(credential && authorization.authorize({
-    principalId: credential.principal_id,
+  const authIdentity = authentication.authenticateBearerIdentity(token);
+  const includeDetails = timingSafeCompare(token, API_KEY) || Boolean(authIdentity && authorization.authorize({
+    principalId: authIdentity.principal_id,
     permission: "system.configure",
-    credentialScopes: credential.scopes,
+    credentialScopes: authIdentity.scopes,
+    delegationId: authIdentity.delegation_id || null,
   }).ok);
   res.status(ready ? 200 : 503).json({
     status: ready ? "ready" : "not_ready",
@@ -167,15 +180,9 @@ app.get("/readiness", (req, res) => {
 app.use((req, res, next) => {
   if (isComputeAuthBypassPath(req.path)) return next();
   const token = getBearerToken(req);
-  const credential = authentication.authenticateCredential(token);
-  if (credential) {
-    req.authIdentity = {
-      principal_id: credential.principal_id,
-      principal_type: credential.principal_type,
-      scopes: credential.scopes,
-      credential_id: credential.credential_id,
-      authentication_method: "scoped_credential",
-    };
+  const authIdentity = authentication.authenticateBearerIdentity(token);
+  if (authIdentity) {
+    req.authIdentity = authIdentity;
     return next();
   }
   if (timingSafeCompare(token, API_KEY)) {
@@ -187,9 +194,7 @@ app.use((req, res, next) => {
   if (!token) {
     return res.status(401).json({ error: "Authentication required", code: "unauthenticated" });
   }
-  if (!credential) {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
+  return res.status(401).json({ error: "Unauthorized" });
 });
 
 app.use(express.json({ limit: MAX_MCP_REQUEST_BODY_BYTES }));
@@ -517,6 +522,9 @@ function createJobHandler(req, res) {
       taskId: body.taskId || body.task_id,
       sessionId: body.sessionId || body.session_id,
       requestingActor: req.authIdentity.principal_id,
+      ...((body.requestPayload || body.request_payload)?.async === true && ["chat", "generate"].includes(body.jobType || body.job_type)
+        ? { executionAuthority: require("./compute/job-authority").captureExecutionAuthority(req.authIdentity, "compute.jobs.create") }
+        : {}),
       dataClassification: body.dataClassification || body.data_classification || "private",
       protocolVersion: body.protocolVersion || body.protocol_version || "1",
       capabilityRequirements: body.capabilityRequirements || body.capability_requirements || {},
@@ -769,7 +777,7 @@ function enrollExecutionNodeHandler(req, res) {
     });
     const node = executionNode.register(enrolled.worker.workerId, {
       protocolVersion: "1", descriptorSetHash: body.descriptorSetHash,
-      capabilities: body.capabilities || {}, workspaces: [], networkScopes: [], limits: body.limits || {},
+      capabilities: body.capabilities || {}, limits: body.limits || {},
     });
     res.json({ ok: true, node, worker: enrolled.worker, credential: enrolled.credential, credentialType: "worker-bearer-v1" });
   } catch (e) { sendComputeError(res, e, 400); }
@@ -780,8 +788,7 @@ function nodeHeartbeatHandler(req, res) {
     const body = req.body || {};
     const node = executionNode.register(req.computeWorker.workerId, {
       protocolVersion: body.protocolVersion || "1", descriptorSetHash: body.descriptorSetHash || "",
-      capabilities: body.capabilities || {}, workspaces: executionNode.get(req.computeWorker.workerId)?.authorizedWorkspaces || [],
-      networkScopes: executionNode.get(req.computeWorker.workerId)?.authorizedNetworkScopes || [], limits: body.limits || {},
+      capabilities: body.capabilities || {}, limits: body.limits || {},
     });
     const worker = compute.workerManager.heartbeat(req.computeWorker.workerId, { utilization: body.utilization, currentJobs: body.currentJobs, telemetry: body.telemetry });
     res.json({ ok: true, node, worker, workspaces: executionNode.listWorkspaces(req.computeWorker.workerId) });

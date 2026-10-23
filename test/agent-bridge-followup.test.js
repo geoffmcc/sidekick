@@ -30,6 +30,7 @@ let port;
 
 delete require.cache[require.resolve("../src/agent")];
 const agent = require("../src/agent");
+const { getExecutionContext } = require("../src/tools/context");
 const { createAgentProxyHeaders } = require("../src/security/agent-proxy-auth");
 const authenticatedTestPrincipal = require("./helpers/authorized-context").createOwnerContext({
   source: "agent",
@@ -88,8 +89,10 @@ function request(method, urlPath, body, extraHeaders = {}, signed = true, signin
 // Deterministic LLM. Reassign `fake` per test. Records the last messages seen on
 // each routing path so tests can assert the continuation brief reached them.
 const seen = { direct: null, tool: null };
+const seenInferencePrincipals = [];
 let fake = null;
 agent.__setLLMOverrideForTests((messages, options) => {
+  seenInferencePrincipals.push(getExecutionContext()?.authIdentity?.principal_id || null);
   const isToolLoop = options && options.format === "json";
   if (isToolLoop) seen.tool = messages; else seen.direct = messages;
   return Promise.resolve(fake(messages, options, isToolLoop));
@@ -154,11 +157,20 @@ let server;
     fake = fakeDirect("project task completed");
     const denied = await request("POST", "/api/agent/run", { goal: "must not create an out-of-project task", project: "agent_test_project" }, { "X-Sidekick-Principal-ID": "principal_without_project_membership", "X-Sidekick-Principal-Scopes": JSON.stringify(["agent.tasks.read"]) });
     assert.strictEqual(denied.status, 403, "a signed principal without a real project grant cannot create a project-scoped task");
+    const inferredDenied = await request("POST", "/api/agent/run", { goal: "please work on project agent_test_project" }, { "X-Sidekick-Principal-ID": "principal_without_project_membership", "X-Sidekick-Principal-Scopes": JSON.stringify(["agent.tasks.read"]) });
+    assert.strictEqual(inferredDenied.status, 403, "goal text cannot select an inaccessible project during authenticated task creation");
     const created = await request("POST", "/api/agent/run", { goal: "create a task within the owned project", project: "agent_test_project" }, authenticatedTestHeaders);
     assert.strictEqual(created.status, 200);
     const detail = await request("GET", "/api/agent/tasks/" + created.data.taskId, null, authenticatedTestHeaders);
     assert.strictEqual(detail.status, 200, "the authorized task owner can read its project task");
     await waitForTranscript(created.data.taskId);
+
+    const inferredCreated = await request("POST", "/api/agent/run", { goal: "please work on project agent_test_project" }, authenticatedTestHeaders);
+    assert.strictEqual(inferredCreated.status, 200, "an authorized caller may infer project scope from the task goal");
+    const inferredDetail = await request("GET", "/api/agent/tasks/" + inferredCreated.data.taskId, null, authenticatedTestHeaders);
+    assert.strictEqual(inferredDetail.status, 200);
+    assert.strictEqual(inferredDetail.data.task.project_id, "agent_test_project", "the inferred project is persisted on the durable task");
+    await waitForTranscript(inferredCreated.data.taskId);
   });
 
   await ok("1c-service) Certification task submission stays read-only when the caller omits its envelope", async () => {
@@ -230,6 +242,15 @@ let server;
     assert.strictEqual(detail.status, 200);
     assert.deepStrictEqual(detail.data.task.goal.success_criteria, ["criteria answer"]);
     assert.strictEqual(detail.data.task.goal.normalized_objective, "Answer with one criterion");
+  });
+
+  await ok("1b-auth-context) authenticated principal is preserved through agent inference", async () => {
+    fake = fakeDirect("authenticated inference context");
+    const before = seenInferencePrincipals.length;
+    const created = await request("POST", "/api/agent/run", { goal: "Answer with authenticated context" }, authenticatedTestHeaders);
+    assert.strictEqual(created.status, 200);
+    await waitForTranscript(created.data.taskId);
+    assert.ok(seenInferencePrincipals.slice(before).includes(authenticatedTestPrincipal.authIdentity.principal_id), "agent inference must retain the initiating authenticated principal");
   });
 
   await ok("1c) authenticated task projections cannot cross principal ownership", async () => {
@@ -542,8 +563,9 @@ let server;
   await ok("19b) SSE closes when project membership is revoked", async () => {
     const identity = require("../src/core/identity");
     const projectAccess = require("../src/core/project-access");
-    const principal = identity.createHumanUser({ username: "sse_revocation_reader", password: "a sufficiently long sse reader password" });
-    identity.assignRole(principal.principal_id, "operator", authenticatedTestPrincipal.authIdentity.principal_id);
+    const principal = require('./helpers/authorized-identity').createHumanUser(identity, { username: "sse_revocation_reader", password: "a sufficiently long sse reader password" });
+    const owner = identity.getPrincipal(authenticatedTestPrincipal.authIdentity.principal_id);
+    identity.assignRole(principal.principal_id, "operator", owner);
     projectAccess.grantProjectAccess({ actorPrincipalId: authenticatedTestPrincipal.authIdentity.principal_id, principalId: principal.principal_id, project: "agent_test_project", accessLevel: "read" });
     const headers = { "X-Sidekick-Principal-ID": principal.principal_id, "X-Sidekick-Principal-Scopes": JSON.stringify(["agent.tasks.read"]) };
     fake = () => new Promise((resolve) => setTimeout(() => resolve({ response: "must not reach a revoked stream", provider: "test", model: "test-model" }), 4000));
@@ -629,11 +651,14 @@ let server;
     const authentication = require("../src/core/authentication");
     const taskStore = require("../src/agent/task-store");
     const { createTask } = require("../src/agent/task-model");
-    const principal = identity.createPrincipal({ type: "human", displayName: "Synthetic recovered-task principal" });
+    const principal = require('./helpers/authorized-identity').createPrincipal(identity, { type: "service", displayName: "Synthetic recovered-task principal" });
+    const owner = identity.listPrincipals({ type: "human" }).find(item => item.roles.includes("owner"));
     const issued = authentication.createCredential({
       principalId: principal.principal_id,
       displayName: "Synthetic recovered-task credential",
       scopes: ["agent.tasks.read", "tools.execute"],
+      createdByPrincipalId: owner.principal_id,
+      actorContext: owner,
     });
     const taskId = "agt_security_recovery_launch01";
     taskStore.insertTask(createTask({
@@ -647,7 +672,7 @@ let server;
     taskStore.updateTask(taskId, { state: "ready" });
     taskStore.updateTask(taskId, { state: "running" });
     taskStore.updateTask(taskId, { state: "interrupted" });
-    assert.strictEqual(authentication.revokeCredential(issued.credential.credential_id), true);
+    assert.strictEqual(authentication.revokeCredential(issued.credential.credential_id, owner), true);
 
     let runnerCalls = 0;
     const launched = agent.__launchRecoveredDurableTaskForTests(taskId, {

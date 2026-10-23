@@ -3,6 +3,14 @@ const { SSEServerTransport } = require("@modelcontextprotocol/server-legacy/sse"
 function registerLegacySseRoutes({ app, sessionManager, createMcpServer }) {
   app.get("/sse", async (req, res) => {
     try {
+      const capacity = sessionManager.getSessionCapacity(req.authIdentity || null);
+      if (!capacity.allowed) {
+        const perIdentity = capacity.scope === "identity";
+        return res.status(perIdentity ? 429 : 503).json({
+          error: perIdentity ? "MCP session limit reached for this identity; close an unused session and retry" : "MCP server session capacity is full; retry after inactive sessions expire",
+          code: "session_capacity_exceeded",
+        });
+      }
       const authState = { current: req.authIdentity || null };
       const server = createMcpServer(() => authState.current);
       const transport = new SSEServerTransport("/messages", res);
@@ -13,7 +21,10 @@ function registerLegacySseRoutes({ app, sessionManager, createMcpServer }) {
         authIdentity: req.authIdentity || null,
         authState
       };
-      sessionManager.registerSession(sessionId, server, transport, metadata);
+      if (!sessionManager.registerSession(sessionId, server, transport, metadata)) {
+        await server.close?.();
+        return res.status(503).json({ error: "MCP server session capacity is full; retry after inactive sessions expire", code: "session_capacity_exceeded" });
+      }
       await server.connect(transport);
       console.log(`[SSE] New session: ${sessionId} from ${metadata.userAgent || "unknown"}`);
     } catch (e) {
@@ -27,7 +38,9 @@ function registerLegacySseRoutes({ app, sessionManager, createMcpServer }) {
       const sessionId = req.query.sessionId;
       if (!sessionId || !sessionManager.hasSession(sessionId)) return res.status(400).json({ error: "Invalid session" });
       const entry = sessionManager.getSession(sessionId);
-      if (entry.authState) entry.authState.current = req.authIdentity || null;
+      if (!sessionManager.authorizeSessionIdentity(sessionId, req.authIdentity || null)) {
+        return res.status(403).json({ error: "MCP session belongs to a different authenticated principal", code: "session_identity_mismatch" });
+      }
       if (!(entry.transport instanceof SSEServerTransport)) return res.status(400).json({ error: "Not an SSE session" });
       entry.lastAccess = Date.now();
       await entry.transport.handlePostMessage(req, res, req.body);

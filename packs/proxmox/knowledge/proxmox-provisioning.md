@@ -108,20 +108,21 @@ unshipped.
 ## Optional Ansible: `ansible_run` (risk: high)
 
 Ansible is optional and detected, never required or auto-installed. When
-present and configured, it configures reachable hosts:
+present and configured, planning is available, but execution currently fails
+closed because a scoped network broker and isolated workspace are not yet
+implemented:
 
 - `detect` — report availability and configuration state.
 - `dry_run` — return the exact resolved command, generated inventory, and the
   extra-var keys (values omitted), without executing.
-- `run` — execute an **allowlisted** playbook against a **generated** inventory
-  through Sidekick's governed shell, reporting per-host results parsed from
-  Ansible's JSON output.
+- `run` — report `capability_unavailable` before starting any command. Do not
+  work around this by granting the shell host networking.
 
 A caller can never supply a playbook path, role, ad-hoc module, inventory
 script, callback plugin, or command argument — only an allowlisted playbook
-name, structured validated hosts, and scalar extra-vars. Host key checking
-stays on. Configure it with `ansible.playbook_dir` (and optionally
-`ansible.allowed_playbooks`).
+name, structured validated hosts, and scalar extra-vars. Host key checking is
+configured on for future brokered execution. Set `ansible.playbook_dir` (and
+optionally `ansible.allowed_playbooks`) for dry-run planning.
 
 ## Reproducible environments
 

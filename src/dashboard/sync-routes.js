@@ -26,7 +26,15 @@ function authorizeMemoryScope(req, res, projectAccess, access, requestedProject)
   return { project, global };
 }
 
-function registerSyncRoutes({ app, dbStore, requireIdentityPermission, projectAccess, auditLog, errorResponse }) {
+function authorizeSyncMemoryScope(req, res, { requireIdentityPermission, projectAccess, permission, access, project }) {
+  // Explicit project transfers use the same memory permission and membership
+  // boundary as the canonical sync tools. Global transfers stay administrator
+  // controlled through the dedicated sync permission.
+  if (!project && !requireIdentityPermission(req, res, permission)) return null;
+  return authorizeMemoryScope(req, res, projectAccess, access, project);
+}
+
+function registerSyncRoutes({ app, dbStore, requireIdentityPermission, projectAccess, auditLog, recordIdentityAudit, errorResponse }) {
   app.get("/api/sync/identity", (req, res) => {
     if (!requireIdentityPermission(req, res, "sync.read")) return;
     try {
@@ -38,18 +46,28 @@ function registerSyncRoutes({ app, dbStore, requireIdentityPermission, projectAc
     if (!requireIdentityPermission(req, res, "sync.manage")) return;
     try {
       const { user_id } = req.body || {};
-       if (!user_id || typeof user_id !== "string") return errorResponse(req, res, null, { status: 400, code: "invalid_request", component: "sync" });
-      dbStore.setUserId(user_id);
-      auditLog(req, "sync_set_user_id", { user_id });
-      res.json({ ok: true, user_id });
+      if (!user_id || typeof user_id !== "string") return errorResponse(req, res, null, { status: 400, code: "invalid_request", component: "sync" });
+      if (typeof recordIdentityAudit !== "function") return errorResponse(req, res, null, { status: 503, code: "audit_unavailable", component: "sync" });
+      try { auditLog(req, "sync_identity.update.requested", {}); }
+      catch { return errorResponse(req, res, null, { status: 503, code: "audit_unavailable", component: "sync" }); }
+      try {
+        dbStore.setUserId(user_id, {
+          audit: details => recordIdentityAudit("dashboard.sync.identity.updated", null, req.authPrincipal.principal_id, details),
+        });
+      } catch {
+        return errorResponse(req, res, null, { status: 503, code: "audit_unavailable", component: "sync" });
+      }
+      let auditStatus = "complete";
+      try { auditLog(req, "sync_set_user_id", { user_id }); }
+      catch { auditStatus = "degraded"; }
+      res.json({ ok: true, user_id, audit_status: auditStatus });
     } catch (error) { return errorResponse(req, res, error, { status: 400, code: "invalid_request", component: "sync" }); }
   });
 
   app.get("/api/sync/export", (req, res) => {
-    if (!requireIdentityPermission(req, res, "sync.read")) return;
     try {
       const { project, since, include_disabled } = req.query;
-      const scope = authorizeMemoryScope(req, res, projectAccess, "read", project);
+      const scope = authorizeSyncMemoryScope(req, res, { requireIdentityPermission, projectAccess, permission: "sync.read", access: "read", project });
       if (!scope) return;
       const options = {};
       if (scope.project) options.project = scope.project;
@@ -62,25 +80,55 @@ function registerSyncRoutes({ app, dbStore, requireIdentityPermission, projectAc
   });
 
   app.post("/api/sync/import", (req, res) => {
-    if (!requireIdentityPermission(req, res, "sync.manage")) return;
     try {
       const { data, strategy, preserve_ids } = req.body || {};
-      const scope = authorizeMemoryScope(req, res, projectAccess, "write", req.body?.project);
+      const scope = authorizeSyncMemoryScope(req, res, { requireIdentityPermission, projectAccess, permission: "sync.manage", access: "write", project: req.body?.project });
       if (!scope) return;
+      if (!data || !Array.isArray(data.memories)) {
+        return errorResponse(req, res, null, { status: 400, code: "invalid_request", component: "sync" });
+      }
+      if (typeof recordIdentityAudit !== "function") {
+        return errorResponse(req, res, null, { status: 503, code: "audit_unavailable", component: "sync" });
+      }
+      try {
+        auditLog(req, "sync_import.requested", { project: scope.project, strategy: strategy || "newest" });
+      } catch {
+        return errorResponse(req, res, null, { status: 503, code: "audit_unavailable", component: "sync" });
+      }
+      let identityAuditWritten = false;
+      let identityAuditFailed = false;
       const result = dbStore.importFromSync(data, {
         strategy: strategy || "newest",
         preserveIds: preserve_ids === true,
         ...((scope.project || !scope.global) ? { projectScope: scope.project } : {}),
+        audit: summary => {
+          try {
+            recordIdentityAudit("dashboard.sync.imported", null, req.authPrincipal.principal_id, {
+              project: scope.project,
+              strategy: strategy || "newest",
+              ...summary,
+            });
+            identityAuditWritten = true;
+          } catch (error) {
+            identityAuditFailed = true;
+            throw error;
+          }
+        },
       });
-      auditLog(req, "sync_import", { imported: result.imported, conflicts: result.conflicts, strategy });
-      res.json({ ok: true, ...result });
+      if (identityAuditFailed) {
+        return errorResponse(req, res, null, { status: 503, code: "audit_unavailable", component: "sync" });
+      }
+      if (!identityAuditWritten) return errorResponse(req, res, null, { status: 503, code: "sync_unavailable", component: "sync" });
+      let auditStatus = "complete";
+      try { auditLog(req, "sync_import", { imported: result.imported, conflicts: result.conflicts, strategy }); }
+      catch { auditStatus = "degraded"; }
+      res.json({ ok: true, ...result, audit_status: auditStatus });
     } catch (error) { return errorResponse(req, res, error, { status: 400, code: "invalid_request", component: "sync" }); }
   });
 
   app.get("/api/sync/diff", (req, res) => {
-    if (!requireIdentityPermission(req, res, "sync.read")) return;
     try {
-       const scope = authorizeMemoryScope(req, res, projectAccess, "read", req.query.project);
+       const scope = authorizeSyncMemoryScope(req, res, { requireIdentityPermission, projectAccess, permission: "sync.read", access: "read", project: req.query.project });
        if (!scope) return;
        if (!req.query.since) return errorResponse(req, res, null, { status: 400, code: "invalid_request", component: "sync" });
       res.json({ ok: true, ...dbStore.getSyncDiff(req.query.since, scope.project ? { project: scope.project } : {}) });

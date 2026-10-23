@@ -63,8 +63,8 @@ try {
 }
 const campaign = kernel.createResearchCampaign({ project_id: "source_fixture", name: "source", created_by: "test" });
 kernel.registerProject({ project_id: "source_fixture", owner_actor_id: owner.principal_id, source: "test" });
-const outsider = identity.createPrincipal({ type: "service", displayName: "Unrelated research reader" });
-identity.assignRole(outsider.principal_id, "administrator", owner.principal_id);
+const outsider = require('./helpers/authorized-identity').createPrincipal(identity, { type: "service", displayName: "Unrelated research reader" });
+identity.assignRole(outsider.principal_id, "administrator", owner);
 const outsiderAuthority = { principal_id: outsider.principal_id, principal_type: "service", scopes: ["tools.execute_high"] };
 assert.equal(authorization.authorize({ principalId: outsider.principal_id, permission: "tools.execute_high", credentialScopes: outsiderAuthority.scopes }).ok, true, "the unrelated principal can execute the high-risk research tool");
 const services = { config: { workspace: workspaceRoot } };

@@ -25,8 +25,8 @@ function test(name, fn) { fn(); passed++; console.log(`  ✓ ${name}`); }
 (async () => {
   try {
     const owner = identity.bootstrapOwner({ username: "govowner", password: "correct horse battery staple", displayName: "Governance Owner" });
-    const viewer = identity.createHumanUser({ username: "govviewer", password: "another correct password", displayName: "Governance Viewer" });
-    identity.assignRole(viewer.principal_id, "viewer", owner.principal_id);
+    const viewer = require('./helpers/authorized-identity').createHumanUser(identity, { username: "govviewer", password: "another correct password", displayName: "Governance Viewer" });
+    identity.assignRole(viewer.principal_id, "viewer", owner);
 
     test("provenance preserves principal fields without inventing identities", () => {
       assert.deepStrictEqual(buildProvenance({ authIdentity: { principal_id: owner.principal_id } }), {

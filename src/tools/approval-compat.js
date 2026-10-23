@@ -427,7 +427,7 @@ async function resolveApproval(id, action, reviewer = "dashboard", options = {})
     if (action !== "approve") {
       return { content: [{ type: "text", text: "Invalid approval action: " + action }], isError: true };
     }
-    return require("./dispatcher").executeApprovedTool({ approvalId: id, reviewer, reviewerPrincipalId: options.reviewerPrincipalId || null, source: reviewer });
+    return require("./dispatcher").executeApprovedTool({ approvalId: id, reviewer, reviewerPrincipalId: options.reviewerPrincipalId || null, reviewerAuthIdentity: options.reviewerAuthIdentity || null, source: reviewer });
   }
 
   const approvals = loadApprovals();
@@ -463,7 +463,7 @@ async function resolveApproval(id, action, reviewer = "dashboard", options = {})
     return { content: [{ type: "text", text: "Invalid approval action: " + action }], isError: true };
   }
 
-  return require("./dispatcher").executeApprovedTool({ approvalId: id, reviewer, reviewerPrincipalId: options.reviewerPrincipalId || null, source: reviewer });
+  return require("./dispatcher").executeApprovedTool({ approvalId: id, reviewer, reviewerPrincipalId: options.reviewerPrincipalId || null, reviewerAuthIdentity: options.reviewerAuthIdentity || null, source: reviewer });
 }
 
 function claimApprovalExecution({ approvalId, reviewer = "dashboard", source, allowStaleReclaim = false } = {}) {

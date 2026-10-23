@@ -24,14 +24,18 @@ const DEPLOY_SH_PATH = path.join(PROJECT_ROOT, 'deploy.sh');
 const DEPLOY_PS1_PATH = path.join(PROJECT_ROOT, 'deploy.ps1');
 const BOOTSTRAP_SH_PATH = path.join(PROJECT_ROOT, 'scripts', 'bootstrap.sh');
 const SETUP_TOOLS_SH_PATH = path.join(PROJECT_ROOT, 'scripts', 'setup-tools.sh');
+const BUBBLEWRAP_LIB_PATH = path.join(PROJECT_ROOT, 'scripts', 'lib', 'bubblewrap.sh');
 const SUDOERS_PATH = path.join(PROJECT_ROOT, 'systemd', 'sidekick-sudoers');
+const DEPLOY_SUDOERS_PATH = path.join(PROJECT_ROOT, 'systemd', 'sidekick-deploy-sudoers');
 
 // Read script contents
 let deployShContent = '';
 let deployPs1Content = '';
 let bootstrapShContent = '';
 let setupToolsShContent = '';
+let bubblewrapLibContent = '';
 let sudoersContent = '';
+let deploySudoersContent = '';
 
 try {
   deployShContent = fs.readFileSync(DEPLOY_SH_PATH, 'utf8');
@@ -55,7 +59,9 @@ try {
 }
 
 setupToolsShContent = fs.readFileSync(SETUP_TOOLS_SH_PATH, 'utf8');
+  bubblewrapLibContent = fs.readFileSync(BUBBLEWRAP_LIB_PATH, 'utf8');
 sudoersContent = fs.readFileSync(SUDOERS_PATH, 'utf8');
+deploySudoersContent = fs.readFileSync(DEPLOY_SUDOERS_PATH, 'utf8');
 
 // ============================================================================
 // DEPLOY.SH TESTS
@@ -471,8 +477,8 @@ console.log('Test 3.3: bootstrap.sh installs systemd services');
   console.log('✓ Systemd service installation present\n');
 }
 
-// Test 3.4: bootstrap.sh configures sudoers
-console.log('Test 3.4: bootstrap.sh configures sudoers');
+// Test 3.4: bootstrap.sh configures narrowly scoped service control
+console.log('Test 3.4: bootstrap.sh configures narrowly scoped service control');
 {
   assert.ok(
     bootstrapShContent.includes('/etc/sudoers.d/sidekick'),
@@ -483,17 +489,26 @@ console.log('Test 3.4: bootstrap.sh configures sudoers');
     'bootstrap.sh should configure NOPASSWD sudo'
   );
   assert.ok(
-    bootstrapShContent.includes('systemctl start sidekick-mcp'),
-    'bootstrap.sh should allow starting sidekick-mcp'
+    bootstrapShContent.includes('install_sidekick_polkit_rule "$USERNAME" "$SCRIPT_DIR"'),
+    'bootstrap.sh should install the scoped systemd polkit rule'
   );
   assert.ok(
-    bootstrapShContent.includes('systemctl restart sidekick-dashboard'),
-    'bootstrap.sh should allow restarting sidekick-dashboard'
+    bootstrapShContent.includes('polkitd'),
+    'bootstrap.sh should install the polkit authorization service'
   );
-  assert.ok(
-    bootstrapShContent.includes('systemctl start sidekick-metrics.timer'),
-    'bootstrap.sh should allow starting sidekick-metrics.timer'
-  );
+  for (const [name, content] of [['bootstrap.sh', bootstrapShContent], ['setup-tools.sh', setupToolsShContent]]) {
+    assert.ok(content.includes('install_sidekick_deploy_sudoers "$USERNAME" "$SCRIPT_DIR"'), `${name} must install the shared narrow SSH deploy policy`);
+  }
+  for (const [name, content] of [['systemd/sidekick-deploy-sudoers', deploySudoersContent]]) {
+    for (const service of ['sidekick-mcp', 'sidekick-dashboard', 'sidekick-agent']) {
+      assert.ok(content.includes(`systemctl start ${service}`), `${name} must preserve the SSH deploy start grant for ${service}`);
+      assert.ok(content.includes(`systemctl stop ${service}`), `${name} must preserve the SSH deploy stop grant for ${service}`);
+      assert.ok(content.includes(`systemctl restart ${service}`), `${name} must preserve the SSH deploy restart grant for ${service}`);
+      assert.ok(content.includes(`systemctl status ${service}`), `${name} must preserve the SSH deploy status grant for ${service}`);
+    }
+    assert.doesNotMatch(content, /NOPASSWD: \/usr\/bin\/systemctl (?:daemon-reload|enable|disable)/, `${name} must not grant unit-file or daemon-reload access`);
+  }
+  assert.doesNotMatch(sudoersContent, /NOPASSWD: \/usr\/bin\/systemctl/, 'base sudoers policy must not duplicate deployment unit grants');
   assert.ok(
     !bootstrapShContent.includes('NOPASSWD: /usr/bin/docker'),
     'bootstrap.sh must not grant root-equivalent Docker wildcard access'
@@ -524,6 +539,22 @@ console.log('Test 3.5: bootstrap.sh installs Node.js');
     'bootstrap.sh should use apt-get for package installation'
   );
   console.log('✓ Node.js installation present\n');
+}
+
+// Test 3.5b: supported Linux setup paths install the required shell isolation backend
+console.log('Test 3.5b: Linux setup installs required shell isolation dependencies');
+{
+  for (const [name, content] of [['bootstrap.sh', bootstrapShContent], ['setup-tools.sh', setupToolsShContent]]) {
+    assert.ok(/apt-get install[^\n]*bubblewrap[^\n]*util-linux/.test(content), `${name} must install bubblewrap and util-linux/prlimit`);
+  }
+  for (const [name, content] of [['bootstrap.sh', bootstrapShContent], ['setup-tools.sh', setupToolsShContent]]) {
+    assert.ok(content.includes('source "$SCRIPT_DIR/lib/bubblewrap.sh"'), `${name} must use the shared isolation health check`);
+    assert.ok(content.includes('sidekick_bubblewrap_smoke_test "$USERNAME"'), `${name} must verify the backend as the service identity`);
+  }
+  assert.ok(bubblewrapLibContent.includes('setpriv --no-new-privs'), 'the smoke check must match the service NNP boundary');
+  assert.ok(bubblewrapLibContent.includes('/usr/bin/prlimit') && bubblewrapLibContent.includes('/usr/bin/bwrap'), 'the smoke check must exercise both required executables');
+  assert.ok(bubblewrapLibContent.includes('--unshare-all') && bubblewrapLibContent.includes('--cap-drop ALL'), 'the smoke check must exercise namespace and capability isolation');
+  console.log('✓ Shell isolation dependencies and checks present\n');
 }
 
 // Test 3.6: bootstrap.sh creates sidekick user
@@ -853,6 +884,22 @@ assert.ok(deployShContent.includes('ensure_secret_config'), 'deploy.sh should co
 assert.ok(deployPs1Content.includes('Ensure-SecretConfig'), 'deploy.ps1 should configure protected secret settings');
 assert.ok(deployShContent.includes('ensure-secret-config.sh'), 'deploy.sh should sync the secret config helper');
 assert.ok(deployPs1Content.includes('ensure-secret-config.sh'), 'deploy.ps1 should sync the secret config helper');
+assert.ok(fs.readFileSync(path.join(__dirname, '..', 'scripts', 'ensure-secret-config.sh'), 'utf8').includes('verify-runtime-secrets.js'), 'deploy secret setup must validate runtime credentials before service restart');
+assert.ok(fs.existsSync(path.join(__dirname, '..', 'scripts', 'verify-runtime-secrets.js')), 'deployment must include the required runtime-secret preflight');
+assert.ok(deployShContent.includes('scripts/verify-runtime-secrets.js'), 'deploy.sh SCP mode must copy the runtime-secret preflight');
+assert.ok(deployPs1Content.includes('scripts\\verify-runtime-secrets.js'), 'deploy.ps1 SCP mode must copy the runtime-secret preflight');
+assert.ok(deployShContent.includes('wait_sidekick_services || exit 1'), 'deploy.sh must fail unless required services become active');
+assert.ok(deployPs1Content.includes('Wait-SidekickServices'), 'deploy.ps1 must fail unless required services become active');
+assert.ok(deployShContent.includes("sudo systemctl status $service"), 'deploy.sh readiness checks must use the exact sudo-authorized per-service status command');
+assert.ok(deployPs1Content.includes('sudo systemctl status $service'), 'deploy.ps1 readiness checks must use the exact sudo-authorized per-service status command');
+assert.ok(!deployShContent.includes('systemctl is-active'), 'deploy.sh must not require an ungranted is-active sudo command');
+assert.ok(!deployPs1Content.includes('systemctl is-active'), 'deploy.ps1 must not require an ungranted is-active sudo command');
+assert.ok(deployShContent.includes('sudo journalctl -u sidekick-mcp') && deployShContent.includes('sudo journalctl -u sidekick-agent') && deployShContent.includes('sudo journalctl -u sidekick-dashboard'), 'deploy.sh must provide log diagnostics matching per-unit sudo grants');
+assert.ok(deployPs1Content.includes('sudo journalctl -u sidekick-mcp; sudo journalctl -u sidekick-agent; sudo journalctl -u sidekick-dashboard'), 'deploy.ps1 must provide log diagnostics matching per-unit sudo grants');
+assert.ok(deployShContent.includes('[[ "$status" == "active" ]]'), 'deploy.sh must not report inactive services as healthy');
+assert.ok(deployPs1Content.includes('$status.Trim() -eq "active"'), 'deploy.ps1 must not report inactive services as healthy');
+assert.ok(deployShContent.lastIndexOf('wait_sidekick_services || exit 1') < deployShContent.indexOf('=== Deploy complete ==='), 'deploy.sh must report completion only after service readiness');
+assert.ok(deployPs1Content.lastIndexOf('Wait-SidekickServices') < deployPs1Content.indexOf('=== Deploy complete ==='), 'deploy.ps1 must report completion only after service readiness');
 assert.ok(bootstrapShContent.includes('/etc/sidekick/secrets'), 'bootstrap.sh should create the protected secret directory');
 assert.ok(bootstrapShContent.includes('generate_secret_file'), 'bootstrap.sh should generate missing core secret files');
 assert.ok(bootstrapShContent.includes('chmod 600'), 'bootstrap.sh should protect generated secret files');

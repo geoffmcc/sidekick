@@ -8,13 +8,19 @@ const { enforcePathPolicy } = require("../path-policy");
 const { getStaticToolRisk } = require("../metadata");
 const { requireToolExecution, requireCanonicalInvocation } = require("../read-authorization");
 
-const MAX_SNAPSHOT_BYTES = 16 * 1024 * 1024;
+const MAX_SNAPSHOT_BYTES = dbStore.MAX_SNAPSHOT_BYTES;
 
 function readSnapshot(filePath) {
-  const fd = fs.openSync(filePath, "r");
+  const before = fs.lstatSync(filePath);
+  if (!before.isFile() || before.isSymbolicLink()) throw new Error("Snapshot must be a regular non-symlink file");
+  const noFollow = fs.constants.O_NOFOLLOW || 0;
+  const fd = fs.openSync(filePath, fs.constants.O_RDONLY | noFollow);
   try {
     const stat = fs.fstatSync(fd);
-    if (!stat.isFile()) throw new Error("Snapshot must be a regular file");
+    if (!stat.isFile() || stat.dev !== before.dev || stat.ino !== before.ino) {
+      throw new Error("Snapshot changed while being opened");
+    }
+    if (enforcePathPolicy(filePath, "read")) throw new Error("Snapshot path is no longer allowed by policy");
     if (stat.size > MAX_SNAPSHOT_BYTES) throw new Error(`Snapshot exceeds the ${MAX_SNAPSHOT_BYTES} byte limit`);
     const buffer = Buffer.alloc(Math.min(stat.size + 1, MAX_SNAPSHOT_BYTES + 1));
     let offset = 0;
@@ -121,8 +127,15 @@ async function sidekick_db_diff({ snapshot_a, snapshot_b, table }) {
       const policyError = enforcePathPolicy(snapshot_b, "read");
       if (policyError) return policyError;
     }
-    const snapA = snapshot_a === "current" || !snapshot_a ? dbStore.createSnapshot() : readSnapshot(snapshot_a);
-    const snapB = snapshot_b === "current" || !snapshot_b ? dbStore.createSnapshot() : readSnapshot(snapshot_b);
+    const loadSnapshot = value => {
+      const snapshot = value === "current" || !value
+        ? dbStore.createSnapshot(table ? { table } : undefined)
+        : readSnapshot(value);
+      if (!table) return snapshot;
+      return { ...snapshot, tables: { [table]: snapshot.tables[table] || [] } };
+    };
+    const snapA = loadSnapshot(snapshot_a);
+    const snapB = loadSnapshot(snapshot_b);
     const diff = dbStore.compareSnapshots(snapA, snapB);
     if (table) return jsonResult({ [table]: diff[table] || { added: [], removed: [] } });
     const summary = {};

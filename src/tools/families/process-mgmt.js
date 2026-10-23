@@ -5,7 +5,8 @@
 // Extracted from src/tools-legacy.js. Depends only on Node builtins, the shared
 // redaction utility, and the shared filesystem path policy — never on
 // tools-legacy.js. `process` and `service` are `high` risk (they can kill
-// processes and control systemd via sudo); those classifications are preserved
+// processes and request systemd unit changes through systemd's polkit API;
+// those classifications are preserved
 // from src/tools/metadata.js and gated by the dispatcher. Command arguments are
 // passed to execFileSync as arrays (no shell string), and all output is passed
 // through redactSensitive before return.
@@ -18,6 +19,19 @@ const { z } = require("zod");
 const { redactSensitive } = require("../../redact");
 const { enforcePathPolicy } = require("../path-policy");
 const { requireToolExecution } = require("../read-authorization");
+
+const ALLOWED_SERVICE_NAMES = Object.freeze([
+  "sidekick-mcp", "sidekick-dashboard", "sidekick-agent", "sidekick-postgres",
+  "sidekick-redis", "sidekick-qdrant", "sidekick-influxdb", "sidekick-grafana",
+  "sidekick-metrics.timer", "nginx"
+]);
+const ALLOWED_SERVICE_NAME_SET = new Set(ALLOWED_SERVICE_NAMES);
+
+function normalizeManagedService(service) {
+  if (typeof service !== "string") return null;
+  const normalized = service.replace(/\.service$/, "");
+  return ALLOWED_SERVICE_NAME_SET.has(normalized) ? normalized : null;
+}
 
 function validateArchiveEntryNames(entries) {
   for (const entry of entries) {
@@ -85,18 +99,26 @@ async function sidekick_service({ action, service, lines }) {
     return { content: [{ type: "text", text: "Invalid action. Allowed: " + allowedActions.join(", ") }], isError: true };
   }
 
+  const normalizedService = normalizeManagedService(service);
+  if (!normalizedService) {
+    return { content: [{ type: "text", text: "Service is outside the Sidekick-managed unit allowlist" }], isError: true };
+  }
+  if (["enable", "disable"].includes(action)) {
+    return { content: [{ type: "text", text: "Service enablement changes are not available to the Sidekick service account; they require an administrator-managed unit-file operation" }], isError: true };
+  }
+
   let cmd;
   if (action === "logs") {
     if (!service) {
       return { content: [{ type: "text", text: "service required for logs" }], isError: true };
     }
     const n = lines || 50;
-    cmd = ["journalctl", ["-u", service, "-n", String(n), "--no-pager"]];
+    cmd = ["journalctl", ["-u", normalizedService, "-n", String(n), "--no-pager"]];
   } else {
     if (!service) {
       return { content: [{ type: "text", text: "service required for " + action }], isError: true };
     }
-    cmd = ["sudo", ["systemctl", action, service]];
+    cmd = ["systemctl", [action, normalizedService]];
   }
 
   try {
@@ -233,4 +255,4 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_process, sidekick_service, sidekick_archive, validateArchiveEntryNames };
+module.exports = { descriptors, sidekick_process, sidekick_service, sidekick_archive, validateArchiveEntryNames, normalizeManagedService, ALLOWED_SERVICE_NAMES };

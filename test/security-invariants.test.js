@@ -12,13 +12,93 @@ const { taskBelongsToIdentity, isAllowedCertificationRoute, isAllowedServiceRout
 const { reloadAgentScheduler } = require("../src/agent/scheduler-reload");
 const { normalizePrincipalContext } = require("../src/agent/task-model");
 const { registerAgentProxyRoutes } = require("../src/dashboard/agent-proxy-routes");
+const { registerApprovalRoutes } = require("../src/dashboard/approval-routes");
 const { createBlackboxQuery } = require("../src/blackbox/query");
 const { clampOffset: clampPredictionOffset } = require("../src/predict");
 const { HISTORY_LIMITS, clampHistoryOffset } = require("../src/agent-history");
 const { dispatchTool } = require("../src/tools/dispatcher");
 const { getStaticToolRisk } = require("../src/tools/metadata");
+const { collectSnapshotRows } = require("../src/db/snapshot-bounds");
+const { createEscalationApprovalRef, validateEscalationApprovalRef } = require("../src/agent/escalation-approval");
+const { verifyRequiredRuntimeSecrets } = require("../scripts/verify-runtime-secrets");
 
 const root = path.resolve(__dirname, "..");
+
+test("escalation approval references are minted for the exact escalation, never borrowed from tool approvals", () => {
+  const escalationId = "aep_01hxyz";
+  const reference = createEscalationApprovalRef(escalationId);
+  assert.equal(reference, "approval:escalation:aep_01hxyz");
+  assert.deepEqual(validateEscalationApprovalRef(reference, escalationId), { ok: true });
+  assert.equal(validateEscalationApprovalRef("approval:unrelated-tool-call", escalationId).reason, "approval_escalation_mismatch");
+  assert.throws(() => createEscalationApprovalRef("bad id"), /invalid escalation id/);
+
+  const source = fs.readFileSync(path.join(root, "src/agent.js"), "utf8");
+  assert.match(source, /createEscalationApprovalRef\(escalation\.escalation_id\)/);
+  assert.match(source, /new Set\(\["decision", "reason"\]\)/, "the caller cannot supply an approval reference");
+});
+
+test("all Sidekick processes migrate shared state before restoring module entries", () => {
+  const source = file => fs.readFileSync(path.join(root, file), "utf8");
+  const index = source("src/index.js");
+  const dashboard = source("src/dashboard.js");
+  const agent = source("src/agent.js");
+  const mcpMigration = index.indexOf("dbStore.runPendingMigrations()");
+  const packAttestation = index.indexOf("reconcileBundledPackModules()");
+  const mcpProvision = index.indexOf("provisionBuiltinModules()");
+  assert.ok(mcpMigration >= 0 && mcpMigration < packAttestation && packAttestation < mcpProvision,
+    "MCP migrates, reconciles bundled provenance, then restores modules");
+  assert.ok(dashboard.indexOf("dbStore.runPendingMigrations()") < dashboard.indexOf("provisionBuiltinModules()"),
+    "Dashboard migrates before restoring modules");
+  assert.ok(agent.indexOf("dbStore.runPendingMigrations()") < agent.indexOf("provisionBuiltinModules()"),
+    "Agent migrates before restoring modules");
+
+  for (const file of ["systemd/sidekick-dashboard.service", "systemd/sidekick-agent.service"]) {
+    const unit = source(file);
+    assert.match(unit, /^Requires=sidekick-mcp\.service$/m, `${file} requires the pack-attesting MCP service`);
+    assert.match(unit, /^After=.*sidekick-mcp\.service/m, `${file} starts after MCP completes startup reconciliation`);
+  }
+  const mcpUnit = source("systemd/sidekick-mcp.service");
+  assert.match(mcpUnit, /^ExecStartPost=\/usr\/bin\/node scripts\/wait-for-mcp-ready\.js$/m,
+    "MCP is not considered started until its health endpoint responds");
+
+  const deploySh = source("deploy.sh");
+  assert.match(deploySh, /sudo install .*sidekick-mcp\.service .*sidekick-mcp\.service.*sudo install .*sidekick-agent\.service .*sidekick-agent\.service.*sudo install .*sidekick-dashboard\.service .*sidekick-dashboard\.service.*sudo systemctl daemon-reload/,
+    "Bash deploy installs all dependent units and reloads systemd");
+  assert.ok(deploySh.indexOf("ensure_secret_config\nsync_service_units") < deploySh.indexOf('if [ "$git_mode_used" = true ]'),
+    "Bash deploy installs unit changes before restarting services");
+  assert.match(deploySh, /restart_service "sidekick-mcp"\s+restart_service "sidekick-agent"\s+restart_service "sidekick-dashboard"/,
+    "Bash deploy restarts core before its dependent services");
+
+  const deployPs = source("deploy.ps1");
+  assert.match(deployPs, /\$units = @\("sidekick-mcp\.service", "sidekick-agent\.service", "sidekick-dashboard\.service"\)/,
+    "PowerShell deploy syncs all Sidekick units");
+  assert.match(deployPs, /Run-Remote "sudo install -o root -g root -m 0644 \$source \$target"[\s\S]*sudo systemctl daemon-reload/,
+    "PowerShell deploy installs unit files and reloads systemd");
+  assert.ok(deployPs.indexOf("Ensure-SecretConfig\n  Sync-SidekickSystemdUnits") < deployPs.indexOf("if ($gitModeUsed)"),
+    "PowerShell deploy installs unit changes before restarting services");
+  assert.match(deployPs, /Restart-SidekickService "sidekick-mcp"\s+Restart-SidekickService "sidekick-agent"\s+Restart-SidekickService "sidekick-dashboard"/,
+    "PowerShell deploy restarts core before dependent services");
+});
+
+test("all Core systemd services explicitly locate file-backed runtime secrets", () => {
+  for (const file of [
+    "systemd/sidekick-mcp.service",
+    "systemd/sidekick-agent.service",
+    "systemd/sidekick-dashboard.service",
+  ]) {
+    const unit = fs.readFileSync(path.join(root, file), "utf8");
+    assert.match(unit, /^Environment=SIDEKICK_SECRET_DIR=\/etc\/sidekick\/secrets$/m,
+      `${file} must point at the directory provisioned by bootstrap`);
+  }
+});
+
+test("deployment secret preflight covers every canonical file-backed secret", () => {
+  const { FILE_SECRET_NAMES } = require("../src/core/runtime-secrets");
+  const preflight = fs.readFileSync(path.join(root, "scripts/ensure-secret-config.sh"), "utf8");
+  for (const name of FILE_SECRET_NAMES) {
+    assert.ok(preflight.includes(name), `deployment preflight must reject ${name} in .env`);
+  }
+});
 
 test("selected privileged handler boundaries retain exact canonical dispatch guards", () => {
   const guardedHandlers = [
@@ -212,6 +292,25 @@ test("database content and execution-log reads require authenticated medium-risk
   }
 });
 
+test("legacy installation API key denial explains scoped principal setup without granting authority", async () => {
+  const result = await dispatchTool({
+    name: "db_search",
+    args: { query: "synthetic" },
+    context: {
+      source: "mcp",
+      requestId: "legacy-key-no-principal",
+      authIdentity: { authentication_method: "legacy_api_key", scopes: ["legacy"] },
+    },
+  });
+
+  assert.equal(result.isError, true);
+  assert.equal(result.code, "unauthenticated");
+  assert.match(result.content[0].text, /legacy installation API key/);
+  assert.match(result.content[0].text, /does not identify a principal/);
+  assert.match(result.content[0].text, /Identity → Connect an MCP client/);
+  assert.match(result.content[0].text, /service credential/);
+});
+
 test("database query, search, log, and diff handlers reject direct calls before access", async () => {
   const family = require("../src/tools/families/database-inspection");
   const results = await Promise.all([
@@ -245,11 +344,57 @@ test("database diff bounds and validates imported snapshot files", async () => {
     const invalid = await dispatchTool({ name: "db_diff", args: { snapshot_a: malformed, snapshot_b: "current" }, context });
     assert.equal(invalid.isError, true);
     assert.match(invalid.content[0].text, /row arrays/);
+
+    const raced = path.join(directory, "raced.json");
+    const displaced = path.join(directory, "displaced.json");
+    fs.writeFileSync(raced, JSON.stringify({ tables: { users: [] } }));
+    const originalOpenSync = fs.openSync;
+    let replaced = false;
+    fs.openSync = function (filePath, ...args) {
+      if (!replaced && path.resolve(String(filePath)) === path.resolve(raced)) {
+        replaced = true;
+        fs.renameSync(raced, displaced);
+        fs.writeFileSync(raced, JSON.stringify({ tables: { users: [{ unexpected: true }] } }));
+      }
+      return originalOpenSync.call(this, filePath, ...args);
+    };
+    let raceResult;
+    try {
+      raceResult = await dispatchTool({ name: "db_diff", args: { snapshot_a: raced, snapshot_b: "current" }, context });
+    } finally {
+      fs.openSync = originalOpenSync;
+    }
+    assert.equal(replaced, true, "test must replace the path between its lstat and open");
+    assert.equal(raceResult.isError, true);
+    assert.match(raceResult.content[0].text, /changed while being opened/);
   } finally {
     if (previousAllowed === undefined) delete process.env.SIDEKICK_ALLOWED_PATHS;
     else process.env.SIDEKICK_ALLOWED_PATHS = previousAllowed;
     fs.rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("database snapshot collection stops at configured row and byte budgets", () => {
+  let yielded = 0;
+  function* rows() {
+    while (true) {
+      yielded += 1;
+      yield { value: "x" };
+    }
+  }
+  assert.throws(
+    () => collectSnapshotRows(rows(), { rows: 0, bytes: 0 }, { maxRows: 2, maxBytes: 1024 }),
+    /exceeds the 2 row limit/,
+  );
+  assert.equal(yielded, 3, "iteration must stop at the first row beyond the cap");
+  assert.throws(
+    () => collectSnapshotRows([{ value: "long" }], { rows: 0, bytes: 0 }, { maxRows: 2, maxBytes: 2 }),
+    /exceeds the 2 byte limit/,
+  );
+  assert.deepEqual(
+    collectSnapshotRows([{ value: "ok" }], { rows: 0, bytes: 0 }, { maxRows: 1, maxBytes: 1024 }),
+    [{ value: "ok" }],
+  );
 });
 
 test("persistent knowledge and memory operations cannot run through identityless dispatch", async () => {
@@ -329,15 +474,26 @@ test("sensitive Dashboard permission checks do not depend on an attached princip
   }
 });
 
-test("Agent proxy credential is separate from the MCP client credential in production", () => {
+test("MCP centrally separates service credentials and Dashboard diagnostics use identity sessions", () => {
   const agent = fs.readFileSync(path.join(root, "src/agent.js"), "utf8");
   const dashboard = fs.readFileSync(path.join(root, "src/dashboard.js"), "utf8");
+  const index = fs.readFileSync(path.join(root, "src/index.js"), "utf8");
+  const authRoutes = fs.readFileSync(path.join(root, "src/dashboard/auth-routes.js"), "utf8");
   const secrets = fs.readFileSync(path.join(root, "src/core/runtime-secrets.js"), "utf8");
   const scheduling = fs.readFileSync(path.join(root, "src/tools/families/scheduling.js"), "utf8");
   assert.match(agent, /readSecret\("SIDEKICK_AGENT_PROXY_KEY", \{ required: true \}\)/);
-  assert.match(agent, /assertDistinctProxySecret\(mcpApiKey, agentProxySecret\)/);
+  assert.doesNotMatch(agent, /SIDEKICK_API_KEY|assertDistinctProxySecret/);
+  assert.match(agent, /assertDistinctAgentSchedulerSecret\(agentProxySecret, agentSchedulerSecret\)/,
+    "Agent independently refuses scheduler-key reuse with its Dashboard proxy credential");
+  assert.doesNotMatch(dashboard, /SIDEKICK_API_KEY|MCP_API_KEY|assertDistinctProxySecret/);
+  assert.match(dashboard, /"Authorization": "Bearer " \+ \(req\.dashboardSessionToken \|\| ""\)/);
   assert.match(dashboard, /readSecret\("SIDEKICK_AGENT_PROXY_KEY", \{ required: true \}\)/);
-  assert.match(dashboard, /assertDistinctProxySecret\(MCP_API_KEY, AGENT_PROXY_KEY\)/);
+  assert.match(authRoutes, /req\.dashboardSessionToken = identityToken/);
+  assert.match(authRoutes, /req\.dashboardSessionToken = session\.token/);
+  assert.match(index, /assertDistinctProxySecret\(API_KEY, agentProxyKey\)/);
+  assert.match(index, /assertDistinctAgentSchedulerSecret\(agentProxyKey, agentSchedulerKey\)/);
+  assert.match(index, /if \(!IS_LOCAL && process\.env\.NODE_ENV !== "test"\)/,
+    "credential separation is mandatory in deployed runtimes while isolated test fixtures may omit service credentials");
   assert.match(secrets, /SIDEKICK_AGENT_PROXY_KEY:\s*"sidekick_agent_proxy_key"/);
   assert.match(secrets, /"SIDEKICK_AGENT_PROXY_KEY"/);
   assert.match(agent, /offeredService === "scheduler" \? agentSchedulerSecret : agentProxySecret/);
@@ -346,8 +502,37 @@ test("Agent proxy credential is separate from the MCP client credential in produ
   assert.equal(assertDistinctProxySecret("synthetic-mcp-key", "synthetic-proxy-key"), true);
   assert.throws(() => assertDistinctProxySecret("same-synthetic-key", "same-synthetic-key"), /must differ/);
   assert.throws(() => assertDistinctProxySecret("", "synthetic-proxy-key"), /both be configured/);
-  assert.equal(assertDistinctAgentSchedulerSecret("synthetic-mcp-key", "synthetic-proxy-key", "synthetic-scheduler-key"), true);
-  assert.throws(() => assertDistinctAgentSchedulerSecret("synthetic-mcp-key", "synthetic-proxy-key", "synthetic-proxy-key"), /must be distinct/);
+  assert.equal(assertDistinctAgentSchedulerSecret("synthetic-proxy-key", "synthetic-scheduler-key"), true);
+  assert.throws(() => assertDistinctAgentSchedulerSecret("synthetic-proxy-key", "synthetic-proxy-key"), /must differ/);
+});
+
+test("deployment secret preflight fails closed before restart when required credentials are unsafe", (t) => {
+  const tempDir = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "sidekick-secret-preflight-"));
+  t.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
+  const apiPath = path.join(tempDir, "sidekick_api_key");
+  const proxyPath = path.join(tempDir, "sidekick_agent_proxy_key");
+  const writeSecrets = (api, proxy) => {
+    fs.writeFileSync(apiPath, `${api}\n`, { mode: 0o600 });
+    fs.writeFileSync(proxyPath, `${proxy}\n`, { mode: 0o600 });
+  };
+
+  assert.throws(() => verifyRequiredRuntimeSecrets(tempDir), /SIDEKICK_API_KEY is missing/);
+  writeSecrets("synthetic-api-key", "synthetic-proxy-key");
+  assert.equal(verifyRequiredRuntimeSecrets(tempDir), true);
+  writeSecrets("synthetic-api-key", "synthetic-api-key");
+  assert.throws(() => verifyRequiredRuntimeSecrets(tempDir), /must differ/);
+  writeSecrets("sk-your-key-here", "synthetic-proxy-key");
+  assert.throws(() => verifyRequiredRuntimeSecrets(tempDir), /placeholder/);
+
+  writeSecrets("synthetic-api-key", "synthetic-proxy-key");
+  if (process.platform !== "win32") {
+    fs.chmodSync(tempDir, 0o777);
+    assert.throws(() => verifyRequiredRuntimeSecrets(tempDir), /SIDEKICK_SECRET_DIR is writable by group or other users/);
+    fs.chmodSync(tempDir, 0o700);
+  }
+  fs.rmSync(proxyPath);
+  fs.symlinkSync(apiPath, proxyPath);
+  assert.throws(() => verifyRequiredRuntimeSecrets(tempDir), /regular, non-symlink/);
 });
 
 test("Agent proxy identity requires a fresh request-bound signature and rejects replay", () => {
@@ -364,6 +549,47 @@ test("Agent proxy identity requires a fresh request-bound signature and rejects 
   assert.equal(verifyAgentProxyRequest({ ...request, path: request.path + "?changed=1", secret, headers, now, usedNonces: new Map() }), null, "signature binds the exact route and query");
   assert.equal(verifyAgentProxyRequest({ ...request, body: "{\"changed\":true}", secret, headers, now, usedNonces: new Map() }), null, "signature binds the request body");
   assert.equal(verifyAgentProxyRequest({ ...request, secret, headers, now: now + 120_000, usedNonces: new Map() }), null, "expired signatures are rejected");
+});
+
+test("Dashboard approval forwards the authenticated reviewer scope and delegation", async () => {
+  const routes = new Map();
+  const app = { get: (route, handler) => routes.set(`GET ${route}`, handler), post: (route, handler) => routes.set(`POST ${route}`, handler) };
+  let captured = null;
+  registerApprovalRoutes({
+    app,
+    listApprovals: () => [],
+    renderContinuationApprovalPreview: () => ({ ok: true }),
+    authenticatedUser: () => "scoped-reviewer",
+    auditLog: () => {},
+    logError: () => {},
+    resolveApproval: async (...args) => { captured = args; return { content: [{ type: "text", text: "approved" }] }; },
+    requireIdentityPermission: () => true,
+    errorResponse: () => assert.fail("unexpected approval route error"),
+  });
+  const req = {
+    params: { id: "approval-synthetic" },
+    authPrincipal: { principal_id: "principal-reviewer", principal_type: "human", scopes: ["approvals.grant"], delegation_id: "delegation-review" },
+  };
+  const res = { json(value) { this.value = value; return this; }, status(code) { this.statusCode = code; return this; } };
+  await routes.get("POST /api/approvals/:id/approve")(req, res);
+  assert.equal(res.statusCode, undefined);
+  assert.equal(captured[0], "approval-synthetic");
+  assert.equal(captured[1], "approve");
+  assert.deepEqual(captured[3], {
+    reviewerPrincipalId: "principal-reviewer",
+    reviewerAuthIdentity: {
+      principal_id: "principal-reviewer",
+      principal_type: "human",
+      scopes: ["approvals.grant"],
+      delegation_id: "delegation-review",
+    },
+  });
+  const dispatcher = fs.readFileSync(path.join(root, "src/tools/dispatcher.js"), "utf8");
+  assert.match(dispatcher, /credentialScopes: effectiveReviewerIdentity\?\.scopes/);
+  assert.match(dispatcher, /authIdentity: effectiveReviewerIdentity/);
+  assert.match(dispatcher, /reviewerAuthIdentity\.principal_id !== reviewerPrincipalId/);
+  const approvalCompat = fs.readFileSync(path.join(root, "src/tools/approval-compat.js"), "utf8");
+  assert.equal((approvalCompat.match(/reviewerAuthIdentity: options\.reviewerAuthIdentity/g) || []).length, 2);
 });
 
 test("identityless certification service can access only its durably attributed tasks", () => {
@@ -437,6 +663,8 @@ test("scheduler reload uses a signed, route-bound service identity", async () =>
   const secret = "synthetic-agent-service-key";
   const usedNonces = new Map();
   let captured;
+  let successfulBodyClosed = false;
+  let rejectedBodyClosed = false;
   const http = {
     request(options, callback) {
       captured = options;
@@ -460,13 +688,14 @@ test("scheduler reload uses a signed, route-bound service identity", async () =>
         }), null, "the scheduler key does not authenticate Dashboard proxy assertions");
         const response = new EventEmitter();
         response.statusCode = 204;
-        response.resume = () => {};
+        response.destroy = () => { successfulBodyClosed = true; };
         callback(response);
       };
       return req;
     },
   };
   assert.deepEqual(await reloadAgentScheduler("delays", { secret, http }), { ok: true });
+  assert.equal(successfulBodyClosed, true, "successful reload response body is closed after the status is recorded");
   assert.equal(captured.path, "/api/delays/reload");
   assert.equal(captured.method, "POST");
   const rejectedHttp = {
@@ -476,7 +705,7 @@ test("scheduler reload uses a signed, route-bound service identity", async () =>
       req.end = () => {
         const response = new EventEmitter();
         response.statusCode = 403;
-        response.resume = () => {};
+        response.destroy = () => { rejectedBodyClosed = true; };
         callback(response);
       };
       return req;
@@ -485,6 +714,7 @@ test("scheduler reload uses a signed, route-bound service identity", async () =>
   assert.deepEqual(await reloadAgentScheduler("watches", { secret, http: rejectedHttp }), {
     ok: false, code: "agent_reload_rejected", status: 403,
   });
+  assert.equal(rejectedBodyClosed, true, "rejected reload response body is closed after the status is recorded");
   assert.deepEqual(await reloadAgentScheduler("unknown", { secret, http }), { ok: false, code: "unsupported_reload" });
   assert.deepEqual(await reloadAgentScheduler("delays", { http }), { ok: false, code: "service_credential_unavailable" });
 });

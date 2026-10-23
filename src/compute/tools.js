@@ -194,18 +194,19 @@ async function sidekick_compute_nodes({ action, node_id, worker_id, ...args }, r
       }
       case "stats": return ok(compute.workerManager.getWorkerStats());
       case "create_token": {
+        if (!runtime.createSensitiveResult) {
+          return err("Secure one-time token display is unavailable; token creation was not attempted");
+        }
         const result = compute.workerManager.createEnrollmentToken({
           displayName: args.display_name,
           trustLevel: args.trust_level || "trusted",
           allowedDataClassifications: args.allowed_data_classifications || ["public", "internal", "private"],
           maxConcurrentJobs: args.max_concurrent_jobs || 2,
           expiresInMs: args.expires_in_ms || 3600000,
-          createdBy: args.created_by || "admin",
+          createdBy: toolContext.getExecutionContext().authIdentity?.principal_id || null,
           reEnrollmentOf: args.re_enrollment_of || null,
         });
-          return runtime.createSensitiveResult
-            ? runtime.createSensitiveResult({ ...result, message: "Token created. Give the token value to the worker operator. It will not be shown again." })
-            : ok({ ...result, message: "Token created. The token value is available only through the authorized one-time display." });
+        return runtime.createSensitiveResult({ ...result, message: "Token created. Give the token value to the worker operator. It will not be shown again." });
       }
       case "list_tokens": {
         const dbStore = require("../db");
@@ -225,6 +226,9 @@ async function sidekick_compute_nodes({ action, node_id, worker_id, ...args }, r
         })));
       }
       case "enroll": {
+        if (!runtime.createSensitiveResult) {
+          return err("Secure one-time worker credential display is unavailable; enrollment was not attempted");
+        }
         if (!args.token || !node_id || !args.display_name || !args.platform) {
           return err("token, node_id, display_name, and platform required");
         }
@@ -242,7 +246,12 @@ async function sidekick_compute_nodes({ action, node_id, worker_id, ...args }, r
           publicKey: args.public_key,
           enrollmentToken: args.token,
         });
-        return ok({ ...enrolled.worker, credential: enrolled.credential, credentialType: "worker-bearer-v1" });
+        return runtime.createSensitiveResult({
+          ...enrolled.worker,
+          credential: enrolled.credential,
+          credentialType: "worker-bearer-v1",
+          message: "Worker enrolled. Save this credential securely; it will not be shown again.",
+        });
       }
       default: return err("Unknown action: " + action + ". Valid: list, get, telemetry, heartbeat, revoke, maintenance, stats, create_token, list_tokens, enroll");
     }
@@ -459,6 +468,9 @@ async function sidekick_compute_jobs({ action, job_id, ...args }) {
             idempotencyKey: args.idempotency_key,
             project: scopedProject,
             source,
+            ...((requestPayload.async === true && ["chat", "generate"].includes(args.job_type))
+              ? { executionAuthority: require("./job-authority").captureExecutionAuthority(context.authIdentity, "compute.jobs.create") }
+              : {}),
           });
           return ok(j);
         } catch (e) {

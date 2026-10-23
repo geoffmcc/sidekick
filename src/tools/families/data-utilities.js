@@ -10,6 +10,7 @@ const path = require("path");
 const { z } = require("zod");
 const { detectFormat, parseCSV } = require("../../core/format");
 const { redactSensitive } = require("../../redact");
+const { BoundedRegex } = require("../../core/bounded-regex");
 const { enforcePathPolicy } = require("../path-policy");
 
 const ajv = new Ajv({ allErrors: true, verbose: true });
@@ -111,7 +112,7 @@ async function sidekick_transform({ action, input, pattern, format, field, key, 
 
   if (action === "filter") {
     if (!pattern) return { content: [{ type: "text", text: "pattern required for filter" }], isError: true };
-    const regex = new RegExp(pattern);
+    const regex = new BoundedRegex(pattern);
     if (typeof data === "string") return { content: [{ type: "text", text: data.split("\n").filter(line => regex.test(line)).join("\n") }] };
     if (Array.isArray(data)) {
       const filtered = data.filter(item => typeof item === "string" ? regex.test(item) : regex.test(typeof item === "object" ? JSON.stringify(item) : String(item)));
@@ -503,7 +504,7 @@ const descriptors = Object.freeze([
     schema: z.object({
       action: z.enum(["filter", "extract", "sort", "format", "map"]),
       input: z.string().describe("Input data (text or JSON string)"),
-      pattern: z.string().optional().describe("Regex pattern for filter action"),
+      pattern: z.string().max(512).optional().describe("Regex pattern for filter action (maximum 512 characters)"),
       field: z.string().optional().describe("Field path for extract action"),
       key: z.string().optional().describe("Key for sort or map action"),
       value: z.string().optional().describe("Value for map action"),

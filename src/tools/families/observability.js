@@ -15,14 +15,16 @@
 const fs = require("fs");
 const path = require("path");
 const dns = require("dns");
-const https = require("https");
 const { execFileSync } = require("child_process");
 const { z } = require("zod");
 const { validateInfluxUrl } = require("../../influx-endpoint-policy");
 const { readSecret } = require("../../core/runtime-secrets");
 const { childProcessEnv } = require("../../security/child-process");
 const { runBoundedShell } = require("../../security/command-execution");
-const { requireToolExecution, requireCanonicalInvocation } = require("../read-authorization");
+const { checkEndpoint } = require("../../security/endpoint-probe");
+const { authorizeNetDiagTarget, normalizeTarget: normalizeNetDiagTarget } = require("../../security/netdiag-scope");
+const { requestPinnedHttp } = require("../../security/pinned-http");
+const { requireToolExecution, requireCanonicalInvocation, requirePermission } = require("../read-authorization");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "..", "..", "data");
 fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -33,6 +35,47 @@ function safeExecFileSync(program, args, options = {}) {
 
 const HEALTH_HISTORY_FILE = path.join(DATA_DIR, "health_history.json");
 const MAX_HEALTH_HISTORY = 100;
+const INFLUX_REQUEST_TIMEOUT_MS = 15_000;
+const MAX_INFLUX_RESPONSE_BYTES = 5 * 1024 * 1024;
+
+async function requestInflux(url, options = {}) {
+  const target = new URL(url);
+  validateInfluxUrl(target.origin);
+  return requestPinnedHttp(url, {
+    ...options,
+    signal: options.signal || AbortSignal.timeout(INFLUX_REQUEST_TIMEOUT_MS),
+  }, {
+    label: "Influx endpoint",
+    allowPrivate: true,
+    timeoutMs: INFLUX_REQUEST_TIMEOUT_MS,
+  });
+}
+
+async function readInfluxResponseText(response, maxBytes = MAX_INFLUX_RESPONSE_BYTES) {
+  const reader = response?.body?.getReader?.();
+  if (!reader) {
+    if (response?.body === null) return "";
+    throw new Error("InfluxDB response cannot be read with a bounded stream");
+  }
+
+  const chunks = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > maxBytes) {
+        await reader.cancel().catch(() => {});
+        throw new Error("InfluxDB response exceeded the configured size limit");
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } finally {
+    reader.releaseLock?.();
+  }
+  return Buffer.concat(chunks, totalBytes).toString("utf8");
+}
 
 function loadHealthHistory() {
   if (!fs.existsSync(HEALTH_HISTORY_FILE)) return [];
@@ -156,29 +199,24 @@ function probeDns(hostname, timeoutMs = 4000) {
 }
 
 function probeHttps(url, timeoutMs = 4000) {
-  return new Promise(resolve => {
-    const started = Date.now();
-    let settled = false;
-    let request;
-
-    const finish = result => {
-      if (settled) return;
-      settled = true;
-      resolve({ url, latencyMs: Date.now() - started, ...result });
-    };
-
+  const started = Date.now();
+  return (async () => {
     try {
-      request = https.request(url, { method: "HEAD" }, response => {
-        response.resume();
-        finish({ ok: true, statusCode: response.statusCode });
+      const target = new URL(String(url));
+      if (target.protocol !== "https:") throw new Error("Health-check endpoint must use HTTPS");
+      const response = await requestPinnedHttp(target.href, {
+        method: "HEAD",
+        signal: AbortSignal.timeout(timeoutMs),
+      }, {
+        label: "health-check endpoint",
+        timeoutMs,
       });
-      request.setTimeout(timeoutMs, () => request.destroy(new Error("Timed out")));
-      request.on("error", error => finish({ ok: false, error: error.message }));
-      request.end();
+      await response.body?.cancel().catch(() => {});
+      return { url: String(url), latencyMs: Date.now() - started, ok: true, statusCode: response.status };
     } catch (error) {
-      finish({ ok: false, error: error.message });
+      return { url: String(url), latencyMs: Date.now() - started, ok: false, error: error.message };
     }
-  });
+  })();
 }
 
 async function checkNetwork(options = {}) {
@@ -586,7 +624,7 @@ function runNetDiagCommand(program, args, timeout = 5000) {
   }
 }
 
-async function sidekick_netdiag({ action, target, port_range, timeout, format }) {
+async function sidekick_netdiag({ action, target, port_range, timeout, format, network_scope, network_scope_revision }) {
   const authorizationError = requireToolExecution({ tool: "netdiag", action: action || null, target: target || null }, "tools.execute_high", "netdiag");
   if (authorizationError) return authorizationError;
   if (!target && action !== "listeners") {
@@ -596,10 +634,74 @@ async function sidekick_netdiag({ action, target, port_range, timeout, format })
     const targetError = validateNetDiagTarget(target);
     if (targetError) return { content: [{ type: "text", text: targetError }], isError: true };
   }
+  if (network_scope && !["check", "route", "ports", "connectivity"].includes(action)) {
+    return { content: [{ type: "text", text: "network_scope is valid for HTTP(S) checks and host-form route, port, connectivity, or host checks" }], isError: true };
+  }
+  if (network_scope_revision != null && !network_scope) {
+    return { content: [{ type: "text", text: "network_scope_revision requires network_scope" }], isError: true };
+  }
+  if (network_scope && !Number.isSafeInteger(network_scope_revision)) {
+    return { content: [{ type: "text", text: "network_scope requires its current network_scope_revision" }], isError: true, code: "network_scope_revision_required" };
+  }
 
   const fmt = format || "detailed";
   const to = timeout || 5000;
   let commandCount = 0;
+
+  let ports = COMMON_PORTS;
+  if (action === "ports" && port_range) {
+    const match = /^\s*(\d+)\s*-\s*(\d+)\s*$/.exec(port_range);
+    if (match) {
+      const start = parseInt(match[1]);
+      const end = parseInt(match[2]);
+      if (start < 1 || end > 65535 || start > end) {
+        return { content: [{ type: "text", text: "port_range must be within 1-65535 and ascending" }], isError: true };
+      }
+      if (end - start + 1 > MAX_NETDIAG_COMMANDS) {
+        return { content: [{ type: "text", text: `port_range may include at most ${MAX_NETDIAG_COMMANDS} ports per diagnostic` }], isError: true };
+      }
+      ports = [];
+      for (let i = start; i <= end; i++) ports.push(i);
+    } else {
+      return { content: [{ type: "text", text: "port_range must use the form start-end" }], isError: true };
+    }
+  }
+
+  const isUrlCheck = action === "check" && /^https?:\/\//i.test(target || "");
+  let probeTarget = target;
+  let resolvedTargets = null;
+  let resolvedCheck = null;
+  if (target && !isUrlCheck && ["check", "route", "ports", "connectivity"].includes(action)) {
+    const requestedTargets = action === "connectivity" ? target.split(",").map(value => value.trim()) : [target];
+    if (requestedTargets.some(value => !value) || requestedTargets.length > MAX_NETDIAG_COMMANDS) {
+      return { content: [{ type: "text", text: `connectivity accepts at most ${MAX_NETDIAG_COMMANDS} non-empty targets` }], isError: true, code: "invalid_target" };
+    }
+    const probes = action === "ports"
+      ? ports.map(port => ({ protocol: "tcp", port }))
+      : action === "route"
+        ? Array.from({ length: 10 }, (_, index) => ({ protocol: "udp", port: 33434 + index }))
+        : action === "check"
+          ? [{ protocol: "icmp" }, { protocol: "tcp", port: 22 }]
+          : [{ protocol: "icmp" }];
+    const authorizedTargets = [];
+    for (const requestedTarget of requestedTargets) {
+      const preflight = await authorizeNetDiagTarget({
+        target: requestedTarget,
+        probes,
+        networkScope: network_scope || null,
+        networkScopeRevision: network_scope_revision,
+      });
+      if (!preflight.ok) {
+        return { content: [{ type: "text", text: `Network diagnostic denied (${preflight.code}): ${preflight.reason}` }], isError: true, code: preflight.code };
+      }
+      authorizedTargets.push(preflight);
+    }
+    if (action === "connectivity") resolvedTargets = authorizedTargets.map(value => value.address);
+    else {
+      resolvedCheck = authorizedTargets[0];
+      probeTarget = resolvedCheck.address;
+    }
+  }
 
   const checkLimit = () => {
     commandCount++;
@@ -609,12 +711,15 @@ async function sidekick_netdiag({ action, target, port_range, timeout, format })
   };
 
   if (action === "dns") {
+    let dnsTarget;
+    try { dnsTarget = normalizeNetDiagTarget(target).host; }
+    catch (error) { return { content: [{ type: "text", text: `Invalid DNS target: ${error.message}` }], isError: true, code: "invalid_target" }; }
     checkLimit();
-    const dnsResult = runNetDiagCommand("dig", ["+short", target, "A"], to);
+    const dnsResult = runNetDiagCommand("dig", ["+short", dnsTarget, "A"], to);
     checkLimit();
-    const dnsAny = runNetDiagCommand("dig", ["+short", target, "ANY"], to);
+    const dnsAny = runNetDiagCommand("dig", ["+short", dnsTarget, "ANY"], to);
     checkLimit();
-    const reverse = runNetDiagCommand("dig", ["+short", "-x", target], to);
+    const reverse = runNetDiagCommand("dig", ["+short", "-x", dnsTarget], to);
 
     let result = `DNS Resolution for: ${target}\n\n`;
     result += `A Records:\n${dnsResult.output || "None"}\n\n`;
@@ -626,7 +731,7 @@ async function sidekick_netdiag({ action, target, port_range, timeout, format })
 
   if (action === "route") {
     checkLimit();
-    const traceResult = runNetDiagCommand("traceroute", ["-m", "10", "-w", "2", target], to * 2);
+    const traceResult = runNetDiagCommand("traceroute", ["-m", "10", "-q", "1", "-p", "33434", "-w", "2", probeTarget], to * 2);
 
     let result = `Route to: ${target}\n\n`;
     result += traceResult.output || "Traceroute failed or timed out";
@@ -635,28 +740,10 @@ async function sidekick_netdiag({ action, target, port_range, timeout, format })
   }
 
   if (action === "ports") {
-    let ports = COMMON_PORTS;
-    if (port_range) {
-      const match = /^\s*(\d+)\s*-\s*(\d+)\s*$/.exec(port_range);
-      if (match) {
-        const start = parseInt(match[1]);
-        const end = parseInt(match[2]);
-        if (start < 1 || end > 65535 || start > end) {
-          return { content: [{ type: "text", text: "port_range must be within 1-65535 and ascending" }], isError: true };
-        }
-        ports = [];
-        for (let i = start; i <= end && ports.length < 20; i++) {
-          ports.push(i);
-        }
-      } else {
-        return { content: [{ type: "text", text: "port_range must use the form start-end" }], isError: true };
-      }
-    }
-
-    checkLimit();
     const results = [];
     for (const port of ports) {
-      const ncResult = runNetDiagCommand("nc", ["-z", "-w", "2", target, String(port)], 3000);
+      checkLimit();
+      const ncResult = runNetDiagCommand("nc", ["-z", "-w", "2", probeTarget, String(port)], 3000);
       const isOpen = ncResult.success && !ncResult.output.includes("failed");
       results.push({ port, open: isOpen });
     }
@@ -693,9 +780,9 @@ async function sidekick_netdiag({ action, target, port_range, timeout, format })
     if (invalidTarget) return { content: [{ type: "text", text: invalidTarget }], isError: true };
     const results = [];
 
-    for (const t of targets) {
+    for (const [index, t] of targets.entries()) {
       checkLimit();
-      const pingResult = runNetDiagCommand("ping", ["-c", "2", "-W", "2", t], to);
+      const pingResult = runNetDiagCommand("ping", ["-c", "2", "-W", "2", resolvedTargets[index]], to);
       const isUp = pingResult.success && pingResult.output.includes("bytes from");
       results.push({ target: t, up: isUp, latency: isUp ? pingResult.output.match(/time[=<](\d+\.?\d*)/)?.[1] + "ms" : "N/A" });
     }
@@ -711,42 +798,49 @@ async function sidekick_netdiag({ action, target, port_range, timeout, format })
   if (action === "check") {
     let host = target;
     let url = null;
-    if (target.startsWith("http://") || target.startsWith("https://")) {
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(target) && !/^https?:\/\//i.test(target)) {
+      return { content: [{ type: "text", text: "target URL must use HTTP or HTTPS" }], isError: true };
+    }
+    if (/^https?:\/\//i.test(target)) {
       try {
         const parsed = new URL(target);
         host = parsed.hostname;
-        url = target;
-      } catch {}
+        url = parsed;
+      } catch {
+        return { content: [{ type: "text", text: "target must be a valid absolute HTTP(S) URL" }], isError: true };
+      }
     }
 
     const report = { target, host, timestamp: new Date().toISOString(), checks: {} };
 
     checkLimit();
-    const dnsResult = runNetDiagCommand("dig", ["+short", host, "A"], to);
-    report.checks.dns = dnsResult.output || "Failed";
-
-    checkLimit();
-    const pingResult = runNetDiagCommand("ping", ["-c", "2", "-W", "2", host], to);
-    report.checks.ping = pingResult.success && pingResult.output.includes("bytes from") ? "OK" : "Failed";
-
     if (url) {
       checkLimit();
-      const curlResult = runNetDiagCommand("curl", ["-s", "-o", "/dev/null", "-w", "%{http_code}|%{time_total}|%{ssl_verify_result}", "--max-time", String(Math.max(1, Math.ceil(to / 1000))), url], to);
-      if (curlResult.success) {
-        const parts = curlResult.output.split("|");
+      try {
+        const result = await checkEndpoint(target, network_scope || null, network_scope_revision || null, to);
+        report.checks.dns = result.error === "dns_resolution_failed" ? "Failed" : "Resolved and pinned";
         report.checks.http = {
-          status: parts[0] || "N/A",
-          time: parts[1] ? parseFloat(parts[1]).toFixed(3) + "s" : "N/A",
-          ssl: parts[2] === "0" ? "Valid" : "Invalid"
+          status: result.status || "N/A",
+          time: Number.isFinite(result.elapsed_ms) ? `${(result.elapsed_ms / 1000).toFixed(3)}s` : "N/A",
+          ssl: url.protocol === "https:" ? (result.status ? "Valid" : "Not verified") : "N/A",
         };
-      } else {
-        report.checks.http = "Failed";
+      } catch (error) {
+        const code = error.code || "endpoint_probe_failed";
+        return { content: [{ type: "text", text: `HTTP check denied or failed (${code}); current network policy must authorize the target.` }], isError: true, code };
       }
+      // URL checks use the governed HTTP probe only. Do not also send ICMP or
+      // SSH traffic to the parsed hostname outside that probe's scope.
+      report.checks.ping = "Not run for URL target";
+      report.checks.ssh = "Not run for URL target";
+    } else {
+      report.checks.dns = resolvedCheck.addresses.join(", ");
+      checkLimit();
+      const pingResult = runNetDiagCommand("ping", ["-c", "2", "-W", "2", probeTarget], to);
+      report.checks.ping = pingResult.success && pingResult.output.includes("bytes from") ? "OK" : "Failed";
+      checkLimit();
+      const portResult = runNetDiagCommand("nc", ["-z", "-w", "2", probeTarget, "22"], 3000);
+      report.checks.ssh = portResult.success && !portResult.output.includes("failed") ? "Open" : "Closed";
     }
-
-    checkLimit();
-    const portResult = runNetDiagCommand("nc", ["-z", "-w", "2", host, "22"], 3000);
-    report.checks.ssh = portResult.success && !portResult.output.includes("failed") ? "Open" : "Closed";
 
     let result = `Network Diagnostic Report\n`;
     result += `Target: ${target}\n`;
@@ -790,6 +884,8 @@ async function sidekick_metrics({ action, measurement, fields, tags, timestamp, 
   if (authorizationError) return authorizationError;
   try {
     const INFLUX_URL = process.env.SIDEKICK_INFLUX_URL || 'http://localhost:8086';
+    const secretDenied = requirePermission("secrets.use", { tool: "metrics", secret: "SIDEKICK_INFLUX_TOKEN" });
+    if (secretDenied) return secretDenied;
     const INFLUX_TOKEN = readSecret('SIDEKICK_INFLUX_TOKEN');
     const INFLUX_ORG = process.env.SIDEKICK_INFLUX_ORG || 'sidekick';
     const INFLUX_BUCKET = process.env.SIDEKICK_INFLUX_BUCKET || 'sidekick';
@@ -832,7 +928,7 @@ async function sidekick_metrics({ action, measurement, fields, tags, timestamp, 
       line += ' ' + ts;
 
       // Write to InfluxDB
-      const response = await fetch(`${INFLUX_URL}/api/v2/write?org=${INFLUX_ORG}&bucket=${INFLUX_BUCKET}&precision=ns`, {
+      const response = await requestInflux(`${INFLUX_URL}/api/v2/write?org=${INFLUX_ORG}&bucket=${INFLUX_BUCKET}&precision=ns`, {
         method: 'POST',
         headers: {
           'Authorization': `Token ${INFLUX_TOKEN}`,
@@ -842,7 +938,7 @@ async function sidekick_metrics({ action, measurement, fields, tags, timestamp, 
       });
 
       if (!response.ok) {
-        const errorText = await response.text();
+        const errorText = await readInfluxResponseText(response, 64 * 1024);
         return { content: [{ type: "text", text: `Error writing to InfluxDB: ${response.status} - ${errorText}` }], isError: true };
       }
 
@@ -854,7 +950,7 @@ async function sidekick_metrics({ action, measurement, fields, tags, timestamp, 
         return { content: [{ type: "text", text: "Error: query is required for query action" }], isError: true };
       }
 
-      const response = await fetch(`${INFLUX_URL}/api/v2/query?org=${INFLUX_ORG}`, {
+      const response = await requestInflux(`${INFLUX_URL}/api/v2/query?org=${INFLUX_ORG}`, {
         method: 'POST',
         headers: {
           'Authorization': `Token ${INFLUX_TOKEN}`,
@@ -865,11 +961,11 @@ async function sidekick_metrics({ action, measurement, fields, tags, timestamp, 
       });
 
       if (!response.ok) {
-        const errorText = await response.text();
+        const errorText = await readInfluxResponseText(response, 64 * 1024);
         return { content: [{ type: "text", text: `Error querying InfluxDB: ${response.status} - ${errorText}` }], isError: true };
       }
 
-      const result = await response.text();
+      const result = await readInfluxResponseText(response);
       return { content: [{ type: "text", text: result }] };
     }
 
@@ -884,7 +980,7 @@ async function sidekick_metrics({ action, measurement, fields, tags, timestamp, 
   |> distinct(column: "_measurement")
   |> keep(columns: ["_measurement"])`;
 
-      const response = await fetch(`${INFLUX_URL}/api/v2/query?org=${INFLUX_ORG}`, {
+      const response = await requestInflux(`${INFLUX_URL}/api/v2/query?org=${INFLUX_ORG}`, {
         method: 'POST',
         headers: {
           'Authorization': `Token ${INFLUX_TOKEN}`,
@@ -895,11 +991,11 @@ async function sidekick_metrics({ action, measurement, fields, tags, timestamp, 
       });
 
       if (!response.ok) {
-        const errorText = await response.text();
+        const errorText = await readInfluxResponseText(response, 64 * 1024);
         return { content: [{ type: "text", text: `Error listing measurements: ${response.status} - ${errorText}` }], isError: true };
       }
 
-      const result = await response.text();
+      const result = await readInfluxResponseText(response);
       const values = cacheMetricsMetadata(cacheKey, parseInfluxCsvColumn(result, "_measurement"));
       return { content: [{ type: "text", text: JSON.stringify(values) }] };
     }
@@ -922,7 +1018,7 @@ async function sidekick_metrics({ action, measurement, fields, tags, timestamp, 
   |> distinct(column: "_field")
   |> keep(columns: ["_field"])`;
 
-      const response = await fetch(`${INFLUX_URL}/api/v2/query?org=${INFLUX_ORG}`, {
+      const response = await requestInflux(`${INFLUX_URL}/api/v2/query?org=${INFLUX_ORG}`, {
         method: 'POST',
         headers: {
           'Authorization': `Token ${INFLUX_TOKEN}`,
@@ -933,11 +1029,11 @@ async function sidekick_metrics({ action, measurement, fields, tags, timestamp, 
       });
 
       if (!response.ok) {
-        const errorText = await response.text();
+        const errorText = await readInfluxResponseText(response, 64 * 1024);
         return { content: [{ type: "text", text: `Error listing fields: ${response.status} - ${errorText}` }], isError: true };
       }
 
-      const result = await response.text();
+      const result = await readInfluxResponseText(response);
       const values = cacheMetricsMetadata(cacheKey, parseInfluxCsvColumn(result, "_field"));
       return { content: [{ type: "text", text: JSON.stringify(values) }] };
     }
@@ -1017,12 +1113,14 @@ const descriptors = Object.freeze([
     description: "Unified network diagnostics: DNS, routing, port scanning, connectivity checks, and local listeners.",
     schema: z.object({
       action: z.enum(["check", "dns", "route", "ports", "listeners", "connectivity"]),
-      target: z.string().describe("Host, URL, or IP to diagnose"),
-      port_range: z.string().optional().describe("Port range for scan (e.g., '80-443')"),
+      target: z.string().describe("Host, IP, or HTTP(S) URL to diagnose; private host-form probes require a network scope"),
+      network_scope: z.string().max(80).optional().describe("Current operator-created scope for HTTP(S) checks or host-form probes"),
+      network_scope_revision: z.number().int().positive().optional().describe("Explicit current network-scope revision; required when network_scope is set"),
+      port_range: z.string().optional().describe("Port range for scan, limited to 15 ports (e.g., '80-85')"),
       timeout: z.number().optional().default(5000),
       format: z.enum(["detailed", "compact", "json"]).optional().default("detailed"),
     }),
-    args: { action: "string (check|dns|route|ports|listeners|connectivity)", target: "string (host, URL, or IP to diagnose)", port_range: "string (optional, port range e.g. '80-443')", timeout: "number (optional, timeout in ms - default 5000)", format: "string (optional, detailed|compact|json - default detailed)" },
+    args: { action: "string (check|dns|route|ports|listeners|connectivity)", target: "string (host, IP, or HTTP(S) URL to diagnose)", network_scope: "string (optional; required for private HTTP(S) check or restricted host-form targets)", network_scope_revision: "number (required when network_scope is set)", port_range: "string (optional; max 15 ports, e.g. '80-85')", timeout: "number (optional, timeout in ms - default 5000)", format: "string (optional, detailed|compact|json - default detailed)" },
     risk: "high",
     category: "Monitoring",
     source: "builtin",
@@ -1031,4 +1129,16 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_status, sidekick_health, sidekick_metrics, sidekick_netdiag, checkNetwork };
+module.exports = {
+  descriptors,
+  sidekick_status,
+  sidekick_health,
+  sidekick_metrics,
+  sidekick_netdiag,
+  checkNetwork,
+  requestInflux,
+  readInfluxResponseText,
+  probeHttps,
+  INFLUX_REQUEST_TIMEOUT_MS,
+  MAX_INFLUX_RESPONSE_BYTES,
+};

@@ -1,6 +1,7 @@
 [Unit]
 Description=Sidekick Dashboard
-After=network.target
+Requires=sidekick-mcp.service
+After=network.target sidekick-mcp.service
 
 [Service]
 Type=simple
@@ -14,6 +15,7 @@ NoNewPrivileges=true
 User=sidekick
 Group=sidekick
 Environment=NODE_ENV=production
+Environment=SIDEKICK_SECRET_DIR=/etc/sidekick/secrets
 EnvironmentFile=-/etc/sidekick/sidekick.env
 
 [Install]

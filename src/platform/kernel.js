@@ -648,8 +648,8 @@ function configureConnector(connectorId, input = {}) {
   const endpoint = input.endpoint === undefined ? current.endpoint : validateConnectorEndpoint(input.endpoint);
   const secretRef = input.secret_ref === undefined ? current.secret_ref : validateConnectorSecretRef(input.secret_ref);
   dbStore.getDb().prepare("UPDATE platform_connectors SET endpoint = ?, secret_ref = ?, config_json = ?, updated_at = ?, error = NULL WHERE connector_id = ?").run(endpoint, secretRef, json(config), nowIso(), current.connector_id);
-  const configured = current.state === "configured" ? getConnector(current.connector_id) : transitionConnector(current.connector_id, "configured");
-  appendEvent({ event_type: "connector.configured", source: input.source || "platform", subject_type: "connector", subject_id: current.connector_id, payload: { name: configured.name, has_endpoint: Boolean(endpoint), has_secret_ref: Boolean(secretRef) }, correlation_id: current.connector_id });
+  const configured = current.state === "configured" ? getConnector(current.connector_id) : transitionConnector(current.connector_id, "configured", { source: input.source, actor_id: input.actor_id });
+  appendEvent({ event_type: "connector.configured", source: input.source || "platform", actor_id: input.actor_id, subject_type: "connector", subject_id: current.connector_id, payload: { name: configured.name, has_endpoint: Boolean(endpoint), has_secret_ref: Boolean(secretRef) }, correlation_id: current.connector_id });
   return getConnector(current.connector_id);
 }
 

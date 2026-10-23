@@ -56,7 +56,7 @@ async function sidekick_memory({ action, id, project, type, memory_class, conten
   if (action === "remember") {
     if (!content && !summary) return { content: [{ type: "text", text: "content or summary required" }], isError: true };
     const text = redactSensitive(content || summary);
-    const memory = dbStore.upsertMemory({ type: type || "fact", project: effectiveProject, content: text, summary: redactSensitive(summary || text), tags: normalizeTags(tags), confidence: Number.isFinite(confidence) ? confidence : 0.8, source: source || "explicit", source_tool: "sidekick_memory", automatic: false, memory_class: memory_class || memoryClassForToolType(type || "fact"), primary_scope_type: scope_type || (effectiveProject ? "project" : "global"), primary_scope_id: scope_id || effectiveProject || null, evidence_excerpt: redactSensitive(evidence || text), directness: "direct", source_authority: source === "correction" ? 10 : 8, metadata: { user_controlled: true, reason: reason || null } });
+    const memory = dbStore.upsertMemory({ type: type || "fact", project: effectiveProject, content: text, summary: redactSensitive(summary || text), tags: normalizeTags(tags), confidence: Number.isFinite(confidence) ? confidence : 0.8, source: "explicit", source_tool: "sidekick_memory", automatic: false, memory_class: memory_class || memoryClassForToolType(type || "fact"), primary_scope_type: scope_type || (effectiveProject ? "project" : "global"), primary_scope_id: scope_id || effectiveProject || null, evidence_excerpt: redactSensitive(evidence || text), directness: "direct", source_authority: 5, metadata: { user_controlled: true, requested_source: source || null, reason: reason || null } });
     dbStore.auditMemoryEvent("remember", "memory", memory.id, { project, type: memory.type }, toolContext.getExecutionSource());
     recordMemoryEvent("memory.remembered", { memory_id: memory.id, project: memory.project, type: memory.type, source: memory.source }, { subjectType: "memory", subjectId: memory.id, project: memory.project });
     return jsonText({ ok: true, memory });
@@ -73,7 +73,7 @@ async function sidekick_memory({ action, id, project, type, memory_class, conten
     if (!memory) return { content: [{ type: "text", text: "Memory not found: " + id }], isError: true };
     return jsonText({ ok: true, memory, evidence: dbStore.getMemoryEvidence(id), why_known: { source: memory.source, source_ref: memory.source_ref, authority: memory.source_authority, confidence: memory.confidence, components: memory.confidence_components } });
   }
-  if (action === "confirm") return manageMemory({ action: "confirm", id, confirmed_by: source || "user", project: effectiveProject });
+  if (action === "confirm") return manageMemory({ action: "confirm", id, project: effectiveProject });
   if (action === "forget") return manageMemory({ action: "delete", id, reason: reason || "user_forget", project: effectiveProject });
   if (action === "expire") return manageMemory({ action: "expire", id, reason: reason || "manual_expire", project: effectiveProject });
   if (action === "pin") {
@@ -87,8 +87,10 @@ async function sidekick_memory({ action, id, project, type, memory_class, conten
     const old = dbStore.getMemoryById(id, { includeDisabled: true });
     try { assertInScope(old, "write", effectiveProject); } catch { return { content: [{ type: "text", text: "Memory not found: " + id }], isError: true }; }
     if (!old) return { content: [{ type: "text", text: "Memory not found: " + id }], isError: true };
-    dbStore.softDeleteMemory(id, reason || "corrected");
-    const replacement = dbStore.upsertMemory({ type: old.type, project: old.project, content: redactSensitive(correct_to), summary: redactSensitive(correct_to), confidence: 0.95, source: "user_correction", source_tool: "sidekick_memory", automatic: false, memory_class: old.memory_class, primary_scope_type: old.primary_scope_type, primary_scope_id: old.primary_scope_id, supersedes_id: id, evidence_excerpt: redactSensitive(correct_to), directness: "direct", source_authority: 10, metadata: { corrected_memory_id: id, correction_reason: reason || null } });
+    const replacement = dbStore.getDb().transaction(() => {
+      dbStore.softDeleteMemory(id, reason || "corrected");
+      return dbStore.upsertMemory({ type: old.type, project: old.project, content: redactSensitive(correct_to), summary: redactSensitive(correct_to), confidence: 0.95, source: "user_correction", source_tool: "sidekick_memory", automatic: false, memory_class: old.memory_class, primary_scope_type: old.primary_scope_type, primary_scope_id: old.primary_scope_id, supersedes_id: id, evidence_excerpt: redactSensitive(correct_to), directness: "direct", source_authority: 10, metadata: { corrected_memory_id: id, correction_reason: reason || null } });
+    })();
     dbStore.auditMemoryEvent("correct", "memory", id, { replacement_id: replacement.id, reason }, toolContext.getExecutionSource());
     recordMemoryEvent("memory.corrected", { memory_id: id, replacement_id: replacement.id, project: replacement.project, type: replacement.type, reason: reason || null }, { subjectType: "memory", subjectId: replacement.id, project: replacement.project });
     return jsonText({ ok: true, old_memory: id, replacement });

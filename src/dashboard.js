@@ -5,22 +5,11 @@ const path = require("path");
 const os = require("os");
 const { timingSafeCompare } = require("./crypto-utils");
 const { readSecret, hasSecret } = require("./core/runtime-secrets");
-const { assertDistinctProxySecret } = require("./security/agent-proxy-auth");
 const { requiresBootstrapToken } = require("./security/dashboard-bootstrap");
 const { formatKb, parseMemInfo, parseDiskRoot, runCommand, systemSnapshot, systemctlStatus } = require("./dashboard/system-snapshot");
 const { callDashboardTool, getToolDefsForSource, getToolCategoriesWithTools, buildPolicyInspection, summarizePolicyInspection, enforceToolPolicy, listApprovals, resolveApproval, renderContinuationApprovalPreview, loadWatches, syncToolRegistry } = require("./tools");
 const dynamicTools = require("./dynamic-tools");
 
-// Restore persisted platform modules in this process so module tools resolve
-// through the registry here as well (each process holds its own loader state).
-try {
-  const builtinModules = require("./modules/builtin-modules");
-  builtinModules.provisionBuiltinModules();
-  builtinModules.startModuleHealthChecks();
-  builtinModules.startModuleReconciliation();
-} catch (error) {
-  console.error("[Modules] Builtin module provisioning failed");
-}
 const dbStore = require("./db");
 const identity = require("./core/identity");
 const authentication = require("./core/authentication");
@@ -40,6 +29,7 @@ const { registerWebhookRoute } = require("./dashboard/webhook-route");
 const { registerKvRoutes } = require("./dashboard/kv-routes");
 const { registerDashboardConfigRoute } = require("./dashboard/config-route");
 const { registerMemoryReadRoutes } = require("./dashboard/memory-read-routes");
+const { registerMemoryMutationRoutes } = require("./dashboard/memory-mutation-routes");
 const { registerSyncRoutes } = require("./dashboard/sync-routes");
 const { registerHandoffReadRoutes } = require("./dashboard/handoff-read-routes");
 const { registerComputeReadRoutes } = require("./dashboard/compute-read-routes");
@@ -52,7 +42,11 @@ const { registerStatsToolsRoutes } = require("./dashboard/stats-tools-routes");
 const { registerSummaryRoute } = require("./dashboard/summary-route");
 const { registerResearchSourceRoutes } = require("./dashboard/research-source-routes");
 const { registerNetworkScopeRoutes } = require("./dashboard/network-scope-routes");
+const { registerClearRoutes } = require("./dashboard/clear-routes");
 const { registerDatabaseRoutes } = require("./dashboard/database-routes");
+const { dashboardActor, createDashboardAuditEntry } = require("./dashboard/audit-identity");
+const { appendAuditLine } = require("./dashboard/audit-log");
+const { buildGrafanaProxyHeaders } = require("./dashboard/grafana-proxy");
 const { registerAgentProxyRoutes } = require("./dashboard/agent-proxy-routes");
 const { registerBlackboxRoutes } = require("./dashboard/blackbox-routes");
 const { registerPredictRoutes } = require("./dashboard/predict-routes");
@@ -81,21 +75,26 @@ const BOOTSTRAP_TOKEN = readSecret("SIDEKICK_BOOTSTRAP_TOKEN");
 const REMOTE_BOOTSTRAP_REQUIRED = requiresBootstrapToken(BIND_HOST, TRUST_PROXY);
 const MCP_PORT = parseInt(process.env.SIDEKICK_PORT || "4097", 10);
 const GRAFANA_PORT = parseInt(process.env.SIDEKICK_GRAFANA_PORT || "3000", 10);
-const MCP_API_KEY = readSecret("SIDEKICK_API_KEY", { required: true });
 const AGENT_PROXY_KEY = process.env.NODE_ENV === "test"
-  ? (readSecret("SIDEKICK_AGENT_PROXY_KEY") || MCP_API_KEY)
+  ? (readSecret("SIDEKICK_AGENT_PROXY_KEY") || "test-agent-proxy-key")
   : readSecret("SIDEKICK_AGENT_PROXY_KEY", { required: true });
-if (process.env.NODE_ENV !== "test") assertDistinctProxySecret(MCP_API_KEY, AGENT_PROXY_KEY);
-if (!MCP_API_KEY || MCP_API_KEY === "sk-sidekick-local-dev" || MCP_API_KEY === "sk-your-key-here") {
-  throw new Error("SIDEKICK_API_KEY must be set to a non-placeholder value");
-}
-
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
 // The dashboard is a separate process in production. Converge migrations here
 // as well as in the MCP process so authentication routes never race startup.
 dbStore.runPendingMigrations();
 syncToolRegistry();
+
+// Restore persisted platform modules only after this process has converged
+// the shared database schema and synchronized the builtin tool registry.
+try {
+  const builtinModules = require("./modules/builtin-modules");
+  builtinModules.provisionBuiltinModules();
+  builtinModules.startModuleHealthChecks();
+  builtinModules.startModuleReconciliation();
+} catch (error) {
+  console.error("[Modules] Builtin module provisioning failed:", String(error?.message || error).slice(0, 300));
+}
 
 const app = express();
 const dashboardErrors = createDashboardErrorBoundary({ fs, logFile: ERROR_LOG });
@@ -126,6 +125,8 @@ app.use((req, res, next) => {
 app.use("/static", express.static(path.join(__dirname, "..", "static")));
 app.use(express.json({ limit: "1mb" }));
 const http = require("http");
+const { getJsonFromLocalService } = require("./dashboard/local-service-client");
+const { abortUpstreamOnDisconnect } = require("./dashboard/upstream-lifecycle");
 const AGENT_PORT = parseInt(process.env.SIDEKICK_AGENT_PORT || "4099", 10);
 
 // Interface enumeration is optional telemetry. A restricted runtime must not
@@ -171,12 +172,17 @@ function clearAuthFailures(keys) {
 // dashboard credentials have authenticated. This avoids creating a second
 // personal account while preserving the existing administrator role.
 function legacyDashboardPrincipal(username, password = null) {
-  if (!username) return null;
+  // This helper is also the identity boundary for compatibility onboarding;
+  // do not rely only on its current route callers having checked Basic Auth.
+  if (!username || username !== DASHBOARD_USER || !password || !timingSafeCompare(password, DASHBOARD_PASS)) return null;
   try {
     const db = dbStore.getDb();
     const rows = db.prepare("SELECT * FROM principals WHERE json_extract(metadata_json, '$.legacy_dashboard_username') = ? LIMIT 1").all(username);
     const row = rows[0] || null;
-    if (row && row.principal_type === "human") return promoteFirstDashboardOwner(identity.getPrincipal(row.principal_id));
+    if (row && row.principal_type === "human") {
+      const principal = promoteFirstDashboardOwner(identity.getPrincipal(row.principal_id));
+      return grantLegacyDashboardAdministrator(principal);
+    }
     if (row && !password) return identity.getPrincipal(row.principal_id);
 
     if (row) {
@@ -194,12 +200,15 @@ function legacyDashboardPrincipal(username, password = null) {
           .run(row.principal_id, username, passwordHash, identity.PASSWORD_SCHEME, new Date().toISOString());
       });
       adopt();
-      return promoteFirstDashboardOwner(identity.getPrincipal(row.principal_id));
+      const principal = promoteFirstDashboardOwner(identity.getPrincipal(row.principal_id));
+      return grantLegacyDashboardAdministrator(principal);
     }
 
     if (!password) return null;
-    const hasOwner = Boolean(db.prepare("SELECT 1 FROM principal_roles WHERE role_name = 'owner' LIMIT 1").get());
-    if (!hasOwner) {
+    const owner = identity.listPrincipals({ type: "human" }).find(item => item.enabled && item.roles.includes("owner"));
+    if (!owner) {
+      const hasOwner = Boolean(db.prepare("SELECT 1 FROM principal_roles WHERE role_name = 'owner' LIMIT 1").get());
+      if (hasOwner) return null;
       return identity.bootstrapOwner({
         username,
         password: crypto.randomBytes(32).toString("base64url"),
@@ -211,12 +220,20 @@ function legacyDashboardPrincipal(username, password = null) {
       username,
       password: crypto.randomBytes(32).toString("base64url"),
       displayName: username,
+      actorIdentity: owner,
       metadata: { legacy_dashboard_username: username, adopted_legacy_dashboard: true },
     });
-    return identity.assignRole(principal.principal_id, "administrator");
+    return identity.assignRole(principal.principal_id, "administrator", owner);
   } catch {
     return null;
   }
+}
+
+function grantLegacyDashboardAdministrator(principal) {
+  if (!principal || !identity.canAssignLegacyDashboardAdministrator(principal.principal_id)) return principal;
+  const owner = identity.listPrincipals({ type: "human" }).find(item => item.enabled && item.roles.includes("owner"));
+  if (!owner) return null;
+  return identity.assignRole(principal.principal_id, "administrator", owner);
 }
 
 function promoteFirstDashboardOwner(principal) {
@@ -224,7 +241,7 @@ function promoteFirstDashboardOwner(principal) {
   try {
     const db = dbStore.getDb();
     if (!db.prepare("SELECT 1 FROM principal_roles WHERE role_name = 'owner' LIMIT 1").get()) {
-      return identity.assignRole(principal.principal_id, "owner", principal.principal_id);
+      return identity.assignRole(principal.principal_id, "owner", principal);
     }
   } catch {}
   return principal;
@@ -297,28 +314,9 @@ function clearIdentityCookie(res, req = null) {
 // Audit logging
 const AUDIT_LOG = path.join(DATA_DIR, 'audit.jsonl');
 function auditLog(req, action, details, actor = null) {
-  const entry = {
-    timestamp: new Date().toISOString(),
-    action,
-    key: req.params.key || null,
-    ip: req.ip,
-    user: actor || (() => {
-      const auth = req.headers.authorization;
-      if (auth && auth.startsWith('Basic ')) {
-        return Buffer.from(auth.slice(6), 'base64').toString().split(':')[0];
-      }
-      return 'anonymous';
-    })(),
-    details
-  };
+  const entry = createDashboardAuditEntry(req, action, details, actor);
   const line = JSON.stringify(entry) + '\n';
-  fs.appendFileSync(AUDIT_LOG, line);
-}
-
-function dashboardActor(req) {
-  const auth = req.headers.authorization;
-  if (auth && auth.startsWith('Basic ')) return Buffer.from(auth.slice(6), 'base64').toString().split(':')[0];
-  return 'anonymous';
+  appendAuditLine(AUDIT_LOG, line);
 }
 
 function startDashboardExecution(req, action) {
@@ -363,39 +361,6 @@ function finishDashboardExecution(execution, state, details = {}) {
 
 function logError(url, status, error, page, userAgent, req = null) {
   return dashboardErrors.logError(req, error, { url, status, component: page, userAgent });
-}
-
-function getJsonFromLocalService(port, pathName, headers = {}, timeout = 3000) {
-  return new Promise((resolve, reject) => {
-    const req = http.request({
-      hostname: "127.0.0.1",
-      port,
-      path: pathName,
-      method: "GET",
-      headers,
-      timeout
-    }, (res) => {
-      let body = "";
-      res.setEncoding("utf8");
-      res.on("data", chunk => { body += chunk; });
-      res.on("end", () => {
-        if (res.statusCode < 200 || res.statusCode >= 300) {
-          reject(new Error("HTTP " + res.statusCode));
-          return;
-        }
-        try {
-          resolve(JSON.parse(body || "{}"));
-        } catch (e) {
-          reject(e);
-        }
-      });
-    });
-    req.on("timeout", () => {
-      req.destroy(new Error("request timed out"));
-    });
-    req.on("error", reject);
-    req.end();
-  });
 }
 
 // IP whitelist middleware
@@ -512,15 +477,10 @@ app.post('/grafana/api/user/auth-tokens/rotate', (req, res) => {
 });
 
 app.use('/grafana', (req, res) => {
-  if (!GRAFANA_USER) return res.status(503).send('Grafana proxy is not configured');
+  if (!requireIdentityPermission(req, res, "dashboard.operations.read")) return;
+  if (!GRAFANA_USER || !GRAFANA_PASS) return res.status(503).send('Grafana proxy credentials are unavailable');
   const targetPath = req.originalUrl || '/grafana/';
-  const headers = { ...req.headers };
-  delete headers.host;
-  delete headers.cookie;
-  delete headers.authorization;
-  // Grafana Auth Proxy: set trusted user header (strip any incoming to prevent spoofing)
-  delete headers['x-webauth-user'];
-  headers['x-webauth-user'] = GRAFANA_USER;
+  const headers = buildGrafanaProxyHeaders(req.headers, GRAFANA_USER, GRAFANA_PASS);
 
   let body = null;
   if (req.body && Object.keys(req.body).length) {
@@ -555,6 +515,7 @@ app.use('/grafana', (req, res) => {
     }
     proxyRes.pipe(res);
   });
+  if (req.method === "GET" || req.method === "HEAD") abortUpstreamOnDisconnect(res, proxyReq);
   proxyReq.on('timeout', () => proxyReq.destroy(new Error('Grafana proxy timed out')));
   proxyReq.on('error', error => {
     if (!res.headersSent) dashboardErrors.respond(req, res, error, { status: 502, code: "upstream_unavailable", component: "grafana" });
@@ -951,7 +912,7 @@ async function dashboardSummaryHandler(req, res) {
     let mcpSessionDetails = [];
     try {
       const mcpHealth = await getJsonFromLocalService(MCP_PORT, "/health", {
-        "Authorization": "Bearer " + MCP_API_KEY
+        "Authorization": "Bearer " + (req.dashboardSessionToken || "")
       });
       mcpClients = Number(mcpHealth.sessions) || 0;
       mcpSessionDetails = Array.isArray(mcpHealth.sessionDetails) ? mcpHealth.sessionDetails : [];
@@ -1106,7 +1067,7 @@ app.get("/api/repository/semantic", async (req, res) => {
    } catch (error) { return dashboardErrors.respond(req, res, error, { status: 400, code: "invalid_request", component: "semantic_repository" }); }
 });
 
-registerEventRoutes({ app, platformKernel, authenticatedUser, requireIdentityPermission, auditLog, errorResponse: dashboardErrors.respond });
+registerEventRoutes({ app, platformKernel, authenticatedUser, requireIdentityPermission, recordIdentityAudit: identity.recordAuditEvent, auditLog, errorResponse: dashboardErrors.respond });
 
 registerConnectorRoutes({
   app,
@@ -1191,6 +1152,7 @@ registerKvRoutes({
   valueSize,
   valueType,
   auditLog,
+  recordIdentityAudit: identity.recordAuditEvent,
   requireIdentityAdministrator,
   requireIdentityPermission,
   errorResponse: dashboardErrors.respond,
@@ -1584,30 +1546,6 @@ function authorizeDashboardMemoryProject(req, res, access, requestedProject, aud
 app.post("/api/memories/:id/disable", (req, res) =>
   dispatchMemoryManage(req, res, { action: "disable", id: req.params.id }, "memory_disable"));
 
-app.post("/api/memories/:id/enable", (req, res) => {
-  // memory_manage has no "enable" action (its "restore" revives deleted or
-  // expired records, a different semantic), so this stays on dbStore directly
-  // — with audit and honest status codes.
-  try {
-    if (!req.authPrincipal?.principal_id) return res.status(401).json({ ok: false, error: "authenticated principal required", code: "unauthenticated" });
-    const memory = dbStore.getMemoryById(req.params.id, { includeDisabled: true });
-    if (!memory) return dashboardErrors.respond(req, res, null, { status: 404, code: "not_found", component: "memory" });
-    if (!projectAccess.hasProjectAccess(req.authPrincipal.principal_id, memory.project, "write", req.authPrincipal.scopes, req.authPrincipal.delegation_id || req.authPrincipal.delegationId || null)) {
-      auditLog(req, "memory_enable", { id: req.params.id, ok: false, denied: true });
-      // Keep inaccessible and nonexistent IDs indistinguishable to callers.
-      return dashboardErrors.respond(req, res, null, { status: 404, code: "not_found", component: "memory" });
-    }
-    const success = dbStore.enableMemory(req.params.id);
-    auditLog(req, "memory_enable", { id: req.params.id, ok: success });
-    if (!success) {
-      return dashboardErrors.respond(req, res, null, { status: 404, code: "not_found", component: "memory" });
-    }
-    res.json({ ok: true });
-  } catch (error) {
-    return dashboardErrors.respond(req, res, error, { status: 500, code: "service_unavailable", component: "memory" });
-  }
-});
-
 app.delete("/api/memories/:id", (req, res) =>
   dispatchMemoryManage(req, res, { action: "delete", id: req.params.id, reason: "dashboard_delete" }, "memory_delete"));
 
@@ -1683,27 +1621,10 @@ app.post("/api/memories/import", async (req, res) => {
   }
 });
 
-app.post("/api/memories/expire", (req, res) => {
-  // Bulk stale expiry has no memory_manage action (`expire` there takes a
-  // single id; `process_auto_expirations` is a different sweep), so this stays
-  // on dbStore directly — with audit and honest status codes.
-  try {
-    if (!requireIdentityAdministrator(req, res)) return;
-    const { stale_days } = req.body || {};
-    if (stale_days !== undefined && (!Number.isFinite(Number(stale_days)) || Number(stale_days) < 0)) {
-      return dashboardErrors.respond(req, res, null, { status: 400, code: "invalid_request", component: "memory" });
-    }
-    const result = dbStore.expireStaleMemories({ staleDays: stale_days });
-    auditLog(req, "memory_expire", { expired: result.expired, stale_days });
-    res.json({ ok: true, ...result });
-  } catch (error) {
-    return dashboardErrors.respond(req, res, error, { status: 500, code: "service_unavailable", component: "memory" });
-  }
-});
-
+registerMemoryMutationRoutes({ app, dbStore, projectAccess, requireIdentityAdministrator, auditLog, recordIdentityAudit: identity.recordAuditEvent, errorResponse: dashboardErrors.respond });
 registerHandoffReadRoutes({ app, dbStore, errorResponse: dashboardErrors.respond });
 
-registerSyncRoutes({ app, dbStore, requireIdentityPermission, projectAccess, auditLog, errorResponse: dashboardErrors.respond });
+registerSyncRoutes({ app, dbStore, requireIdentityPermission, projectAccess, auditLog, recordIdentityAudit: identity.recordAuditEvent, errorResponse: dashboardErrors.respond });
 
 app.get("/api/procedures", (req, res) => {
   if (!requireIdentityPermission(req, res, "dashboard.catalog.read")) return;
@@ -1758,17 +1679,6 @@ function clearConversationFiles() {
   return removed;
 }
 
-function respondToClear(req, res, auditEvent, run) {
-  try {
-    const detail = run() || {};
-    auditLog(req, auditEvent, detail);
-    res.json({ ok: true, ...detail });
-  } catch (error) {
-    auditLog(req, auditEvent + ".failed", { error: "dashboard_action_failed" });
-    return dashboardErrors.respond(req, res, error, { status: 500, code: "service_unavailable", component: auditEvent });
-  }
-}
-
 function requireDashboardAdministrator(req, res) {
   if (typeof requireIdentityAdministrator !== "function") {
     res.status(503).json({ ok: false, error: "authorization service unavailable", code: "authorization_unavailable" });
@@ -1777,23 +1687,7 @@ function requireDashboardAdministrator(req, res) {
   return requireIdentityAdministrator(req, res);
 }
 
-app.delete("/api/logs", (req, res) =>
-  requireDashboardAdministrator(req, res) && respondToClear(req, res, "logs.clear", () => { dbStore.clearToolLogs(); return {}; }));
-
-app.delete("/api/kv", (req, res) =>
-  requireDashboardAdministrator(req, res) && respondToClear(req, res, "kv.clear", () => { dbStore.clearKV(); return {}; }));
-
-app.delete("/api/conversations", (req, res) =>
-  requireDashboardAdministrator(req, res) && respondToClear(req, res, "conversations.clear", () => ({ removed: clearConversationFiles() })));
-
-app.delete("/api/data", (req, res) =>
-  requireDashboardAdministrator(req, res) && respondToClear(req, res, "data.clear", () => {
-    // Ordered so a failure reports which stage stopped the wipe rather than
-    // claiming the whole clear succeeded.
-    dbStore.clearToolLogs();
-    dbStore.clearKV();
-    return { removed: clearConversationFiles() };
-  }));
+registerClearRoutes({ app, dbStore, clearConversationFiles, requireDashboardAdministrator, auditLog, errorResponse: dashboardErrors.respond });
 
 // Error logging endpoint (for frontend errors). Fire-and-forget by design:
 // 204 says "received, no body" without asserting the write succeeded — the

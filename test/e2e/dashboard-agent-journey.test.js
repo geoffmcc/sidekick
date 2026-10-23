@@ -93,3 +93,41 @@ test("tool-backed Agent task shows dispatch completion and durable history after
     assert.ok(fixture.ollama, "the external inference boundary fixture should be running");
   });
 });
+
+test("Dashboard displays escalation details and requester self-approval remains blocked", async () => {
+  await withDiagnostics(page, fixture, "agent-escalation-review", async () => {
+    await page.goto(`${fixture.baseUrl}/#agent`, { waitUntil: "domcontentloaded" });
+    await page.locator("#page-agent.active").waitFor({ state: "attached" });
+    await page.locator("#agentGoal").fill("Review dashboard escalation controls");
+    await page.locator("#agentProject").fill("e2e_escalation_review");
+    const startedResponse = page.waitForResponse(response => response.url().includes("/api/agent/run") && response.request().method() === "POST");
+    await page.locator("#agentGo").click();
+    const started = await startedResponse;
+    assert.equal(started.status(), 200, await started.text());
+    const startedBody = await started.json();
+    const taskId = startedBody.taskId;
+    assert.ok(taskId, "task creation returns its durable task id");
+    const escalationResponse = await fixture.request("POST", `/api/agent/tasks/${encodeURIComponent(taskId)}/escalations`, {
+      requested_operation: "Restart the isolated test service",
+      reason: "The task requires an operator decision",
+      target_ref: "resource:e2e-test-service",
+      risk_class: "medium",
+      effect_class: "reversible",
+    });
+    assert.equal(escalationResponse.status, 201, JSON.stringify(escalationResponse.body));
+    const escalationId = escalationResponse.body.escalation.escalation_id;
+
+    const review = page.locator("#agentDurableEscalation");
+    await review.getByRole("button", { name: "Approve this request" }).waitFor({ state: "visible", timeout: 30000 });
+    assert.match(await review.innerText(), /Restart the isolated test service/);
+    assert.match(await review.innerText(), /resource:e2e-test-service/);
+
+    page.once("dialog", dialog => dialog.accept());
+    const decisionResponse = page.waitForResponse(response => response.url().includes(`/api/agent/tasks/${taskId}/escalations/${escalationId}/decision`));
+    await review.getByRole("button", { name: "Approve this request" }).click();
+    assert.equal((await decisionResponse).status(), 403, "the server rejects requester self-approval from the Dashboard");
+    const decided = await fixture.request("GET", `/api/agent/tasks/${encodeURIComponent(taskId)}`);
+    assert.equal(decided.status, 200);
+    assert.equal(decided.body.escalations.find(item => item.escalation_id === escalationId)?.state, "open");
+  });
+});

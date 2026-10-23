@@ -56,6 +56,7 @@ const MAX_CONCURRENT_JOBS = boundedInt(process.env.SIDEKICK_WORKER_CONCURRENCY, 
 const MAX_RETRY_MS = boundedInt(process.env.SIDEKICK_WORKER_MAX_RETRY_MS, 30000, 1000, 300000);
 const SHUTDOWN_GRACE_MS = boundedInt(process.env.SIDEKICK_WORKER_SHUTDOWN_GRACE_MS, 10000, 1000, 120000);
 const DISCONNECT_TIMEOUT_MS = boundedInt(process.env.SIDEKICK_WORKER_DISCONNECT_TIMEOUT_MS, 3000, 250, 30000);
+const MAX_CONTROL_RESPONSE_BYTES = 2 * 1024 * 1024;
 const OPENVINO_STARTUP_READINESS_MS = boundedInt(process.env.SIDEKICK_OPENVINO_STARTUP_READINESS_MS, 60000, 1000, 300000);
 // Model generation can legitimately take longer than the worker control-plane
 // requests, especially on first load or for long coding prompts. Keep this
@@ -140,6 +141,12 @@ function credentialHeaders() {
 
 function httpRequest(method, requestPath, body, extraHeaders = {}, options = {}) {
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      fn(value);
+    };
     const url = new URL(requestPath, SERVER_URL);
     const mod = url.protocol === "https:" ? https : http;
     const bodyStr = body ? JSON.stringify(body) : null;
@@ -148,15 +155,27 @@ function httpRequest(method, requestPath, body, extraHeaders = {}, options = {})
     // options.signal lets a caller abort an in-flight request (cancellation
     // observed DURING a long generation, not only before/after it).
     const req = mod.request({ hostname: url.hostname, port: url.port, path: `${url.pathname}${url.search}`, method, headers, signal: options.signal }, (res) => {
-      let data = "";
-      res.on("data", c => { data += c; if (data.length > 2 * 1024 * 1024) req.destroy(new Error("Response too large")); });
+      const chunks = [];
+      let bytes = 0;
+      res.on("data", chunk => {
+        bytes += chunk.length;
+        if (bytes > MAX_CONTROL_RESPONSE_BYTES) {
+          const error = new Error("Response too large");
+          finish(reject, error);
+          req.destroy(error);
+          return;
+        }
+        chunks.push(chunk);
+      });
       res.on("end", () => {
-        try { resolve({ status: res.statusCode, data: data ? JSON.parse(data) : {} }); }
-        catch { resolve({ status: res.statusCode, data: { error: data.substring(0, 500) } }); }
+        if (settled) return;
+        const data = Buffer.concat(chunks).toString("utf8");
+        try { finish(resolve, { status: res.statusCode, data: data ? JSON.parse(data) : {} }); }
+        catch { finish(resolve, { status: res.statusCode, data: { error: data.substring(0, 500) } }); }
       });
     });
     req.setTimeout(options.timeoutMs || 15000, () => req.destroy(new Error("Request timeout")));
-    req.on("error", reject);
+    req.on("error", error => finish(reject, error));
     if (bodyStr) req.write(bodyStr);
     req.end();
   });
@@ -1116,4 +1135,4 @@ function __setWorkerIdentityForTest(id, cred) {
   credential = cred;
 }
 
-module.exports = { collectSystemInfo, configuredProviders, configuredExecutors, configuredModelInventory, configuredHealth, collectRuntimeTelemetry, inferenceTelemetryFromOllama, loadedOllamaModels, deterministicEmbedding, executeJob, validateJobResult, boundedInt, jitteredBackoff, redact, getOpenVinoExecutor, sendDisconnect, requestShutdown, rotateWorkerCredential, __setOpenVinoExecutorForTest, __setWorkerIdentityForTest };
+module.exports = { collectSystemInfo, configuredProviders, configuredExecutors, configuredModelInventory, configuredHealth, collectRuntimeTelemetry, inferenceTelemetryFromOllama, loadedOllamaModels, deterministicEmbedding, executeJob, validateJobResult, boundedInt, jitteredBackoff, redact, getOpenVinoExecutor, sendDisconnect, requestShutdown, rotateWorkerCredential, __setOpenVinoExecutorForTest, __setWorkerIdentityForTest, httpRequest, MAX_CONTROL_RESPONSE_BYTES };

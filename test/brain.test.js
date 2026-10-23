@@ -193,9 +193,9 @@ test("source is allowed as a read filter on the tools that genuinely take one", 
 });
 
 test("source is NOT exempt on tools where it is an authority or execution input", () => {
-  // memory: source:"correction" sets source_authority 10, the maximum in the
-  // system — a model self-asserting top authority, then recalled into later
-  // planning. baseline: source:"command" is a mode selector reaching execSync,
+  // memory: source is provenance metadata and plans must not self-assert it.
+  // Runtime persistence pins authority even when direct callers supply labels.
+  // baseline: source:"command" is a mode selector reaching execSync,
   // and baseline is only high risk while bash is critical, so a deployment
   // gating bash would not gate this.
   const mem = validate(withStep({ id: "s1", type: "tool", tool: "memory",

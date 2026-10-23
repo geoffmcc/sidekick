@@ -440,10 +440,10 @@ copying a fixed inventory. See
  [`docs/security-research-pack.md`](docs/security-research-pack.md), plus
  [`docs/browser-automation.md`](docs/browser-automation.md).
 
-> Installing or enabling a pack activates executable module code inside the
-> Sidekick process. Inspection never executes package code, and every installed
-> package is integrity-verified before it loads — but there is no sandbox.
-> Treat installing a third-party pack as equivalent to deploying code.
+> Enabling a bundled first-party pack activates trusted module code inside the
+> Sidekick process; pack-level isolation is not provided. Third-party module
+> code fails closed before loading until an OS isolation boundary and broker
+> exist. Package integrity and provenance are not a sandbox.
 
 ### Semantic Repository Intelligence
 
@@ -510,7 +510,7 @@ The Knowledge Base replaces the need for large markdown files. Instead of re-rea
 - Sidekick Compute accepts only versioned, allowlisted model workloads; it is not arbitrary worker-side command execution.
 - Evolve does not silently activate free-form code. Generated capabilities must pass validation and approval before trial or active exposure.
 - The Agent Bridge acts only on submitted tasks, schedules, or watches and remains bounded by task profiles, model/tool budgets, wall-clock and idle limits, tool policy, approvals, checkpoint/recovery rules, verification, and the same dispatcher used by other execution paths.
-- The module system's full lifecycle is implemented for first-party AND third-party modules: safe package inspection, a managed module store, verified entry-point loading with whole-package integrity, install/configure/enable/disable/upgrade/uninstall, and a derived health model. **Installed module code is trusted executable code running in-process with Sidekick's privileges — there is no sandbox and none is claimed.** The controls are integrity, provenance and lifecycle, not isolation. Treat installing a third-party pack as equivalent to deploying code.
+- The module lifecycle supports first-party and third-party package inspection and management. Bundled first-party module code runs in-process as trusted release code. Third-party executable module code fails closed before loading until an OS isolation boundary and capability broker exist; integrity and provenance do not constitute a sandbox.
 - Capability packs compose existing subsystems; they are not a second plugin runtime, dispatcher or workflow engine. There is no remote marketplace: packs are installed from the bundled release copy or from an approved server-local path.
 - Handler extraction out of `src/tools-legacy.js` is complete (zero production handlers remain there); the remaining platform convergence work is tracked in `docs/platform-roadmap.md`.
 
@@ -808,14 +808,11 @@ The deploy script automatically syncs `.env` to the remote machine if it exists 
 
 The deploy script follows a two-phase security approach:
 
-1. **First deploy (password required):** The script SSHs as the initial user (ubuntu/admin/root) and bootstraps the VM using SSH ControlMaster for connection multiplexing. This creates the sidekick user, installs Node.js, configures sudoers, installs systemd services, installs your SSH key, and opens firewall ports. All privileged operations require the initial user's password (prompted once via SSH ControlMaster).
+1. **First deploy (password required):** The script SSHs as the initial user (ubuntu/admin/root) and bootstraps the VM using SSH ControlMaster for connection multiplexing. This creates the sidekick user, installs Node.js and Polkit, configures narrow sudoers entries, installs systemd services and the Polkit policy, installs your SSH key, and opens firewall ports. All privileged operations require the initial user's password (prompted once via SSH ControlMaster).
 
-2. **Subsequent deploys (no password):** The script SSHs as the sidekick user using SSH key authentication. Only minimal sudo permissions are used for service management (start/stop/restart/status) and log viewing. The sudoers file restricts the sidekick user to only these specific commands:
-   - `systemctl start/stop/restart/status sidekick-*`
-   - `journalctl -u sidekick-*`
-   - `ufw allow 4097/4098/4099`
+2. **Subsequent deploys (no password):** The script SSHs as the sidekick user using SSH key authentication. Core operations use Polkit only when requested from `sidekick-mcp.service` with `NoNewPrivileges=true`; SSH deployment uses exact sudoers grants for start/stop/restart/status of the three Sidekick services. Unit enablement, daemon reload, and arbitrary commands are not granted. The sudoers entries do not bypass `NoNewPrivileges` inside the services.
 
-This follows the principle of least privilege: after initial setup, the sidekick user cannot reload systemd, enable/disable services, or modify the system in any way beyond managing the Sidekick services.
+Manual systemd installations must install `polkitd` and run `sudo bash ./scripts/install-polkit-policy.sh sidekick` from the repository root before starting the services. WireGuard changes and Nginx configuration-file changes still require separate NNP-compatible mediation and are not granted by the service-control Polkit policy.
 
 | Variable | Default | Description |
 |----------|---------|-------------|

@@ -11,7 +11,7 @@ const { METADATA_HOSTS } = require("../compute/endpoint-guard");
 
 const MAX_LIST = 256;
 const MAX_HOST = 253;
-const PROTOCOLS = new Set(["http", "https", "ws", "wss"]);
+const PROTOCOLS = new Set(["http", "https", "ws", "wss", "tcp", "udp", "icmp"]);
 const PERMANENT_REASON = "permanent_denial";
 
 function fail(message) { throw new Error(message); }
@@ -128,7 +128,7 @@ function normalizeScope(input = {}) {
   if (!/^[a-z][a-z0-9_-]{1,79}$/.test(name)) fail("name must use lowercase letters, numbers, _ or -");
   const description = input.description == null ? null : boundedString(input.description, "description", 500);
   const protocols = [...new Set(list(input.allowed_protocols, "allowed_protocols").map(v => boundedString(v, "protocol", 8).toLowerCase()))].sort();
-  if (!protocols.length || protocols.some(p => !PROTOCOLS.has(p))) fail("allowed_protocols must contain http, https, ws or wss");
+  if (!protocols.length || protocols.some(p => !PROTOCOLS.has(p))) fail("allowed_protocols must contain http, https, ws, wss, tcp, udp or icmp");
   const allowedCidrs = [...new Set(list(input.allowed_cidrs, "allowed_cidrs").map((v, i) => normalizeCidr(v, `allowed_cidrs[${i}]`)))].sort();
   const deniedCidrs = [...new Set(list(input.denied_cidrs, "denied_cidrs").map((v, i) => normalizeCidr(v, `denied_cidrs[${i}]`)))].sort();
   const exactIps = [...new Set(list(input.allowed_ips, "allowed_ips").map((v, i) => parseAddress(v, `allowed_ips[${i}]`).text))].sort();

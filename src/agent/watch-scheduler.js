@@ -52,13 +52,6 @@ function createWatchScheduler({
 
     const renewTimer = startScheduledLeaseRenewal(current.platform_execution_id, checkClaim.claim);
     try {
-      let checkResult;
-      if (watch.source === "service") checkResult = checkService(watch.target);
-      else if (watch.source === "process") checkResult = checkProcess(watch.target);
-      else if (watch.source === "endpoint") checkResult = checkEndpoint(watch.target);
-      else if (watch.source === "file") checkResult = checkFile(watch.target, watch.condition === "content_matches" ? watch.value : null);
-
-      const triggered = evaluateWatchCondition(watch, checkResult);
       const checkExecution = createScheduledPlatformExecution("watch", watch, {
         attach: false,
         parentExecutionId: watch.platform_execution_id || null,
@@ -68,9 +61,39 @@ function createWatchScheduler({
         source: "agent",
         actor: "agent",
         risk: "medium",
-        metadata: { source: watch.source, target: watch.target, condition: watch.condition },
+        metadata: { source: watch.source, target: watch.target, network_scope: watch.network_scope || null, network_scope_revision: watch.network_scope_revision || null, condition: watch.condition },
         reason: "scheduled watch check started",
       });
+      let checkResult;
+      try {
+        if (watch.source === "service") checkResult = checkService(watch.target);
+        else if (watch.source === "process") checkResult = checkProcess(watch.target);
+        else if (watch.source === "endpoint") checkResult = await checkEndpoint(watch.target, watch.network_scope, watch.network_scope_revision);
+        else if (watch.source === "file") checkResult = checkFile(watch.target, watch.condition === "content_matches" ? watch.value : null);
+      } catch (error) {
+        const reason = error.policyDenied ? "scheduled watch check denied by current security policy" : "scheduled watch check failed";
+        if (checkExecution) transitionExecution(checkExecution.execution_id, "failed", {
+          source: "agent", actor_id: "agent", reason,
+          result_status: "failure", error_category: error.code || "watch_check_failed",
+          result_summary: reason, correlation_id: watch.id,
+        });
+        appendScheduledPlatformEvent("watch", watch, "schedule.watch.check_failed", {
+          code: String(error.code || "watch_check_failed").slice(0, 80),
+        }, {
+          source: "agent", actor: "agent", severity: "error",
+          executionId: checkExecution?.execution_id,
+          rootExecutionId: watch.platform_execution_id || checkExecution?.root_execution_id,
+        });
+        const watchesAfter = loadWatches();
+        const updated = watchesAfter.find(w => w.id === watch.id);
+        if (updated) {
+          updated.lastCheck = new Date().toISOString();
+          saveWatches(watchesAfter);
+        }
+        return;
+      }
+
+      const triggered = evaluateWatchCondition(watch, checkResult);
       const watchesAfter = loadWatches();
       const updated = watchesAfter.find(w => w.id === watch.id);
       if (updated) {

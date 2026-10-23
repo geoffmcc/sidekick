@@ -15,6 +15,10 @@ const DEFAULT_TIMEOUT_MS = 30000;
 // Responses are accumulated in memory and returned as tool output, so an
 // unbounded body is a memory-exhaustion vector as well as a context flood.
 const MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
+const MAX_REQUEST_BODY_BYTES = 5 * 1024 * 1024;
+const MAX_REQUEST_HEADER_BYTES = 64 * 1024;
+const MAX_REQUEST_HEADER_COUNT = 64;
+const MAX_REQUEST_HEADER_VALUE_LENGTH = 8192;
 
 function errorText(text, code = "network_request_failed", guidance = null) {
   const payload = { ok: false, code, error: text, ...(guidance ? { guidance } : {}) };
@@ -32,11 +36,55 @@ function connectionFailure(error) {
   return { code: "network_unreachable", guidance: "Check the target endpoint and network path from the Sidekick host." };
 }
 
+function validateRequestPayload(headersJson, body) {
+  if (body !== undefined && body !== null && Buffer.byteLength(String(body), "utf8") > MAX_REQUEST_BODY_BYTES) {
+    return { error: errorText(`Request body exceeds ${MAX_REQUEST_BODY_BYTES} bytes`, "request_body_too_large") };
+  }
+  if (headersJson === undefined || headersJson === null || headersJson === "") return { headers: Object.create(null) };
+  if (typeof headersJson !== "string" || Buffer.byteLength(headersJson, "utf8") > MAX_REQUEST_HEADER_BYTES) {
+    return { error: errorText(`Request headers exceed ${MAX_REQUEST_HEADER_BYTES} bytes`, "request_headers_too_large") };
+  }
+  let parsed;
+  try { parsed = JSON.parse(headersJson); } catch {
+    return { error: errorText("Error: headers must be a JSON object") };
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { error: errorText("Error: headers must be a JSON object") };
+  }
+  const entries = Object.entries(parsed);
+  if (entries.length > MAX_REQUEST_HEADER_COUNT) {
+    return { error: errorText(`Request contains more than ${MAX_REQUEST_HEADER_COUNT} headers`, "too_many_request_headers") };
+  }
+  let headerBytes = 0;
+  for (const [name, value] of entries) {
+    const values = Array.isArray(value) ? value : [value];
+    if (!name || name.length > 128 || values.some(item => typeof item !== "string" && typeof item !== "number")) {
+      return { error: errorText("Error: header names and values must be bounded strings or numbers", "invalid_request_header") };
+    }
+    const valueText = values.map(String).join(", ");
+    if (valueText.length > MAX_REQUEST_HEADER_VALUE_LENGTH) {
+      return { error: errorText(`Request header value exceeds ${MAX_REQUEST_HEADER_VALUE_LENGTH} characters`, "request_header_value_too_large") };
+    }
+    headerBytes += Buffer.byteLength(name, "utf8") + Buffer.byteLength(valueText, "utf8");
+  }
+  if (headerBytes > MAX_REQUEST_HEADER_BYTES) {
+    return { error: errorText(`Request headers exceed ${MAX_REQUEST_HEADER_BYTES} bytes`, "request_headers_too_large") };
+  }
+  const { accepted, rejected } = filterRequestHeaders(parsed);
+  if (rejected.length) {
+    return { error: errorText("Error: these headers may not be set by the caller: " + rejected.join(", ")) };
+  }
+  return { headers: accepted };
+}
+
 async function sidekick_web_fetch({ url: targetUrl, method, headers, body, network_scope, network_scope_revision }, runtime = {}) {
   const denied = requireCanonicalInvocation("web_fetch");
   if (denied) return denied;
   const https = require("https");
   const http = require("http");
+
+  const payload = validateRequestPayload(headers, body);
+  if (payload.error) return payload.error;
 
   // Destination policy first: this tool makes requests with the server's own
   // network identity, so an unvalidated target reaches anything the host can.
@@ -69,27 +117,11 @@ async function sidekick_web_fetch({ url: targetUrl, method, headers, body, netwo
       port: urlObj.port || (urlObj.protocol === "https:" ? 443 : 80),
       path: urlObj.pathname + urlObj.search,
       method: method || "GET",
-      headers: { "User-Agent": "Sidekick-MCP/1.0" },
+      headers: Object.assign(Object.create(null), { "User-Agent": "Sidekick-MCP/1.0" }, payload.headers),
       timeout: timeoutMs
     };
     options.headers.Host = urlObj.host;
     if (urlObj.protocol === "https:") options.servername = urlObj.hostname.replace(/^\[|\]$/g, "");
-    if (headers) {
-      let parsed = null;
-      try { parsed = JSON.parse(headers); } catch {
-        return resolve(errorText("Error: headers must be a JSON object"));
-      }
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        return resolve(errorText("Error: headers must be a JSON object"));
-      }
-      // Refuse rather than silently drop: a caller that believes it set
-      // Authorization should not think the request carried it.
-      const { accepted, rejected } = filterRequestHeaders(parsed);
-      if (rejected.length) {
-        return resolve(errorText("Error: these headers may not be set by the caller: " + rejected.join(", ")));
-      }
-      Object.assign(options.headers, accepted);
-    }
     if (body) {
       options.headers["Content-Type"] = options.headers["Content-Type"] || "application/json";
       options.headers["Content-Length"] = Buffer.byteLength(body);
@@ -138,8 +170,8 @@ const descriptors = Object.freeze([
     schema: z.object({
       url: z.string().describe("URL to fetch"),
       method: z.enum(["GET", "POST"]).optional().default("GET").describe("HTTP method"),
-      headers: z.string().optional().describe("JSON object of extra headers"),
-      body: z.string().optional().describe("Request body (for POST)"),
+      headers: z.string().max(MAX_REQUEST_HEADER_BYTES).optional().describe(`JSON object of extra headers (maximum ${MAX_REQUEST_HEADER_BYTES} characters)`),
+      body: z.string().max(MAX_REQUEST_BODY_BYTES).optional().describe(`Request body (for POST; maximum ${MAX_REQUEST_BODY_BYTES} characters and bytes)`),
       network_scope: z.string().max(80).optional().describe("Exact operator-created named outbound network scope"),
       network_scope_revision: z.number().int().positive().optional().describe("Immutable named scope revision"),
     }),
@@ -152,4 +184,14 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_web_fetch, connectionFailure, errorText };
+module.exports = {
+  descriptors,
+  sidekick_web_fetch,
+  connectionFailure,
+  errorText,
+  validateRequestPayload,
+  MAX_REQUEST_BODY_BYTES,
+  MAX_REQUEST_HEADER_BYTES,
+  MAX_REQUEST_HEADER_COUNT,
+  MAX_REQUEST_HEADER_VALUE_LENGTH,
+};

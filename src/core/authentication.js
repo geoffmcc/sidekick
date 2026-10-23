@@ -28,6 +28,39 @@ function validFutureDate(value, field) {
   if (!Number.isFinite(date.getTime()) || date.getTime() <= Date.now()) throw new Error(`${field} must be a future timestamp`);
   return date.toISOString();
 }
+function credentialActorContext(actorContext) {
+  const principalId = actorContext?.principal_id || actorContext?.principalId;
+  if (typeof principalId !== "string" || !principalId.trim()) throw new Error("credential mutations require an authenticated identity context");
+  const rawScopes = actorContext.scopes ?? actorContext.credentialScopes;
+  if (rawScopes !== undefined && rawScopes !== null && !Array.isArray(rawScopes)) throw new Error("credential authority scopes are invalid");
+  return {
+    principalId: principalId.trim(),
+    credentialScopes: Array.isArray(rawScopes) ? rawScopes : null,
+    delegationId: actorContext.delegation_id || actorContext.delegationId || null,
+  };
+}
+function assertCredentialActor(actorContext, permission) {
+  const context = credentialActorContext(actorContext);
+  const authorization = require("./authorization");
+  if (!authorization.authorize({ ...context, permission }).ok) throw new Error(`Credential mutation requires ${permission}`);
+  return { context, authorization };
+}
+function assertCredentialSubject(context, authorization, targetPrincipalId, { scopes = [], allowCrossPrincipal = true } = {}) {
+  const target = identity.getPrincipal(targetPrincipalId);
+  if (!target || !target.enabled) throw new Error("credential target must be an enabled principal");
+  if (context.principalId !== target.principal_id) {
+    if (!allowCrossPrincipal || !["agent", "service"].includes(target.principal_type)) {
+      throw new Error("credentials for another human principal cannot be managed by this operation");
+    }
+    for (const permission of ["principals.manage", "roles.manage"]) {
+      if (!authorization.authorize({ ...context, permission }).ok) throw new Error(`Cross-principal credential management requires ${permission}`);
+    }
+  }
+  for (const scope of scopes) {
+    if (!authorization.authorize({ ...context, permission: scope }).ok) throw new Error(`Credential scope exceeds the actor's authority: ${scope}`);
+  }
+  return target;
+}
 function safeCredential(row) {
   return {
     credential_id: row.credential_id,
@@ -49,10 +82,13 @@ function createSession(principalId, { userAgent = null, ipAddress = null, ttlMs 
   const timestamp = Date.now();
   const createdAt = new Date(timestamp).toISOString();
   const expiresAt = new Date(timestamp + Math.max(60_000, Number(ttlMs) || SESSION_TTL_MS)).toISOString();
-  dbStore.getDb().prepare(`INSERT INTO identity_sessions
-    (session_id_hash, principal_id, created_at, expires_at, last_seen_at, user_agent, ip_address)
-    VALUES (?, ?, ?, ?, ?, ?, ?)`).run(hash(raw), principalId, createdAt, expiresAt, createdAt, userAgent, ipAddress);
-  identity.recordAuditEvent("session.created", principalId, principalId, { expires_at: expiresAt });
+  const db = dbStore.getDb();
+  db.transaction(() => {
+    db.prepare(`INSERT INTO identity_sessions
+      (session_id_hash, principal_id, created_at, expires_at, last_seen_at, user_agent, ip_address)
+      VALUES (?, ?, ?, ?, ?, ?, ?)`).run(hash(raw), principalId, createdAt, expiresAt, createdAt, userAgent, ipAddress);
+    identity.recordAuditEvent("session.created", principalId, principalId, { expires_at: expiresAt });
+  })();
   return { token: raw, expires_at: expiresAt };
 }
 
@@ -84,30 +120,48 @@ function isSessionActive(sessionId) {
   return Boolean(row);
 }
 
-function invalidateSession(token) {
+function invalidateSession(token, actorPrincipalId = null) {
   if (typeof token !== "string" || !token) return false;
-  const result = dbStore.getDb().prepare("UPDATE identity_sessions SET invalidated_at = ? WHERE session_id_hash = ? AND invalidated_at IS NULL").run(now(), hash(token));
-  return result.changes === 1;
+  const db = dbStore.getDb();
+  return db.transaction(() => {
+    const sessionHash = hash(token);
+    const session = db.prepare("SELECT principal_id FROM identity_sessions WHERE session_id_hash = ?").get(sessionHash);
+    const result = db.prepare("UPDATE identity_sessions SET invalidated_at = ? WHERE session_id_hash = ? AND invalidated_at IS NULL").run(now(), sessionHash);
+    if (result.changes === 1) identity.recordAuditEvent("session.revoked", session?.principal_id, actorPrincipalId || session?.principal_id || null, {});
+    return result.changes === 1;
+  })();
 }
 
-function invalidatePrincipalSessions(principalId) {
-  const result = dbStore.getDb().prepare("UPDATE identity_sessions SET invalidated_at = ? WHERE principal_id = ? AND invalidated_at IS NULL").run(now(), requiredText(principalId, "principal_id"));
-  return result.changes;
+function invalidatePrincipalSessions(principalId, actorPrincipalId = null) {
+  const idValue = requiredText(principalId, "principal_id");
+  const db = dbStore.getDb();
+  return db.transaction(() => {
+    const result = db.prepare("UPDATE identity_sessions SET invalidated_at = ? WHERE principal_id = ? AND invalidated_at IS NULL").run(now(), idValue);
+    if (result.changes > 0) identity.recordAuditEvent("principal.sessions_revoked", idValue, actorPrincipalId, { count: result.changes });
+    return result.changes;
+  })();
 }
 
-function createCredential({ principalId, displayName, scopes = [], expiresAt = null, createdByPrincipalId = null } = {}) {
-  requiredText(principalId, "principal_id");
+function createCredential({ principalId, displayName, scopes = [], expiresAt = null, createdByPrincipalId = null, actorContext = null } = {}) {
+  const targetId = requiredText(principalId, "principal_id");
   const name = requiredText(displayName, "displayName");
   if (!Array.isArray(scopes) || scopes.some(scope => typeof scope !== "string" || !scope.trim() || scope.length > 160)) throw new Error("scopes must be a bounded string array");
+  const uniqueScopes = [...new Set(scopes.map(scope => scope.trim()))];
   const expiry = validFutureDate(expiresAt, "expires_at");
   const credentialId = id("cred");
   const secret = crypto.randomBytes(CREDENTIAL_BYTES).toString("base64url");
   const token = `skc_${credentialId}_${secret}`;
   const timestamp = now();
-  dbStore.getDb().prepare(`INSERT INTO identity_credentials
-    (credential_id, principal_id, display_name, verifier_hash, token_prefix, scopes_json, created_at, expires_at, created_by_principal_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(credentialId, principalId, name, hash(secret), token.slice(0, 16), JSON.stringify([...new Set(scopes.map(scope => scope.trim()))]), timestamp, expiry, createdByPrincipalId);
-  identity.recordAuditEvent("credential.created", principalId, createdByPrincipalId, { credential_id: credentialId, scopes: [...new Set(scopes.map(scope => scope.trim()))], expires_at: expiry });
+  const db = dbStore.getDb();
+  db.transaction(() => {
+    const { context, authorization } = assertCredentialActor(actorContext, "credentials.create");
+    if (createdByPrincipalId && createdByPrincipalId !== context.principalId) throw new Error("credential audit actor must match the authenticated identity context");
+    const target = assertCredentialSubject(context, authorization, targetId, { scopes: uniqueScopes });
+    db.prepare(`INSERT INTO identity_credentials
+      (credential_id, principal_id, display_name, verifier_hash, token_prefix, scopes_json, created_at, expires_at, created_by_principal_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(credentialId, target.principal_id, name, hash(secret), token.slice(0, 16), JSON.stringify(uniqueScopes), timestamp, expiry, context.principalId);
+    identity.recordAuditEvent("credential.created", target.principal_id, context.principalId, { credential_id: credentialId, scopes: uniqueScopes, expires_at: expiry });
+  })();
   return { token, credential: getCredential(credentialId) };
 }
 
@@ -139,12 +193,44 @@ function authenticateCredential(token) {
   return { ...safeCredential(row), principal_type: row.principal_type, principal_display_name: row.display_name, last_used_at: lastUsed };
 }
 
-function revokeCredential(credentialId) {
+// Normalize the two supported principal-bearing HTTP bearer forms. Browser
+// session tokens remain opaque and revocable: getSession checks current expiry,
+// invalidation, and principal state on every request. The legacy installation
+// API key is intentionally handled separately by its compatibility middleware
+// because it does not identify a principal.
+function authenticateBearerIdentity(token) {
+  const credential = authenticateCredential(token);
+  if (credential) {
+    return {
+      principal_id: credential.principal_id,
+      principal_type: credential.principal_type,
+      scopes: credential.scopes,
+      credential_id: credential.credential_id,
+      authentication_method: "scoped_credential",
+    };
+  }
+  const session = getSession(token);
+  if (!session) return null;
+  return {
+    principal_id: session.principal_id,
+    principal_type: session.principal_type,
+    scopes: null,
+    authentication_method: "browser_session",
+  };
+}
+
+function revokeCredential(credentialId, actorContext = null) {
   const idValue = requiredText(credentialId, "credential_id");
-  const principal = dbStore.getDb().prepare("SELECT principal_id FROM identity_credentials WHERE credential_id = ?").get(idValue);
-  const result = dbStore.getDb().prepare("UPDATE identity_credentials SET revoked_at = ? WHERE credential_id = ? AND revoked_at IS NULL").run(now(), idValue);
-  if (result.changes === 1) identity.recordAuditEvent("credential.revoked", principal?.principal_id, null, { credential_id: idValue });
-  return result.changes === 1;
+  const db = dbStore.getDb();
+  return db.transaction(() => {
+    const { context, authorization } = assertCredentialActor(actorContext, "credentials.revoke");
+    const credential = db.prepare("SELECT principal_id, scopes_json FROM identity_credentials WHERE credential_id = ?").get(idValue);
+    if (!credential) return false;
+    assertCredentialSubject(context, authorization, credential.principal_id, { allowCrossPrincipal: true });
+    const result = db.prepare("UPDATE identity_credentials SET revoked_at = ? WHERE credential_id = ? AND revoked_at IS NULL").run(now(), idValue);
+    if (result.changes === 1) identity.recordAuditEvent("credential.revoked", credential.principal_id, context.principalId, { credential_id: idValue });
+    return result.changes === 1;
+  })();
 }
 
 function createOwnerRecoveryToken(ownerPrincipalId, ttlMs = RECOVERY_TTL_MS) {
@@ -153,8 +239,11 @@ function createOwnerRecoveryToken(ownerPrincipalId, ttlMs = RECOVERY_TTL_MS) {
   const token = crypto.randomBytes(RECOVERY_BYTES).toString("base64url");
   const createdAt = now();
   const expiresAt = new Date(Date.now() + Math.max(60_000, Number(ttlMs) || RECOVERY_TTL_MS)).toISOString();
-  dbStore.getDb().prepare("INSERT INTO identity_recovery_tokens (token_hash, owner_principal_id, created_at, expires_at) VALUES (?, ?, ?, ?)").run(hash(token), owner.principal_id, createdAt, expiresAt);
-  identity.recordAuditEvent("owner.recovery_token_created", owner.principal_id, owner.principal_id, { expires_at: expiresAt });
+  const db = dbStore.getDb();
+  db.transaction(() => {
+    db.prepare("INSERT INTO identity_recovery_tokens (token_hash, owner_principal_id, created_at, expires_at) VALUES (?, ?, ?, ?)").run(hash(token), owner.principal_id, createdAt, expiresAt);
+    identity.recordAuditEvent("owner.recovery_token_created", owner.principal_id, owner.principal_id, { expires_at: expiresAt });
+  })();
   return { token, expires_at: expiresAt };
 }
 
@@ -167,7 +256,7 @@ function recoverOwnerPassword(token, newPassword) {
     if (!row || new Date(row.expires_at).getTime() <= Date.now()) throw new Error("recovery token is invalid or expired");
     const owner = identity.getPrincipal(row.owner_principal_id);
     if (!owner || !owner.enabled || !owner.roles.includes("owner")) throw new Error("Owner recovery is unavailable");
-    identity.changePassword(owner.principal_id, newPassword, owner.principal_id);
+    identity.changePassword(owner.principal_id, newPassword, owner);
     invalidatePrincipalSessions(owner.principal_id);
     db.prepare("UPDATE identity_recovery_tokens SET used_at = ? WHERE token_hash = ? AND used_at IS NULL").run(now(), row.token_hash);
     identity.recordAuditEvent("owner.recovered", owner.principal_id, owner.principal_id, {});
@@ -179,26 +268,28 @@ function recoverOwnerPassword(token, newPassword) {
   }
 }
 
-function rotateCredential(credentialId, createdByPrincipalId = null) {
-  const current = getCredential(credentialId);
-  if (!current || current.revoked_at) throw new Error("credential not found or already revoked");
+function rotateCredential(credentialId, actorContext = null) {
+  const idValue = requiredText(credentialId, "credential_id");
   const db = dbStore.getDb();
-  db.exec("BEGIN IMMEDIATE");
-  try {
+  return db.transaction(() => {
+    const { context, authorization } = assertCredentialActor(actorContext, "credentials.revoke");
+    if (!authorization.authorize({ ...context, permission: "credentials.create" }).ok) throw new Error("Credential rotation requires credentials.create");
+    const row = db.prepare("SELECT * FROM identity_credentials WHERE credential_id = ? AND revoked_at IS NULL").get(idValue);
+    if (!row) throw new Error("credential not found or already revoked");
+    const current = safeCredential(row);
+    assertCredentialSubject(context, authorization, current.principal_id, { scopes: current.scopes, allowCrossPrincipal: true });
     const replacement = createCredential({
       principalId: current.principal_id,
       displayName: current.display_name,
       scopes: current.scopes,
       expiresAt: current.expires_at,
-      createdByPrincipalId,
+      createdByPrincipalId: context.principalId,
+      actorContext,
     });
-    db.prepare("UPDATE identity_credentials SET revoked_at = ? WHERE credential_id = ? AND revoked_at IS NULL").run(now(), current.credential_id);
-    db.exec("COMMIT");
+    const result = db.prepare("UPDATE identity_credentials SET revoked_at = ? WHERE credential_id = ? AND revoked_at IS NULL").run(now(), current.credential_id);
+    if (result.changes !== 1) throw new Error("credential changed during rotation");
     return replacement;
-  } catch (error) {
-    try { db.exec("ROLLBACK"); } catch {}
-    throw error;
-  }
+  })();
 }
 
-module.exports = Object.freeze({ SESSION_TTL_MS, RECOVERY_TTL_MS, createSession, getSession, isSessionActive, invalidateSession, invalidatePrincipalSessions, createCredential, getCredential, listCredentials, authenticateCredential, revokeCredential, rotateCredential, createOwnerRecoveryToken, recoverOwnerPassword });
+module.exports = Object.freeze({ SESSION_TTL_MS, RECOVERY_TTL_MS, createSession, getSession, isSessionActive, invalidateSession, invalidatePrincipalSessions, createCredential, getCredential, listCredentials, authenticateCredential, authenticateBearerIdentity, revokeCredential, rotateCredential, createOwnerRecoveryToken, recoverOwnerPassword });

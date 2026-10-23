@@ -78,11 +78,11 @@ function registerBlackboxRoutes({ app, blackbox, requireIdentityPermission, hasI
       res.end();
     };
     if (!hasIdentityPermission(req, "blackbox.read")) return close();
-    res.write(`event: snapshot\ndata: ${JSON.stringify(blackbox.captureStatus(req.params.id))}\n\n`);
+    if (!res.write(`event: snapshot\ndata: ${JSON.stringify(blackbox.captureStatus(req.params.id))}\n\n`)) return close();
     unsubscribe = blackbox.subscribeCapture(req.params.id, event => {
       if (ended) return;
       if (!hasIdentityPermission(req, "blackbox.read")) return close();
-      res.write(`event: progress\ndata: ${JSON.stringify(event)}\n\n`);
+      if (!res.write(`event: progress\ndata: ${JSON.stringify(event)}\n\n`)) close();
     });
     authorizationPoll = setInterval(() => {
       if (!hasIdentityPermission(req, "blackbox.read")) close();

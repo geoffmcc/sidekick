@@ -18,13 +18,38 @@
 // src/tools/metadata.js.
 
 const https = require("https");
+const MAX_GITHUB_RESPONSE_BYTES = 8 * 1024 * 1024;
+const MAX_GITHUB_PAGES = 50;
+const MAX_GITHUB_PAGINATED_RESPONSE_BYTES = 16 * 1024 * 1024;
+const MAX_GITHUB_REQUEST_BYTES = 1024 * 1024;
+
+function readGithubResponseText(response, maxBytes = MAX_GITHUB_RESPONSE_BYTES) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let totalBytes = 0;
+    let oversized = false;
+    response.on("data", chunk => {
+      if (oversized) return;
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      totalBytes += buffer.byteLength;
+      if (totalBytes > maxBytes) {
+        oversized = true;
+        chunks.length = 0;
+        return;
+      }
+      chunks.push(buffer);
+    });
+    response.on("end", () => resolve(oversized ? null : Buffer.concat(chunks, totalBytes).toString("utf8")));
+    response.on("error", reject);
+  });
+}
 const { z } = require("zod");
 const { redactSensitive } = require("../../redact");
 const { resolveOutboundUrl } = require("../../security/outbound-url");
 const { requireToolExecution, requireCanonicalInvocation } = require("../read-authorization");
-const { loadSecrets } = require("../../core/secrets-store");
-const { decryptSecret } = require("../../core/secret-cipher");
 const { readSecret } = require("../../core/runtime-secrets");
+const { getExecutionContext } = require("../context");
+const authorization = require("../../core/authorization");
 
 // Reuse TLS connections for the GitHub API. Most calls are short read
 // sequences, so avoiding a new handshake per request materially reduces
@@ -53,6 +78,35 @@ function getGithubArg(args, names) {
   return args.value;
 }
 
+function validateRepoName(repo) {
+  return typeof repo === "string" && repo.length <= 201 && /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo) &&
+    !repo.split("/").some(part => part === "." || part === "..");
+}
+
+function isGithubNumericId(value) {
+  return (typeof value === "number" && Number.isSafeInteger(value) && value > 0) ||
+    (typeof value === "string" && /^[1-9]\d{0,9}$/.test(value));
+}
+
+function isGithubCommitId(value) {
+  return typeof value === "string" && /^[a-f\d]{1,64}$/i.test(value);
+}
+
+function validateGithubRef(value) {
+  if (typeof value !== "string" || value.length < 1 || value.length > 255 || !/^[A-Za-z0-9_./-]+$/.test(value)) return false;
+  return value.split("/").every(part => part && part !== "." && part !== ".." && !part.endsWith(".lock"));
+}
+
+function serializeGithubBody(body) {
+  if (!body) return { body: null };
+  let bodyStr;
+  try { bodyStr = JSON.stringify(body); } catch { return { error: "GitHub API request body is not serializable" }; }
+  if (Buffer.byteLength(bodyStr) > MAX_GITHUB_REQUEST_BYTES) {
+    return { error: `GitHub API request body exceeded ${MAX_GITHUB_REQUEST_BYTES} bytes` };
+  }
+  return { body: bodyStr };
+}
+
 // The GitHub connector is the governing authority for this integration when one
 // is registered (endpoint + credential reference). It is optional so the tool
 // still works before the connector authority is present; env stays the highest-
@@ -65,6 +119,25 @@ function githubConnector() {
 }
 
 function resolveGithubToken() {
+  const context = getExecutionContext();
+  const authIdentity = context?.authIdentity || null;
+  if (!authIdentity?.principal_id) {
+    const error = new Error("GitHub credential use requires an authenticated principal");
+    error.code = "unauthenticated";
+    throw error;
+  }
+  const decision = authorization.authorize({
+    principalId: authIdentity.principal_id,
+    permission: "secrets.use",
+    credentialScopes: authIdentity.scopes,
+    delegationId: authIdentity.delegation_id || authIdentity.delegationId || null,
+    resource: "github",
+  });
+  if (!decision.ok) {
+    const error = new Error("GitHub credential use is not authorized");
+    error.code = decision.code;
+    throw error;
+  }
   // Authority order: the ACTIVE registered GitHub connector is the governing
   // authority for this integration, so its secret_ref resolves FIRST. The
   // GITHUB_TOKEN env var is a fallback for pre-connector deployments (and the
@@ -76,6 +149,11 @@ function resolveGithubToken() {
   if (connector && connectorResolve) {
     const viaConnector = connectorResolve.resolveConnectorCredential(connector);
     if (viaConnector) return viaConnector;
+    if (connector.secret_ref) {
+      const error = new Error("configured GitHub connector credential is unavailable");
+      error.code = "credential_unavailable";
+      throw error;
+    }
   }
 
   try {
@@ -88,14 +166,7 @@ function resolveGithubToken() {
     return undefined;
   }
 
-  try {
-    const secrets = loadSecrets();
-    const secret = secrets["github_token"];
-    if (secret) return decryptSecret(secret);
-  } catch (e) {
-    // Secret store not available
-  }
-  return undefined;
+  return connectorResolve?.resolveSecretRef("secret:github_token", { context, requireIdentity: true }) || undefined;
 }
 
 // Governed API base: the connector's endpoint when registered, else the public
@@ -191,16 +262,23 @@ async function githubRequest(token, method, endpoint, body) {
       agent: githubHttpAgent,
       servername: url.hostname.replace(/^\[|\]$/g, "")
     };
-    let bodyStr = null;
-    if (body) {
-      bodyStr = JSON.stringify(body);
+    const serializedBody = serializeGithubBody(body);
+    if (serializedBody.error) {
+      resolve({ status: 0, headers: {}, data: serializedBody.error });
+      return;
+    }
+    const bodyStr = serializedBody.body;
+    if (bodyStr) {
       options.headers["Content-Type"] = "application/json";
       options.headers["Content-Length"] = Buffer.byteLength(bodyStr);
     }
     const req = https.request(options, (res) => {
-      let data = "";
-      res.on("data", (chunk) => data += chunk);
-      res.on("end", () => {
+      readGithubResponseText(res).then((data) => {
+        if (data === null) {
+          noteGithubResponse(res.statusCode);
+          resolve({ status: 0, headers: {}, data: `GitHub API response exceeded ${MAX_GITHUB_RESPONSE_BYTES} bytes` });
+          return;
+        }
         let parsed = data;
         try {
           parsed = data ? JSON.parse(data) : null;
@@ -208,8 +286,8 @@ async function githubRequest(token, method, endpoint, body) {
           parsed = data;
         }
         noteGithubResponse(res.statusCode);
-        resolve({ status: res.statusCode, headers: res.headers || {}, data: parsed });
-      });
+        resolve({ status: res.statusCode, headers: res.headers || {}, data: parsed, bytes: Buffer.byteLength(data, "utf8") });
+      }).catch(err => resolve({ status: 0, headers: {}, data: err.message }));
     });
     req.on("error", (err) => resolve({ status: 0, headers: {}, data: err.message }));
     req.setTimeout(30000, () => { req.destroy(); resolve({ status: 0, headers: {}, data: "timeout" }); });
@@ -228,33 +306,50 @@ function parseGithubLinkHeader(linkHeader) {
   return links;
 }
 
-function endpointFromGithubUrl(url) {
-  const parsed = new URL(url);
+function endpointFromGithubUrl(url, expectedUrl) {
+  let parsed;
+  try { parsed = new URL(url); } catch { return null; }
+  const expected = new URL(expectedUrl);
+  if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.origin !== expected.origin || parsed.pathname !== expected.pathname) return null;
   return parsed.pathname + parsed.search;
 }
 
 async function githubPaginatedRequest(token, endpoint, dataKey) {
-  let next = endpoint;
+  const apiBase = resolveGithubApiBase();
+  const initialUrl = new URL(apiBase + endpoint);
+  const expectedUrl = initialUrl.href;
+  let next = initialUrl.pathname + initialUrl.search;
   const items = [];
   let lastResponse = null;
+  let pageCount = 0;
+  let totalBytes = 0;
 
   while (next) {
+    if (pageCount >= MAX_GITHUB_PAGES) {
+      return { response: { status: 0, headers: {}, data: `GitHub API pagination exceeded ${MAX_GITHUB_PAGES} pages` }, items };
+    }
+    pageCount++;
     const res = await githubRequest(token, "GET", next);
     lastResponse = res;
     if (res.status < 200 || res.status >= 300) return { response: res, items };
+    totalBytes += Number(res.bytes) || 0;
+    if (totalBytes > MAX_GITHUB_PAGINATED_RESPONSE_BYTES) {
+      return { response: { status: 0, headers: {}, data: `GitHub API pagination exceeded ${MAX_GITHUB_PAGINATED_RESPONSE_BYTES} total response bytes` }, items };
+    }
 
     const pageItems = dataKey ? res.data?.[dataKey] : res.data;
     if (Array.isArray(pageItems)) items.push(...pageItems);
 
     const links = parseGithubLinkHeader(res.headers.link);
-    next = links.next ? endpointFromGithubUrl(links.next) : null;
+    if (links.next) {
+      next = endpointFromGithubUrl(links.next, expectedUrl);
+      if (!next) return { response: { status: 0, headers: {}, data: "GitHub API returned an unsafe pagination URL" }, items };
+    } else {
+      next = null;
+    }
   }
 
   return { response: lastResponse, items };
-}
-
-function validateRepoName(repo) {
-  return typeof repo === "string" && /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo);
 }
 
 function getCiRevisionSelector(args) {
@@ -396,6 +491,9 @@ async function sidekick_ci_status(args = {}) {
 
   const selector = getCiRevisionSelector(args);
   if (selector.error) return { content: [{ type: "text", text: selector.error }], isError: true };
+  if (selector.type === "pr" && !isGithubNumericId(selector.value)) return { content: [{ type: "text", text: "Invalid pull request number" }], isError: true };
+  if (selector.type === "sha" && !isGithubCommitId(selector.value)) return { content: [{ type: "text", text: "Invalid commit SHA" }], isError: true };
+  if (selector.type === "ref" && !validateGithubRef(selector.value)) return { content: [{ type: "text", text: "Invalid Git reference" }], isError: true };
 
   const token = resolveGithubToken();
   if (!token) return githubCredentialMissing();
@@ -412,7 +510,8 @@ async function sidekick_ci_status(args = {}) {
       if (!ref) return { content: [{ type: "text", text: "GitHub PR response did not include head.sha" }], isError: true };
     }
 
-    const encodedRef = encodeURIComponent(ref);
+    if (!validateGithubRef(ref)) return { content: [{ type: "text", text: "GitHub returned an invalid commit reference" }], isError: true };
+    const encodedRef = String(ref).split("/").map(encodeURIComponent).join("/");
     const [checks, legacy] = await Promise.all([
       githubPaginatedRequest(token, `/repos/${args.repo}/commits/${encodedRef}/check-runs?per_page=100`, "check_runs"),
       githubPaginatedRequest(token, `/repos/${args.repo}/commits/${encodedRef}/status?per_page=100`, "statuses")
@@ -436,6 +535,7 @@ async function sidekick_ci_status(args = {}) {
 async function sidekick_github({ action, repo, args: extraArgs }) {
   const authorizationError = requireToolExecution({ tool: "github", action: action || null, repo: repo || null }, "tools.execute_high", "github");
   if (authorizationError) return authorizationError;
+  if (!validateRepoName(repo)) return { content: [{ type: "text", text: "Invalid repository. Expected owner/repository format" }], isError: true };
   const parsedArgs = parseGithubArgs(extraArgs);
   const token = resolveGithubToken();
 
@@ -466,15 +566,20 @@ async function sidekick_github({ action, repo, args: extraArgs }) {
         agent: githubHttpAgent,
         servername: url.hostname.replace(/^\[|\]$/g, "")
       };
-      if (body) {
-        const bodyStr = JSON.stringify(body);
+      const serializedBody = serializeGithubBody(body);
+      if (serializedBody.error) return resolve({ status: 0, data: serializedBody.error });
+      const bodyStr = serializedBody.body;
+      if (bodyStr) {
         options.headers["Content-Type"] = "application/json";
         options.headers["Content-Length"] = Buffer.byteLength(bodyStr);
       }
       const req = https.request(options, (res) => {
-        let data = "";
-        res.on("data", (chunk) => data += chunk);
-        res.on("end", () => {
+        readGithubResponseText(res).then((data) => {
+          if (data === null) {
+            noteGithubResponse(res.statusCode);
+            resolve({ status: 0, data: `GitHub API response exceeded ${MAX_GITHUB_RESPONSE_BYTES} bytes` });
+            return;
+          }
           noteGithubResponse(res.statusCode);
           try {
             const parsed = JSON.parse(data);
@@ -482,11 +587,11 @@ async function sidekick_github({ action, repo, args: extraArgs }) {
           } catch (e) {
             resolve({ status: res.statusCode, data: data });
           }
-        });
+        }).catch(error => resolve({ status: 0, data: error.message }));
       });
       req.on("error", (err) => resolve({ status: 0, data: err.message }));
       req.setTimeout(30000, () => { req.destroy(); resolve({ status: 0, data: "timeout" }); });
-      if (body) req.write(JSON.stringify(body));
+      if (bodyStr) req.write(bodyStr);
       req.end();
       }).catch(error => resolve({ status: 0, data: error.message }));
     });
@@ -509,7 +614,7 @@ async function sidekick_github({ action, repo, args: extraArgs }) {
     },
     pr_get: async () => {
       const num = getGithubArg(parsedArgs, ["number", "pr", "pull", "pull_number"]);
-      if (!num) return { content: [{ type: "text", text: "PR number required" }], isError: true };
+      if (!isGithubNumericId(num)) return { content: [{ type: "text", text: "Valid PR number required" }], isError: true };
       const res = await ghRequest("GET", `/repos/${repo}/pulls/${num}`);
       if (res.status !== 200) return { content: [{ type: "text", text: JSON.stringify(res.data) }], isError: true };
       const pr = res.data;
@@ -517,7 +622,7 @@ async function sidekick_github({ action, repo, args: extraArgs }) {
     },
     pr_merge: async () => {
       const num = getGithubArg(parsedArgs, ["number", "pr", "pull", "pull_number"]);
-      if (!num) return { content: [{ type: "text", text: "PR number required" }], isError: true };
+      if (!isGithubNumericId(num)) return { content: [{ type: "text", text: "Valid PR number required" }], isError: true };
       const method = parsedArgs.method || parsedArgs.merge_method || "squash";
       const res = await ghRequest("PUT", `/repos/${repo}/pulls/${num}/merge`, { merge_method: method });
       if (res.status !== 200) return { content: [{ type: "text", text: JSON.stringify(res.data) }], isError: true };
@@ -538,14 +643,14 @@ async function sidekick_github({ action, repo, args: extraArgs }) {
     },
     issue_close: async () => {
       const num = getGithubArg(parsedArgs, ["number", "issue", "issue_number"]);
-      if (!num) return { content: [{ type: "text", text: "issue number required" }], isError: true };
+      if (!isGithubNumericId(num)) return { content: [{ type: "text", text: "Valid issue number required" }], isError: true };
       const res = await ghRequest("PATCH", `/repos/${repo}/issues/${num}`, { state: "closed" });
       if (res.status !== 200) return { content: [{ type: "text", text: JSON.stringify(res.data) }], isError: true };
       return { content: [{ type: "text", text: `Closed issue #${num}` }] };
     },
     commit_status: async () => {
       const sha = getGithubArg(parsedArgs, ["sha", "ref", "commit", "commit_sha"]);
-      if (!sha) return { content: [{ type: "text", text: "commit SHA required" }], isError: true };
+      if (!isGithubCommitId(sha)) return { content: [{ type: "text", text: "Valid commit SHA required" }], isError: true };
       const res = await ghRequest("GET", `/repos/${repo}/commits/${sha}/status`);
       if (res.status !== 200) return { content: [{ type: "text", text: JSON.stringify(res.data) }], isError: true };
       const statuses = res.data.statuses.map(s => `${s.context}: ${s.state} - ${s.description || ""}`);
@@ -576,8 +681,8 @@ async function sidekick_github({ action, repo, args: extraArgs }) {
 const SCHEMAS = {
   github: z.object({
     action: z.enum(["pr_list", "pr_create", "pr_get", "pr_merge", "issue_list", "issue_create", "issue_close", "commit_status", "release_create", "repo_info"]).describe("GitHub action to perform"),
-    repo: z.string().describe("Repository in format 'owner/repo'"),
-    args: z.string().optional().describe("Additional arguments (JSON string or value depending on action)")
+    repo: z.string().max(201).regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/).describe("Repository in format 'owner/repo'"),
+    args: z.string().max(MAX_GITHUB_REQUEST_BYTES).optional().describe("Additional arguments (JSON string or value depending on action)")
   }),
   ci_status: z.object({
     repo: z.string().describe("Repository in format 'owner/repo'"),
@@ -616,4 +721,29 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_github, sidekick_ci_status, parseGithubArgs, getGithubArg, getCiRevisionSelector, buildCiStatusResult, formatCiStatusText, resolveGithubToken, resolveGithubApiBase, githubCredentialMissing, githubHealthDecision, noteGithubResponse };
+module.exports = {
+  descriptors,
+  sidekick_github,
+  sidekick_ci_status,
+  parseGithubArgs,
+  getGithubArg,
+  getCiRevisionSelector,
+  buildCiStatusResult,
+  formatCiStatusText,
+  resolveGithubToken,
+  resolveGithubApiBase,
+  githubCredentialMissing,
+  githubHealthDecision,
+  noteGithubResponse,
+  readGithubResponseText,
+  MAX_GITHUB_RESPONSE_BYTES,
+  MAX_GITHUB_PAGES,
+  MAX_GITHUB_PAGINATED_RESPONSE_BYTES,
+  endpointFromGithubUrl,
+  MAX_GITHUB_REQUEST_BYTES,
+  validateRepoName,
+  validateGithubRef,
+  isGithubNumericId,
+  isGithubCommitId,
+  serializeGithubBody,
+};

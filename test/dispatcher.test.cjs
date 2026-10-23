@@ -101,6 +101,24 @@ console.log('Running Dispatcher Tests...');
     assert.ok(result.isError, 'cancelled signal should fail');
     assert.strictEqual(result.code, 'cancelled');
 
+    let staleNetdiagInvoked = false;
+    const staleNetdiagDescriptor = {
+      name: 'netdiag',
+      description: 'Stale network diagnostic descriptor',
+      schema: z.object({ target: z.string().optional() }),
+      risk: 'high',
+      category: 'Test',
+      handler: async () => { staleNetdiagInvoked = true; return { content: [] }; },
+    };
+    result = await dispatchTestTool({
+      descriptor: staleNetdiagDescriptor,
+      args: { target: 'example.com', network_scope: 'scope-1', network_scope_revision: 1 },
+      context: { source: 'test' },
+    });
+    assert.ok(result.isError, 'stale netdiag schema must not drop network scope authorization');
+    assert.strictEqual(result.code, 'stale_tool_schema');
+    assert.strictEqual(staleNetdiagInvoked, false, 'stale netdiag handler must not run');
+
     const contextDescriptor = {
       name: 'context_test',
       description: 'Context test descriptor',

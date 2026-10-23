@@ -30,9 +30,9 @@ const { registerHandoffReadRoutes } = require("../src/dashboard/handoff-read-rou
 const predictEngine = require("../src/predict");
 
 const owner = identity.bootstrapOwner({ username: "access_owner", password: "a sufficiently long owner password" });
-const operator = identity.createHumanUser({ username: "access_operator", password: "a sufficiently long operator password" });
-identity.assignRole(operator.principal_id, "operator", owner.principal_id);
-const denied = identity.createHumanUser({ username: "access_denied", password: "a sufficiently long denied password" });
+const operator = require('./helpers/authorized-identity').createHumanUser(identity, { username: "access_operator", password: "a sufficiently long operator password" });
+identity.assignRole(operator.principal_id, "operator", owner);
+const denied = require('./helpers/authorized-identity').createHumanUser(identity, { username: "access_denied", password: "a sufficiently long denied password" });
 platformKernel.registerProject({ project_id: "memory_a", owner_actor_id: owner.principal_id });
 platformKernel.registerProject({ project_id: "memory_b", owner_actor_id: owner.principal_id });
 projectAccess.grantProjectAccess({ actorPrincipalId: owner.principal_id, principalId: operator.principal_id, project: "memory_a", accessLevel: "read" });
@@ -40,8 +40,8 @@ const memoryA = db.upsertMemory({ type: "fact", project: "memory_a", content: "P
 const secretB = db.upsertMemory({ type: "fact", project: "memory_b", content: "Project B private fact", summary: "Project B private fact", confidence: 0.9, source: "test" });
 
 test("Agent cross-principal learning review requires project membership in addition to approvals.grant", () => {
-  const reviewer = identity.createHumanUser({ username: "scoped_learning_reviewer", password: "a sufficiently long reviewer password" });
-  identity.assignRole(reviewer.principal_id, "administrator", owner.principal_id);
+  const reviewer = require('./helpers/authorized-identity').createHumanUser(identity, { username: "scoped_learning_reviewer", password: "a sufficiently long reviewer password" });
+  identity.assignRole(reviewer.principal_id, "administrator", owner);
   const task = { task_id: "agt_cross_project_review", project_id: "memory_b", actor_principal_id: denied.principal_id };
   const scopedReviewer = { principal_id: reviewer.principal_id, scopes: ["approvals.grant"] };
   assert.equal(canReviewUnownedTask(scopedReviewer, task), false, "approval permission alone cannot read a source task in an ungranted project");
@@ -65,11 +65,11 @@ test("project grants attenuate access and revoke immediately", () => {
   assert.equal(taskBelongsToIdentity({ principal_id: operator.principal_id, scopes: null }, task), false, "project membership revocation immediately hides the owner's project-scoped task");
   assert.equal(taskBelongsToIdentity({ principal_id: operator.principal_id, scopes: [] }, task), false, "empty credential scopes cannot retain task access");
   const agentSource = fs.readFileSync(path.join(__dirname, "../src/agent.js"), "utf8");
-  assert.match(agentSource, /requestedProject && authIdentity && !projectAccess\.hasProjectPermission\(authIdentity\.principal_id, requestedProject, "agent\.tasks\.read"/);
+  assert.match(agentSource, /taskProject && authIdentity && !projectAccess\.hasProjectPermission\(authIdentity\.principal_id, taskProject, "agent\.tasks\.read"/);
 });
 
 test("project access changes roll back when their authoritative audit event cannot be written", () => {
-  const target = identity.createHumanUser({ username: "audit_atomic_target", password: "a sufficiently long target password" });
+  const target = require('./helpers/authorized-identity').createHumanUser(identity, { username: "audit_atomic_target", password: "a sufficiently long target password" });
   platformKernel.registerProject({ project_id: "audit_atomic_project", owner_actor_id: owner.principal_id });
   const connection = db.getDb();
 
@@ -104,47 +104,47 @@ test("project access changes roll back when their authoritative audit event cann
 });
 
 test("role and delegation authority changes roll back when their audit event fails", () => {
-  const roleTarget = identity.createHumanUser({ username: "audit_role_target", password: "a sufficiently long role password" });
+  const roleTarget = require('./helpers/authorized-identity').createHumanUser(identity, { username: "audit_role_target", password: "a sufficiently long role password" });
   const connection = db.getDb();
   connection.exec(`CREATE TRIGGER reject_role_grant_audit BEFORE INSERT ON identity_audit_events
     WHEN NEW.event_type = 'role.assigned' AND NEW.principal_id = '${roleTarget.principal_id}'
     BEGIN SELECT RAISE(ABORT, 'synthetic role audit failure'); END`);
   try {
-    assert.throws(() => identity.assignRole(roleTarget.principal_id, "operator", owner.principal_id), /synthetic role audit failure/);
+    assert.throws(() => identity.assignRole(roleTarget.principal_id, "operator", owner), /synthetic role audit failure/);
     assert.equal(authorization.authorize({ principalId: roleTarget.principal_id, permission: "workflows.execute" }).ok, false,
       "failed role audit must roll back the permission grant");
   } finally {
     connection.exec("DROP TRIGGER reject_role_grant_audit");
   }
-  identity.assignRole(roleTarget.principal_id, "operator", owner.principal_id);
+  identity.assignRole(roleTarget.principal_id, "operator", owner);
   connection.exec(`CREATE TRIGGER reject_role_revoke_audit BEFORE INSERT ON identity_audit_events
     WHEN NEW.event_type = 'role.removed' AND NEW.principal_id = '${roleTarget.principal_id}'
     BEGIN SELECT RAISE(ABORT, 'synthetic role audit failure'); END`);
   try {
-    assert.throws(() => identity.removeRole(roleTarget.principal_id, "operator", owner.principal_id), /synthetic role audit failure/);
+    assert.throws(() => identity.removeRole(roleTarget.principal_id, "operator", owner), /synthetic role audit failure/);
     assert.equal(authorization.authorize({ principalId: roleTarget.principal_id, permission: "workflows.execute" }).ok, true,
       "failed role audit must roll back permission revocation");
   } finally {
     connection.exec("DROP TRIGGER reject_role_revoke_audit");
   }
 
-  const delegate = identity.createPrincipal({ type: "agent", displayName: "Audit delegation target", actorPrincipalId: owner.principal_id });
+  const delegate = require('./helpers/authorized-identity').createPrincipal(identity, { type: "agent", displayName: "Audit delegation target", actorPrincipalId: owner.principal_id });
   connection.exec(`CREATE TRIGGER reject_delegation_grant_audit BEFORE INSERT ON identity_audit_events
     WHEN NEW.event_type = 'delegation.created' AND NEW.principal_id = '${delegate.principal_id}'
     BEGIN SELECT RAISE(ABORT, 'synthetic delegation audit failure'); END`);
   try {
-    assert.throws(() => authorization.createDelegation({ delegatorPrincipalId: owner.principal_id, delegatePrincipalId: delegate.principal_id, permissions: ["memory.read"] }), /synthetic delegation audit failure/);
+    assert.throws(() => authorization.createDelegation({ delegatorPrincipalId: owner.principal_id, delegatePrincipalId: delegate.principal_id, permissions: ["memory.read"], actorContext: owner }), /synthetic delegation audit failure/);
     assert.equal(connection.prepare("SELECT COUNT(*) AS count FROM identity_delegations WHERE delegate_principal_id = ?").get(delegate.principal_id).count, 0,
       "failed delegation audit must roll back delegated authority");
   } finally {
     connection.exec("DROP TRIGGER reject_delegation_grant_audit");
   }
-  const delegation = authorization.createDelegation({ delegatorPrincipalId: owner.principal_id, delegatePrincipalId: delegate.principal_id, permissions: ["memory.read"] });
+  const delegation = authorization.createDelegation({ delegatorPrincipalId: owner.principal_id, delegatePrincipalId: delegate.principal_id, permissions: ["memory.read"], actorContext: owner });
   connection.exec(`CREATE TRIGGER reject_delegation_revoke_audit BEFORE INSERT ON identity_audit_events
     WHEN NEW.event_type = 'delegation.revoked' AND json_extract(NEW.details_json, '$.delegation_id') = '${delegation.delegation_id}'
     BEGIN SELECT RAISE(ABORT, 'synthetic delegation audit failure'); END`);
   try {
-    assert.throws(() => authorization.revokeDelegation(delegation.delegation_id, owner.principal_id), /synthetic delegation audit failure/);
+    assert.throws(() => authorization.revokeDelegation(delegation.delegation_id, owner), /synthetic delegation audit failure/);
     assert.equal(authorization.getDelegation(delegation.delegation_id).revoked_at, null,
       "failed revocation audit must roll back delegation revocation");
   } finally {
@@ -206,6 +206,7 @@ test("memory project helpers preserve delegated authority attenuation and rechec
     delegatorPrincipalId: owner.principal_id,
     delegatePrincipalId: operator.principal_id,
     permissions: ["predictions.read"],
+    actorContext: owner,
   });
   const delegatedIdentity = {
     principal_id: operator.principal_id,
@@ -218,7 +219,7 @@ test("memory project helpers preserve delegated authority attenuation and rechec
   const delegatedContext = toolContext.createMcpExecutionContext({ authIdentity: delegatedIdentity, project: "memory_a" });
   assert.throws(() => toolContext.runWithContext(delegatedContext, () => require("../src/tools/families/memory-scope").scopedProject("memory_a")), /scope denied/);
 
-  authorization.revokeDelegation(delegation.delegation_id, owner.principal_id);
+  authorization.revokeDelegation(delegation.delegation_id, owner);
   assert.equal(projectAccess.hasProjectAccess(operator.principal_id, "memory_a", "read", null, delegation.delegation_id), false,
     "revocation remains effective in direct project-access helper calls");
 });
@@ -927,21 +928,21 @@ test("canonical Predict dispatcher enforces identity, project filtering, and res
 });
 
 test("Predict revalidates delegated permission and project membership on each call", async () => {
-  const delegate = identity.createPrincipal({ type: "agent", displayName: "prediction reader agent", actorPrincipalId: owner.principal_id });
+  const delegate = require('./helpers/authorized-identity').createPrincipal(identity, { type: "agent", displayName: "prediction reader agent", actorPrincipalId: owner.principal_id });
   projectAccess.grantProjectAccess({ actorPrincipalId: owner.principal_id, principalId: delegate.principal_id, project: "memory_a", accessLevel: "read" });
   const delegation = require("../src/core/authorization").createDelegation({
     delegatorPrincipalId: operator.principal_id,
     delegatePrincipalId: delegate.principal_id,
     permissions: ["predictions.read"],
     expiresAt: new Date(Date.now() + 60_000).toISOString(),
-    actorPrincipalId: operator.principal_id,
+    actorContext: { principal_id: operator.principal_id },
   });
   const context = { authIdentity: { principal_id: delegate.principal_id, principal_type: "agent", delegation_id: delegation.delegation_id } };
   const allowed = await dispatcher.callAgentTool("predict", { action: "list" }, context);
   assert.equal(allowed.isError, undefined);
   assert.ok(JSON.parse(allowed.content[0].text).predictions.every(prediction => prediction.project === "memory_a"));
 
-  require("../src/core/authorization").revokeDelegation(delegation.delegation_id, operator.principal_id);
+  require("../src/core/authorization").revokeDelegation(delegation.delegation_id, { principal_id: operator.principal_id });
   const revoked = await dispatcher.callAgentTool("predict", { action: "list" }, context);
   assert.equal(revoked.isError, true);
   assert.equal(revoked.code, "authorization_denied", "revoked authority is reevaluated at dispatch");
@@ -1097,7 +1098,7 @@ test("handoff extraction cannot write memories into an ungranted project", async
 
 test("revoked and disabled principals cannot retain project access", () => {
   projectAccess.grantProjectAccess({ actorPrincipalId: owner.principal_id, principalId: operator.principal_id, project: "memory_a", accessLevel: "write" });
-  identity.setPrincipalEnabled(operator.principal_id, false, owner.principal_id);
+  identity.setPrincipalEnabled(operator.principal_id, false, owner);
   assert.equal(projectAccess.hasProjectAccess(operator.principal_id, "memory_a", "write"), false);
 });
 

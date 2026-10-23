@@ -461,13 +461,13 @@ function baseDefinition(overrides = {}) {
       return { isError: true, approvalRequired: true, approvalId: 'approval_fixture', code: 'approval_required', status: 'approval_required', content: [{ type: 'text', text: 'Approval required' }] };
     };
     try {
-      const pending = await runWorkflowDefinition(name, {}, { actorPrincipalId: 'actor_fixture', requestedByPrincipalId: 'requester_fixture', scopes: ['tools.execute'], delegationId: 'delegation_fixture' });
+      const pending = await toolContext.runWithContext(authenticatedWorkflowContext, () => runner.runWorkflowDefinition(name, {}, { project: 'workflow-suite', actorPrincipalId: 'forged_actor_fixture', requestedByPrincipalId: 'forged_requester_fixture', scopes: ['tools.execute'], delegationId: 'forged_delegation_fixture' }));
       assert.strictEqual(pending.status, 'awaiting_approval');
       assert.strictEqual(pending.ok, false);
       assert.strictEqual(pending.result_status, 'approval_required');
       assert.strictEqual(pending.steps[0].status, 'approval_required');
       assert.strictEqual(pending.steps[0].approval_id, 'approval_fixture');
-      assert.deepStrictEqual(dispatchOptions.authIdentity, { principal_id: 'actor_fixture', requested_by_principal_id: 'requester_fixture', acting_for_principal_id: null, scopes: ['tools.execute'], delegation_id: 'delegation_fixture' });
+      assert.deepStrictEqual(dispatchOptions.authIdentity, authenticatedWorkflowContext.authIdentity);
 
       repository.registerWorkflowDefinition({
         ...originalDefinition,
@@ -572,9 +572,38 @@ function baseDefinition(overrides = {}) {
       return { isError: true, approvalRequired: true, approvalId: 'approval_context_defaults', code: 'approval_required', status: 'approval_required', content: [{ type: 'text', text: 'Approval required' }] };
     };
     try {
-      const pending = await runWorkflowDefinition('core/auth-context-defaults', {}, { actorPrincipalId: 'actor_fixture', requestedByPrincipalId: 'requester_fixture' });
+      const pending = await toolContext.runWithContext(authenticatedWorkflowContext, () => runner.runWorkflowDefinition('core/auth-context-defaults', {}, { project: 'workflow-suite', actorPrincipalId: 'actor_fixture', requestedByPrincipalId: 'requester_fixture' }));
       assert.equal(pending.status, 'awaiting_approval');
-      assert.deepEqual(observed.authIdentity, { principal_id: 'actor_fixture', requested_by_principal_id: 'requester_fixture', acting_for_principal_id: null, scopes: null, delegation_id: null });
+      assert.deepEqual(observed.authIdentity, authenticatedWorkflowContext.authIdentity);
+    } finally {
+      dispatcher.callInternalTool = originalDispatch;
+    }
+  });
+
+  await test('WD.11j: workflow options cannot manufacture an unauthenticated principal', async () => {
+    const name = 'core/unauthenticated-identity-options';
+    repository.registerWorkflowDefinition({
+      name, version: '1.0.0', title: 'Unauthenticated identity options',
+      description: 'Ignores caller-supplied principal-shaped runner options', inputs: {},
+      steps: [{ name: 'read', tool: 'get', args: { key: 'wf-test-key' } }], result: {},
+    }, { ownerKind: 'core' });
+    const originalDispatch = dispatcher.callInternalTool;
+    let observed = null;
+    dispatcher.callInternalTool = async (_tool, _args, options) => {
+      observed = options;
+      return { isError: true, approvalRequired: true, approvalId: 'approval_unauthenticated', code: 'approval_required', status: 'approval_required', content: [{ type: 'text', text: 'Approval required' }] };
+    };
+    try {
+      const anonymousContext = toolContext.createInternalExecutionContext({ source: 'internal', project: 'workflow-suite' });
+      const pending = await toolContext.runWithContext(anonymousContext, () => runner.runWorkflowDefinition(name, {}, {
+        project: 'workflow-suite', actorPrincipalId: 'forged_actor', requestedByPrincipalId: 'forged_requester',
+        scopes: ['tools.execute'], delegationId: 'forged_delegation',
+      }));
+      assert.equal(pending.status, 'awaiting_approval');
+      assert.equal(observed.authIdentity, null);
+      const workflow = platformKernel.getWorkflow(pending.run_id);
+      assert.equal(workflow.actor_principal_id, null);
+      assert.equal(workflow.requested_by_principal_id, null);
     } finally {
       dispatcher.callInternalTool = originalDispatch;
     }

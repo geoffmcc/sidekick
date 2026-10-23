@@ -1,7 +1,7 @@
 "use strict";
 
 /**
- * Optional Ansible integration — a bounded, provider-agnostic playbook runner.
+ * Optional Ansible integration — a bounded, provider-agnostic playbook planner.
  *
  * This module knows nothing about Proxmox; it configures reachable hosts with
  * Ansible. It is contributed by the Proxmox pack for the provision→configure
@@ -10,7 +10,7 @@
  * being configured, and Ansible does not need to know it was provisioned by
  * Proxmox.
  *
- * Security posture (the whole point of not just handing an agent a shell):
+ * Security posture:
  *
  *   - Ansible is OPTIONAL. Absence is detected and reported, never assumed, and
  *     never auto-installed.
@@ -22,23 +22,15 @@
  *     can break out of an inventory line.
  *   - Extra variables are structured scalars, written to a JSON file and passed
  *     as `--extra-vars @file` — never interpolated into the command line.
- *   - The command line interpolates ONLY paths this module created in a private
- *     0700 temp directory. No model-supplied string ever reaches the shell.
  *   - Host key checking stays ON (no StrictHostKeyChecking=no).
- *   - Execution goes through Sidekick's governed `bash` tool (critical risk), so
- *     policy, approval and audit all apply; success is derived from Ansible's
- *     parsed JSON stats, never from the process exit code alone.
- *   - Output is redacted before return.
+ *   - Run requests fail closed until a scoped network broker and isolated
+ *     workspace can safely carry its network and filesystem requirements.
+ *     Dry-run planning remains available.
  */
 
 const fs = require("fs");
-const os = require("os");
 const path = require("path");
-const { requireSidekickSrc } = require("./deps");
 const providers = require("./providers");
-
-let redactSensitive = s => s;
-try { ({ redactSensitive } = requireSidekickSrc("src/redact.js")); } catch { /* best-effort */ }
 
 const ALIAS_RE = /^[a-z0-9][a-z0-9_-]{0,62}$/i;
 const HOST_RE = /^[a-zA-Z0-9._-]{1,253}$/; // hostname or IPv4/IPv6-literal-free address
@@ -46,7 +38,6 @@ const USER_RE = /^[a-z_][a-z0-9_-]{0,31}$/;
 const VAR_KEY_RE = /^[a-z_][a-z0-9_]{0,63}$/i;
 const INI_VALUE_RE = /^[A-Za-z0-9._~/:@=+-]+$/; // safe inventory value charset
 const PLAYBOOK_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.ya?ml$/;
-
 function isAvailable() {
   return providers.whichSync("ansible-playbook");
 }
@@ -57,19 +48,23 @@ function detect(config) {
   const configured = Boolean(ans.playbook_dir);
   let dirExists = false;
   if (configured) { try { dirExists = fs.statSync(path.resolve(ans.playbook_dir)).isDirectory(); } catch { dirExists = false; } }
+  const providerState = !available ? "not_installed" : !configured ? "installed_unconfigured" : !dirExists ? "misconfigured" : "ready";
+  const executionBlocker = "No scoped network broker is configured for Ansible; unrestricted host networking is not granted to shell commands.";
   return {
     available,
     configured,
     playbook_dir_exists: dirExists,
     allowed_playbooks: Array.isArray(ans.allowed_playbooks) ? ans.allowed_playbooks : null,
-    state: !available ? "not_installed" : !configured ? "installed_unconfigured" : !dirExists ? "misconfigured" : "ready",
+    execution_available: false,
+    execution_blocker: executionBlocker,
+    state: providerState === "ready" ? "execution_unavailable" : providerState,
     detail: !available
       ? "ansible-playbook is not on the Sidekick host PATH."
       : !configured
         ? "Ansible is installed but no playbook_dir is configured for the pack."
         : !dirExists
           ? `Configured ansible.playbook_dir does not exist: ${ans.playbook_dir}`
-          : "Ansible is installed and configured.",
+          : executionBlocker,
   };
 }
 
@@ -142,10 +137,9 @@ function buildExtraVars(vars) {
 }
 
 /**
- * Extract the first complete top-level JSON object from mixed output. The
- * governed bash tool concatenates stdout and stderr (ansible writes its JSON
- * callback to stdout and warnings/deprecations to stderr), so slicing to the
- * end of the text would include trailing non-JSON and break parsing. This walks
+ * Extract the first complete top-level JSON object from mixed output. Ansible
+ * may write its JSON callback to stdout and warnings/deprecations to stderr,
+ * so slicing to the end of the text would include trailing non-JSON and break parsing. This walks
  * balanced braces, honouring string literals, and returns exactly the JSON
  * document.
  */
@@ -201,14 +195,13 @@ function buildCommand({ playbookPath, invPath, varsPath, limit }) {
 }
 
 /**
- * Run an allowlisted playbook against structured hosts. `dispatch` is the module
- * services dispatch (for the governed bash tool). Returns a structured result.
- * When `dryRun`, returns the resolved command/inventory/vars without executing.
+ * Validate an allowlisted playbook and provide a dry-run plan. Execution stays
+ * unavailable until a scoped network broker and isolated workspace are wired.
  */
-async function run(config, dispatch, params, { dryRun = false, timeoutMs } = {}) {
+async function run(config, _dispatch, params, { dryRun = false } = {}) {
   const availability = detect(config);
   if (!availability.available) return { ok: false, code: "provider_unavailable", message: availability.detail, availability };
-  if (availability.state !== "ready") return { ok: false, code: "not_configured", message: availability.detail, availability };
+  if (!["ready", "execution_unavailable"].includes(availability.state)) return { ok: false, code: "not_configured", message: availability.detail, availability };
 
   const pb = resolvePlaybook(config, params.playbook);
   if (!pb.ok) return { ok: false, code: pb.code, message: pb.message };
@@ -220,66 +213,19 @@ async function run(config, dispatch, params, { dryRun = false, timeoutMs } = {})
   let limit = null;
   if (params.limit !== undefined) { if (!ALIAS_RE.test(String(params.limit))) return { ok: false, code: "invalid_input", message: "limit must be a host alias" }; limit = params.limit; }
 
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sk-ansible-"));
-  // Set when the run parks for approval: the queued command still needs the
-  // generated inventory and extra-vars files that live in this directory.
-  let keepWorkspace = false;
-  try {
-    fs.chmodSync(tmp, 0o700);
-    const invPath = path.join(tmp, "inventory.ini");
-    const varsPath = path.join(tmp, "extra_vars.json");
-    fs.writeFileSync(invPath, inv.ini, { mode: 0o600 });
-    fs.writeFileSync(varsPath, JSON.stringify(ev.vars), { mode: 0o600 });
-    const command = buildCommand({ playbookPath: pb.path, invPath, varsPath, limit });
-
-    if (dryRun) {
-      return {
-        ok: true, dry_run: true, playbook: params.playbook, hosts: inv.aliases,
-        command, inventory: inv.ini, extra_var_keys: Object.keys(ev.vars),
-        note: "Dry run: nothing was executed. Extra-var VALUES are omitted; only their keys are shown.",
-      };
-    }
-
-    const dispatched = await dispatch("bash", { command }, { timeoutMs: timeoutMs || (config.ansible && config.ansible.default_timeout_ms) || 900000 });
-    if (dispatched && dispatched.code === "module_permission_denied") {
-      return { ok: false, code: "permission_denied", message: "The pack lacks permission to run the bash tool required for Ansible." };
-    }
-    if (dispatched && (dispatched.approvalRequired || dispatched.code === "approval_required")) {
-      // The queued command references the inventory and extra-vars files in
-      // `tmp`. Deleting them here made approval structurally unusable: the
-      // approved execution replayed a command whose inputs no longer existed,
-      // and retrying only minted another approval with another doomed temp dir.
-      keepWorkspace = true;
-      return {
-        ok: false,
-        code: "approval_required",
-        approval_id: dispatched.approvalId || null,
-        message: "Running Ansible requires operator approval of the underlying bash execution.",
-        // Retained so the approved run can find its inputs; the operator can
-        // remove it if the approval is abandoned.
-        retained_workspace: tmp,
-      };
-    }
-    const text = dispatched && Array.isArray(dispatched.content) && dispatched.content[0] ? String(dispatched.content[0].text || "") : "";
-    // Extract exactly ansible's JSON document; the bash tool appends stderr
-    // (warnings/deprecations) after stdout, which would otherwise break parsing.
-    const stdout = extractJsonObject(text) || text;
-    const exitCode = dispatched && dispatched.isError ? 1 : 0;
-    const result = parseResult(stdout, exitCode, inv.aliases);
+  if (dryRun) {
     return {
-      ok: result.ok,
-      code: result.ok ? undefined : "ansible_failed",
-      playbook: params.playbook,
-      hosts: inv.aliases,
-      per_host: result.per_host,
-      reason: result.reason,
-      output_tail: redactSensitive(text).slice(-2000),
+      ok: true, dry_run: true, playbook: params.playbook, hosts: inv.aliases,
+      command: buildCommand({ playbookPath: pb.path, invPath: "<isolated-workspace>/inventory.ini", varsPath: "<isolated-workspace>/extra_vars.json", limit }),
+      inventory: inv.ini, extra_var_keys: Object.keys(ev.vars),
+      note: "Dry run: nothing was executed. Extra-var VALUES are omitted; execution remains unavailable until a scoped network broker is configured.",
     };
-  } finally {
-    if (!keepWorkspace) {
-      try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* best-effort */ }
-    }
   }
+  return {
+    ok: false,
+    code: "capability_unavailable",
+    message: "Ansible execution requires a scoped network broker and isolated workspace, which are not configured; no command was executed.",
+  };
 }
 
 module.exports = { isAvailable, detect, resolvePlaybook, buildInventory, buildExtraVars, parseResult, buildCommand, extractJsonObject, run };

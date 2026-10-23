@@ -74,9 +74,14 @@ function makeMock(overrides = {}) {
       if (state.failSeed && args.join(' ') === 'run seed:knowledge') fail('seed failed');
       return 'ok\n';
     }
-    if (cmd === 'sudo') {
-      const action = args[1];
-      const svc = args[2];
+    const serviceArgs = cmd === 'systemctl'
+      ? args
+      : cmd === 'sudo' && args[0] === 'systemctl'
+        ? args.slice(1)
+        : null;
+    if (serviceArgs && ['start', 'stop', 'restart', 'reload'].includes(serviceArgs[0])) {
+      const action = serviceArgs[0];
+      const svc = serviceArgs[1];
       if (state.failStop && action === 'stop') fail('stop failed');
       if (state.failRestart && action === 'restart') fail('restart failed');
       if (action === 'stop') { state.services = 'inactive'; setSvc(svc, 'inactive'); }
@@ -153,7 +158,7 @@ try {
   assert.strictEqual(result.status, 'failed', 'deployment without a lockfile should fail closed');
   assert.ok(result.error.includes('missing package-lock.json'), 'lockfile failure should be explicit');
   assert.ok(!state.calls.some(command => command.startsWith('npm ')), 'lockfile failure must not invoke an unpinned install');
-  assert.ok(!state.calls.some(command => command.startsWith('sudo systemctl stop')), 'lockfile failure must happen before service interruption');
+  assert.ok(!state.calls.some(command => command.includes('systemctl stop')), 'lockfile failure must happen before service interruption');
 
   resetApp();
   state = makeMock();
@@ -167,7 +172,7 @@ try {
   assert.ok(fs.existsSync(path.join(result.backup, '.env')), 'backup should include .env');
   assert.ok(fs.existsSync(path.join(result.backup, 'data')), 'backup should include data');
   assert.ok(fs.existsSync(path.join(result.backup, 'manifest.json')), 'backup should include a manifest');
-  assert.ok(state.calls.includes('sudo systemctl stop sidekick-mcp'), 'backup should quiesce MCP before copying mutable state');
+  assert.ok(state.calls.includes('sudo systemctl stop sidekick-mcp'), 'SSH deployment should quiesce MCP through the narrow sudoers grant');
   assert.strictEqual(gitDeploy.allowedFetchUrl('git://github.com/geoffmcc/sidekick.git'), false, 'git protocol should not be allowed for deploy origin');
 
   for (const [name, overrides, expected] of [
@@ -261,10 +266,10 @@ try {
   result = gitDeploy.deploy();
   delete process.env.SIDEKICK_DEPLOY_SKIP_MCP_LIFECYCLE;
   assert.strictEqual(result.status, 'ok', 'ops lifecycle mode should deploy successfully');
-  assert.ok(!state.calls.includes('sudo systemctl stop sidekick-mcp'), 'ops lifecycle mode must not stop MCP from inside MCP');
-  assert.ok(!state.calls.includes('sudo systemctl restart sidekick-mcp'), 'ops lifecycle mode must not restart MCP from inside MCP');
-  assert.ok(state.calls.includes('sudo systemctl restart sidekick-agent'), 'ops lifecycle mode should restart agent');
-  assert.ok(state.calls.includes('sudo systemctl restart sidekick-dashboard'), 'ops lifecycle mode should restart dashboard');
+  assert.ok(!state.calls.includes('systemctl stop sidekick-mcp'), 'ops lifecycle mode must not stop MCP from inside MCP');
+  assert.ok(!state.calls.includes('systemctl restart sidekick-mcp'), 'ops lifecycle mode must not restart MCP from inside MCP');
+  assert.ok(state.calls.includes('systemctl restart sidekick-agent'), 'ops lifecycle mode should restart agent');
+  assert.ok(state.calls.includes('systemctl restart sidekick-dashboard'), 'ops lifecycle mode should restart dashboard');
 
   const deploySh = fs.readFileSync(path.join(root, 'deploy.sh'), 'utf8');
   const deployPs1 = fs.readFileSync(path.join(root, 'deploy.ps1'), 'utf8');

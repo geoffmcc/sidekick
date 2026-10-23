@@ -107,9 +107,7 @@
       "aliases": ["pve_retire"]
     }
   },
-  "permissions": [
-    { "tool": "bash", "risk": "critical" }
-  ],
+  "permissions": [],
   "lifecycle": {
     "disable": "stop_new_work",
     "uninstall": "retain_data"

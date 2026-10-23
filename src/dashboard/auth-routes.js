@@ -75,7 +75,8 @@ function registerAuthRoutes({
 
   app.post("/api/auth/logout", (req, res) => {
     const token = requestCookie(req, "sidekick_identity");
-    authentication.invalidateSession(token);
+    try { authentication.invalidateSession(token, req.authPrincipal?.principal_id || null); }
+    catch { clearIdentityCookie(res, req); return res.status(503).json({ error: "Session audit storage is unavailable", code: "audit_unavailable" }); }
     clearIdentityCookie(res, req);
     res.status(204).end();
   });
@@ -89,6 +90,7 @@ function registerAuthRoutes({
         const principal = identity.getPrincipal(identitySession.principal_id);
         if (!principal || !principal.enabled) return res.status(401).json({ error: "Authentication required", code: "principal-disabled" });
         req.authPrincipal = { ...identitySession, ...principal };
+        req.dashboardSessionToken = identityToken;
         req.authPrincipalId = identitySession.principal_id;
         req.authUser = identitySession.display_name;
         return next();
@@ -117,6 +119,7 @@ function registerAuthRoutes({
         setIdentityCookie(res, session.token, undefined, req);
         req.authUser = user;
         req.authPrincipal = { ...principal, ...authentication.getSession(session.token) };
+        req.dashboardSessionToken = session.token;
         req.authPrincipalId = principal.principal_id;
         clearAuthFailures(attemptKeys);
         return next();
@@ -135,6 +138,9 @@ function registerAuthRoutes({
   function identityPermissionDecision(req, permission) {
     const principalId = req.authPrincipal?.principal_id;
     const principal = req.authPrincipal;
+    if (principal?.session_id && (!authentication || typeof authentication.isSessionActive !== "function" || !authentication.isSessionActive(principal.session_id))) {
+      return { ok: false, code: "unauthenticated" };
+    }
     return authorization.authorize({
       principalId,
       permission,
@@ -144,8 +150,6 @@ function registerAuthRoutes({
   }
 
   function hasIdentityPermission(req, permission) {
-    const principal = req.authPrincipal;
-    if (principal?.session_id && (!authentication || typeof authentication.isSessionActive !== "function" || !authentication.isSessionActive(principal.session_id))) return false;
     return identityPermissionDecision(req, permission).ok;
   }
 
@@ -173,8 +177,8 @@ function registerAuthRoutes({
     if (!account) return res.status(403).json({ error: "A local identity session is required", code: "insufficient_identity" });
     if (!identity.verifyUserPassword(account.username, req.body?.current_password)) return res.status(401).json({ error: "Current password is incorrect" });
     try {
-      identity.changePassword(principalId, req.body?.new_password, principalId);
-      authentication.invalidatePrincipalSessions(principalId);
+      identity.changePassword(principalId, req.body?.new_password, req.authPrincipal);
+      authentication.invalidatePrincipalSessions(principalId, principalId);
       res.json({ ok: true });
     } catch (error) {
       return errorResponse(req, res, error, { status: 400, code: "invalid_request", component: "auth" });
@@ -183,9 +187,13 @@ function registerAuthRoutes({
 
   app.post("/api/auth/users", (req, res) => {
     if (!requireIdentityAdministrator(req, res)) return;
+    // Creating an account and assigning it a role are separate authorities.
+    // In particular, users.manage must not become an indirect path to the
+    // critical roles.manage operation through this convenience endpoint.
+    if (req.body?.role && !requireIdentityPermission(req, res, "roles.manage")) return;
     try {
-      const principal = identity.createHumanUser({ username: req.body?.username, password: req.body?.password, displayName: req.body?.display_name, actorPrincipalId: req.authPrincipal.principal_id });
-      if (req.body?.role) identity.assignRole(principal.principal_id, req.body.role, req.authPrincipal.principal_id);
+      const principal = identity.createHumanUser({ username: req.body?.username, password: req.body?.password, displayName: req.body?.display_name, actorIdentity: req.authPrincipal });
+      if (req.body?.role) identity.assignRole(principal.principal_id, req.body.role, req.authPrincipal);
       res.status(201).json({ principal: identity.getPrincipal(principal.principal_id) });
     } catch (error) {
       return errorResponse(req, res, error, { status: 400, code: "user_create_failed", component: "auth" });
@@ -197,8 +205,8 @@ function registerAuthRoutes({
     try {
       const target = identity.getHumanUser(req.params.id);
       if (!target) return res.status(404).json({ error: "Human principal not found" });
-      identity.changePassword(target.principal.principal_id, req.body?.new_password, req.authPrincipal.principal_id);
-      authentication.invalidatePrincipalSessions(target.principal.principal_id);
+      identity.changePassword(target.principal.principal_id, req.body?.new_password, req.authPrincipal);
+      authentication.invalidatePrincipalSessions(target.principal.principal_id, req.authPrincipal.principal_id);
       res.json({ ok: true });
     } catch (error) {
       return errorResponse(req, res, error, { status: 400, code: "invalid_request", component: "auth" });
@@ -215,8 +223,8 @@ function registerAuthRoutes({
     if (!requireIdentityPermission(req, res, "principals.manage")) return;
     if (!['enable', 'disable'].includes(req.params.state)) return res.status(404).json({ error: "Unknown principal state" });
     try {
-      const principal = identity.setPrincipalEnabled(req.params.id, req.params.state === 'enable', req.authPrincipal.principal_id);
-      if (req.params.state === 'disable') authentication.invalidatePrincipalSessions(principal.principal_id);
+      const principal = identity.setPrincipalEnabled(req.params.id, req.params.state === 'enable', req.authPrincipal);
+      if (req.params.state === 'disable') authentication.invalidatePrincipalSessions(principal.principal_id, req.authPrincipal.principal_id);
       res.json({ principal });
     } catch (error) {
       return errorResponse(req, res, error, { status: String(error?.message || "").includes("Owner") ? 409 : 400, code: "principal_state_change_rejected", component: "auth" });
@@ -227,10 +235,12 @@ function registerAuthRoutes({
   app.post("/api/auth/principals/:id/disable", (req, res) => { req.params.state = 'disable'; setPrincipalStateRoute(req, res); });
 
   app.post("/api/auth/principals/:id/roles", (req, res) => {
-    const adoptedSelfPromotion = req.body?.role === "owner" && req.params.id === req.authPrincipal?.principal_id && req.authPrincipal?.principal_type === "human" && req.authPrincipal?.metadata?.adopted_legacy_dashboard === true;
+    const adoptedSelfPromotion = req.body?.role === "owner" && req.params.id === req.authPrincipal?.principal_id &&
+      req.authPrincipal?.principal_type === "human" && req.authPrincipal?.metadata?.adopted_legacy_dashboard === true &&
+      identity.canCompleteFirstOwnerSetup?.(req.params.id) === true;
     if (!adoptedSelfPromotion && !requireIdentityPermission(req, res, "roles.manage")) return;
     try {
-      res.status(201).json({ principal: identity.assignRole(req.params.id, req.body?.role, req.authPrincipal.principal_id) });
+      res.status(201).json({ principal: identity.assignRole(req.params.id, req.body?.role, req.authPrincipal) });
     } catch (error) {
       return errorResponse(req, res, error, { status: 400, code: "invalid_request", component: "auth" });
     }
@@ -239,7 +249,7 @@ function registerAuthRoutes({
   app.delete("/api/auth/principals/:id/roles/:role", (req, res) => {
     if (!requireIdentityPermission(req, res, "roles.manage")) return;
     try {
-      res.json({ principal: identity.removeRole(req.params.id, req.params.role, req.authPrincipal.principal_id) });
+      res.json({ principal: identity.removeRole(req.params.id, req.params.role, req.authPrincipal) });
     } catch (error) {
       return errorResponse(req, res, error, { status: 400, code: "invalid_request", component: "auth" });
     }
@@ -274,7 +284,7 @@ function registerAuthRoutes({
       }
     }
     try {
-      const delegation = authorization.createDelegation({ delegatorPrincipalId, delegatePrincipalId: req.body?.delegate_principal_id, permissions: req.body?.permissions, expiresAt: req.body?.expires_at, actorPrincipalId: req.authPrincipal.principal_id });
+      const delegation = authorization.createDelegation({ delegatorPrincipalId, delegatePrincipalId: req.body?.delegate_principal_id, permissions: req.body?.permissions, expiresAt: req.body?.expires_at, actorContext: req.authPrincipal });
       res.status(201).json({ delegation });
     } catch (error) {
       return errorResponse(req, res, error, { status: 400, code: "invalid_request", component: "auth" });
@@ -295,7 +305,7 @@ function registerAuthRoutes({
       return res.status(403).json({ error: "Delegation revocation exceeds the request authority", code: "insufficient_delegation" });
     }
     try {
-      res.json({ delegation: authorization.revokeDelegation(req.params.id, principal.principal_id) });
+      res.json({ delegation: authorization.revokeDelegation(req.params.id, principal) });
     } catch (error) {
       return errorResponse(req, res, error, { status: 403, code: "insufficient_delegation", component: "auth" });
     }
@@ -309,8 +319,29 @@ function registerAuthRoutes({
 
   app.post("/api/auth/credentials", (req, res) => {
     if (!requireIdentityPermission(req, res, "credentials.create")) return;
+    const actorId = req.authPrincipal.principal_id;
+    const principalId = req.body?.principal_id || actorId;
+    if (principalId !== actorId) {
+      return res.status(403).json({ error: "Generic credentials may only be created for the initiating principal", code: "credential_target_forbidden" });
+    }
+    const scopes = req.body?.scopes === undefined ? [] : req.body.scopes;
+    if (!Array.isArray(scopes) || scopes.some(scope => typeof scope !== "string" || !scope.trim() || scope.length > 160)) {
+      return res.status(400).json({ error: "scopes must be a bounded permission array", code: "invalid_request" });
+    }
+    const uniqueScopes = [...new Set(scopes.map(scope => scope.trim()))];
+    for (const scope of uniqueScopes) {
+      const decision = identityPermissionDecision(req, scope);
+      if (!decision.ok) return res.status(403).json({ error: "Credential scopes exceed the initiating identity's current authority", code: "forbidden", permission: scope });
+    }
     try {
-      const created = authentication.createCredential({ principalId: req.body?.principal_id, displayName: req.body?.display_name, scopes: req.body?.scopes, expiresAt: req.body?.expires_at, createdByPrincipalId: req.authPrincipal.principal_id });
+      let created;
+      dbStore.getDb().transaction(() => {
+        if (!identityPermissionDecision(req, "credentials.create").ok) throw new Error("Credential creation authority was revoked");
+        for (const scope of uniqueScopes) {
+          if (!identityPermissionDecision(req, scope).ok) throw new Error(`Credential scope authority was revoked: ${scope}`);
+        }
+        created = authentication.createCredential({ principalId: actorId, displayName: req.body?.display_name, scopes: uniqueScopes, expiresAt: req.body?.expires_at, createdByPrincipalId: actorId, actorContext: req.authPrincipal });
+      })();
       res.status(201).json({ credential: created.credential, token: created.token });
     } catch (error) {
       return errorResponse(req, res, error, { status: 400, code: "invalid_request", component: "auth" });
@@ -363,7 +394,7 @@ function registerAuthRoutes({
             type: "service",
             displayName: req.body?.display_name,
             createdByPrincipalId: actorId,
-            actorPrincipalId: actorId,
+            actorIdentity: actor,
             metadata: { managed_for: "scoped_machine_credential" },
           });
           for (const permission of uniquePermissions) identity.grantPrincipalPermission(principal.principal_id, permission, actor);
@@ -374,6 +405,7 @@ function registerAuthRoutes({
           scopes: uniqueScopes,
           expiresAt: req.body?.expires_at,
           createdByPrincipalId: actorId,
+          actorContext: actor,
         });
         provisioned = { principal, credential: created.credential, token: created.token };
       })();
@@ -402,6 +434,7 @@ function registerAuthRoutes({
 
   app.post("/api/auth/service-credentials/:id/rotate", (req, res) => {
     if (!requireIdentityPermission(req, res, "credentials.revoke")) return;
+    if (!requireIdentityPermission(req, res, "credentials.create")) return;
     if (!requireIdentityPermission(req, res, "roles.manage")) return;
     const credential = authentication.getCredential(req.params.id);
     const principal = credential && identity.getPrincipal(credential.principal_id);
@@ -418,7 +451,7 @@ function registerAuthRoutes({
       if (!decision.ok) return res.status(403).json({ error: "Cannot rotate a credential beyond the initiating identity's authority", code: "forbidden", permission: scope });
     }
     try {
-      const replacement = authentication.rotateCredential(credential.credential_id, req.authPrincipal.principal_id);
+      const replacement = authentication.rotateCredential(credential.credential_id, req.authPrincipal);
       res.set("Cache-Control", "no-store");
       res.status(201).json({ principal, credential: replacement.credential, token: replacement.token });
     } catch (error) {
@@ -428,13 +461,27 @@ function registerAuthRoutes({
 
   app.post("/api/auth/credentials/:id/revoke", (req, res) => {
     if (!requireIdentityPermission(req, res, "credentials.revoke")) return;
-    res.json({ revoked: authentication.revokeCredential(req.params.id) });
+    const credential = authentication.getCredential(req.params.id);
+    if (credential && credential.principal_id !== req.authPrincipal.principal_id) {
+      return res.status(403).json({ error: "Credentials may only be revoked by their owning principal", code: "credential_target_forbidden" });
+    }
+    res.json({ revoked: authentication.revokeCredential(req.params.id, req.authPrincipal) });
   });
 
   app.post("/api/auth/credentials/:id/rotate", (req, res) => {
     if (!requireIdentityPermission(req, res, "credentials.revoke")) return;
+    if (!requireIdentityPermission(req, res, "credentials.create")) return;
+    const credential = authentication.getCredential(req.params.id);
+    if (!credential) return res.status(404).json({ error: "Credential not found", code: "not_found" });
+    if (credential.principal_id !== req.authPrincipal.principal_id) {
+      return res.status(403).json({ error: "Credentials may only be rotated by their owning principal", code: "credential_target_forbidden" });
+    }
+    for (const scope of credential.scopes) {
+      const decision = identityPermissionDecision(req, scope);
+      if (!decision.ok) return res.status(403).json({ error: "Credential scopes exceed the initiating identity's current authority", code: "forbidden", permission: scope });
+    }
     try {
-      const replacement = authentication.rotateCredential(req.params.id, req.authPrincipal.principal_id);
+      const replacement = authentication.rotateCredential(req.params.id, req.authPrincipal);
       res.status(201).json({ credential: replacement.credential, token: replacement.token });
     } catch (error) {
       return errorResponse(req, res, error, { status: 400, code: "invalid_request", component: "auth" });

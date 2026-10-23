@@ -14,6 +14,33 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  secret-scan:
+    name: Full-history secret scan
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Scan all fetched Git history with Gitleaks
+        run: >-
+          docker run --rm
+          --network none
+          --read-only
+          --cap-drop ALL
+          --security-opt no-new-privileges
+          --cpus 2
+          --memory 2g
+          --pids-limit 64
+          --user "$(id -u):$(id -g)"
+          --mount "type=bind,src=${GITHUB_WORKSPACE},dst=/repo,readonly"
+          --workdir /repo
+          ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:b109bc5f8f76a38196a3e413704fc5b9e3c32360bce4e4b603bd6f45b3721dbb
+          git --redact --no-banner --exit-code 1 --log-opts=--all /repo
+
   fast-gate:
     name: Metadata and architecture gate
     permissions:
@@ -54,6 +81,8 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
+      - name: Install OS sandbox backend for changed tests
+        run: bash scripts/ci/setup-bubblewrap.sh
       - run: npm ci
       - name: Run changed-test selector self-tests
         run: node --test test/scripts-quality-gates.test.js
@@ -109,6 +138,8 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
+      - name: Install OS sandbox backend for security tests
+        run: bash scripts/ci/setup-bubblewrap.sh
       - run: npm ci
       - run: npm run test:security
 
@@ -132,6 +163,8 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
+      - name: Install OS sandbox backend for security shard
+        run: bash scripts/ci/setup-bubblewrap.sh
       - run: npm ci
       - name: Install browser runtime for browser shard only
         if: matrix.domain == 'platforms'
@@ -166,6 +199,8 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
+      - name: Install OS sandbox backend for compatibility tests
+        run: bash scripts/ci/setup-bubblewrap.sh
       - run: npm ci
       - run: node scripts/run-tests.js --tier=compatibility
 
@@ -190,6 +225,17 @@ jobs:
       - name: Require a stable package lock
         run: git diff --exit-code -- package-lock.json
       - run: npm audit --omit=dev --audit-level=moderate
+      - name: Generate CycloneDX software bill of materials
+        run: npm sbom --package-lock-only --sbom-format=cyclonedx --sbom-type=application > sidekick.cdx.json
+      - name: Validate generated software bill of materials
+        run: node -e "const bom = require('./sidekick.cdx.json'); if (bom.bomFormat !== 'CycloneDX' || !Array.isArray(bom.components) || !Array.isArray(bom.dependencies) || bom.components.length === 0) process.exit(1)"
+      - name: Publish software bill of materials artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1, Node 24
+        with:
+          name: sidekick-cyclonedx-sbom
+          path: sidekick.cdx.json
+          if-no-files-found: error
+          retention-days: 14
       - run: npm run package:worker
       - run: npm pack --dry-run
 
@@ -249,6 +295,8 @@ jobs:
         with:
           node-version: 22.x
           cache: npm
+      - name: Install OS sandbox backend for coverage tests
+        run: bash scripts/ci/setup-bubblewrap.sh
       - run: npm ci
       - name: Install browser runtime for coverage E2E
         env:
@@ -315,6 +363,8 @@ jobs:
         with:
           node-version: 22.x
           cache: npm
+      - name: Install OS sandbox backend for mutation tests
+        run: bash scripts/ci/setup-bubblewrap.sh
       - run: npm ci
       - name: Run mutation policy self-tests
         run: node --test test/mutation-policy.test.js
@@ -343,6 +393,8 @@ jobs:
         with:
           node-version: 22.x
           cache: npm
+      - name: Install OS sandbox backend for flake tests
+        run: bash scripts/ci/setup-bubblewrap.sh
       - run: npm ci
       - name: Run flake policy self-tests
         run: node --test test/scripts-quality-gates.test.js

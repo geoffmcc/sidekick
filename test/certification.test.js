@@ -2,6 +2,11 @@
 
 const assert = require("assert");
 const { listScenarios, runCertification, formatCertificationText, collectReliabilityMetrics, createLiveAgentExecutor } = require("../src/certification");
+const identity = require("../src/core/identity");
+require("../src/db").runPendingMigrations();
+if (!identity.listPrincipals({ type: "human" }).some(principal => principal.enabled && principal.roles.includes("owner"))) {
+  identity.bootstrapOwner({ username: "certification_fixture_owner", password: "synthetic certification fixture owner password" });
+}
 const certificationIdentity = require("../src/certification/identity").createCertificationIdentity();
 const run = options => runCertification({ ...(options || {}), authIdentity: certificationIdentity.authIdentity });
 assert.equal(certificationIdentity.authIdentity.principal_type, "service");

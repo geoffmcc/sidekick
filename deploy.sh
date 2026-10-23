@@ -51,6 +51,40 @@ run_remote() { ssh -i "$SSH_KEY" $SSH_OPTS "$VPS" "$@" 2>&1; }
 copy_to_vps() { scp -i "$SSH_KEY" $SSH_OPTS "$1" "$VPS:$2" 2>&1; }
 restart_service() { echo -e "  \033[33mrestarting $1...\033[0m"; run_remote "sudo systemctl restart $1" >/dev/null; }
 
+wait_sidekick_services() {
+  local timeout_seconds=220 interval_seconds=5 elapsed=0 states active_count service state all_active
+  local services=(sidekick-mcp sidekick-agent sidekick-dashboard)
+  while (( elapsed <= timeout_seconds )); do
+    states=""
+    all_active=true
+    for service in "${services[@]}"; do
+      state=$(run_remote "sudo systemctl status $service 2>&1 | grep 'Active:' | awk '{print \$2}'") || true
+      state=$(printf '%s' "$state" | tr -d '\r' | tr -d '[:space:]')
+      states+="${service}=${state:-unknown} "
+      if [[ "$state" != "active" ]]; then all_active=false; fi
+    done
+    if [[ "$all_active" == "true" ]]; then return 0; fi
+    if (( elapsed < timeout_seconds )); then sleep "$interval_seconds"; fi
+    elapsed=$((elapsed + interval_seconds))
+  done
+
+  echo -e "\033[31mERROR: Sidekick services did not all become active within ${timeout_seconds} seconds. Current states: ${states}\033[0m" >&2
+  echo "Inspect logs with separate commands:" >&2
+  echo "  sudo journalctl -u sidekick-mcp" >&2
+  echo "  sudo journalctl -u sidekick-agent" >&2
+  echo "  sudo journalctl -u sidekick-dashboard" >&2
+  return 1
+}
+
+sync_service_units() {
+  echo -e "  \033[33minstalling updated Sidekick systemd units...\033[0m"
+  local command="sudo install -o root -g root -m 0644 $REMOTE_DIR/systemd/sidekick-mcp.service /etc/systemd/system/sidekick-mcp.service && sudo install -o root -g root -m 0644 $REMOTE_DIR/systemd/sidekick-agent.service /etc/systemd/system/sidekick-agent.service && sudo install -o root -g root -m 0644 $REMOTE_DIR/systemd/sidekick-dashboard.service /etc/systemd/system/sidekick-dashboard.service && sudo systemctl daemon-reload"
+  if ! run_remote "$command" >/dev/null; then
+    echo -e "\033[31mERROR: Failed to install/reload Sidekick systemd units\033[0m"
+    return 1
+  fi
+}
+
 ensure_secret_config() {
   echo -e "  \033[33mEnsuring protected secret configuration...\033[0m"
   if ! run_remote "test -x $REMOTE_DIR/scripts/ensure-secret-config.sh && bash $REMOTE_DIR/scripts/ensure-secret-config.sh $REMOTE_DIR" >/dev/null; then
@@ -418,6 +452,12 @@ if [ "$SCP_MODE" = true ]; then
   run_remote "chmod 700 $REMOTE_DIR/scripts/ensure-secret-config.sh" >/dev/null
   changed+=("ensure-secret-config.sh")
 
+  if ! copy_to_vps "$PROJECT_DIR/scripts/verify-runtime-secrets.js" "$REMOTE_DIR/scripts/verify-runtime-secrets.js" >/dev/null; then
+    echo -e "\033[31mERROR: Failed to copy verify-runtime-secrets.js\033[0m"
+    exit 1
+  fi
+  changed+=("verify-runtime-secrets.js")
+
   if ! copy_to_vps "$PROJECT_DIR/docs/knowledge-seed.sql" "$REMOTE_DIR/docs/knowledge-seed.sql" >/dev/null; then
     echo -e "\033[31mERROR: Failed to copy knowledge-seed.sql\033[0m"
     exit 1
@@ -487,11 +527,14 @@ fi
 
 repair_optional_tools
 ensure_secret_config
+sync_service_units
 
 if [ "$git_mode_used" = true ]; then
   echo ""
-  echo -e "\033[36m--- Restarting MCP ---\033[0m"
+  echo -e "\033[36m--- Restarting Services ---\033[0m"
   restart_service "sidekick-mcp"
+  restart_service "sidekick-agent"
+  restart_service "sidekick-dashboard"
 else
   echo ""
   echo -e "\033[36m--- Installing Dependencies ---\033[0m"
@@ -515,10 +558,13 @@ else
 
   echo ""
   echo -e "\033[36m--- Starting Services ---\033[0m"
+  restart_service "sidekick-mcp"
   restart_service "sidekick-agent"
   restart_service "sidekick-dashboard"
-  restart_service "sidekick-mcp"
 fi
+
+echo -e "  \033[33mwaiting for MCP, Agent, and Dashboard readiness...\033[0m"
+wait_sidekick_services || exit 1
 
 echo ""
 echo -e "\033[36m=== Deploy complete ===\033[0m"
@@ -536,7 +582,7 @@ for svc in sidekick-mcp sidekick-dashboard sidekick-agent sidekick-execution-nod
     exit 1
   fi
   status=$(run_remote "sudo systemctl status $svc 2>&1 | grep 'Active:' | awk '{print \$2}'") || true
-  if [[ "$status" == *"active"* ]]; then
+  if [[ "$status" == "active" ]]; then
     echo -e "  \033[32m$svc : $status\033[0m"
   else
     echo -e "  \033[31m$svc : $status\033[0m"

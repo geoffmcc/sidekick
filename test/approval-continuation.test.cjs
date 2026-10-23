@@ -39,6 +39,7 @@ const store = require('../src/approvals/store');
 const continuation = require('../src/approvals/continuation');
 const sweeper = require('../src/approvals/sweeper');
 const vocab = require('../src/approvals/vocabulary');
+const identity = require('../src/core/identity');
 const { resumeBrainTask } = require('../src/brain/resume');
 
 console.log('Running Approval Continuation Tests...');
@@ -392,6 +393,25 @@ test('approve requires an approver identity', () => {
   const outcome = continuation.approve({ approvalId, approverIdentity: '' });
   assert.strictEqual(outcome.ok, false);
   assert.strictEqual(outcome.code, 'approver_identity_required');
+});
+
+test('task approval rechecks the approver credential scope', () => {
+  require('../src/db').runPendingMigrations();
+  const fixtureOwner = identity.listPrincipals({ type: 'human' }).find(item => item.roles.includes('owner'))
+    || identity.bootstrapOwner({ username: 'approval_fixture_owner', password: 'synthetic approval fixture owner password' });
+  const principal = require('./helpers/authorized-identity').createPrincipal(identity, { type: 'human', displayName: 'Scoped approval reviewer' });
+  identity.assignRole(principal.principal_id, 'administrator', fixtureOwner);
+  const { taskId, approvalId } = parkFixture();
+  const outcome = continuation.approve({
+    approvalId,
+    approverIdentity: principal.principal_id,
+    approverPrincipalId: principal.principal_id,
+    credentialScopes: ['approvals.read'],
+  });
+  assert.strictEqual(outcome.ok, false);
+  assert.strictEqual(outcome.code, 'forbidden');
+  assert.strictEqual(store.getApproval(approvalId).status, 'pending');
+  assert.strictEqual(store.getCheckpoint(taskId).state, 'waiting_for_approval');
 });
 
 // ===========================================================================

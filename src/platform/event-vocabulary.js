@@ -198,6 +198,7 @@ const KNOWN_EVENT_TYPES = Object.freeze([
   "schedule.watch.removed",
   "schedule.watch.resumed",
   "schedule.watch.triggered",
+  "schedule.watch.check_failed",
   "scope.guard.decision",
   "scope.snapshot.created",
   "workflow.checkpointed",

@@ -42,10 +42,20 @@ try {
     assert.equal(db.getDb().prepare("SELECT 1 FROM identity_role_permissions WHERE role_name = 'auditor' AND permission LIKE 'sync.%'").get(), undefined, "auditors cannot export or mutate synchronized state");
   });
 
+  const legacyPrincipalId = "prn_adopted_legacy_fixture";
+  const legacyPassword = identity.passwordHash("synthetic adopted account password");
+  const legacyNow = new Date().toISOString();
+  db.getDb().prepare(`INSERT INTO principals (principal_id, principal_type, display_name, metadata_json, created_at, updated_at)
+    VALUES (?, 'human', ?, ?, ?, ?)`).run(legacyPrincipalId, "Adopted legacy account", JSON.stringify({ adopted_legacy_dashboard: true }), legacyNow, legacyNow);
+  db.getDb().prepare(`INSERT INTO human_users (principal_id, username, password_hash, password_scheme, password_changed_at)
+    VALUES (?, 'adopted_legacy', ?, ?, ?)`).run(legacyPrincipalId, legacyPassword, identity.PASSWORD_SCHEME, legacyNow);
+  const adoptedLegacy = identity.getPrincipal(legacyPrincipalId);
+  assert.equal(identity.canCompleteFirstOwnerSetup(adoptedLegacy.principal_id), true, "adopted account is eligible before bootstrap");
   const owner = identity.bootstrapOwner({ username: "owner", password: "correct horse battery staple", displayName: "Owner" });
-  const operator = identity.createHumanUser({ username: "operator", password: "another correct password", displayName: "Operator" });
-  identity.assignRole(operator.principal_id, "operator", owner.principal_id);
-  const agent = identity.createPrincipal({ type: "agent", displayName: "Build Agent", actorPrincipalId: owner.principal_id });
+  const authorizedIdentityFixtures = require("./helpers/authorized-identity");
+  const operator = authorizedIdentityFixtures.createHumanUser(identity, { username: "operator", password: "another correct password", displayName: "Operator" }, owner);
+  identity.assignRole(operator.principal_id, "operator", owner);
+  const agent = authorizedIdentityFixtures.createPrincipal(identity, { type: "agent", displayName: "Build Agent" }, owner);
 
   test("authorization evaluates permissions rather than role names", () => {
     assert.ok(db.getDb().prepare("SELECT 1 FROM identity_permissions WHERE permission = 'blackbox.read'").get());
@@ -56,8 +66,8 @@ try {
     assert.strictEqual(authorization.authorize({ principalId: operator.principal_id, permission: "connectors.read" }).code, "forbidden");
     assert.strictEqual(authorization.authorize({ principalId: operator.principal_id, permission: "connectors.manage" }).code, "forbidden");
     assert.strictEqual(authorization.authorize({ principalId: operator.principal_id, permission: "database.inspect" }).ok, true, "operator DB inspection workflow retains an explicit grant");
-    const viewer = identity.createHumanUser({ username: "viewer_no_db", password: "another sufficiently long password" });
-    identity.assignRole(viewer.principal_id, "viewer", owner.principal_id);
+    const viewer = authorizedIdentityFixtures.createHumanUser(identity, { username: "viewer_no_db", password: "another sufficiently long password" }, owner);
+    identity.assignRole(viewer.principal_id, "viewer", owner);
     assert.strictEqual(authorization.authorize({ principalId: viewer.principal_id, permission: "database.inspect" }).code, "forbidden", "viewer role does not receive database inspection");
     assert.strictEqual(authorization.authorize({ principalId: operator.principal_id, permission: "dashboard.operations.read" }).code, "forbidden");
     assert.strictEqual(authorization.authorize({ principalId: operator.principal_id, permission: "dashboard.operations.manage" }).code, "forbidden");
@@ -91,24 +101,67 @@ try {
   });
 
   test("delegation is a subset of delegator authority and revocable", () => {
-    const delegation = authorization.createDelegation({ delegatorPrincipalId: operator.principal_id, delegatePrincipalId: agent.principal_id, permissions: ["workflows.execute"], expiresAt: new Date(Date.now() + 60_000).toISOString(), actorPrincipalId: operator.principal_id });
+    assert.throws(() => authorization.createDelegation({ delegatorPrincipalId: owner.principal_id, delegatePrincipalId: agent.principal_id, permissions: ["workflows.execute"], actorContext: { principal_id: operator.principal_id } }), /authorized administrator/);
+    const delegation = authorization.createDelegation({ delegatorPrincipalId: operator.principal_id, delegatePrincipalId: agent.principal_id, permissions: ["workflows.execute"], expiresAt: new Date(Date.now() + 60_000).toISOString(), actorContext: { principal_id: operator.principal_id } });
+    const administratorDelegation = authorization.createDelegation({ delegatorPrincipalId: operator.principal_id, delegatePrincipalId: agent.principal_id, permissions: ["workflows.execute"], actorContext: { principal_id: owner.principal_id } });
+    assert.equal(administratorDelegation.created_by_principal_id, owner.principal_id, "an authorized administrator may act for a delegator with current authority");
+    authorization.revokeDelegation(administratorDelegation.delegation_id, { principal_id: owner.principal_id });
     assert.strictEqual(authorization.authorize({ principalId: agent.principal_id, permission: "workflows.execute", delegationId: delegation.delegation_id }).ok, true);
     assert.strictEqual(authorization.authorize({ principalId: agent.principal_id, permission: "tools.execute", delegationId: delegation.delegation_id }).code, "forbidden");
-    assert.throws(() => authorization.createDelegation({ delegatorPrincipalId: operator.principal_id, delegatePrincipalId: agent.principal_id, permissions: ["users.manage"] }), /lacks permission/);
-    authorization.revokeDelegation(delegation.delegation_id, operator.principal_id);
+    assert.throws(() => authorization.createDelegation({ delegatorPrincipalId: operator.principal_id, delegatePrincipalId: agent.principal_id, permissions: ["users.manage"], actorContext: { principal_id: operator.principal_id } }), /lacks permission/);
+    assert.throws(() => authorization.revokeDelegation(delegation.delegation_id), /authenticated identity context/);
+    assert.throws(() => authorization.revokeDelegation(delegation.delegation_id, { principal_id: agent.principal_id }), /authorized administrator/);
+    authorization.revokeDelegation(delegation.delegation_id, { principal_id: operator.principal_id });
+    assert.throws(() => authorization.revokeDelegation(delegation.delegation_id), /authenticated identity context/, "already-revoked records still require an actor before returning their details");
     assert.strictEqual(authorization.authorize({ principalId: agent.principal_id, permission: "workflows.execute", delegationId: delegation.delegation_id }).code, "delegation-revoked-or-expired");
   });
 
   test("disabled principals cannot authorize", () => {
-    identity.setPrincipalEnabled(operator.principal_id, false, owner.principal_id);
+    identity.setPrincipalEnabled(operator.principal_id, false, owner);
     assert.strictEqual(authorization.authorize({ principalId: operator.principal_id, permission: "workflows.execute" }).code, "principal-disabled");
   });
 
   test("Owner promotion and final-Owner protection require authority", () => {
-    assert.throws(() => identity.assignRole(agent.principal_id, "owner"), /authorized actor/);
-    identity.assignRole(agent.principal_id, "owner", owner.principal_id);
-    identity.setPrincipalEnabled(owner.principal_id, false, agent.principal_id);
-    assert.throws(() => identity.removeRole(agent.principal_id, "owner", agent.principal_id), /final usable Owner/);
+    assert.throws(() => identity.assignRole(agent.principal_id, "owner"), /authenticated identity context/);
+    identity.assignRole(agent.principal_id, "owner", owner);
+    identity.setPrincipalEnabled(owner.principal_id, false, agent);
+    assert.throws(() => identity.removeRole(agent.principal_id, "owner", agent), /final usable Owner/);
+  });
+
+  test("ordinary role grants and removals require roles.manage at the identity boundary", () => {
+    const target = authorizedIdentityFixtures.createPrincipal(identity, { type: "service", displayName: "Unauthorized role target" }, agent);
+    assert.throws(() => identity.assignRole(target.principal_id, "administrator", operator), /roles.manage/);
+    assert.deepEqual(identity.getPrincipal(target.principal_id).roles, []);
+    assert.throws(() => identity.removeRole(operator.principal_id, "operator", operator), /roles.manage/);
+    assert.deepEqual(identity.getPrincipal(operator.principal_id).roles, ["operator"]);
+  });
+
+  test("principal enable and disable require principals.manage at the identity boundary", () => {
+    const target = authorizedIdentityFixtures.createPrincipal(identity, { type: "service", displayName: "Unauthorized state target" }, agent);
+    assert.throws(() => identity.setPrincipalEnabled(target.principal_id, false, target), /principals.manage/);
+    assert.equal(identity.getPrincipal(target.principal_id).enabled, true);
+    assert.throws(() => identity.setPrincipalEnabled(target.principal_id, true, target), /principals.manage/);
+    assert.equal(identity.getPrincipal(target.principal_id).enabled, true);
+  });
+
+  test("profile, username, and cross-user password changes require users.manage", () => {
+    const activeOwner = identity.getPrincipal(agent.principal_id);
+    const subject = authorizedIdentityFixtures.createHumanUser(identity, { username: "profile_subject", password: "synthetic subject password" }, activeOwner);
+    const viewer = authorizedIdentityFixtures.createHumanUser(identity, { username: "profile_viewer", password: "synthetic viewer password" }, activeOwner);
+    identity.assignRole(viewer.principal_id, "viewer", activeOwner);
+    assert.throws(() => identity.updatePrincipal(subject.principal_id, { displayName: "Tampered" }, viewer), /users.manage/);
+    assert.throws(() => identity.updateUsername(subject.principal_id, "tampered_name", viewer), /users.manage/);
+    assert.throws(() => identity.changePassword(subject.principal_id, "synthetic unauthorized reset", viewer), /users.manage/);
+    assert.equal(identity.getPrincipal(subject.principal_id).display_name, "profile_subject");
+    assert.equal(identity.getHumanUser(subject.principal_id).username, "profile_subject");
+    assert.ok(identity.verifyUserPassword("profile_subject", "synthetic subject password"));
+  });
+
+  test("adopted legacy Dashboard account cannot self-promote after Owner bootstrap", () => {
+    assert.equal(identity.canCompleteFirstOwnerSetup(adoptedLegacy.principal_id), false);
+    assert.throws(() => identity.assignRole(adoptedLegacy.principal_id, "owner", adoptedLegacy), /authorized actor/);
+    assert.throws(() => identity.assignRole(adoptedLegacy.principal_id, "administrator", adoptedLegacy), /roles.manage/);
+    assert.deepEqual(identity.getPrincipal(adoptedLegacy.principal_id).roles, []);
   });
 
   console.log(`Identity authorization: ${passed} passed`);

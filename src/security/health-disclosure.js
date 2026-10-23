@@ -11,4 +11,13 @@ function projectStartupFailures(failures, includeDetails = false) {
   return Object.fromEntries(entries.map(([component]) => [component, "unavailable"]));
 }
 
-module.exports = Object.freeze({ projectStartupFailures });
+function projectMcpSessionHealth(snapshot, includeDetails = false) {
+  const projected = {
+    sessions: Number.isSafeInteger(snapshot?.sessions) && snapshot.sessions >= 0 ? snapshot.sessions : 0,
+    staleMappings: Number.isSafeInteger(snapshot?.staleMappings) && snapshot.staleMappings >= 0 ? snapshot.staleMappings : 0,
+  };
+  if (includeDetails) projected.sessionDetails = Array.isArray(snapshot?.sessionDetails) ? snapshot.sessionDetails : [];
+  return projected;
+}
+
+module.exports = Object.freeze({ projectMcpSessionHealth, projectStartupFailures });

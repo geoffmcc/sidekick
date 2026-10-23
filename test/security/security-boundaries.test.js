@@ -16,6 +16,7 @@ process.env.SIDEKICK_APPROVAL_REQUIRED_TOOLS = "";
 process.env.SIDEKICK_SECRET_KEY = "security-boundaries-test-secret-key";
 
 const db = require("../../src/db");
+const legacyTools = require("../../src/tools-legacy");
 const identity = require("../../src/core/identity");
 const authorization = require("../../src/core/authorization");
 const securityAudit = require("../../src/core/security-audit");
@@ -36,6 +37,30 @@ before(() => {
     password: "boundary-owner-password",
     displayName: "Boundary Owner",
   });
+});
+
+test("critical shell execution requires approval when approval settings are omitted", () => {
+  const names = [
+    "SIDEKICK_APPROVAL_MODE",
+    "SIDEKICK_MCP_APPROVAL_MODE",
+    "SIDEKICK_APPROVAL_REQUIRED_TOOLS",
+    "SIDEKICK_MCP_APPROVAL_REQUIRED_TOOLS",
+    "SIDEKICK_APPROVAL_EXEMPT_TOOLS",
+    "SIDEKICK_MCP_APPROVAL_EXEMPT_TOOLS",
+  ];
+  const previous = new Map(names.map(name => [name, process.env[name]]));
+  try {
+    for (const name of names) delete process.env[name];
+    const decision = legacyTools.getApprovalDecision("bash", "mcp");
+    assert.equal(decision.mode, "strict");
+    assert.equal(decision.risk, "critical");
+    assert.equal(decision.required, true);
+  } finally {
+    for (const [name, value] of previous) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
 });
 
 after(() => {
@@ -85,27 +110,27 @@ test("production dispatch rejects caller descriptors and the continuation seam r
 });
 
 test("authorization narrows credentials and delegation to current authority", () => {
-  const delegate = identity.createPrincipal({ type: "agent", displayName: "Boundary Agent" });
-  const secondOwner = identity.createPrincipal({ type: "human", displayName: "Second Owner" });
-  identity.assignRole(secondOwner.principal_id, "owner", owner.principal_id);
+  const delegate = require('../helpers/authorized-identity').createPrincipal(identity, { type: "agent", displayName: "Boundary Agent" });
+  const secondOwner = require('../helpers/authorized-identity').createPrincipal(identity, { type: "human", displayName: "Second Owner" });
+  identity.assignRole(secondOwner.principal_id, "owner", owner);
   const delegation = authorization.createDelegation({
     delegatorPrincipalId: owner.principal_id,
     delegatePrincipalId: delegate.principal_id,
     permissions: ["workflows.execute"],
-    actorPrincipalId: owner.principal_id,
+    actorContext: owner,
   });
 
   assert.equal(authorization.authorize({ principalId: delegate.principal_id, permission: "workflows.execute", delegationId: delegation.delegation_id }).ok, true);
   assert.equal(authorization.authorize({ principalId: delegate.principal_id, permission: "workflows.execute", delegationId: delegation.delegation_id, credentialScopes: ["users.read"] }).code, "forbidden");
 
-  identity.setPrincipalEnabled(owner.principal_id, false, secondOwner.principal_id);
+  identity.setPrincipalEnabled(owner.principal_id, false, secondOwner);
   assert.equal(authorization.authorize({ principalId: delegate.principal_id, permission: "workflows.execute", delegationId: delegation.delegation_id }).code, "delegation-revoked-or-expired");
-  identity.setPrincipalEnabled(owner.principal_id, true, secondOwner.principal_id);
-  authorization.revokeDelegation(delegation.delegation_id, owner.principal_id);
+  identity.setPrincipalEnabled(owner.principal_id, true, secondOwner);
+  authorization.revokeDelegation(delegation.delegation_id, owner);
 });
 
 test("security audit records server-derived provenance without password material", () => {
-  const actor = identity.createPrincipal({ type: "service", displayName: "Boundary Service" });
+  const actor = require('../helpers/authorized-identity').createPrincipal(identity, { type: "service", displayName: "Boundary Service" });
   securityAudit.recordSecurityEvent("boundary.checked", {
     context: context.createMcpExecutionContext({ authIdentity: { principal_id: actor.principal_id }, requestId: "boundary-request" }),
     principalId: actor.principal_id,

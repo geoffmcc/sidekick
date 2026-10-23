@@ -4,6 +4,7 @@ const { readSecret } = require("../core/runtime-secrets");
 const authentication = require("../core/authentication");
 const identity = require("../core/identity");
 const { verifyScheduledAuthority } = require("../security/scheduled-authority");
+const { restoreScheduledContext } = require("./delay-policy");
 
 function createDelayExecution({
   loadDelays,
@@ -32,22 +33,8 @@ function createDelayExecution({
     let scheduledContext = null;
     let policy = null;
     try {
-      scheduledContext = verifyScheduledAuthority({ delay: current, secret: readSecret("SIDEKICK_SECRET_KEY", { required: true }) });
-      if (scheduledContext?.authIdentity?.credential_id) {
-        const stored = scheduledContext.authIdentity;
-        const credential = getCredential(stored.credential_id);
-        if (!credential || credential.revoked_at || credential.principal_id !== stored.principal_id || (credential.expires_at && Date.parse(credential.expires_at) <= Date.now())) {
-          scheduledContext = null;
-        } else {
-          const originalScopes = Array.isArray(stored.scopes) ? stored.scopes : [];
-          const currentScopes = Array.isArray(credential.scopes) ? credential.scopes : [];
-          scheduledContext = { ...scheduledContext, authIdentity: { ...stored, scopes: originalScopes.filter(scope => currentScopes.includes(scope)) } };
-        }
-      }
-      if (scheduledContext?.authIdentity?.principal_id) {
-        const principal = getPrincipal(scheduledContext.authIdentity.principal_id);
-        if (!principal?.enabled) scheduledContext = null;
-      }
+      const signedContext = verifyScheduledAuthority({ delay: current, secret: readSecret("SIDEKICK_SECRET_KEY", { required: true }) });
+      scheduledContext = restoreScheduledContext(signedContext, { getCredential, getPrincipal });
       if (scheduledContext) policy = authorizeScheduledDelay(current, scheduledContext);
     } catch {
       scheduledContext = null;

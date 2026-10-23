@@ -17,7 +17,7 @@ function createScopedOwnerCredential(dataDir, displayName = "HTTP integration ad
     "compute.jobs.recover",
     "projects.access.manage",
   ];
-  return authentication.createCredential({ principalId: owner.principal_id, displayName, scopes }).token;
+  return authentication.createCredential({ principalId: owner.principal_id, displayName, scopes, createdByPrincipalId: owner.principal_id, actorContext: owner }).token;
 }
 
 module.exports = { createScopedOwnerCredential };

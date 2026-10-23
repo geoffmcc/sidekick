@@ -16,19 +16,26 @@ const authentication = require("../src/core/authentication");
 const authorization = require("../src/core/authorization");
 const express = require("express");
 const { registerExecutionNodeAdminRoutes } = require("../src/node/admin-api");
+const { validateLocalArguments } = require("../src/node/agent");
+const { getCanonicalRegistry } = require("../src/tools/canonical-registry");
 
 const owner = identity.bootstrapOwner({ username: "node_admin_test_owner", password: "synthetic test password with sufficient length" });
+const ownerContext = { principal_id: owner.principal_id };
 const ownerCredential = authentication.createCredential({
   principalId: owner.principal_id,
   displayName: "synthetic execution-node admin credential",
   scopes: ["compute.nodes.read", "compute.nodes.manage", "compute.jobs.cancel"],
+  createdByPrincipalId: owner.principal_id,
+  actorContext: ownerContext,
 });
-const operator = identity.createPrincipal({ type: "human", displayName: "execution-node admin test operator" });
-identity.assignRole(operator.principal_id, "operator", owner.principal_id);
+const operator = require('./helpers/authorized-identity').createPrincipal(identity, { type: "service", displayName: "execution-node admin test operator", createdByPrincipalId: owner.principal_id, actorPrincipalId: owner.principal_id });
+identity.assignRole(operator.principal_id, "operator", owner);
 const operatorCredential = authentication.createCredential({
   principalId: operator.principal_id,
   displayName: "synthetic underprivileged credential",
   scopes: ["compute.nodes.manage"],
+  createdByPrincipalId: owner.principal_id,
+  actorContext: ownerContext,
 });
 
 const executionNode = {
@@ -85,4 +92,23 @@ test("execution-node admin HTTP mutations require scoped permissions and record 
   assert.equal(revokeResponse.status, 200);
   const revokeAudit = dbStore.getDb().prepare("SELECT actor_principal_id, event_type FROM identity_audit_events WHERE event_type = 'execution_node.revoked' ORDER BY created_at DESC LIMIT 1").get();
   assert.equal(revokeAudit.actor_principal_id, owner.principal_id);
+});
+
+test("execution node refuses network Git actions even when a scope name is configured", () => {
+  const previousScope = process.env.SIDEKICK_NODE_NETWORK_SCOPE;
+  process.env.SIDEKICK_NODE_NETWORK_SCOPE = "synthetic-git-scope";
+  try {
+    const git = getCanonicalRegistry({ includeActiveModules: false }).get("git");
+    assert.ok(git, "canonical Git descriptor is available");
+    for (const action of ["pull", "push"]) {
+      assert.throws(
+        () => validateLocalArguments(git, { action, path: path.join(os.tmpdir(), "synthetic-repository") }),
+        /no enforced scoped egress broker/,
+        `${action} must fail closed instead of treating a scope label as enforcement`
+      );
+    }
+  } finally {
+    if (previousScope === undefined) delete process.env.SIDEKICK_NODE_NETWORK_SCOPE;
+    else process.env.SIDEKICK_NODE_NETWORK_SCOPE = previousScope;
+  }
 });

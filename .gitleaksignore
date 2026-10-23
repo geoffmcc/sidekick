@@ -1,0 +1,14 @@
+# Synthetic test fixtures and manifest checksum flagged by Gitleaks v8.30.1.
+# These fingerprints are commit-specific; new findings remain blocking.
+8c69c61ae0905228b73c98984f14720aa9c5702d:test/security-dashboard-direct-routes.test.js:generic-api-key:485
+8c69c61ae0905228b73c98984f14720aa9c5702d:test/security-dashboard-direct-routes.test.js:generic-api-key:494
+8c69c61ae0905228b73c98984f14720aa9c5702d:test/security-dashboard-direct-routes.test.js:generic-api-key:497
+1951ed6e5d898d53459133625ffefe5fc9ddf5e7:test/browser-subsystem.test.js:generic-api-key:105
+26af2bcbcad9a4bee0dbe4dc0dfa45e2ba3e8dba:src/compute/openvino-model-manifest.js:generic-api-key:186
+50585a8d00b25e517d8c9040fb76b4255c74d777:test/security.test.js:private-key:39
+50585a8d00b25e517d8c9040fb76b4255c74d777:test/security.test.js:private-key:49
+50585a8d00b25e517d8c9040fb76b4255c74d777:test/security.test.js:jwt:168
+50585a8d00b25e517d8c9040fb76b4255c74d777:test/security.test.js:jwt:239
+50585a8d00b25e517d8c9040fb76b4255c74d777:test/security.test.js:generic-api-key:97
+50585a8d00b25e517d8c9040fb76b4255c74d777:test/security.test.js:generic-api-key:102
+50585a8d00b25e517d8c9040fb76b4255c74d777:test/security.test.js:generic-api-key:153

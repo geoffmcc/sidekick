@@ -1,5 +1,6 @@
 /** Browser-facing Agent relay. The Agent service owns task authorization and execution. */
 const { createAgentProxyHeaders } = require("../security/agent-proxy-auth");
+const { abortUpstreamOnDisconnect } = require("./upstream-lifecycle");
 
 function registerAgentProxyRoutes({ app, http, agentPort, agentProxySecret, errorResponse }) {
   function proxyAgent(req, res, method, body) {
@@ -17,6 +18,11 @@ function registerAgentProxyRoutes({ app, http, agentPort, agentProxySecret, erro
     }));
     if (body) headers["Content-Length"] = Buffer.byteLength(body);
     const upstream = http.request({ hostname: "127.0.0.1", port: agentPort, path: req.originalUrl, method, headers }, response => { res.writeHead(response.statusCode, response.headers); response.pipe(res); });
+    if (method === "GET") {
+      // GET relays, including SSE, are read-only. Tear down their upstream
+      // socket when the browser leaves so abandoned streams cannot accumulate.
+      abortUpstreamOnDisconnect(res, upstream);
+    }
     upstream.on("error", error => { if (!res.headersSent) errorResponse(req, res, error, { status: 502, code: "upstream_unavailable", component: "agent_proxy" }); else res.end(); });
     if (body) upstream.write(body);
     upstream.end();
@@ -28,6 +34,7 @@ function registerAgentProxyRoutes({ app, http, agentPort, agentProxySecret, erro
   app.get("/api/agent/tasks/:taskId/control-room", relay("GET"));
   app.post("/api/agent/tasks/:taskId/plans", relay("POST", true));
   app.post("/api/agent/tasks/:taskId/escalations", relay("POST", true));
+  app.post("/api/agent/tasks/:taskId/escalations/:escalationId/decision", relay("POST", true));
   app.post("/api/agent/tasks/:taskId/work-packages", relay("POST", true));
   app.post("/api/agent/tasks/:taskId/work-packages/:packageId/claim", relay("POST", true));
   app.get("/api/agent/tasks/:taskId/workspace-transactions", relay("GET"));

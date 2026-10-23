@@ -90,7 +90,7 @@ test("service credential provisioning is atomic, audited, narrowly scoped, and r
   assert.equal(authentication.authenticateCredential(res.body.token), null, "rotation revokes the previous token");
   assert.deepEqual(authentication.authenticateCredential(rotated.body.token).scopes, ["packs.read", "packs.manage"]);
 
-  identity.setPrincipalEnabled(auth.principal_id, false, owner.principal_id);
+  identity.setPrincipalEnabled(auth.principal_id, false, owner);
   assert.equal(authentication.authenticateCredential(rotated.body.token), null, "disabling the service identity immediately invalidates its credential");
 });
 
@@ -103,6 +103,73 @@ test("service credential provisioning rejects scopes outside the approved grants
   }, res);
   assert.equal(res.statusCode, 400);
   assert.equal(identity.listPrincipals({ type: "service" }).length, before);
+});
+
+test("generic credential routes cannot create, rotate, or revoke another principal's credential", () => {
+  const administrator = require('./helpers/authorized-identity').createHumanUser(identity, {
+    username: "credential_route_admin",
+    password: "synthetic credential administrator password",
+    actorPrincipalId: owner.principal_id,
+  });
+  identity.assignRole(administrator.principal_id, "administrator", owner);
+
+  const before = authentication.listCredentials(owner.principal_id).length;
+  const create = response();
+  handlers.get("POST /api/auth/credentials")({
+    authPrincipal: administrator,
+    body: {
+      principal_id: owner.principal_id,
+      display_name: "Impersonation credential",
+      scopes: ["secrets.read"],
+    },
+  }, create);
+  assert.equal(create.statusCode, 403, "an Administrator cannot mint an Owner credential for a permission it does not hold");
+  assert.equal(authentication.listCredentials(owner.principal_id).length, before);
+
+  const outOfScope = response();
+  handlers.get("POST /api/auth/credentials")({
+    authPrincipal: administrator,
+    body: {
+      display_name: "Out-of-scope credential",
+      scopes: ["secrets.read"],
+    },
+  }, outOfScope);
+  assert.equal(outOfScope.statusCode, 403, "an Administrator cannot put Owner-only scopes on its own credential");
+  assert.equal(authentication.listCredentials(administrator.principal_id).length, 0);
+
+  const selfCredential = response();
+  handlers.get("POST /api/auth/credentials")({
+    authPrincipal: owner,
+    body: {
+      display_name: "Owner self credential",
+      scopes: ["secrets.read"],
+    },
+  }, selfCredential);
+  assert.equal(selfCredential.statusCode, 201, "the Owner retains credential creation within its own authority");
+  assert.deepEqual(selfCredential.body.credential.scopes, ["secrets.read"]);
+
+  const ownerCredential = authentication.createCredential({
+    principalId: owner.principal_id,
+    displayName: "Owner-only synthetic credential",
+    scopes: ["secrets.read"],
+    createdByPrincipalId: owner.principal_id,
+    actorContext: owner,
+  });
+  const revoke = response();
+  handlers.get("POST /api/auth/credentials/:id/revoke")({
+    authPrincipal: administrator,
+    params: { id: ownerCredential.credential.credential_id },
+  }, revoke);
+  assert.equal(revoke.statusCode, 403, "an Administrator cannot revoke another principal's credential");
+  assert.ok(authentication.authenticateCredential(ownerCredential.token));
+
+  const rotate = response();
+  handlers.get("POST /api/auth/credentials/:id/rotate")({
+    authPrincipal: administrator,
+    params: { id: ownerCredential.credential.credential_id },
+  }, rotate);
+  assert.equal(rotate.statusCode, 403, "an Administrator cannot rotate another principal's credential");
+  assert.ok(authentication.authenticateCredential(ownerCredential.token));
 });
 
 test("an MCP agent can receive standard tool access without pack-management authority", () => {
