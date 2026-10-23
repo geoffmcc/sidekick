@@ -93,6 +93,16 @@ test("first-party provenance cannot be self-asserted by a managed third-party mo
   );
 });
 
+test("persisted builtin labels cannot promote managed third-party code into Core", () => {
+  const record = repository.getModule(name);
+  record.source = "builtin";
+  assert.ok(record.install_path, "fixture must represent a managed package");
+  assert.throws(
+    () => entryLoader.assertExecutionIsolation(record),
+    error => error.code === entryLoader.LOAD_FAILURES.ISOLATION_UNAVAILABLE && /managed package cannot claim the builtin trust class/.test(error.message)
+  );
+});
+
 test.after(() => {
   try { require("../src/db").closeDatabase(); } catch {}
   fs.rmSync(dataDir, { recursive: true, force: true });
