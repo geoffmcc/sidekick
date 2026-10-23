@@ -31,6 +31,11 @@ try {
   test("Core principal and human-user creation require scoped service authorization", () => {
     const principalCount = db.getDb().prepare("SELECT COUNT(*) AS count FROM principals").get().count;
     assert.throws(() => identity.createPrincipal({ type: "service", displayName: "Missing actor" }), /authenticated identity context/);
+    assert.throws(() => identity.createPrincipal({
+      type: "service", displayName: "Spoofed creator attribution",
+      createdByPrincipalId: scopedRoleManager.principal_id,
+      actorIdentity: { principal_id: owner.principal_id, scopes: ["principals.manage"] },
+    }), /createdByPrincipalId must match the authenticated actor/);
     assert.throws(() => identity.createHumanUser({ username: "missing_actor", password: "synthetic missing actor password" }), /authenticated identity context/);
     assert.throws(() => identity.createPrincipal({ type: "service", displayName: "Wrong scope", actorIdentity: { principal_id: scopedRoleManager.principal_id, scopes: ["roles.manage"] } }), /principals.manage/);
     assert.throws(() => identity.createHumanUser({ username: "wrong_scope", password: "synthetic wrong scope password", actorIdentity: { principal_id: scopedRoleManager.principal_id, scopes: ["roles.manage"] } }), /users.manage/);

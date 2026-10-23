@@ -145,6 +145,9 @@ function createPrincipalRecord({ type, displayName, createdByPrincipalId = null,
 function createPrincipal({ type, displayName, createdByPrincipalId = null, metadata = {}, actorIdentity = null } = {}) {
   validateType(type);
   const { actorPrincipalId, authorizationContext } = requireCreationActor(actorIdentity, "principals.manage");
+  if (createdByPrincipalId !== null && createdByPrincipalId !== undefined && createdByPrincipalId !== actorPrincipalId) {
+    throw new Error("createdByPrincipalId must match the authenticated actor");
+  }
   const db = dbStore.getDb();
   return db.transaction(() => {
     if (!require("./authorization").authorize({ ...authorizationContext, permission: "principals.manage" }).ok) {
@@ -152,7 +155,7 @@ function createPrincipal({ type, displayName, createdByPrincipalId = null, metad
     }
     return createPrincipalRecord({
       type, displayName, metadata,
-      createdByPrincipalId: createdByPrincipalId || actorPrincipalId,
+      createdByPrincipalId: actorPrincipalId,
       actorPrincipalId,
     });
   })();

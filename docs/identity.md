@@ -81,8 +81,9 @@ not inherit the delegator's entire role set. Owner promotion/demotion requires
 Core principal creation requires an authenticated identity context with
 `principals.manage`; human account creation requires `users.manage`. Both
 permissions are revalidated inside the write transaction, including credential
-scopes and delegation. The initial Owner is created only through the separate
-one-time `bootstrapOwner` path.
+scopes and delegation. Principal creator attribution is bound to that actor and
+cannot be supplied for another identity. The initial Owner is created only
+through the separate one-time `bootstrapOwner` path.
 
 Database schema and statistics reads use the dedicated medium-risk
 `database.inspect` permission rather than generic `tools.execute`. Migration
