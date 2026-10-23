@@ -669,7 +669,7 @@ test("concurrent resume updates for different projects do not overwrite each oth
 
 test("handoff list stays within trusted project scope across MCP dispatch", async () => {
   const principal = identity.createPrincipal({ type: "service", displayName: "Handoff scope fixture" });
-  identity.assignRole(principal.principal_id, "operator");
+  identity.assignRole(principal.principal_id, "operator", resumeOwner.principal_id);
   for (const project of ["continuity", "other_project"]) {
     store.saveHandoff({
       project,
@@ -696,7 +696,7 @@ test("handoff list stays within trusted project scope across MCP dispatch", asyn
 
 test("resume list inherits trusted project scope across MCP dispatch", async () => {
   const principal = identity.createPrincipal({ type: "service", displayName: "Resume scope fixture" });
-  identity.assignRole(principal.principal_id, "operator");
+  identity.assignRole(principal.principal_id, "operator", resumeOwner.principal_id);
   grantResumeRead(principal.principal_id, "continuity");
   store.setDocument("resume", { items: {
     continuity: { project: "continuity", status: "active", summary: "Visible scoped item", next_step: "Continue safely" },
@@ -714,7 +714,7 @@ test("resume list inherits trusted project scope across MCP dispatch", async () 
 
 test("resume mutations cannot override a trusted project scope", async () => {
   const principal = identity.createPrincipal({ type: "service", displayName: "Resume mutation scope fixture" });
-  identity.assignRole(principal.principal_id, "operator");
+  identity.assignRole(principal.principal_id, "operator", resumeOwner.principal_id);
   store.setDocument("resume", { items: {
     continuity: { project: "continuity", status: "active", summary: "Scoped item", next_step: "Continue" },
     other_project: { project: "other_project", status: "active", summary: "Original foreign summary", next_step: "Original next step" },
@@ -729,7 +729,7 @@ test("resume mutations cannot override a trusted project scope", async () => {
 
 test("scoped resume reads do not synchronize foreign project pointers", async () => {
   const principal = identity.createPrincipal({ type: "service", displayName: "Resume sync scope fixture" });
-  identity.assignRole(principal.principal_id, "operator");
+  identity.assignRole(principal.principal_id, "operator", resumeOwner.principal_id);
   grantResumeRead(principal.principal_id, "continuity");
   const foreignHandoff = create(undefined, { project: "other_project" });
   store.transitionHandoff(foreignHandoff.id, "completed");

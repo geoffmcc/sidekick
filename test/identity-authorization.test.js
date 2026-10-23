@@ -117,6 +117,14 @@ try {
     assert.throws(() => identity.removeRole(agent.principal_id, "owner", agent.principal_id), /final usable Owner/);
   });
 
+  test("ordinary role grants and removals require roles.manage at the identity boundary", () => {
+    const target = identity.createPrincipal({ type: "service", displayName: "Unauthorized role target" });
+    assert.throws(() => identity.assignRole(target.principal_id, "administrator", operator.principal_id), /roles.manage/);
+    assert.deepEqual(identity.getPrincipal(target.principal_id).roles, []);
+    assert.throws(() => identity.removeRole(operator.principal_id, "operator", operator.principal_id), /roles.manage/);
+    assert.deepEqual(identity.getPrincipal(operator.principal_id).roles, ["operator"]);
+  });
+
   test("adopted legacy Dashboard account cannot self-promote after Owner bootstrap", () => {
     assert.equal(identity.canCompleteFirstOwnerSetup(adoptedLegacy.principal_id), false);
     assert.throws(() => identity.assignRole(adoptedLegacy.principal_id, "owner", adoptedLegacy.principal_id), /authorized actor/);

@@ -184,7 +184,12 @@ function legacyDashboardPrincipal(username, password = null) {
     const db = dbStore.getDb();
     const rows = db.prepare("SELECT * FROM principals WHERE json_extract(metadata_json, '$.legacy_dashboard_username') = ? LIMIT 1").all(username);
     const row = rows[0] || null;
-    if (row && row.principal_type === "human") return promoteFirstDashboardOwner(identity.getPrincipal(row.principal_id));
+    if (row && row.principal_type === "human") {
+      const principal = promoteFirstDashboardOwner(identity.getPrincipal(row.principal_id));
+      return identity.canAssignLegacyDashboardAdministrator(principal.principal_id)
+        ? identity.assignRole(principal.principal_id, "administrator", principal.principal_id)
+        : principal;
+    }
     if (row && !password) return identity.getPrincipal(row.principal_id);
 
     if (row) {
@@ -202,7 +207,10 @@ function legacyDashboardPrincipal(username, password = null) {
           .run(row.principal_id, username, passwordHash, identity.PASSWORD_SCHEME, new Date().toISOString());
       });
       adopt();
-      return promoteFirstDashboardOwner(identity.getPrincipal(row.principal_id));
+      const principal = promoteFirstDashboardOwner(identity.getPrincipal(row.principal_id));
+      return identity.canAssignLegacyDashboardAdministrator(principal.principal_id)
+        ? identity.assignRole(principal.principal_id, "administrator", principal.principal_id)
+        : principal;
     }
 
     if (!password) return null;
@@ -221,7 +229,7 @@ function legacyDashboardPrincipal(username, password = null) {
       displayName: username,
       metadata: { legacy_dashboard_username: username, adopted_legacy_dashboard: true },
     });
-    return identity.assignRole(principal.principal_id, "administrator");
+    return identity.assignRole(principal.principal_id, "administrator", principal.principal_id);
   } catch {
     return null;
   }

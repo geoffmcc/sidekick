@@ -17,15 +17,22 @@ function createCertificationIdentity() {
   const identity = require("../core/identity");
   const kernel = require("../platform/kernel");
   const projectAccess = require("../core/project-access");
+  const owner = identity.listPrincipals({ type: "human" }).find(item => item.enabled && item.roles.includes("owner"));
+  if (!owner) throw new Error("An enabled Owner is required to authorize the ephemeral certification identity");
   const principal = identity.createPrincipal({
     type: "service",
     displayName: "Ephemeral certification runner",
+    createdByPrincipalId: owner.principal_id,
+    actorPrincipalId: owner.principal_id,
     metadata: { service: "certification", ephemeral: true },
   });
-  identity.assignRole(principal.principal_id, "administrator");
-
   let accessGranted = false;
   try {
+    // The identity is short-lived and its Administrator role is intersected
+    // with narrow per-operation credential scopes. The Owner explicitly
+    // authorizes this role grant; certification execution scopes omit
+    // projects.access.manage and other administrative permissions.
+    identity.assignRole(principal.principal_id, "administrator", owner.principal_id);
     if (!kernel.getProject(PROJECT)) {
       kernel.registerProject({ project_id: PROJECT, display_name: "Isolated certification", source: "certification" });
     }

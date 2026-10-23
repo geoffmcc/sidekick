@@ -160,31 +160,35 @@ function assignRole(principalIdValue, role, actorPrincipalId = null) {
   validateRole(role);
   const principal = getPrincipal(principalIdValue);
   if (!principal) throw new Error("principal not found");
-  let firstOwnerException = false;
-  if (role === "owner") {
-    // The legacy dashboard bridge is adopted in place as a human account.
-    // Its administrator role intentionally lacks roles.manage, so allow that
-    // one account to promote itself only while first-owner setup is still
-    // incomplete. Once an Owner exists, all promotions require roles.manage.
-    const adoptedSelfPromotion = actorPrincipalId === principal.principal_id &&
-      principal.principal_type === "human" && principal.metadata?.adopted_legacy_dashboard === true &&
-      canCompleteFirstOwnerSetup(principal.principal_id);
-    firstOwnerException = adoptedSelfPromotion;
-    if (!actorPrincipalId && !adoptedSelfPromotion) throw new Error("Owner promotion requires an authorized actor");
-    if (!adoptedSelfPromotion) {
-      const authorization = require("./authorization");
-      if (!authorization.authorize({ principalId: actorPrincipalId, permission: "roles.manage" }).ok) throw new Error("Owner promotion requires an authorized actor");
-    }
+  // The legacy Dashboard bridge has two explicit onboarding cases: complete
+  // first-owner setup while no Owner exists, or map the authenticated legacy
+  // Basic Auth administrator to an Administrator role. Every other role
+  // mutation requires current roles.manage authority.
+  const firstOwnerException = role === "owner" && actorPrincipalId === principal.principal_id && canCompleteFirstOwnerSetup(principal.principal_id);
+  const legacyDashboardAdminException = role === "administrator" && actorPrincipalId === principal.principal_id && canAssignLegacyDashboardAdministrator(principal.principal_id);
+  const authorized = actorPrincipalId && require("./authorization").authorize({ principalId: actorPrincipalId, permission: "roles.manage" }).ok;
+  if (!firstOwnerException && !legacyDashboardAdminException && !authorized) {
+    throw new Error(role === "owner" ? "Owner promotion requires an authorized actor" : "Role assignment requires roles.manage");
   }
   const db = dbStore.getDb();
   db.transaction(() => {
-    // Recheck inside the write transaction so first-owner completion cannot
-    // be replayed after another account has completed bootstrap.
+    // Recheck onboarding exceptions inside the write transaction so they
+    // cannot be replayed after bootstrap or after the legacy role is set.
     if (firstOwnerException && !canCompleteFirstOwnerSetup(principal.principal_id)) {
       throw new Error("Owner promotion requires an authorized actor");
     }
+    if (legacyDashboardAdminException && !canAssignLegacyDashboardAdministrator(principal.principal_id)) {
+      throw new Error("Legacy Dashboard administrator assignment is no longer available");
+    }
+    if (!firstOwnerException && !legacyDashboardAdminException &&
+        !require("./authorization").authorize({ principalId: actorPrincipalId, permission: "roles.manage" }).ok) {
+      throw new Error(role === "owner" ? "Owner promotion requires an authorized actor" : "Role assignment requires roles.manage");
+    }
     db.prepare("INSERT INTO principal_roles (principal_id, role_name, assigned_by_principal_id, assigned_at) VALUES (?, ?, ?, ?)").run(principal.principal_id, role, actorPrincipalId, now());
-    audit("role.assigned", principal.principal_id, actorPrincipalId, { role });
+    audit("role.assigned", principal.principal_id, actorPrincipalId, {
+      role,
+      ...(legacyDashboardAdminException ? { authority: "legacy_dashboard_basic_auth_onboarding" } : {}),
+    });
   })();
   return getPrincipal(principal.principal_id);
 }
@@ -195,6 +199,16 @@ function canCompleteFirstOwnerSetup(principalIdValue) {
   const db = dbStore.getDb();
   if (db.prepare("SELECT 1 FROM identity_bootstrap WHERE singleton_id = 1").get()) return false;
   return !db.prepare("SELECT 1 FROM principal_roles WHERE role_name = 'owner' LIMIT 1").get();
+}
+
+function canAssignLegacyDashboardAdministrator(principalIdValue) {
+  const principal = getPrincipal(principalIdValue);
+  if (!principal || principal.principal_type !== "human" || principal.roles.length > 0 ||
+      principal.metadata?.adopted_legacy_dashboard !== true ||
+      typeof principal.metadata?.legacy_dashboard_username !== "string" ||
+      !principal.metadata.legacy_dashboard_username.trim()) return false;
+  const db = dbStore.getDb();
+  return Boolean(db.prepare("SELECT 1 FROM principal_roles WHERE role_name = 'owner' LIMIT 1").get());
 }
 
 function grantPrincipalPermission(principalIdValue, permission, actorIdentity) {
@@ -247,15 +261,18 @@ function removeRole(principalIdValue, role, actorPrincipalId = null) {
   validateRole(role);
   const principal = getPrincipal(principalIdValue);
   if (!principal) throw new Error("principal not found");
-  if (role === "owner") {
-    const remaining = dbStore.getDb().prepare(`SELECT COUNT(*) AS count FROM principal_roles pr JOIN principals p ON p.principal_id = pr.principal_id WHERE pr.role_name = 'owner' AND p.enabled = 1 AND pr.principal_id <> ?`).get(principal.principal_id).count;
-    if (remaining < 1) throw new Error("cannot remove the final usable Owner");
-    if (!actorPrincipalId) throw new Error("Owner demotion requires an authorized actor");
-    const authorization = require("./authorization");
-    if (!authorization.authorize({ principalId: actorPrincipalId, permission: "roles.manage" }).ok) throw new Error("Owner demotion requires roles.manage");
+  if (!actorPrincipalId || !require("./authorization").authorize({ principalId: actorPrincipalId, permission: "roles.manage" }).ok) {
+    throw new Error(role === "owner" ? "Owner demotion requires roles.manage" : "Role removal requires roles.manage");
   }
   const db = dbStore.getDb();
   db.transaction(() => {
+    if (!require("./authorization").authorize({ principalId: actorPrincipalId, permission: "roles.manage" }).ok) {
+      throw new Error(role === "owner" ? "Owner demotion requires roles.manage" : "Role removal requires roles.manage");
+    }
+    if (role === "owner") {
+      const remaining = db.prepare(`SELECT COUNT(*) AS count FROM principal_roles pr JOIN principals p ON p.principal_id = pr.principal_id WHERE pr.role_name = 'owner' AND p.enabled = 1 AND pr.principal_id <> ?`).get(principal.principal_id).count;
+      if (remaining < 1) throw new Error("cannot remove the final usable Owner");
+    }
     db.prepare("DELETE FROM principal_roles WHERE principal_id = ? AND role_name = ?").run(principal.principal_id, role);
     audit("role.removed", principal.principal_id, actorPrincipalId, { role });
   })();
@@ -322,4 +339,4 @@ function verifyUserPassword(username, password) {
   return getPrincipal(row.principal_id);
 }
 
-module.exports = Object.freeze({ PRINCIPAL_TYPES, ROLE_NAMES, PASSWORD_SCHEME, MIN_PASSWORD_LENGTH, passwordHash, verifyPassword, getPrincipal, getHumanUser, listPrincipals, createPrincipal, createHumanUser, updatePrincipal, updateUsername, assignRole, canCompleteFirstOwnerSetup, removeRole, grantPrincipalPermission, revokePrincipalPermission, getPrincipalPermissions, bootstrapOwner, setPrincipalEnabled, changePassword, verifyUserPassword, recordAuditEvent });
+module.exports = Object.freeze({ PRINCIPAL_TYPES, ROLE_NAMES, PASSWORD_SCHEME, MIN_PASSWORD_LENGTH, passwordHash, verifyPassword, getPrincipal, getHumanUser, listPrincipals, createPrincipal, createHumanUser, updatePrincipal, updateUsername, assignRole, canCompleteFirstOwnerSetup, canAssignLegacyDashboardAdministrator, removeRole, grantPrincipalPermission, revokePrincipalPermission, getPrincipalPermissions, bootstrapOwner, setPrincipalEnabled, changePassword, verifyUserPassword, recordAuditEvent });

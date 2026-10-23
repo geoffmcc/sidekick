@@ -57,7 +57,7 @@ try {
   test("non-human principals are typed and roles are explicit", () => {
     const agent = identity.createPrincipal({ type: "agent", displayName: "Claude Code" });
     assert.strictEqual(agent.principal_type, "agent");
-    assert.deepStrictEqual(identity.assignRole(agent.principal_id, "operator", agent.principal_id).roles, ["operator"]);
+    assert.throws(() => identity.assignRole(agent.principal_id, "operator", agent.principal_id), /roles.manage/);
     assert.throws(() => identity.assignRole(agent.principal_id, "root"), /Unsupported role/);
   });
   test("lifecycle audit contains stable principal IDs and no password material", () => {
