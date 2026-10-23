@@ -13,7 +13,7 @@ const dbStore = require("./db");
 const authentication = require("./core/authentication");
 const identity = require("./core/identity");
 const authorization = require("./core/authorization");
-const { projectStartupFailures } = require("./security/health-disclosure");
+const { projectMcpSessionHealth, projectStartupFailures } = require("./security/health-disclosure");
 const packageJson = require("../package.json");
 const { createMcpServer } = require("./mcp/server");
 const { createSessionManager } = require("./mcp/session-manager");
@@ -110,6 +110,7 @@ app.get("/health", (req, res) => {
 
   const token = getBearerToken(req);
   const authIdentity = authentication.authenticateBearerIdentity(token);
+  const sessionSnapshot = sessionManager.getHealthSnapshot();
   const includeDetails = timingSafeCompare(token, API_KEY) || Boolean(authIdentity && authorization.authorize({
     principalId: authIdentity.principal_id,
     permission: "system.configure",
@@ -123,7 +124,7 @@ app.get("/health", (req, res) => {
     status: Object.keys(startupFailures).length ? "degraded" : "healthy",
     uptime: uptimeSeconds,
     uptimeHuman: uptimeStr,
-    ...sessionManager.getHealthSnapshot(),
+    ...projectMcpSessionHealth(sessionSnapshot, includeDetails),
     version: APP_VERSION,
     runtime: {
       node: process.version,
@@ -135,10 +136,6 @@ app.get("/health", (req, res) => {
     ready: Object.keys(startupFailures).length === 0,
     failures: projectStartupFailures(startupFailures, includeDetails),
   };
-
-  if (includeDetails) {
-    payload.sessionDetails = sessionManager.getHealthSnapshot().sessionDetails;
-  }
 
   res.json(payload);
 });

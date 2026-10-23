@@ -13,21 +13,23 @@ const { app } = require("../src/index");
 console.log("MCP v2 test: Sidekick loaded");
 
 function modernRequest(port, id, method, params, headers = {}) {
+  const protocolVersion = headers.protocolVersion || "2026-07-28";
   return fetch(`http://127.0.0.1:${port}/mcp`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
       accept: "application/json, text/event-stream",
-      "MCP-Protocol-Version": "2026-07-28",
+      "MCP-Protocol-Version": protocolVersion,
       "Mcp-Method": method,
-      authorization: "Bearer mcp-v2-runtime-test-key",
-      ...(headers.name ? { "Mcp-Name": headers.name } : {})
+      authorization: `Bearer ${headers.authToken || "mcp-v2-runtime-test-key"}`,
+      ...(headers.name ? { "Mcp-Name": headers.name } : {}),
+      ...(headers.sessionId ? { "Mcp-Session-Id": headers.sessionId } : {}),
     },
     signal: AbortSignal.timeout(5000),
     body: JSON.stringify({ jsonrpc: "2.0", id, method, params: {
       ...(params || {}),
       _meta: {
-        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/protocolVersion": protocolVersion,
         "io.modelcontextprotocol/clientInfo": { name: "sidekick-v2-test", version: "1.0.0" },
         "io.modelcontextprotocol/clientCapabilities": {}
       }
@@ -41,6 +43,58 @@ function modernRequest(port, id, method, params, headers = {}) {
   try {
     await new Promise(resolve => server.once("listening", resolve));
     const port = server.address().port;
+
+    console.log("MCP v2 test: browser-session bearer identity on live HTTP routes");
+    const identity = require("../src/core/identity");
+    const authentication = require("../src/core/authentication");
+    const owner = identity.bootstrapOwner({
+      username: "mcp_v2_session_owner",
+      password: "synthetic browser session test password",
+      displayName: "MCP v2 Session Owner",
+    });
+    const browserSession = authentication.createSession(owner.principal_id);
+    const browserInitialization = await modernRequest(port, "session-owner-initialize", "initialize", {
+      protocolVersion: "2025-03-26",
+      capabilities: {},
+      clientInfo: { name: "sidekick-session-auth-test", version: "1.0.0" },
+    }, {
+      authToken: browserSession.token,
+      protocolVersion: "2025-03-26",
+    });
+    assert.strictEqual(browserInitialization.status, 200);
+    const browserSessionId = browserInitialization.headers.get("mcp-session-id");
+    assert.ok(browserSessionId, "a current browser session can initialize a live MCP session");
+
+    const unauthenticatedHealth = await fetch(`http://127.0.0.1:${port}/health`);
+    assert.strictEqual(unauthenticatedHealth.status, 200);
+    assert.strictEqual(Object.hasOwn(await unauthenticatedHealth.json(), "sessionDetails"), false,
+      "public health must omit MCP session identifiers and client metadata");
+
+    const authenticatedHealth = await fetch(`http://127.0.0.1:${port}/health`, {
+      headers: { authorization: `Bearer ${browserSession.token}` },
+    });
+    assert.strictEqual(authenticatedHealth.status, 200);
+    const authenticatedHealthBody = await authenticatedHealth.json();
+    assert.ok(Array.isArray(authenticatedHealthBody.sessionDetails),
+      "a live authorized browser principal can access protected health details");
+    assert.ok(authenticatedHealthBody.sessionDetails.some(entry => entry.id === browserSessionId),
+      "the authorized detail response includes the authenticated MCP session created above");
+
+    assert.strictEqual(authentication.invalidateSession(browserSession.token, owner.principal_id), true);
+    const revokedHealth = await fetch(`http://127.0.0.1:${port}/health`, {
+      headers: { authorization: `Bearer ${browserSession.token}` },
+    });
+    assert.strictEqual(revokedHealth.status, 200);
+    assert.strictEqual(Object.hasOwn(await revokedHealth.json(), "sessionDetails"), false,
+      "a revoked browser session loses protected health details on the next request");
+
+    const revokedMcpRequest = await modernRequest(port, "revoked-session-call", "ping", {}, {
+      authToken: browserSession.token,
+      protocolVersion: "2025-03-26",
+      sessionId: browserSessionId,
+    });
+    assert.strictEqual(revokedMcpRequest.status, 401,
+      "a revoked browser session cannot authenticate a subsequent MCP request");
 
     console.log("MCP v2 test: discovery");
     const discoverResponse = await modernRequest(port, 1, "server/discover", {});
