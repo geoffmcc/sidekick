@@ -319,7 +319,11 @@ async function executeResolvedTool(descriptor, args, context, requestedName = de
           details: { permission, tool: descriptor.name, code: decision.code },
         });
       } catch {}
-      return errorResult(`Authorization denied: ${decision.code}`, "authorization_denied", { authorization: decision });
+      return errorResult(
+        `Authorization denied: ${decision.code} (required permission: ${permission})`,
+        "authorization_denied",
+        { authorization: decision },
+      );
     }
     nodeAuthorization = {
       principalId: context.authIdentity.principal_id,

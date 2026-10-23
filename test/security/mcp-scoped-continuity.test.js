@@ -138,6 +138,8 @@ test("MCP continuity tools honor narrow memory credentials and preserve project 
   });
   assert.equal(deniedCheckpoint.isError, true);
   assert.match(deniedCheckpoint.content?.[0]?.text || "", /Authorization denied: forbidden/);
+  assert.match(deniedCheckpoint.content?.[0]?.text || "", /required permission: memory\.write/,
+    "MCP denial identifies the grant needed without exposing principal role details");
   assert.equal(db.getTaskSession(sessionId).updated_at, sessionBefore.updated_at,
     "a denied checkpoint has no persistent side effect");
 
@@ -162,6 +164,7 @@ test("MCP continuity tools honor narrow memory credentials and preserve project 
   });
   assert.equal(deniedResumeWrite.isError, true);
   assert.match(deniedResumeWrite.content?.[0]?.text || "", /Authorization denied: forbidden/);
+  assert.match(deniedResumeWrite.content?.[0]?.text || "", /required permission: memory\.write/);
   assert.deepEqual(db.loadDocument("resume"), resumeBefore,
     "a denied resume-pointer update has no persistent side effect");
 });
