@@ -140,16 +140,16 @@ test("session, credential, and recovery-token issuance/revocation roll back with
   const service = identity.createPrincipal({ type: "service", displayName: "Atomic audit service", actorPrincipalId: owner.principal_id });
   const beforeCredentials = db.prepare("SELECT COUNT(*) AS count FROM identity_credentials WHERE principal_id = ?").get(service.principal_id).count;
   rejectAudit("credential.created", "reject_credential_create_audit", () => {
-    assert.throws(() => authentication.createCredential({ principalId: service.principal_id, displayName: "synthetic", scopes: ["memory.read"], createdByPrincipalId: owner.principal_id }), /synthetic audit failure/);
+    assert.throws(() => authentication.createCredential({ principalId: service.principal_id, displayName: "synthetic", scopes: ["memory.read"], createdByPrincipalId: owner.principal_id, actorContext: owner }), /synthetic audit failure/);
     assert.equal(db.prepare("SELECT COUNT(*) AS count FROM identity_credentials WHERE principal_id = ?").get(service.principal_id).count, beforeCredentials);
   });
 
-  const created = authentication.createCredential({ principalId: service.principal_id, displayName: "synthetic", scopes: ["memory.read"], createdByPrincipalId: owner.principal_id });
+  const created = authentication.createCredential({ principalId: service.principal_id, displayName: "synthetic", scopes: ["memory.read"], createdByPrincipalId: owner.principal_id, actorContext: owner });
   rejectAudit("credential.revoked", "reject_credential_revoke_audit", () => {
-    assert.throws(() => authentication.revokeCredential(created.credential.credential_id, owner.principal_id), /synthetic audit failure/);
+    assert.throws(() => authentication.revokeCredential(created.credential.credential_id, owner), /synthetic audit failure/);
     assert.equal(authentication.getCredential(created.credential.credential_id).revoked_at, null);
   });
-  assert.equal(authentication.revokeCredential(created.credential.credential_id, owner.principal_id), true);
+  assert.equal(authentication.revokeCredential(created.credential.credential_id, owner), true);
   const revocationAudit = db.prepare("SELECT actor_principal_id FROM identity_audit_events WHERE event_type = 'credential.revoked' AND principal_id = ? ORDER BY created_at DESC LIMIT 1").get(service.principal_id);
   assert.equal(revocationAudit.actor_principal_id, owner.principal_id);
 

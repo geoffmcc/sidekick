@@ -19,31 +19,40 @@ const { registerComputeAdminRoutes } = require("../src/compute/admin-api");
 const jobManager = require("../src/compute/job-manager");
 
 const owner = identity.bootstrapOwner({ username: "compute_admin_test_owner", password: "synthetic compute test password" });
+const ownerContext = { principal_id: owner.principal_id };
 const ownerCredential = authentication.createCredential({
   principalId: owner.principal_id,
   displayName: "synthetic compute owner credential",
   scopes: ["compute.nodes.read", "compute.nodes.manage", "compute.jobs.read", "compute.jobs.create", "compute.jobs.cancel", "compute.jobs.manage", "compute.jobs.recover"],
+  createdByPrincipalId: owner.principal_id,
+  actorContext: ownerContext,
 });
-const administrator = identity.createPrincipal({ type: "human", displayName: "compute admin test administrator" });
+const administrator = identity.createPrincipal({ type: "service", displayName: "compute admin test administrator", createdByPrincipalId: owner.principal_id, actorPrincipalId: owner.principal_id });
 identity.assignRole(administrator.principal_id, "administrator", owner.principal_id);
 const adminCredential = authentication.createCredential({
   principalId: administrator.principal_id,
   displayName: "synthetic compute administrator credential",
   scopes: ["compute.nodes.read", "compute.nodes.manage", "compute.jobs.read", "compute.jobs.create", "compute.jobs.cancel", "compute.jobs.manage", "compute.jobs.recover"],
+  createdByPrincipalId: owner.principal_id,
+  actorContext: ownerContext,
 });
-const member = identity.createPrincipal({ type: "human", displayName: "compute project member" });
+const member = identity.createPrincipal({ type: "service", displayName: "compute project member", createdByPrincipalId: owner.principal_id, actorPrincipalId: owner.principal_id });
 identity.assignRole(member.principal_id, "administrator", owner.principal_id);
 const memberCredential = authentication.createCredential({
   principalId: member.principal_id,
   displayName: "synthetic project member credential",
   scopes: ["compute.nodes.read", "compute.nodes.manage", "compute.jobs.read", "compute.jobs.create", "compute.jobs.cancel", "compute.jobs.manage"],
+  createdByPrincipalId: owner.principal_id,
+  actorContext: ownerContext,
 });
-const operator = identity.createPrincipal({ type: "human", displayName: "compute admin test operator" });
+const operator = identity.createPrincipal({ type: "service", displayName: "compute admin test operator", createdByPrincipalId: owner.principal_id, actorPrincipalId: owner.principal_id });
 identity.assignRole(operator.principal_id, "operator", owner.principal_id);
 const operatorCredential = authentication.createCredential({
   principalId: operator.principal_id,
   displayName: "synthetic compute operator credential",
   scopes: ["compute.nodes.manage", "compute.jobs.create", "compute.jobs.recover"],
+  createdByPrincipalId: owner.principal_id,
+  actorContext: ownerContext,
 });
 
 const calls = new Map();

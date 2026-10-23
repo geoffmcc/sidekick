@@ -641,11 +641,14 @@ let server;
     const authentication = require("../src/core/authentication");
     const taskStore = require("../src/agent/task-store");
     const { createTask } = require("../src/agent/task-model");
-    const principal = identity.createPrincipal({ type: "human", displayName: "Synthetic recovered-task principal" });
+    const principal = identity.createPrincipal({ type: "service", displayName: "Synthetic recovered-task principal" });
+    const owner = identity.listPrincipals({ type: "human" }).find(item => item.roles.includes("owner"));
     const issued = authentication.createCredential({
       principalId: principal.principal_id,
       displayName: "Synthetic recovered-task credential",
       scopes: ["agent.tasks.read", "tools.execute"],
+      createdByPrincipalId: owner.principal_id,
+      actorContext: owner,
     });
     const taskId = "agt_security_recovery_launch01";
     taskStore.insertTask(createTask({
@@ -659,7 +662,7 @@ let server;
     taskStore.updateTask(taskId, { state: "ready" });
     taskStore.updateTask(taskId, { state: "running" });
     taskStore.updateTask(taskId, { state: "interrupted" });
-    assert.strictEqual(authentication.revokeCredential(issued.credential.credential_id), true);
+    assert.strictEqual(authentication.revokeCredential(issued.credential.credential_id, owner), true);
 
     let runnerCalls = 0;
     const launched = agent.__launchRecoveredDurableTaskForTests(taskId, {

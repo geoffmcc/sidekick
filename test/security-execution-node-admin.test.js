@@ -20,17 +20,22 @@ const { validateLocalArguments } = require("../src/node/agent");
 const { getCanonicalRegistry } = require("../src/tools/canonical-registry");
 
 const owner = identity.bootstrapOwner({ username: "node_admin_test_owner", password: "synthetic test password with sufficient length" });
+const ownerContext = { principal_id: owner.principal_id };
 const ownerCredential = authentication.createCredential({
   principalId: owner.principal_id,
   displayName: "synthetic execution-node admin credential",
   scopes: ["compute.nodes.read", "compute.nodes.manage", "compute.jobs.cancel"],
+  createdByPrincipalId: owner.principal_id,
+  actorContext: ownerContext,
 });
-const operator = identity.createPrincipal({ type: "human", displayName: "execution-node admin test operator" });
+const operator = identity.createPrincipal({ type: "service", displayName: "execution-node admin test operator", createdByPrincipalId: owner.principal_id, actorPrincipalId: owner.principal_id });
 identity.assignRole(operator.principal_id, "operator", owner.principal_id);
 const operatorCredential = authentication.createCredential({
   principalId: operator.principal_id,
   displayName: "synthetic underprivileged credential",
   scopes: ["compute.nodes.manage"],
+  createdByPrincipalId: owner.principal_id,
+  actorContext: ownerContext,
 });
 
 const executionNode = {

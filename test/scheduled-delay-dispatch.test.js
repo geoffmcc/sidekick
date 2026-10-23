@@ -24,10 +24,13 @@ const { createScheduledAuthority } = require("../src/security/scheduled-authorit
 const { createDelayExecution } = require("../src/agent/delay-execution");
 
 const owner = identity.bootstrapOwner({ username: "schedule-owner", password: "correct horse battery staple", displayName: "Schedule Owner" });
+const ownerContext = { principal_id: owner.principal_id };
 const machineCredential = authentication.createCredential({
   principalId: owner.principal_id,
   displayName: "Scoped scheduled executor",
   scopes: ["tools.execute"],
+  createdByPrincipalId: owner.principal_id,
+  actorContext: ownerContext,
 });
 const initialIdentity = authentication.authenticateCredential(machineCredential.token);
 
@@ -102,6 +105,8 @@ test("the real dispatcher denies a scheduled effect after its delegation is revo
     principalId: delegate.principal_id,
     displayName: "Delegated scheduled executor",
     scopes: ["tools.execute"],
+    createdByPrincipalId: owner.principal_id,
+    actorContext: ownerContext,
   });
   const delegatedIdentity = {
     ...authentication.authenticateCredential(credential.token),

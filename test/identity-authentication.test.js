@@ -18,6 +18,8 @@ function test(name, fn) { fn(); passed++; console.log(`  ✓ ${name}`); }
 try {
   const owner = identity.bootstrapOwner({ username: "owner", password: "correct horse battery staple", displayName: "Owner" });
   const agent = identity.createPrincipal({ type: "agent", displayName: "Build Agent", createdByPrincipalId: owner.principal_id });
+  identity.assignRole(agent.principal_id, "operator", owner.principal_id);
+  const ownerContext = { principal_id: owner.principal_id };
   const packService = identity.createPrincipal({ type: "service", displayName: "MCP Pack Manager", createdByPrincipalId: owner.principal_id, actorPrincipalId: owner.principal_id });
   identity.grantPrincipalPermission(packService.principal_id, "packs.read", owner.principal_id);
   identity.grantPrincipalPermission(packService.principal_id, "packs.manage", owner.principal_id);
@@ -39,28 +41,40 @@ try {
     assert.strictEqual(authentication.isSessionActive(expiringSession.session_id), false, "expired sessions cannot retain long-lived stream access");
   });
 
+  test("Core credential mutations require an authorized actor context", () => {
+    const before = db.getDb().prepare("SELECT COUNT(*) AS count FROM identity_credentials").get().count;
+    assert.throws(() => authentication.createCredential({ principalId: owner.principal_id, displayName: "Missing actor", scopes: [] }), /authenticated identity context/);
+    assert.throws(() => authentication.createCredential({ principalId: agent.principal_id, displayName: "Unprivileged actor", scopes: ["tools.execute"], actorContext: { principal_id: agent.principal_id } }), /credentials.create/);
+    assert.equal(db.getDb().prepare("SELECT COUNT(*) AS count FROM identity_credentials").get().count, before);
+
+    const credential = authentication.createCredential({ principalId: owner.principal_id, displayName: "Owner-authorized", scopes: [], createdByPrincipalId: owner.principal_id, actorContext: ownerContext });
+    assert.throws(() => authentication.revokeCredential(credential.credential.credential_id), /authenticated identity context/);
+    assert.throws(() => authentication.rotateCredential(credential.credential.credential_id), /authenticated identity context/);
+    assert.ok(authentication.authenticateCredential(credential.token), "denied lifecycle calls preserve the live credential");
+  });
+
   test("scoped machine credential is revealed once and stores only a verifier", () => {
-    const created = authentication.createCredential({ principalId: agent.principal_id, displayName: "Build API", scopes: ["build.read"] });
+    const created = authentication.createCredential({ principalId: agent.principal_id, displayName: "Build API", scopes: ["tools.execute"], createdByPrincipalId: owner.principal_id, actorContext: ownerContext });
     assert.match(created.token, /^skc_cred_/);
     assert.ok(created.credential.credential_id);
     assert.strictEqual(Object.prototype.hasOwnProperty.call(created.credential, "verifier_hash"), false);
     const stored = db.getDb().prepare("SELECT verifier_hash, token_prefix FROM identity_credentials WHERE credential_id = ?").get(created.credential.credential_id);
     assert.ok(stored.verifier_hash);
     assert.strictEqual(stored.verifier_hash.includes(created.token), false);
-    assert.deepStrictEqual(authentication.authenticateCredential(created.token).scopes, ["build.read"]);
+    assert.deepStrictEqual(authentication.authenticateCredential(created.token).scopes, ["tools.execute"]);
     assert.strictEqual(authentication.authenticateCredential(created.token).last_used_at !== null, true);
   });
 
   test("credential expiry and revocation deny future use", () => {
-    const created = authentication.createCredential({ principalId: agent.principal_id, displayName: "Revocable API", scopes: [], expiresAt: new Date(Date.now() + 60_000).toISOString() });
+    const created = authentication.createCredential({ principalId: agent.principal_id, displayName: "Revocable API", scopes: [], expiresAt: new Date(Date.now() + 60_000).toISOString(), createdByPrincipalId: owner.principal_id, actorContext: ownerContext });
     assert.ok(authentication.authenticateCredential(created.token));
-    assert.strictEqual(authentication.revokeCredential(created.credential.credential_id), true);
+    assert.strictEqual(authentication.revokeCredential(created.credential.credential_id, ownerContext), true);
     assert.strictEqual(authentication.authenticateCredential(created.token), null);
-    assert.strictEqual(authentication.revokeCredential(created.credential.credential_id), false);
+    assert.strictEqual(authentication.revokeCredential(created.credential.credential_id, ownerContext), false);
   });
 
   test("a machine credential with no scopes grants none of its principal's role permissions", () => {
-    const created = authentication.createCredential({ principalId: owner.principal_id, displayName: "Empty Scope API", scopes: [] });
+    const created = authentication.createCredential({ principalId: owner.principal_id, displayName: "Empty Scope API", scopes: [], createdByPrincipalId: owner.principal_id, actorContext: ownerContext });
     const authenticated = authentication.authenticateCredential(created.token);
     assert.deepStrictEqual(authenticated.scopes, []);
     assert.strictEqual(authorization.authorize({ principalId: owner.principal_id, permission: "tools.execute", credentialScopes: authenticated.scopes }).code, "forbidden");
@@ -71,6 +85,8 @@ try {
       principalId: packService.principal_id,
       displayName: "MCP pack management",
       scopes: ["packs.read", "packs.manage"],
+      createdByPrincipalId: owner.principal_id,
+      actorContext: ownerContext,
     });
     const authenticated = authentication.authenticateCredential(credential.token);
     assert.strictEqual(authenticated.principal_type, "service");
@@ -83,15 +99,15 @@ try {
   });
 
   test("credential rotation creates a replacement and revokes the old token", () => {
-    const created = authentication.createCredential({ principalId: agent.principal_id, displayName: "Rotating API", scopes: ["rotate.read"] });
-    const replacement = authentication.rotateCredential(created.credential.credential_id, owner.principal_id);
+    const created = authentication.createCredential({ principalId: agent.principal_id, displayName: "Rotating API", scopes: ["tools.execute"], createdByPrincipalId: owner.principal_id, actorContext: ownerContext });
+    const replacement = authentication.rotateCredential(created.credential.credential_id, ownerContext);
     assert.notStrictEqual(replacement.credential.credential_id, created.credential.credential_id);
     assert.strictEqual(authentication.authenticateCredential(created.token), null);
     assert.ok(authentication.authenticateCredential(replacement.token));
   });
 
   test("disabled principals invalidate both sessions and credentials", () => {
-    const created = authentication.createCredential({ principalId: agent.principal_id, displayName: "Disable API", scopes: [] });
+    const created = authentication.createCredential({ principalId: agent.principal_id, displayName: "Disable API", scopes: [], createdByPrincipalId: owner.principal_id, actorContext: ownerContext });
     const session = authentication.createSession(agent.principal_id);
     identity.setPrincipalEnabled(agent.principal_id, false, owner.principal_id);
     assert.strictEqual(authentication.authenticateCredential(created.token), null);

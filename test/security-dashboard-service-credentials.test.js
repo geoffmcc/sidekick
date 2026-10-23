@@ -152,6 +152,8 @@ test("generic credential routes cannot create, rotate, or revoke another princip
     principalId: owner.principal_id,
     displayName: "Owner-only synthetic credential",
     scopes: ["secrets.read"],
+    createdByPrincipalId: owner.principal_id,
+    actorContext: owner,
   });
   const revoke = response();
   handlers.get("POST /api/auth/credentials/:id/revoke")({

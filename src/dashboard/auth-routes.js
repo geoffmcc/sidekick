@@ -338,7 +338,7 @@ function registerAuthRoutes({
         for (const scope of uniqueScopes) {
           if (!identityPermissionDecision(req, scope).ok) throw new Error(`Credential scope authority was revoked: ${scope}`);
         }
-        created = authentication.createCredential({ principalId: actorId, displayName: req.body?.display_name, scopes: uniqueScopes, expiresAt: req.body?.expires_at, createdByPrincipalId: actorId });
+        created = authentication.createCredential({ principalId: actorId, displayName: req.body?.display_name, scopes: uniqueScopes, expiresAt: req.body?.expires_at, createdByPrincipalId: actorId, actorContext: req.authPrincipal });
       })();
       res.status(201).json({ credential: created.credential, token: created.token });
     } catch (error) {
@@ -403,6 +403,7 @@ function registerAuthRoutes({
           scopes: uniqueScopes,
           expiresAt: req.body?.expires_at,
           createdByPrincipalId: actorId,
+          actorContext: actor,
         });
         provisioned = { principal, credential: created.credential, token: created.token };
       })();
@@ -431,6 +432,7 @@ function registerAuthRoutes({
 
   app.post("/api/auth/service-credentials/:id/rotate", (req, res) => {
     if (!requireIdentityPermission(req, res, "credentials.revoke")) return;
+    if (!requireIdentityPermission(req, res, "credentials.create")) return;
     if (!requireIdentityPermission(req, res, "roles.manage")) return;
     const credential = authentication.getCredential(req.params.id);
     const principal = credential && identity.getPrincipal(credential.principal_id);
@@ -447,7 +449,7 @@ function registerAuthRoutes({
       if (!decision.ok) return res.status(403).json({ error: "Cannot rotate a credential beyond the initiating identity's authority", code: "forbidden", permission: scope });
     }
     try {
-      const replacement = authentication.rotateCredential(credential.credential_id, req.authPrincipal.principal_id);
+      const replacement = authentication.rotateCredential(credential.credential_id, req.authPrincipal);
       res.set("Cache-Control", "no-store");
       res.status(201).json({ principal, credential: replacement.credential, token: replacement.token });
     } catch (error) {
@@ -461,11 +463,12 @@ function registerAuthRoutes({
     if (credential && credential.principal_id !== req.authPrincipal.principal_id) {
       return res.status(403).json({ error: "Credentials may only be revoked by their owning principal", code: "credential_target_forbidden" });
     }
-    res.json({ revoked: authentication.revokeCredential(req.params.id, req.authPrincipal?.principal_id || null) });
+    res.json({ revoked: authentication.revokeCredential(req.params.id, req.authPrincipal) });
   });
 
   app.post("/api/auth/credentials/:id/rotate", (req, res) => {
     if (!requireIdentityPermission(req, res, "credentials.revoke")) return;
+    if (!requireIdentityPermission(req, res, "credentials.create")) return;
     const credential = authentication.getCredential(req.params.id);
     if (!credential) return res.status(404).json({ error: "Credential not found", code: "not_found" });
     if (credential.principal_id !== req.authPrincipal.principal_id) {
@@ -476,7 +479,7 @@ function registerAuthRoutes({
       if (!decision.ok) return res.status(403).json({ error: "Credential scopes exceed the initiating identity's current authority", code: "forbidden", permission: scope });
     }
     try {
-      const replacement = authentication.rotateCredential(req.params.id, req.authPrincipal.principal_id);
+      const replacement = authentication.rotateCredential(req.params.id, req.authPrincipal);
       res.status(201).json({ credential: replacement.credential, token: replacement.token });
     } catch (error) {
       return errorResponse(req, res, error, { status: 400, code: "invalid_request", component: "auth" });

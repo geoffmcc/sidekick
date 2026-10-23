@@ -89,7 +89,7 @@ function provisionCredential(home) {
     'const identity = require("./src/core/identity");',
     'const principal = identity.listPrincipals({ type: "human" }).find(item => item.roles.includes("owner")) || identity.bootstrapOwner({ username: "stdio-test", password: "stdio-test-password-123" });',
     'require("./src/platform/kernel").registerProject({ project_id: "local_test", owner_actor_id: principal.principal_id, source: "test" });',
-    'const result = require("./src/core/authentication").createCredential({ principalId: principal.principal_id, displayName: "stdio test", scopes: ["tools.execute", "tools.execute_high", "memory.read", "memory.write"] });',
+    'const result = require("./src/core/authentication").createCredential({ principalId: principal.principal_id, displayName: "stdio test", scopes: ["tools.execute", "tools.execute_high", "memory.read", "memory.write"], createdByPrincipalId: principal.principal_id, actorContext: principal });',
     'process.stdout.write(result.token);',
     'db.closeDatabase();'
   ].join(" ");
@@ -102,7 +102,7 @@ function provisionCredential(home) {
 }
 
 function revokeCredential(home, credentialId) {
-  const script = 'const db=require("./src/db"); const changed=require("./src/core/authentication").revokeCredential(process.argv[1]); process.stdout.write(String(changed)); db.closeDatabase();';
+  const script = 'const db=require("./src/db"); const identity=require("./src/core/identity"); const principal=identity.listPrincipals({type:"human"}).find(item=>item.roles.includes("owner")); const changed=require("./src/core/authentication").revokeCredential(process.argv[1], principal); process.stdout.write(String(changed)); db.closeDatabase();';
   return new Promise((resolve, reject) => {
     execFile(process.execPath, ["-e", script, credentialId], {
       cwd: ROOT,

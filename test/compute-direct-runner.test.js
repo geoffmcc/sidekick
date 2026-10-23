@@ -227,6 +227,8 @@ function makeAsyncChatJob(extraPayload = {}, extra = {}) {
       principalId: directRunnerOwner.principal_id,
       displayName: "synthetic direct inference credential",
       scopes: ["tools.execute"],
+      createdByPrincipalId: directRunnerOwner.principal_id,
+      actorContext: directRunnerOwner,
     });
     const authority = captureExecutionAuthority({
       principal_id: directRunnerOwner.principal_id,
@@ -251,6 +253,8 @@ function makeAsyncChatJob(extraPayload = {}, extra = {}) {
       principalId: directRunnerOwner.principal_id,
       displayName: "synthetic revoked direct inference credential",
       scopes: ["tools.execute"],
+      createdByPrincipalId: directRunnerOwner.principal_id,
+      actorContext: directRunnerOwner,
     });
     const authority = captureExecutionAuthority({
       principal_id: directRunnerOwner.principal_id,
@@ -258,7 +262,7 @@ function makeAsyncChatJob(extraPayload = {}, extra = {}) {
       scopes: credential.credential.scopes,
     }, "tools.execute");
     const job = makeAsyncChatJob({}, { executionAuthority: authority });
-    authentication.revokeCredential(credential.credential.credential_id, directRunnerOwner.principal_id);
+    authentication.revokeCredential(credential.credential.credential_id, directRunnerOwner);
     let dispatches = 0;
     inferenceService.chat = async () => { dispatches++; return { content: "must not run" }; };
     directJobRunner.runOnce();

@@ -24,11 +24,15 @@ const { authorizeRecoveredTask } = require("../src/agent/recovery-authorization"
 db.runPendingMigrations();
 
 test("durable task recovery uses the live credential record after database restore", () => {
-  const principal = identity.createPrincipal({ type: "human", displayName: "Synthetic recovery principal" });
+  const owner = identity.bootstrapOwner({ username: "durable_recovery_owner", password: "synthetic durable recovery owner password" });
+  const principal = identity.createPrincipal({ type: "service", displayName: "Synthetic recovery principal", createdByPrincipalId: owner.principal_id, actorPrincipalId: owner.principal_id });
+  identity.assignRole(principal.principal_id, "operator", owner.principal_id);
   const created = authentication.createCredential({
     principalId: principal.principal_id,
     displayName: "Synthetic durable task credential",
     scopes: ["memory.read", "tools.execute"],
+    createdByPrincipalId: owner.principal_id,
+    actorContext: owner,
   });
   const task = createTask({
     task_id: "agt_security_credential01",
@@ -61,7 +65,7 @@ test("durable task recovery uses the live credential record after database resto
     .run(new Date(Date.now() - 1000).toISOString(), created.credential.credential_id);
   assert.equal(persistedTaskAuthIdentity(taskStore.getTask(task.task_id)), null, "credential expiry prevents durable task authority reconstruction");
 
-  assert.equal(authentication.revokeCredential(created.credential.credential_id), true);
+  assert.equal(authentication.revokeCredential(created.credential.credential_id, owner), true);
   assert.equal(persistedTaskAuthIdentity(taskStore.getTask(task.task_id)), null, "credential revocation prevents durable task recovery from reconstructing authority");
   assert.deepEqual(authorizeRecoveredTask(taskStore.getTask(task.task_id), recoveryDeps), { ok: false, reason: "principal_authority_unavailable" }, "recovery denies execution when the original credential has been revoked");
 });

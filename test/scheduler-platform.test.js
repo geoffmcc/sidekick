@@ -158,6 +158,8 @@ console.log('Passed\n');
       principalId: ownerContext.authIdentity.principal_id,
       displayName: 'Manual delay scope fixture',
       scopes: ['tools.execute', 'tools.execute_high'],
+      createdByPrincipalId: ownerContext.authIdentity.principal_id,
+      actorContext: { principal_id: ownerContext.authIdentity.principal_id },
     });
     const manualAuthIdentity = require('../src/core/authentication').authenticateCredential(manualCredential.token);
     const credentialContext = toolContext.createInternalExecutionContext({ source: 'mcp', authIdentity: manualAuthIdentity });
