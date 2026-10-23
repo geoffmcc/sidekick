@@ -39,6 +39,13 @@ installation-wide API-key clients remain an explicit compatibility path while
 they migrate to named scoped credentials; it is not the long-term identity
 model.
 
+Legacy Dashboard Basic Auth is checked again by its identity-adoption helper.
+If no Owner exists, the first verified legacy login can complete the one-time
+Owner bootstrap. If an enabled Owner already exists and the configured Basic
+Auth identity has not yet been adopted, that Owner authorizes creation of a
+separate Administrator principal. Legacy metadata alone cannot grant a role;
+the Core role service requires `roles.manage` for Administrator assignment.
+
 Unauthenticated Owner bootstrap is available without a token only for a
 loopback Dashboard that is not configured to trust a reverse proxy. A
 non-loopback bind or `SIDEKICK_DASHBOARD_TRUST_PROXY=true` requires the

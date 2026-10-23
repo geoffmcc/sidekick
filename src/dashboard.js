@@ -179,16 +179,16 @@ function clearAuthFailures(keys) {
 // dashboard credentials have authenticated. This avoids creating a second
 // personal account while preserving the existing administrator role.
 function legacyDashboardPrincipal(username, password = null) {
-  if (!username) return null;
+  // This helper is also the identity boundary for compatibility onboarding;
+  // do not rely only on its current route callers having checked Basic Auth.
+  if (!username || username !== DASHBOARD_USER || !password || !timingSafeCompare(password, DASHBOARD_PASS)) return null;
   try {
     const db = dbStore.getDb();
     const rows = db.prepare("SELECT * FROM principals WHERE json_extract(metadata_json, '$.legacy_dashboard_username') = ? LIMIT 1").all(username);
     const row = rows[0] || null;
     if (row && row.principal_type === "human") {
       const principal = promoteFirstDashboardOwner(identity.getPrincipal(row.principal_id));
-      return identity.canAssignLegacyDashboardAdministrator(principal.principal_id)
-        ? identity.assignRole(principal.principal_id, "administrator", principal.principal_id)
-        : principal;
+      return grantLegacyDashboardAdministrator(principal);
     }
     if (row && !password) return identity.getPrincipal(row.principal_id);
 
@@ -208,14 +208,14 @@ function legacyDashboardPrincipal(username, password = null) {
       });
       adopt();
       const principal = promoteFirstDashboardOwner(identity.getPrincipal(row.principal_id));
-      return identity.canAssignLegacyDashboardAdministrator(principal.principal_id)
-        ? identity.assignRole(principal.principal_id, "administrator", principal.principal_id)
-        : principal;
+      return grantLegacyDashboardAdministrator(principal);
     }
 
     if (!password) return null;
-    const hasOwner = Boolean(db.prepare("SELECT 1 FROM principal_roles WHERE role_name = 'owner' LIMIT 1").get());
-    if (!hasOwner) {
+    const owner = identity.listPrincipals({ type: "human" }).find(item => item.enabled && item.roles.includes("owner"));
+    if (!owner) {
+      const hasOwner = Boolean(db.prepare("SELECT 1 FROM principal_roles WHERE role_name = 'owner' LIMIT 1").get());
+      if (hasOwner) return null;
       return identity.bootstrapOwner({
         username,
         password: crypto.randomBytes(32).toString("base64url"),
@@ -227,12 +227,20 @@ function legacyDashboardPrincipal(username, password = null) {
       username,
       password: crypto.randomBytes(32).toString("base64url"),
       displayName: username,
+      actorPrincipalId: owner.principal_id,
       metadata: { legacy_dashboard_username: username, adopted_legacy_dashboard: true },
     });
-    return identity.assignRole(principal.principal_id, "administrator", principal.principal_id);
+    return identity.assignRole(principal.principal_id, "administrator", owner);
   } catch {
     return null;
   }
+}
+
+function grantLegacyDashboardAdministrator(principal) {
+  if (!principal || !identity.canAssignLegacyDashboardAdministrator(principal.principal_id)) return principal;
+  const owner = identity.listPrincipals({ type: "human" }).find(item => item.enabled && item.roles.includes("owner"));
+  if (!owner) return null;
+  return identity.assignRole(principal.principal_id, "administrator", owner);
 }
 
 function promoteFirstDashboardOwner(principal) {

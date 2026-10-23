@@ -156,6 +156,7 @@ try {
   test("adopted legacy Dashboard account cannot self-promote after Owner bootstrap", () => {
     assert.equal(identity.canCompleteFirstOwnerSetup(adoptedLegacy.principal_id), false);
     assert.throws(() => identity.assignRole(adoptedLegacy.principal_id, "owner", adoptedLegacy.principal_id), /authorized actor/);
+    assert.throws(() => identity.assignRole(adoptedLegacy.principal_id, "administrator", adoptedLegacy.principal_id), /roles.manage/);
     assert.deepEqual(identity.getPrincipal(adoptedLegacy.principal_id).roles, []);
   });
 

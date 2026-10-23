@@ -1023,6 +1023,30 @@ setTimeout(async () => {
       console.log('✓ Passed\n');
     }
 
+    console.log('Test 3.9: legacy Dashboard onboarding verifies Basic Auth and uses an Owner actor');
+    {
+      const identity = require('../src/core/identity');
+      const owner = dbStore.getDb().prepare("SELECT principal_id FROM principals WHERE json_extract(metadata_json, '$.legacy_dashboard_username') = 'test-user' LIMIT 1").get();
+      assert.ok(owner?.principal_id, 'Initial legacy Dashboard login should have established the Owner');
+      const rejected = await makeRequest('POST', '/api/auth/login', { username: 'test-user', password: 'wrong-password' });
+      assert.equal(rejected.status, 401, 'identity onboarding must reject a wrong configured password');
+
+      const ownerPrincipal = identity.getPrincipal(owner.principal_id);
+      identity.updateUsername(owner.principal_id, 'existing-owner', ownerPrincipal);
+      identity.updatePrincipal(owner.principal_id, {
+        metadata: { ...ownerPrincipal.metadata, legacy_dashboard_username: undefined },
+      }, ownerPrincipal);
+
+      const accepted = await makeRequest('POST', '/api/auth/login', { username: 'test-user', password: 'test-pass' });
+      assert.equal(accepted.status, 200, 'verified legacy Basic Auth should create the compatibility administrator');
+      assert.deepEqual(accepted.data.principal.roles, ['administrator']);
+      const roleEvent = dbStore.getDb().prepare("SELECT actor_principal_id FROM identity_audit_events WHERE event_type = 'role.assigned' AND principal_id = ? ORDER BY created_at DESC LIMIT 1").get(accepted.data.principal.principal_id);
+      assert.equal(roleEvent?.actor_principal_id, owner.principal_id, 'legacy role assignment must be authorized and attributed to the enabled Owner');
+      const rejectedAgain = await makeRequest('POST', '/api/auth/login', { username: 'test-user', password: 'wrong-password' });
+      assert.equal(rejectedAgain.status, 401, 'wrong credentials must not re-enter legacy onboarding');
+      console.log('Legacy Dashboard onboarding authorization passed');
+    }
+
     dbStore.closeDatabase?.();
     fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
     
