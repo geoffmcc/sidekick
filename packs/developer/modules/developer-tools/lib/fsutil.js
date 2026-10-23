@@ -16,7 +16,10 @@ const fs = require("fs");
 const path = require("path");
 
 const SKIP_DIRECTORIES = new Set([
-  ".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build", "out",
+  // Sidekick's runtime data directory contains the database, secrets, managed
+  // modules, browser binaries and artifacts. It is operational state, never
+  // repository source, and must not consume bounded profile/semantic budgets.
+  "data", ".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build", "out",
   "target", "coverage", ".next", ".nuxt", ".cache", "vendor", "third_party", "bundles", "generated", ".idea", ".vscode",
   ".terraform", ".gradle", ".mypy_cache", ".pytest_cache", ".tox", "bin", "obj",
 ]);
