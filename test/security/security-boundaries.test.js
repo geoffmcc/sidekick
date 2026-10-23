@@ -32,6 +32,7 @@ const { descriptors: monitoringDescriptors, resolveSnapshotPath, readSnapshotFil
 const { readTextBounded } = require("../../src/core/bounded-file-read");
 const { tunnelStopPattern, createTunnelLog } = require("../../src/tools/families/networking");
 const { readJsonFile, writeJsonFile } = require("../../src/core/json-file-store");
+const proceduresStore = require("../../src/core/procedures-store");
 
 let owner;
 
@@ -278,6 +279,18 @@ test("persistent JSON reads reject symlinks where the platform supports no-follo
   fs.writeFileSync(target, JSON.stringify({ secret: "synthetic" }));
   fs.symlinkSync(target, link);
   assert.throws(() => readJsonFile(link));
+});
+
+test("learned procedures use bounded atomic persistent storage", () => {
+  const procedures = { safe_example: { name: "safe_example", steps: [], parameters: {} } };
+  proceduresStore.saveProcedures(procedures);
+  assert.deepEqual(proceduresStore.loadProcedures(), procedures);
+  if (process.platform !== "win32") assert.equal(fs.statSync(proceduresStore.PROCEDURES_FILE).mode & 0o777, 0o600);
+
+  fs.writeFileSync(proceduresStore.PROCEDURES_FILE, Buffer.alloc(proceduresStore.MAX_PROCEDURES_BYTES + 1), { mode: 0o600 });
+  assert.deepEqual(proceduresStore.loadProcedures(), {}, "oversized stored procedures are not loaded into the dynamic tool registry");
+  proceduresStore.saveProcedures({});
+  assert.deepEqual(proceduresStore.loadProcedures(), {});
 });
 
 test("filesystem text reads enforce byte limits and support bounded continuation", () => {

@@ -7,23 +7,27 @@
 
 const fs = require("fs");
 const path = require("path");
+const { readJsonFile, writeJsonFile } = require("./json-file-store");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "..", "data");
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
 const PROCEDURES_FILE = path.join(DATA_DIR, "procedures.json");
+const MAX_PROCEDURES_BYTES = 5 * 1024 * 1024;
 
 function loadProcedures() {
   if (!fs.existsSync(PROCEDURES_FILE)) return {};
   try {
-    return JSON.parse(fs.readFileSync(PROCEDURES_FILE, "utf-8"));
+    const procedures = readJsonFile(PROCEDURES_FILE, { maxBytes: MAX_PROCEDURES_BYTES });
+    return procedures && typeof procedures === "object" && !Array.isArray(procedures) ? procedures : {};
   } catch (e) {
     return {};
   }
 }
 
 function saveProcedures(procedures) {
-  fs.writeFileSync(PROCEDURES_FILE, JSON.stringify(procedures, null, 2));
+  if (!procedures || typeof procedures !== "object" || Array.isArray(procedures)) throw new Error("procedures store root must be an object");
+  writeJsonFile(PROCEDURES_FILE, procedures, { maxBytes: MAX_PROCEDURES_BYTES });
 }
 
-module.exports = { PROCEDURES_FILE, loadProcedures, saveProcedures };
+module.exports = { PROCEDURES_FILE, MAX_PROCEDURES_BYTES, loadProcedures, saveProcedures };
