@@ -15,7 +15,6 @@
 const fs = require("fs");
 const path = require("path");
 const dns = require("dns");
-const https = require("https");
 const { execFileSync } = require("child_process");
 const { z } = require("zod");
 const { validateInfluxUrl } = require("../../influx-endpoint-policy");
@@ -199,29 +198,24 @@ function probeDns(hostname, timeoutMs = 4000) {
 }
 
 function probeHttps(url, timeoutMs = 4000) {
-  return new Promise(resolve => {
-    const started = Date.now();
-    let settled = false;
-    let request;
-
-    const finish = result => {
-      if (settled) return;
-      settled = true;
-      resolve({ url, latencyMs: Date.now() - started, ...result });
-    };
-
+  const started = Date.now();
+  return (async () => {
     try {
-      request = https.request(url, { method: "HEAD" }, response => {
-        finish({ ok: true, statusCode: response.statusCode });
-        response.destroy();
+      const target = new URL(String(url));
+      if (target.protocol !== "https:") throw new Error("Health-check endpoint must use HTTPS");
+      const response = await requestPinnedHttp(target.href, {
+        method: "HEAD",
+        signal: AbortSignal.timeout(timeoutMs),
+      }, {
+        label: "health-check endpoint",
+        timeoutMs,
       });
-      request.setTimeout(timeoutMs, () => request.destroy(new Error("Timed out")));
-      request.on("error", error => finish({ ok: false, error: error.message }));
-      request.end();
+      await response.body?.cancel().catch(() => {});
+      return { url: String(url), latencyMs: Date.now() - started, ok: true, statusCode: response.status };
     } catch (error) {
-      finish({ ok: false, error: error.message });
+      return { url: String(url), latencyMs: Date.now() - started, ok: false, error: error.message };
     }
-  });
+  })();
 }
 
 async function checkNetwork(options = {}) {
