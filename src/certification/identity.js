@@ -47,7 +47,7 @@ function createCertificationIdentity() {
     });
     accessGranted = true;
   } catch (error) {
-    try { identity.setPrincipalEnabled(principal.principal_id, false, principal.principal_id); } catch {}
+    try { identity.setPrincipalEnabled(principal.principal_id, false, owner.principal_id); } catch {}
     throw error;
   }
 
@@ -74,7 +74,7 @@ function createCertificationIdentity() {
         // Retain the audit-visible project row; do not delete persistent data.
         // It has no owner and no certification principal retains membership.
       } catch (error) { cleanupError = error; }
-      try { identity.setPrincipalEnabled(principal.principal_id, false, principal.principal_id); }
+      try { identity.setPrincipalEnabled(principal.principal_id, false, owner.principal_id); }
       catch (error) { cleanupError ||= error; }
       if (cleanupError) throw new Error("Certification service identity cleanup failed", { cause: cleanupError });
     },

@@ -11,6 +11,7 @@ db.runPendingMigrations();
 const identity = require("../src/core/identity");
 
 let passed = 0;
+let bootstrapOwner;
 function test(name, fn) { fn(); passed++; console.log(`  ✓ ${name}`); }
 
 try {
@@ -29,6 +30,7 @@ try {
   });
   test("bootstrap creates exactly one Owner and no password-bearing DTO", () => {
     const owner = identity.bootstrapOwner({ username: "geoff", password: "correct horse battery staple", displayName: "Geoffrey" });
+    bootstrapOwner = owner;
     assert.strictEqual(owner.principal_type, "human");
     assert.deepStrictEqual(owner.roles, ["owner"]);
     assert.strictEqual(Object.prototype.hasOwnProperty.call(owner, "password_hash"), false);
@@ -46,11 +48,11 @@ try {
     assert.strictEqual(renamed.principal_id, user.principal_id);
     assert.strictEqual(renamed.display_name, "Alice Renamed");
     assert.strictEqual(identity.updateUsername(user.principal_id, "alice-renamed", user.principal_id).principal_id, user.principal_id);
-    const disabled = identity.setPrincipalEnabled(user.principal_id, false, user.principal_id);
+    const disabled = identity.setPrincipalEnabled(user.principal_id, false, bootstrapOwner.principal_id);
     assert.strictEqual(disabled.principal_id, user.principal_id);
     assert.strictEqual(disabled.enabled, false);
     assert.strictEqual(identity.verifyUserPassword("alice-renamed", "another correct password"), null);
-    const enabled = identity.setPrincipalEnabled(user.principal_id, true, user.principal_id);
+    const enabled = identity.setPrincipalEnabled(user.principal_id, true, bootstrapOwner.principal_id);
     assert.strictEqual(enabled.principal_id, user.principal_id);
     assert.ok(identity.verifyUserPassword("alice-renamed", "another correct password"));
   });

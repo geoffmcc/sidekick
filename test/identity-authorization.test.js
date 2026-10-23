@@ -125,6 +125,14 @@ try {
     assert.deepEqual(identity.getPrincipal(operator.principal_id).roles, ["operator"]);
   });
 
+  test("principal enable and disable require principals.manage at the identity boundary", () => {
+    const target = identity.createPrincipal({ type: "service", displayName: "Unauthorized state target" });
+    assert.throws(() => identity.setPrincipalEnabled(target.principal_id, false, target.principal_id), /principals.manage/);
+    assert.equal(identity.getPrincipal(target.principal_id).enabled, true);
+    assert.throws(() => identity.setPrincipalEnabled(target.principal_id, true, target.principal_id), /principals.manage/);
+    assert.equal(identity.getPrincipal(target.principal_id).enabled, true);
+  });
+
   test("adopted legacy Dashboard account cannot self-promote after Owner bootstrap", () => {
     assert.equal(identity.canCompleteFirstOwnerSetup(adoptedLegacy.principal_id), false);
     assert.throws(() => identity.assignRole(adoptedLegacy.principal_id, "owner", adoptedLegacy.principal_id), /authorized actor/);

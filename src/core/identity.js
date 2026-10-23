@@ -298,19 +298,29 @@ function bootstrapOwner({ username, password, displayName, metadata = {} } = {})
 }
 
 function setPrincipalEnabled(id, enabled, actorPrincipalId = null) {
+  if (typeof enabled !== "boolean") throw new Error("enabled must be a boolean");
   const principal = getPrincipal(id);
   if (!principal) throw new Error("principal not found");
-  if (!enabled && principal.roles.includes("owner")) {
-    const remaining = dbStore.getDb().prepare(`SELECT COUNT(*) AS count FROM principal_roles pr JOIN principals p ON p.principal_id = pr.principal_id WHERE pr.role_name = 'owner' AND p.enabled = 1 AND pr.principal_id <> ?`).get(principal.principal_id).count;
-    if (remaining < 1) throw new Error("cannot disable the final usable Owner");
+  const authorization = require("./authorization");
+  if (!actorPrincipalId || !authorization.authorize({ principalId: actorPrincipalId, permission: "principals.manage" }).ok) {
+    throw new Error("Principal state changes require principals.manage");
   }
   const timestamp = now();
   const db = dbStore.getDb();
   return db.transaction(() => {
-    db.prepare("UPDATE principals SET enabled = ?, disabled_at = ?, updated_at = ? WHERE principal_id = ?").run(enabled ? 1 : 0, enabled ? null : timestamp, timestamp, principal.principal_id);
-    if (!enabled) db.prepare("UPDATE identity_sessions SET invalidated_at = ? WHERE principal_id = ? AND invalidated_at IS NULL").run(timestamp, principal.principal_id);
-    audit(enabled ? "principal.enabled" : "principal.disabled", principal.principal_id, actorPrincipalId, {});
-    return getPrincipal(principal.principal_id);
+    if (!authorization.authorize({ principalId: actorPrincipalId, permission: "principals.manage" }).ok) {
+      throw new Error("Principal state changes require principals.manage");
+    }
+    const currentPrincipal = getPrincipal(id);
+    if (!currentPrincipal) throw new Error("principal not found");
+    if (!enabled && currentPrincipal.roles.includes("owner")) {
+      const remaining = db.prepare(`SELECT COUNT(*) AS count FROM principal_roles pr JOIN principals p ON p.principal_id = pr.principal_id WHERE pr.role_name = 'owner' AND p.enabled = 1 AND pr.principal_id <> ?`).get(currentPrincipal.principal_id).count;
+      if (remaining < 1) throw new Error("cannot disable the final usable Owner");
+    }
+    db.prepare("UPDATE principals SET enabled = ?, disabled_at = ?, updated_at = ? WHERE principal_id = ?").run(enabled ? 1 : 0, enabled ? null : timestamp, timestamp, currentPrincipal.principal_id);
+    if (!enabled) db.prepare("UPDATE identity_sessions SET invalidated_at = ? WHERE principal_id = ? AND invalidated_at IS NULL").run(timestamp, currentPrincipal.principal_id);
+    audit(enabled ? "principal.enabled" : "principal.disabled", currentPrincipal.principal_id, actorPrincipalId, {});
+    return getPrincipal(currentPrincipal.principal_id);
   })();
 }
 
