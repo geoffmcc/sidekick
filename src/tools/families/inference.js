@@ -8,11 +8,12 @@
 // health, and fallback; this family no longer reaches Ollama/Groq directly for
 // inference (the `ollama` handler remains a direct model-management surface,
 // which is administration, not inference). Risk classifications (llm medium,
-// embed/ollama low) are preserved from src/tools/metadata.js; policy, redaction
+// embed low, ollama high) are preserved from the built-in descriptors; policy, redaction
 // and audit are applied by the dispatcher. sidekick_llm is exported for the
 // legacy handlers that call it (teach, fresheyes, changelog, black_box).
 
 const { z } = require("zod");
+const OllamaProvider = require("../../providers/ollama-provider");
 
 function configuredModel(value) {
   const model = String(value || "").trim();
@@ -133,36 +134,32 @@ async function sidekick_embed({ text, model, device }) {
   }
 }
 
-async function sidekick_ollama({ action, model }) {
+async function sidekick_ollama({ action, model }, runtime = {}) {
   const authorizationError = requireToolExecution({ tool: "ollama", action: action || null, model: model || null }, "tools.execute_high", "ollama");
   if (authorizationError) return authorizationError;
   try {
-    const ollamaUrl = process.env.OLLAMA_URL || "http://127.0.0.1:11434";
+    const actionTimeoutMs = action === "pull" ? 600000 : 15000;
+    const callerTimeoutMs = Number(runtime.context?.timeoutMs);
+    const timeoutMs = callerTimeoutMs > 0 ? Math.max(1, Math.min(actionTimeoutMs, callerTimeoutMs)) : actionTimeoutMs;
+    const provider = new OllamaProvider({
+      endpoint: process.env.OLLAMA_URL || "http://127.0.0.1:11434",
+      timeout: timeoutMs,
+    });
 
     if (action === "list") {
-      const response = await fetch(`${ollamaUrl}/api/tags`);
-      if (!response.ok) {
-        await readOllamaResponseText(response, MAX_OLLAMA_ERROR_BYTES, { truncate: true });
-        return { content: [{ type: "text", text: `Error: Failed to list models (${response.status})` }], isError: true };
-      }
-      const data = await readOllamaResponseJson(response);
-      const models = (data.models || []).map(m => ({
+      const listed = await provider.listModels();
+      const models = listed.map(m => ({
         name: m.name,
         size: m.size,
-        modified_at: m.modified_at,
+        modified_at: m.modifiedAt,
         digest: m.digest?.substring(0, 12)
       }));
       return { content: [{ type: "text", text: JSON.stringify(models, null, 2) }] };
     }
 
     if (action === "ps") {
-      const response = await fetch(`${ollamaUrl}/api/ps`);
-      if (!response.ok) {
-        await readOllamaResponseText(response, MAX_OLLAMA_ERROR_BYTES, { truncate: true });
-        return { content: [{ type: "text", text: `Error: Failed to list running models (${response.status})` }], isError: true };
-      }
-      const data = await readOllamaResponseJson(response);
-      const models = (data.models || []).map(m => ({
+      const loaded = await provider.loadedModels();
+      const models = loaded.map(m => ({
         name: m.name,
         size: m.size,
         digest: m.digest?.substring(0, 12),
@@ -175,17 +172,7 @@ async function sidekick_ollama({ action, model }) {
       if (!model) {
         return { content: [{ type: "text", text: "Error: model name required" }], isError: true };
       }
-      const response = await fetch(`${ollamaUrl}/api/pull`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: model, stream: false }),
-      });
-      if (!response.ok) {
-        const errorBody = await readOllamaResponseText(response, MAX_OLLAMA_ERROR_BYTES, { truncate: true });
-        const errText = errorBody.text + (errorBody.truncated ? " [truncated]" : "");
-        return { content: [{ type: "text", text: `Error: Failed to pull model (${response.status}): ${errText}` }], isError: true };
-      }
-      await readOllamaResponseJson(response);
+      await provider.pullModel(model, { timeout: timeoutMs });
       return { content: [{ type: "text", text: `Successfully pulled model: ${model}` }] };
     }
 
@@ -193,16 +180,7 @@ async function sidekick_ollama({ action, model }) {
       if (!model) {
         return { content: [{ type: "text", text: "Error: model name required" }], isError: true };
       }
-      const response = await fetch(`${ollamaUrl}/api/show`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: model }),
-      });
-      if (!response.ok) {
-        await readOllamaResponseText(response, MAX_OLLAMA_ERROR_BYTES, { truncate: true });
-        return { content: [{ type: "text", text: `Error: Failed to show model (${response.status})` }], isError: true };
-      }
-      const data = await readOllamaResponseJson(response);
+      const data = await provider.getModelInfo(model);
       return { content: [{ type: "text", text: JSON.stringify({
         name: data.details?.family,
         parameter_size: data.details?.parameter_size,
@@ -335,7 +313,7 @@ const descriptors = Object.freeze([
     description: "Manage Ollama models: list, ps, pull, show",
     schema: z.object({
       action: z.enum(["list", "ps", "pull", "show"]).describe("Ollama action"),
-      model: z.string().optional().describe("Model name (required for pull/show)"),
+      model: z.string().max(256).optional().describe("Model name (required for pull/show; maximum 256 characters)"),
     }),
     args: { action: "string (list|ps|pull|show)", model: "string (optional, model name for pull/show)" },
     risk: "high",

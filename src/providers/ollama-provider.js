@@ -135,8 +135,8 @@ class OllamaProvider {
     };
   }
 
-  async pullModel(modelName) {
-    return this._request("/api/pull", { name: modelName, stream: false }, { timeout: 600000 });
+  async pullModel(modelName, options = {}) {
+    return this._request("/api/pull", { name: modelName, stream: false }, { timeout: options.timeout || 600000 });
   }
 
   async loadedModels() {
