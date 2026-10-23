@@ -69,6 +69,24 @@ function validateArchiveEntryNames(entries) {
   return true;
 }
 
+function validateArchiveEntryTypes(listing) {
+  if (typeof listing !== "string" || listing.length === 0) {
+    throw new Error("archive member types could not be verified");
+  }
+  const lines = listing.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+  while (lines.length && lines[lines.length - 1] === "") lines.pop();
+  if (lines.length === 0) throw new Error("archive member types could not be verified");
+
+  for (const line of lines) {
+    const match = /^([bcdhlps-])([rwxStTs-]{9})\s/.exec(line);
+    if (!match) throw new Error("archive member type listing is invalid");
+    if (match[1] !== "-" && match[1] !== "d") {
+      throw new Error("archive contains a link or special file entry");
+    }
+  }
+  return true;
+}
+
 function validateArchiveSourceType(stat, action) {
   if (!stat || typeof stat.isFile !== "function" || typeof stat.isDirectory !== "function") {
     return "archive source type could not be verified";
@@ -217,6 +235,8 @@ async function sidekick_archive({ action, path: sourcePath, output, format }) {
       if (sourcePath.endsWith(".tar.gz") || sourcePath.endsWith(".tgz")) {
         const listing = execFileSync("tar", ["-tzf", sourceAbsolute], { timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024, env: childProcessEnv() });
         validateArchiveEntryNames(listing.split("\n"));
+        const typeListing = execFileSync("tar", ["-tvzf", sourceAbsolute], { timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024, env: childProcessEnv() });
+        validateArchiveEntryTypes(typeListing);
         cmd = ["tar", ["-xzf", sourceAbsolute, "-C", extractTarget, "--no-same-owner", "--no-overwrite-dir"]];
       } else if (sourcePath.endsWith(".zip")) {
         const listing = execFileSync("unzip", ["-Z1", sourceAbsolute], { timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024, env: childProcessEnv() });
@@ -297,4 +317,4 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_process, sidekick_service, sidekick_archive, validateArchiveEntryNames, validateArchiveSourceType, normalizeManagedService, ALLOWED_SERVICE_NAMES, buildProcessKillCommand, ALLOWED_PROCESS_SIGNALS };
+module.exports = { descriptors, sidekick_process, sidekick_service, sidekick_archive, validateArchiveEntryNames, validateArchiveEntryTypes, validateArchiveSourceType, normalizeManagedService, ALLOWED_SERVICE_NAMES, buildProcessKillCommand, ALLOWED_PROCESS_SIGNALS };

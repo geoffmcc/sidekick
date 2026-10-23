@@ -3,7 +3,7 @@
 const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
-const { validateArchiveEntryNames, validateArchiveSourceType } = require("../src/tools/families/process-mgmt");
+const { validateArchiveEntryNames, validateArchiveEntryTypes, validateArchiveSourceType } = require("../src/tools/families/process-mgmt");
 
 for (const entry of [
   "../outside.txt",
@@ -16,6 +16,17 @@ for (const entry of [
 }
 
 assert.strictEqual(validateArchiveEntryNames(["./safe.txt", "nested/file.txt", "nested/"]), true);
+
+assert.strictEqual(validateArchiveEntryTypes("-rw-r--r-- 0 0 1 Jan 01 00:00 file.txt\ndrwxr-xr-x 0 0 0 Jan 01 00:00 folder/\n"), true);
+for (const typeListing of [
+  "lrwxrwxrwx 0 0 0 Jan 01 00:00 link -> ../outside\n",
+  "hrw-r--r-- 0 0 0 Jan 01 00:00 alias link to file\n",
+  "prw-r--r-- 0 0 0 Jan 01 00:00 pipe\n"
+]) {
+  assert.throws(() => validateArchiveEntryTypes(typeListing), /link or special file/);
+}
+assert.throws(() => validateArchiveEntryTypes("unrecognized tar output\n"), /listing is invalid/);
+assert.throws(() => validateArchiveEntryTypes(""), /could not be verified/);
 
 const regularFile = { isFile: () => true, isDirectory: () => false };
 const directory = { isFile: () => false, isDirectory: () => true };
@@ -31,6 +42,8 @@ assert.match(validateArchiveSourceType(null, "extract"), /could not be verified/
 
 const source = fs.readFileSync(path.join(__dirname, "..", "src", "tools", "families", "process-mgmt.js"), "utf8");
 assert.match(source, /validateArchiveEntryNames\(listing\.split\("\\n"\)\)/, "archive extraction must validate the complete listing first");
+assert.match(source, /validateArchiveEntryTypes\(typeListing\)/, "tar extraction must reject link and special-file entries before extraction");
+assert.match(source, /\["-tvzf", sourceAbsolute\]/, "tar member types must be inspected before extraction");
 assert.match(source, /sourceStat = fs\.statSync\(sourcePath\)/, "archive source type must be verified before invoking archive commands");
 assert.match(source, /validateArchiveSourceType\(sourceStat, action\)/, "archive operations must reject special source files");
 assert.match(source, /const extractTarget = output \? path\.resolve\(output\) : process\.cwd\(\)/, "archive extraction target must be explicit and canonicalized");
