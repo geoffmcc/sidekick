@@ -112,6 +112,17 @@ function validationError(name, parsed) {
 
 function requiredToolPermission(descriptor, args = {}) {
   if (descriptor.authorizationPermission) return descriptor.authorizationPermission;
+  // Continuity tools have their own project-scoped permission checks in the
+  // handlers. Requiring the broad tools.execute grant here would make a
+  // narrowly scoped memory credential unusable before those checks run.
+  // Keep the dispatcher gate aligned with the operation's read/write intent;
+  // the handler still enforces project membership, ownership, and live scope.
+  if (descriptor.name === "session") {
+    return ["status", "list"].includes(args.action) ? "memory.read" : "memory.write";
+  }
+  if (descriptor.name === "resume") {
+    return ["check", "list"].includes(args.action || "check") ? "memory.read" : "memory.write";
+  }
   if (descriptor.name === "predict") {
     const action = args.action === "suggest" ? "list" : args.action;
     if (["list", "get", "explain"].includes(action)) return "predictions.read";
