@@ -4,6 +4,11 @@
 // default. In particular, a command supplied to a governed shell-capable tool
 // must not inherit file-backed credentials or runtime loader hooks.
 const SECRET_ENV_KEY = /(?:API[_-]?KEY|ACCESS[_-]?KEY|PRIVATE[_-]?KEY|(?:^|[_-])AUTH(?:ORIZATION)?(?:[_-]|$)|TOKEN|PASSWORD|PASSWD|PASSPHRASE|SECRET|CREDENTIAL)/i;
+// Credential material is sometimes named after its format or purpose rather
+// than containing the generic words above (for example FERNET_KEY or
+// OIDC_BEARER). Keep the matches token-like and key-specific to avoid dropping
+// unrelated application settings such as COOKIE_DOMAIN or SESSION_TIMEOUT.
+const SENSITIVE_MATERIAL_ENV_KEY = /(?:^|[_-])(?:BEARER(?:[_-]?TOKEN)?|JWT|(?:SESSION[_-]?(?:TOKEN|ID|COOKIE))|(?:AUTH[_-]?COOKIE)|(?:COOKIE[_-]?(?:TOKEN|SECRET|VALUE))|(?:FERNET[_-]?KEY)|(?:MASTER[_-]?KEY)|(?:(?:DATA[_-]?)?ENCRYPTION[_-]?KEY)|(?:SIGNING[_-]?KEY))(?:[_-]|$)/i;
 const CREDENTIAL_LOCATOR_ENV_KEYS = new Set([
   "AWS_CONFIG_FILE", "AWS_DEFAULT_PROFILE", "AWS_PROFILE", "AZURE_CONFIG_DIR",
   "BOTO_CONFIG", "CLOUDSDK_CONFIG", "CURL_HOME", "DOCKER_CONFIG", "GH_CONFIG_DIR",
@@ -34,6 +39,11 @@ function isCredentialLocatorEnvKey(key) {
   return CREDENTIAL_LOCATOR_ENV_KEYS.has(String(key || "").toUpperCase());
 }
 
+function isSecretEnvKey(key) {
+  const normalized = String(key || "");
+  return SECRET_ENV_KEY.test(normalized) || SENSITIVE_MATERIAL_ENV_KEY.test(normalized);
+}
+
 function containsCredentialUrl(value) {
   if (typeof value !== "string" || !value.includes("://")) return false;
   try {
@@ -47,7 +57,7 @@ function containsCredentialUrl(value) {
 function childProcessEnv(overrides = {}) {
   const env = {};
   for (const [key, value] of Object.entries(process.env)) {
-    if (SECRET_ENV_KEY.test(key) || isCredentialLocatorEnvKey(key) || isLoaderEnvKey(key) || containsCredentialUrl(value)) continue;
+    if (isSecretEnvKey(key) || isCredentialLocatorEnvKey(key) || isLoaderEnvKey(key) || containsCredentialUrl(value)) continue;
     // Windows exposes this key as `Path` in some launch environments while
     // Unix and our child-process callers conventionally use `PATH`. Normalize
     // it so filtered environments retain executable discovery consistently.
@@ -57,7 +67,7 @@ function childProcessEnv(overrides = {}) {
     if (value == null) delete env[key];
     else {
       const text = String(value);
-      if (!SECRET_ENV_KEY.test(key) && !isCredentialLocatorEnvKey(key) && !isLoaderEnvKey(key) && !containsCredentialUrl(text)) {
+      if (!isSecretEnvKey(key) && !isCredentialLocatorEnvKey(key) && !isLoaderEnvKey(key) && !containsCredentialUrl(text)) {
         env[key] = text;
       }
     }

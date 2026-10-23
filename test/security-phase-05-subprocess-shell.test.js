@@ -25,16 +25,22 @@ const credentialEnvKeys = [
   "AWS_PROFILE", "AWS_DEFAULT_PROFILE", "GH_CONFIG_DIR", "HELM_REGISTRY_CONFIG",
   "TF_CLI_CONFIG_FILE", "TERRAFORM_CLI_CONFIG_FILE", "NETRC", "CURL_HOME", "WGETRC",
   "GNUPGHOME", "GPG_AGENT_INFO", "BOTO_CONFIG", "NUGET_CREDENTIALPROVIDERS_PATH",
+  "OIDC_BEARER", "SERVICE_JWT", "APP_SESSION_ID", "WEB_AUTH_COOKIE",
+  "APP_FERNET_KEY", "MASTER_KEY", "DATA_ENCRYPTION_KEY", "RELEASE_SIGNING_KEY",
 ];
 const previousCredentialEnv = new Map(credentialEnvKeys.map(key => [key, process.env[key]]));
 for (const key of credentialEnvKeys) process.env[key] = "attacker-controlled-credential-reference";
 const credentialOverrides = Object.fromEntries(credentialEnvKeys.map(key => [key, "override"]));
 credentialOverrides.GIT_AUTHOR_NAME = "Sidekick Test";
+credentialOverrides.SESSION_TIMEOUT = "1800";
+credentialOverrides.COOKIE_DOMAIN = "sidekick.test";
 const filteredCredentials = childProcessEnv(credentialOverrides);
 for (const key of credentialEnvKeys) {
   assert.strictEqual(filteredCredentials[key], undefined, `${key} must not cross a child-process boundary`);
 }
 assert.strictEqual(filteredCredentials.GIT_AUTHOR_NAME, "Sidekick Test", "credential filtering must preserve ordinary Git author settings");
+assert.strictEqual(filteredCredentials.SESSION_TIMEOUT, "1800", "credential filtering must preserve non-secret session configuration");
+assert.strictEqual(filteredCredentials.COOKIE_DOMAIN, "sidekick.test", "credential filtering must preserve non-secret cookie configuration");
 for (const [key, value] of previousCredentialEnv) {
   if (value === undefined) delete process.env[key];
   else process.env[key] = value;
