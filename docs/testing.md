@@ -41,7 +41,8 @@ warnings, queue and lock wait duration, peak concurrency,
 skipped/cancelled/timed-out/not-run suites, and the slowest suites. Human
 progress is written to stderr; `--json` keeps stdout to one JSON result line.
 Child output is bounded by `--max-output-chars` (default 12000) and the result
-is written to `artifacts/test-results.json` by `scripts/run-tests.js`.
+is written to a unique path under `artifacts/test-runs/` by
+`scripts/run-tests.js`, preserving earlier run reports.
 
 ## Commands
 

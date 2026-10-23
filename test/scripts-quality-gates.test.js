@@ -2,11 +2,12 @@
 
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { mkdtempSync, mkdirSync, writeFileSync } = require("node:fs");
+const { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } = require("node:fs");
 const { tmpdir } = require("node:os");
 const path = require("node:path");
 const { applyMutation, buildReport, getSpecs, loadPolicy, shouldFail } = require("../scripts/test-mutation");
 const { coverageInvocation, coveragePaths, evaluatePolicy, loadPolicy: loadCoveragePolicy } = require("../scripts/test-coverage");
+const { testResultPath, writeTestResult } = require("../scripts/run-tests");
 const { classifyPath, importSpecifiers, runChangedTests, selectChangedTests } = require("../scripts/test-changed");
 const {
   buildFlakeReport,
@@ -82,6 +83,31 @@ test("coverage runs use unique paths and do not reuse prior artifacts", () => {
   assert.match(first.summaryPath, /artifacts[\\/]coverage-runs[\\/]/);
   assert.equal(path.dirname(first.runDir), path.join("C:/repo", "artifacts", "coverage-runs"));
   assert.doesNotMatch(first.tempPrefix, /[\\/]/);
+});
+
+test("test reports preserve prior artifacts and use unique run paths", () => {
+  const fixture = mkdtempSync(path.join(tmpdir(), "sidekick-test-report-paths-"));
+  const legacyPath = path.join(fixture, "artifacts", "test-results.json");
+  mkdirSync(path.dirname(legacyPath), { recursive: true });
+  writeFileSync(legacyPath, "keep prior result\n");
+  const firstOptions = { runId: "local", attempt: 1, pid: 10, timestamp: 100 };
+  const secondOptions = { ...firstOptions, timestamp: 101 };
+  const firstPath = testResultPath(fixture, firstOptions);
+  const secondPath = testResultPath(fixture, secondOptions);
+  assert.notEqual(firstPath, secondPath);
+  assert.match(firstPath, /artifacts[\\/]test-runs[\\/]/);
+  writeTestResult(fixture, { passed: 1 }, firstOptions);
+  assert.equal(readFileSync(legacyPath, "utf8"), "keep prior result\n");
+  assert.deepEqual(JSON.parse(readFileSync(firstPath, "utf8")), { passed: 1 });
+  assert.equal(existsSync(secondPath), false);
+});
+
+test("CI uploads the per-run test result path", () => {
+  const workflow = readFileSync(path.resolve(__dirname, "../.github/workflows/ci.yml"), "utf8");
+  const matches = workflow.match(/^\s*path:\s*artifacts\/test-runs\/\*\/test-results\.json\s*$/gm) || [];
+  assert.equal(matches.length, 3, "security, domain-shard, and E2E jobs must upload per-run reports");
+  assert.doesNotMatch(workflow, /^\s*path:\s*artifacts\/test-results\.json\s*$/m,
+    "CI must not depend on the legacy overwrite-prone path");
 });
 
 test("coverage policy evaluates domains and files independently", () => {
