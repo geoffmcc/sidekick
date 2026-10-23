@@ -17,9 +17,9 @@ function finishProbeFromHeaders(response, endpoint, resolve) {
   response.destroy();
 }
 
-async function probeGithub(connector, { timeoutMs = 10000 } = {}) {
+async function probeGithub(connector, { timeoutMs = 10000, context } = {}) {
   if (!connector || connector.type !== "github") return Promise.resolve({ ok: false, error: "unsupported_connector_type" });
-  const token = resolveConnectorCredential(connector);
+  const token = resolveConnectorCredential(connector, { context, requireIdentity: true });
   if (!token) return Promise.resolve({ ok: false, error: "credential_unavailable" });
   let base;
   try { base = new URL(String(connector.endpoint || "")); } catch { return Promise.resolve({ ok: false, error: "invalid_endpoint" }); }

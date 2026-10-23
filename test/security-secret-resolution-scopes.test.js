@@ -69,6 +69,13 @@ test("connector secret resolution applies explicit credential scopes", () => {
   );
 });
 
+test("connector secret resolution denies missing authenticated principal", () => {
+  assert.throws(
+    () => resolveSecretRef("secret:synthetic_provider_credential", { context: { source: "internal" } }),
+    error => error.code === "unauthenticated",
+  );
+});
+
 test("connector secret resolution preserves delegated permission limits", () => {
   const context = executionContext({ principal_id: operator.principal_id, delegation_id: delegation.delegation_id });
   assert.throws(
@@ -82,6 +89,13 @@ test("provider credential resolution applies explicit credential scopes", () => 
   assert.throws(
     () => runWithContext(context, () => resolveProviderApiKey(provider)),
     error => error.code === "forbidden",
+  );
+});
+
+test("provider credential resolution denies missing authenticated principal", () => {
+  assert.throws(
+    () => resolveProviderApiKey(provider),
+    error => error.code === "unauthenticated",
   );
 });
 

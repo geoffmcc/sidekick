@@ -29,6 +29,8 @@ function createHarness({ failRequestAudit = false, failCompletionAudit = false }
     post: (route, handler) => handlers.set(`POST ${route}`, handler),
   };
   const platformKernel = {
+    getConnector: id => ({ connector_id: id, type: "github", endpoint: "https://github.com" }),
+    recordConnectorHealth: (id, health) => ({ ok: health.ok, connector: { connector_id: id, state: health.ok ? "healthy" : "error" }, health }),
     registerConnector: input => { calls.push(["register", input]); return { connector_id: "connector-1", name: input.name, type: input.type }; },
     configureConnector: (id, input) => { calls.push(["configure", id, input]); return { connector_id: id, secret_ref: input.secret_ref }; },
     transitionConnector: (id, state, input) => { calls.push(["transition", id, state, input]); return { connector_id: id, state }; },
@@ -89,4 +91,31 @@ test("platform connector events retain the authenticated dashboard actor", () =>
   const events = dbStore.getDb().prepare("SELECT event_type, actor_id FROM platform_execution_events WHERE subject_type = 'connector' AND subject_id = ? ORDER BY rowid").all(configured.connector_id);
   assert.deepEqual(events.map(event => event.event_type), ["connector.registered", "connector.state_changed", "connector.configured"]);
   assert.deepEqual(events.map(event => event.actor_id), ["principal-1", "principal-1", "principal-1"]);
+});
+
+test("dashboard connector health probe receives authenticated principal context", async () => {
+  let receivedContext;
+  const permissionChecks = [];
+  const { handlers } = createHarness();
+  // Register a probe spy without changing the rest of the route harness.
+  registerConnectorRoutes({
+    app: { get: (route, handler) => handlers.set(`GET ${route}`, handler), post() {} },
+    platformKernel: {
+      getConnector: id => ({ connector_id: id, type: "github", endpoint: "https://github.com" }),
+      recordConnectorHealth: (id, health) => ({ ok: health.ok, connector: { connector_id: id, state: "healthy" }, health }),
+    },
+    probeConnector: async (_connector, options) => { receivedContext = options.context; return { ok: true, status: 200 }; },
+    authenticatedUser: () => "principal-1",
+    requireIdentityPermission: (_req, _res, permission) => { permissionChecks.push(permission); return true; },
+    startDashboardExecution: () => null,
+    finishDashboardExecution: () => {},
+    auditLog: () => {},
+    errorResponse: (_req, res, _error, options) => res.status(options.status).json({ code: options.code }),
+  });
+  const req = { params: { connectorId: "connector-1" }, query: {}, authPrincipal: { principal_id: "principal-1", scopes: ["secrets.use"] } };
+  const res = { statusCode: 200, status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; return this; } };
+  await handlers.get("GET /api/connectors/:connectorId/health")(req, res);
+  assert.deepEqual(receivedContext, { source: "dashboard", authIdentity: req.authPrincipal });
+  assert.deepEqual(permissionChecks, ["connectors.read", "secrets.use"]);
+  assert.equal(res.body.ok, true);
 });

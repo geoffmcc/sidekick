@@ -45,9 +45,9 @@ const { z } = require("zod");
 const { redactSensitive } = require("../../redact");
 const { resolveOutboundUrl } = require("../../security/outbound-url");
 const { requireToolExecution, requireCanonicalInvocation } = require("../read-authorization");
-const { loadSecrets } = require("../../core/secrets-store");
-const { decryptSecret } = require("../../core/secret-cipher");
 const { readSecret } = require("../../core/runtime-secrets");
+const { getExecutionContext } = require("../context");
+const authorization = require("../../core/authorization");
 
 // Reuse TLS connections for the GitHub API. Most calls are short read
 // sequences, so avoiding a new handshake per request materially reduces
@@ -88,6 +88,25 @@ function githubConnector() {
 }
 
 function resolveGithubToken() {
+  const context = getExecutionContext();
+  const authIdentity = context?.authIdentity || null;
+  if (!authIdentity?.principal_id) {
+    const error = new Error("GitHub credential use requires an authenticated principal");
+    error.code = "unauthenticated";
+    throw error;
+  }
+  const decision = authorization.authorize({
+    principalId: authIdentity.principal_id,
+    permission: "secrets.use",
+    credentialScopes: authIdentity.scopes,
+    delegationId: authIdentity.delegation_id || authIdentity.delegationId || null,
+    resource: "github",
+  });
+  if (!decision.ok) {
+    const error = new Error("GitHub credential use is not authorized");
+    error.code = decision.code;
+    throw error;
+  }
   // Authority order: the ACTIVE registered GitHub connector is the governing
   // authority for this integration, so its secret_ref resolves FIRST. The
   // GITHUB_TOKEN env var is a fallback for pre-connector deployments (and the
@@ -99,6 +118,11 @@ function resolveGithubToken() {
   if (connector && connectorResolve) {
     const viaConnector = connectorResolve.resolveConnectorCredential(connector);
     if (viaConnector) return viaConnector;
+    if (connector.secret_ref) {
+      const error = new Error("configured GitHub connector credential is unavailable");
+      error.code = "credential_unavailable";
+      throw error;
+    }
   }
 
   try {
@@ -111,14 +135,7 @@ function resolveGithubToken() {
     return undefined;
   }
 
-  try {
-    const secrets = loadSecrets();
-    const secret = secrets["github_token"];
-    if (secret) return decryptSecret(secret);
-  } catch (e) {
-    // Secret store not available
-  }
-  return undefined;
+  return connectorResolve?.resolveSecretRef("secret:github_token", { context, requireIdentity: true }) || undefined;
 }
 
 // Governed API base: the connector's endpoint when registered, else the public

@@ -29,13 +29,22 @@ for (const k of [
 
 delete require.cache[require.resolve("../src/db")];
 const dbStore = require("../src/db");
+dbStore.runPendingMigrations();
 const providerRegistry = require("../src/compute/provider-registry");
 const modelRegistry = require("../src/compute/model-registry");
 const placement = require("../src/compute/placement");
 const { bootstrapProviders } = require("../src/compute/provider-bootstrap");
 const { resolveProviderApiKey } = require("../src/compute/provider-credentials");
+const identity = require("../src/core/identity");
+const { runWithContext } = require("../src/tools/context");
 
 console.log("Running Compute provider bootstrap tests...\n");
+
+const testOwner = identity.bootstrapOwner({
+  username: `provider_bootstrap_owner_${process.pid}`,
+  password: "synthetic-provider-bootstrap-password",
+  displayName: "Synthetic provider bootstrap owner",
+});
 
 let passed = 0;
 let failed = 0;
@@ -166,7 +175,7 @@ test("cloud credential is stored as a secret reference, never plaintext in the r
     const ref = providerRegistry.getAuthSecretRef(groq.providerId);
     assert.strictEqual(ref, "compute_provider_groq_api_key");
     // And it resolves back to the original value through the secret authority.
-    assert.strictEqual(resolveProviderApiKey(groq), "gsk_test_secret_value");
+    assert.strictEqual(runWithContext({ source: "test", authIdentity: { principal_id: testOwner.principal_id } }, () => resolveProviderApiKey(groq)), "gsk_test_secret_value");
   } finally {
     delete process.env.GROQ_API_KEY;
     delete process.env.SIDEKICK_SECRET_KEY;

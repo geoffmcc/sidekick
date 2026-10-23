@@ -66,10 +66,13 @@ function registerConnectorRoutes({
 
   app.get("/api/connectors/:connectorId/health", async (req, res) => {
     if (!requireIdentityPermission(req, res, "connectors.read")) return;
+    if (!requireIdentityPermission(req, res, "secrets.use")) return;
     const connector = platformKernel.getConnector(req.params.connectorId);
     if (!connector) return res.status(404).json({ ok: false, error: "connector not found" });
     try {
-      const health = await probeConnector(connector);
+      const health = await probeConnector(connector, {
+        context: { source: "dashboard", authIdentity: req.authPrincipal || null },
+      });
       const recorded = platformKernel.recordConnectorHealth(connector.connector_id, health);
       res.status(recorded.ok ? 200 : 502).json({ ok: recorded.ok, connector_id: recorded.connector.connector_id, state: recorded.connector.state, health: recorded.health, last_health_check_at: recorded.connector.last_health_check_at, probe_execution: "adapter-owned" });
     } catch (error) {

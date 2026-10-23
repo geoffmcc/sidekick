@@ -25,7 +25,7 @@ try { kernel = require("../platform/kernel"); } catch { kernel = null; }
 function authorizeSecretUse(context, resource) {
   const authIdentity = context?.authIdentity || null;
   const principalId = authIdentity?.principal_id || null;
-  if (!principalId) return { ok: true, compatibility: true };
+  if (!principalId) return { ok: false, code: "unauthenticated" };
   return authorization.authorize({
     principalId,
     permission: "secrets.use",
@@ -35,7 +35,7 @@ function authorizeSecretUse(context, resource) {
   });
 }
 
-function resolveSecretRef(secretRef, { context = getExecutionContext(), requireIdentity = false } = {}) {
+function resolveSecretRef(secretRef, { context = getExecutionContext(), requireIdentity = true } = {}) {
   if (!secretRef || typeof secretRef !== "string") return null;
   const match = /^secret:(.+)$/.exec(secretRef);
   if (!match) return null;

@@ -25,6 +25,9 @@ delete process.env.SIDEKICK_DISABLE_CONNECTOR_BOOTSTRAP;
 
 delete require.cache[require.resolve("../src/db")];
 const kernel = require("../src/platform/kernel");
+require("../src/db").runPendingMigrations();
+const identity = require("../src/core/identity");
+const { runWithContext } = require("../src/tools/context");
 const { loadSecrets, saveSecrets } = require("../src/core/secrets-store");
 const { encryptSecret } = require("../src/core/secret-cipher");
 const { bootstrapConnectors } = require("../src/connectors/bootstrap");
@@ -33,6 +36,8 @@ const github = require("../src/tools/families/github");
 const { dispatchTestTool } = require("../src/tools/dispatcher");
 const connectorDescriptor = require("../src/tools/canonical-registry").getCanonicalRegistry().get("connector");
 const invokeConnector = args => dispatchTestTool({ descriptor: connectorDescriptor, args, context: { source: "connector-authority-test" } });
+const connectorTestOwner = identity.bootstrapOwner({ username: `connector_authority_owner_${process.pid}`, password: "synthetic-connector-authority-password", displayName: "Synthetic connector authority owner" });
+const asConnectorOwner = fn => runWithContext({ source: "test", authIdentity: { principal_id: connectorTestOwner.principal_id } }, fn);
 
 console.log("Running connector authority tests...\n");
 
@@ -109,7 +114,7 @@ test("resolve finds the active connector and decrypts its secret_ref", () => {
   bootstrapConnectors();
   const active = resolve.getActiveConnector("github");
   assert.ok(active, "active github connector found");
-  assert.strictEqual(resolve.resolveConnectorCredential(active), "ghp_resolveme_2");
+  assert.strictEqual(asConnectorOwner(() => resolve.resolveConnectorCredential(active)), "ghp_resolveme_2");
 });
 
 // ---- github tool routing ----------------------------------------------------
@@ -125,7 +130,7 @@ test("github tool routes token + endpoint through the connector", () => {
   });
   kernel.transitionConnector(conn.connector_id, "enabled");
   assert.strictEqual(github.resolveGithubApiBase(), "https://ghe.example.com/api/v3");
-  assert.strictEqual(github.resolveGithubToken(), "ghp_viaconnector_3");
+  assert.strictEqual(asConnectorOwner(() => github.resolveGithubToken()), "ghp_viaconnector_3");
 });
 
 test("the active connector's secret_ref outranks env GITHUB_TOKEN (connector is the authority)", () => {
@@ -134,7 +139,7 @@ test("the active connector's secret_ref outranks env GITHUB_TOKEN (connector is 
   bootstrapConnectors();
   process.env.GITHUB_TOKEN = "ghp_fromenv_fallback";
   try {
-    assert.strictEqual(github.resolveGithubToken(), "ghp_fromsecret_4");
+    assert.strictEqual(asConnectorOwner(() => github.resolveGithubToken()), "ghp_fromsecret_4");
   } finally {
     delete process.env.GITHUB_TOKEN;
   }
@@ -144,13 +149,25 @@ test("test-only GITHUB_TOKEN fallback is available when no connector is active",
   resetConnectors(); // removes secrets.enc, no connector registered
   process.env.GITHUB_TOKEN = "ghp_fromenv_fallback2";
   try {
-    assert.strictEqual(github.resolveGithubToken(), "ghp_fromenv_fallback2");
+    assert.strictEqual(asConnectorOwner(() => github.resolveGithubToken()), "ghp_fromenv_fallback2");
   } finally {
     delete process.env.GITHUB_TOKEN;
   }
 });
 
-test("test-only GITHUB_TOKEN fallback is used when an active connector secret is unavailable", () => {
+test("GitHub credential resolution requires current secrets.use authorization", () => {
+  resetConnectors();
+  storeGithubSecret("ghp_authorization_8");
+  assert.throws(() => github.resolveGithubToken(), error => error.code === "unauthenticated");
+  const limited = identity.createPrincipal({ type: "service", displayName: "Synthetic limited GitHub caller" });
+  identity.assignRole(limited.principal_id, "operator", connectorTestOwner.principal_id);
+  assert.throws(
+    () => runWithContext({ source: "test", authIdentity: { principal_id: limited.principal_id, scopes: ["workflows.execute"] } }, () => github.resolveGithubToken()),
+    error => error.code === "forbidden",
+  );
+});
+
+test("active connector with an unavailable secret cannot fall through to environment credential", () => {
   resetConnectors(); // no secrets.enc: the connector's secret_ref resolves to null
   const conn = kernel.registerConnector({
     name: "GH-noref", type: "github", endpoint: "https://api.github.com",
@@ -159,7 +176,7 @@ test("test-only GITHUB_TOKEN fallback is used when an active connector secret is
   kernel.transitionConnector(conn.connector_id, "enabled");
   process.env.GITHUB_TOKEN = "ghp_fromenv_fallback3";
   try {
-    assert.strictEqual(github.resolveGithubToken(), "ghp_fromenv_fallback3");
+    assert.throws(() => asConnectorOwner(() => github.resolveGithubToken()), error => error.code === "credential_unavailable");
   } finally {
     delete process.env.GITHUB_TOKEN;
   }
@@ -218,7 +235,7 @@ test("with no connector, github falls back to the legacy secret-store key and pu
   storeGithubSecret("ghp_legacyfallback_5");
   // No bootstrap: no connector registered.
   assert.strictEqual(kernel.listConnectors({ type: "github" }).length, 0);
-  assert.strictEqual(github.resolveGithubToken(), "ghp_legacyfallback_5");
+  assert.strictEqual(asConnectorOwner(() => github.resolveGithubToken()), "ghp_legacyfallback_5");
   assert.strictEqual(github.resolveGithubApiBase(), "https://api.github.com");
 });
 
