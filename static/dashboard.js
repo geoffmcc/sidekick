@@ -4848,6 +4848,9 @@ function renderInstalledCapabilities(packs) {
       actions.push('<button class="btn btn-sm" data-dashboard-action="callback" data-handler="capabilityAction" data-id="' + attr(pack.name) + '" data-value="enable"><i class="fas fa-play"></i> Enable</button>');
     }
     actions.push('<button class="btn btn-sm btn-outline" data-dashboard-action="callback" data-handler="capabilityUpgrade" data-id="' + attr(pack.name) + '"><i class="fas fa-arrow-up"></i> Upgrade</button>');
+    if (pack.bundled === true && pack.provenance === 'first_party') {
+      actions.push('<button class="btn btn-sm btn-outline" data-dashboard-action="callback" data-handler="capabilityRefreshBundled" data-id="' + attr(pack.name) + '" title="Replace package files with this release’s verified bundled copy"><i class="fas fa-arrows-rotate"></i> Refresh bundled copy</button>');
+    }
     actions.push('<button class="btn btn-sm btn-outline" data-dashboard-action="callback" data-handler="capabilityUninstall" data-id="' + attr(pack.name) + '"><i class="fas fa-trash"></i> Uninstall</button>');
 
     return '<div class="card capability-card">'
@@ -5023,6 +5026,11 @@ function capabilityUpgrade(name) {
   const path = prompt('Server-local path of the upgrade package (leave blank to upgrade from the bundled release copy):', '');
   if (path === null) return;
   return capabilityPost('/api/capabilities/' + encodeURIComponent(name) + '/upgrade', path ? { path } : {}, 'upgrade');
+}
+
+function capabilityRefreshBundled(name) {
+  if (!confirm('Refresh "' + name + '" from this release’s verified bundled copy? This replaces the installed package files, preserves pack configuration and enabled state, and explicitly allows a same-version refresh. It does not grant third-party code first-party trust.')) return;
+  return capabilityPost('/api/capabilities/' + encodeURIComponent(name) + '/upgrade', { allow_same_version: true }, 'refresh bundled copy');
 }
 
 function capabilityUninstall(name) {

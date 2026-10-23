@@ -79,6 +79,15 @@ test("capability catalog, lifecycle, health, maturity, and workflow projections 
     await page.locator("#capDetail-api-engineering").waitFor({ state: "visible" });
     await waitFor("maturity detail", async () => /"level"/.test(await page.locator("#capDetail-api-engineering").textContent()));
 
+    const refreshBundled = installedCard.getByRole("button", { name: /refresh bundled copy/i });
+    await refreshBundled.waitFor({ state: "visible" });
+    page.once("dialog", dialog => dialog.accept());
+    await refreshBundled.click();
+    await waitFor("verified bundled-copy refresh", async () => {
+      const refreshed = await fixture.request("GET", "/api/capabilities/api-engineering");
+      return refreshed.body?.ok && refreshed.body.pack?.state === "enabled";
+    });
+
     const disabled = await fixture.request("POST", "/api/capabilities/api-engineering/disable", {});
     assert.equal(disabled.status, 200, JSON.stringify(disabled.body));
     const disabledPack = await fixture.request("GET", "/api/capabilities/api-engineering");

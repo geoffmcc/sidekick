@@ -21,7 +21,7 @@
     showToolDetail, showProcedureDetail, showBlackboxIncident, analyzeBlackboxIncident,
     pinBlackboxIncident, exportBlackboxIncident, retryBlackboxCapture, openBlackboxSource,
     setNetworkScopeState, updateNetworkScope, capabilityDetail, capabilityHealth,
-    capabilityMaturity, capabilityAction, capabilityUpgrade, capabilityUninstall,
+    capabilityMaturity, capabilityAction, capabilityUpgrade, capabilityRefreshBundled, capabilityUninstall,
     inspectBundledCapability, installBundledCapability,
     startBlackboxCapture, loadBlackbox, showNewEntryModal, exportKV, importKV,
     expireStaleMemories, exportMemories, importMemories, loadResearchSources,
