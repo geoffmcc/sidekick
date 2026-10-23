@@ -175,7 +175,7 @@ function registerAuthRoutes({
     if (!account) return res.status(403).json({ error: "A local identity session is required", code: "insufficient_identity" });
     if (!identity.verifyUserPassword(account.username, req.body?.current_password)) return res.status(401).json({ error: "Current password is incorrect" });
     try {
-      identity.changePassword(principalId, req.body?.new_password, principalId);
+      identity.changePassword(principalId, req.body?.new_password, req.authPrincipal);
       authentication.invalidatePrincipalSessions(principalId, principalId);
       res.json({ ok: true });
     } catch (error) {
@@ -203,7 +203,7 @@ function registerAuthRoutes({
     try {
       const target = identity.getHumanUser(req.params.id);
       if (!target) return res.status(404).json({ error: "Human principal not found" });
-      identity.changePassword(target.principal.principal_id, req.body?.new_password, req.authPrincipal.principal_id);
+      identity.changePassword(target.principal.principal_id, req.body?.new_password, req.authPrincipal);
       authentication.invalidatePrincipalSessions(target.principal.principal_id, req.authPrincipal.principal_id);
       res.json({ ok: true });
     } catch (error) {

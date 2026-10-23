@@ -146,11 +146,12 @@ function createHumanUser({ username, password, displayName, actorPrincipalId = n
   })();
 }
 
-function updatePrincipal(id, { displayName, metadata } = {}, actorPrincipalId = null) {
+function updatePrincipal(id, { displayName, metadata } = {}, actorIdentity = null) {
   const principal = getPrincipal(id);
   if (!principal) throw new Error("principal not found");
+  const { actorPrincipalId, authorizationContext } = identityAuthority(actorIdentity);
   const authorization = require("./authorization");
-  if (!actorPrincipalId || !authorization.authorize({ principalId: actorPrincipalId, permission: "users.manage" }).ok) {
+  if (!actorPrincipalId || !authorization.authorize({ ...authorizationContext, permission: "users.manage" }).ok) {
     throw new Error("Principal profile changes require users.manage");
   }
   const nextName = displayName === undefined ? principal.display_name : requiredText(displayName, "displayName");
@@ -158,7 +159,7 @@ function updatePrincipal(id, { displayName, metadata } = {}, actorPrincipalId = 
   if (!nextMetadata || typeof nextMetadata !== "object" || Array.isArray(nextMetadata)) throw new Error("metadata must be an object");
   const db = dbStore.getDb();
   return db.transaction(() => {
-    if (!authorization.authorize({ principalId: actorPrincipalId, permission: "users.manage" }).ok) {
+    if (!authorization.authorize({ ...authorizationContext, permission: "users.manage" }).ok) {
       throw new Error("Principal profile changes require users.manage");
     }
     const currentPrincipal = getPrincipal(id);
@@ -169,18 +170,19 @@ function updatePrincipal(id, { displayName, metadata } = {}, actorPrincipalId = 
   })();
 }
 
-function updateUsername(id, username, actorPrincipalId = null) {
+function updateUsername(id, username, actorIdentity = null) {
   const principal = getPrincipal(id);
   if (!principal || principal.principal_type !== "human") throw new Error("human principal not found");
+  const { actorPrincipalId, authorizationContext } = identityAuthority(actorIdentity);
   const authorization = require("./authorization");
-  if (!actorPrincipalId || !authorization.authorize({ principalId: actorPrincipalId, permission: "users.manage" }).ok) {
+  if (!actorPrincipalId || !authorization.authorize({ ...authorizationContext, permission: "users.manage" }).ok) {
     throw new Error("Username changes require users.manage");
   }
   const name = requiredText(username, "username", 80);
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{2,79}$/.test(name)) throw new Error("username must be 3-80 characters and use letters, numbers, ., _, or -");
   const db = dbStore.getDb();
   return db.transaction(() => {
-    if (!authorization.authorize({ principalId: actorPrincipalId, permission: "users.manage" }).ok) {
+    if (!authorization.authorize({ ...authorizationContext, permission: "users.manage" }).ok) {
       throw new Error("Username changes require users.manage");
     }
     const currentPrincipal = getPrincipal(id);
@@ -368,13 +370,14 @@ function setPrincipalEnabled(id, enabled, actorIdentity = null) {
   })();
 }
 
-function changePassword(id, password, actorPrincipalId = null) {
+function changePassword(id, password, actorIdentity = null) {
   const principal = getPrincipal(id);
   if (!principal || principal.principal_type !== "human") throw new Error("human principal not found");
+  const { actorPrincipalId, authorizationContext } = identityAuthority(actorIdentity);
   const authorization = require("./authorization");
   const actor = actorPrincipalId ? getPrincipal(actorPrincipalId) : null;
   const isEnabledSelfChange = actor?.principal_id === principal.principal_id && actor.enabled;
-  if (!isEnabledSelfChange && (!actorPrincipalId || !authorization.authorize({ principalId: actorPrincipalId, permission: "users.manage" }).ok)) {
+  if (!isEnabledSelfChange && (!actorPrincipalId || !authorization.authorize({ ...authorizationContext, permission: "users.manage" }).ok)) {
     throw new Error("Password changes require the current user or users.manage");
   }
   const digest = passwordHash(password);
@@ -385,7 +388,7 @@ function changePassword(id, password, actorPrincipalId = null) {
     const currentTarget = getPrincipal(id);
     if (!currentTarget || currentTarget.principal_type !== "human") throw new Error("human principal not found");
     const stillSelfChange = currentActor?.principal_id === currentTarget.principal_id && currentActor.enabled;
-    if (!stillSelfChange && (!actorPrincipalId || !authorization.authorize({ principalId: actorPrincipalId, permission: "users.manage" }).ok)) {
+    if (!stillSelfChange && (!actorPrincipalId || !authorization.authorize({ ...authorizationContext, permission: "users.manage" }).ok)) {
       throw new Error("Password changes require the current user or users.manage");
     }
     db.prepare("UPDATE human_users SET password_hash = ?, password_changed_at = ?, last_login_at = NULL WHERE principal_id = ?").run(digest, timestamp, currentTarget.principal_id);

@@ -230,7 +230,7 @@ function recoverOwnerPassword(token, newPassword) {
     if (!row || new Date(row.expires_at).getTime() <= Date.now()) throw new Error("recovery token is invalid or expired");
     const owner = identity.getPrincipal(row.owner_principal_id);
     if (!owner || !owner.enabled || !owner.roles.includes("owner")) throw new Error("Owner recovery is unavailable");
-    identity.changePassword(owner.principal_id, newPassword, owner.principal_id);
+    identity.changePassword(owner.principal_id, newPassword, owner);
     invalidatePrincipalSessions(owner.principal_id);
     db.prepare("UPDATE identity_recovery_tokens SET used_at = ? WHERE token_hash = ? AND used_at IS NULL").run(now(), row.token_hash);
     identity.recordAuditEvent("owner.recovered", owner.principal_id, owner.principal_id, {});

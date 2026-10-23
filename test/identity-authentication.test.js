@@ -25,6 +25,8 @@ try {
   identity.grantPrincipalPermission(packService.principal_id, "packs.manage", owner.principal_id);
   const scopedRoleManager = identity.createPrincipal({ type: "service", displayName: "Scoped role manager", createdByPrincipalId: owner.principal_id, actorPrincipalId: owner.principal_id });
   identity.grantPrincipalPermission(scopedRoleManager.principal_id, "roles.manage", owner.principal_id);
+  const scopedUserManager = identity.createPrincipal({ type: "service", displayName: "Scoped user manager", createdByPrincipalId: owner.principal_id, actorPrincipalId: owner.principal_id });
+  identity.grantPrincipalPermission(scopedUserManager.principal_id, "users.manage", owner.principal_id);
 
   test("server-side browser sessions are opaque, expiring, and invalidatable", () => {
     const created = authentication.createSession(owner.principal_id, { userAgent: "test", ipAddress: "127.0.0.1" });
@@ -62,6 +64,18 @@ try {
     assert.ok(identity.getPrincipal(target.principal_id).roles.includes("operator"));
     assert.throws(() => identity.setPrincipalEnabled(target.principal_id, false, { principal_id: scopedRoleManager.principal_id, scopes: ["roles.manage"] }), /principals.manage/);
     assert.equal(identity.getPrincipal(target.principal_id).enabled, true);
+  });
+
+  test("identity profile and password mutations preserve credential scope attenuation", () => {
+    const subject = identity.createHumanUser({ username: "scoped_subject", password: "synthetic scoped subject password", actorPrincipalId: owner.principal_id });
+    const noScopes = { principal_id: scopedUserManager.principal_id, scopes: [] };
+    const scoped = { principal_id: scopedUserManager.principal_id, scopes: ["users.manage"] };
+    assert.throws(() => identity.updatePrincipal(subject.principal_id, { displayName: "Denied" }, noScopes), /users.manage/);
+    assert.throws(() => identity.updateUsername(subject.principal_id, "denied_name", noScopes), /users.manage/);
+    assert.throws(() => identity.changePassword(subject.principal_id, "synthetic denied password change", noScopes), /users.manage/);
+    assert.equal(identity.updatePrincipal(subject.principal_id, { displayName: "Authorized" }, scoped).display_name, "Authorized");
+    assert.equal(identity.updateUsername(subject.principal_id, "authorized_name", scoped).principal_id, subject.principal_id);
+    identity.changePassword(subject.principal_id, "synthetic authorized password change", scoped);
   });
 
   test("scoped machine credential is revealed once and stores only a verifier", () => {
