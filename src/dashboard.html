@@ -721,7 +721,8 @@
     <div class="section-title">Create scope</div>
     <div class="control-row form-row">
       <input id="networkScopeName" class="scope-name" placeholder="name (for example lab-browser)">
-      <textarea id="networkScopePolicy" class="scope-policy" rows="5" placeholder='{"allowed_hosts":["lab.example.test"],"allowed_protocols":["https"],"allowed_ports":[443]}'></textarea>
+      <textarea id="networkScopePolicy" class="scope-policy" rows="5" placeholder='{"allowed_hosts":["lab.example.test"],"allowed_protocols":["https","icmp","tcp"],"allowed_ports":[443,22]}'></textarea>
+      <div class="sub">Private host-form diagnostics require a current scope revision. Select only the needed tcp, udp, or icmp protocols; TCP and UDP probes require explicit ports.</div>
        <button class="btn btn-sm" data-dashboard-action="modal" data-handler="createNetworkScope">Create</button>
     </div>
   </div>

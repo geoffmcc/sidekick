@@ -22,6 +22,7 @@ const { readSecret } = require("../../core/runtime-secrets");
 const { childProcessEnv } = require("../../security/child-process");
 const { runBoundedShell } = require("../../security/command-execution");
 const { checkEndpoint } = require("../../security/endpoint-probe");
+const { authorizeNetDiagTarget, normalizeTarget: normalizeNetDiagTarget } = require("../../security/netdiag-scope");
 const { requestPinnedHttp } = require("../../security/pinned-http");
 const { requireToolExecution, requireCanonicalInvocation, requirePermission } = require("../read-authorization");
 
@@ -633,16 +634,74 @@ async function sidekick_netdiag({ action, target, port_range, timeout, format, n
     const targetError = validateNetDiagTarget(target);
     if (targetError) return { content: [{ type: "text", text: targetError }], isError: true };
   }
-  if (network_scope && (action !== "check" || !/^https?:\/\//i.test(target || ""))) {
-    return { content: [{ type: "text", text: "network_scope is only valid for HTTP(S) check targets" }], isError: true };
+  if (network_scope && !["check", "route", "ports", "connectivity"].includes(action)) {
+    return { content: [{ type: "text", text: "network_scope is valid for HTTP(S) checks and host-form route, port, connectivity, or host checks" }], isError: true };
   }
   if (network_scope_revision != null && !network_scope) {
     return { content: [{ type: "text", text: "network_scope_revision requires network_scope" }], isError: true };
+  }
+  if (network_scope && !Number.isSafeInteger(network_scope_revision)) {
+    return { content: [{ type: "text", text: "network_scope requires its current network_scope_revision" }], isError: true, code: "network_scope_revision_required" };
   }
 
   const fmt = format || "detailed";
   const to = timeout || 5000;
   let commandCount = 0;
+
+  let ports = COMMON_PORTS;
+  if (action === "ports" && port_range) {
+    const match = /^\s*(\d+)\s*-\s*(\d+)\s*$/.exec(port_range);
+    if (match) {
+      const start = parseInt(match[1]);
+      const end = parseInt(match[2]);
+      if (start < 1 || end > 65535 || start > end) {
+        return { content: [{ type: "text", text: "port_range must be within 1-65535 and ascending" }], isError: true };
+      }
+      if (end - start + 1 > MAX_NETDIAG_COMMANDS) {
+        return { content: [{ type: "text", text: `port_range may include at most ${MAX_NETDIAG_COMMANDS} ports per diagnostic` }], isError: true };
+      }
+      ports = [];
+      for (let i = start; i <= end; i++) ports.push(i);
+    } else {
+      return { content: [{ type: "text", text: "port_range must use the form start-end" }], isError: true };
+    }
+  }
+
+  const isUrlCheck = action === "check" && /^https?:\/\//i.test(target || "");
+  let probeTarget = target;
+  let resolvedTargets = null;
+  let resolvedCheck = null;
+  if (target && !isUrlCheck && ["check", "route", "ports", "connectivity"].includes(action)) {
+    const requestedTargets = action === "connectivity" ? target.split(",").map(value => value.trim()) : [target];
+    if (requestedTargets.some(value => !value) || requestedTargets.length > MAX_NETDIAG_COMMANDS) {
+      return { content: [{ type: "text", text: `connectivity accepts at most ${MAX_NETDIAG_COMMANDS} non-empty targets` }], isError: true, code: "invalid_target" };
+    }
+    const probes = action === "ports"
+      ? ports.map(port => ({ protocol: "tcp", port }))
+      : action === "route"
+        ? Array.from({ length: 10 }, (_, index) => ({ protocol: "udp", port: 33434 + index }))
+        : action === "check"
+          ? [{ protocol: "icmp" }, { protocol: "tcp", port: 22 }]
+          : [{ protocol: "icmp" }];
+    const authorizedTargets = [];
+    for (const requestedTarget of requestedTargets) {
+      const preflight = await authorizeNetDiagTarget({
+        target: requestedTarget,
+        probes,
+        networkScope: network_scope || null,
+        networkScopeRevision: network_scope_revision,
+      });
+      if (!preflight.ok) {
+        return { content: [{ type: "text", text: `Network diagnostic denied (${preflight.code}): ${preflight.reason}` }], isError: true, code: preflight.code };
+      }
+      authorizedTargets.push(preflight);
+    }
+    if (action === "connectivity") resolvedTargets = authorizedTargets.map(value => value.address);
+    else {
+      resolvedCheck = authorizedTargets[0];
+      probeTarget = resolvedCheck.address;
+    }
+  }
 
   const checkLimit = () => {
     commandCount++;
@@ -652,12 +711,15 @@ async function sidekick_netdiag({ action, target, port_range, timeout, format, n
   };
 
   if (action === "dns") {
+    let dnsTarget;
+    try { dnsTarget = normalizeNetDiagTarget(target).host; }
+    catch (error) { return { content: [{ type: "text", text: `Invalid DNS target: ${error.message}` }], isError: true, code: "invalid_target" }; }
     checkLimit();
-    const dnsResult = runNetDiagCommand("dig", ["+short", target, "A"], to);
+    const dnsResult = runNetDiagCommand("dig", ["+short", dnsTarget, "A"], to);
     checkLimit();
-    const dnsAny = runNetDiagCommand("dig", ["+short", target, "ANY"], to);
+    const dnsAny = runNetDiagCommand("dig", ["+short", dnsTarget, "ANY"], to);
     checkLimit();
-    const reverse = runNetDiagCommand("dig", ["+short", "-x", target], to);
+    const reverse = runNetDiagCommand("dig", ["+short", "-x", dnsTarget], to);
 
     let result = `DNS Resolution for: ${target}\n\n`;
     result += `A Records:\n${dnsResult.output || "None"}\n\n`;
@@ -669,7 +731,7 @@ async function sidekick_netdiag({ action, target, port_range, timeout, format, n
 
   if (action === "route") {
     checkLimit();
-    const traceResult = runNetDiagCommand("traceroute", ["-m", "10", "-w", "2", target], to * 2);
+    const traceResult = runNetDiagCommand("traceroute", ["-m", "10", "-q", "1", "-p", "33434", "-w", "2", probeTarget], to * 2);
 
     let result = `Route to: ${target}\n\n`;
     result += traceResult.output || "Traceroute failed or timed out";
@@ -678,28 +740,10 @@ async function sidekick_netdiag({ action, target, port_range, timeout, format, n
   }
 
   if (action === "ports") {
-    let ports = COMMON_PORTS;
-    if (port_range) {
-      const match = /^\s*(\d+)\s*-\s*(\d+)\s*$/.exec(port_range);
-      if (match) {
-        const start = parseInt(match[1]);
-        const end = parseInt(match[2]);
-        if (start < 1 || end > 65535 || start > end) {
-          return { content: [{ type: "text", text: "port_range must be within 1-65535 and ascending" }], isError: true };
-        }
-        ports = [];
-        for (let i = start; i <= end && ports.length < 20; i++) {
-          ports.push(i);
-        }
-      } else {
-        return { content: [{ type: "text", text: "port_range must use the form start-end" }], isError: true };
-      }
-    }
-
-    checkLimit();
     const results = [];
     for (const port of ports) {
-      const ncResult = runNetDiagCommand("nc", ["-z", "-w", "2", target, String(port)], 3000);
+      checkLimit();
+      const ncResult = runNetDiagCommand("nc", ["-z", "-w", "2", probeTarget, String(port)], 3000);
       const isOpen = ncResult.success && !ncResult.output.includes("failed");
       results.push({ port, open: isOpen });
     }
@@ -736,9 +780,9 @@ async function sidekick_netdiag({ action, target, port_range, timeout, format, n
     if (invalidTarget) return { content: [{ type: "text", text: invalidTarget }], isError: true };
     const results = [];
 
-    for (const t of targets) {
+    for (const [index, t] of targets.entries()) {
       checkLimit();
-      const pingResult = runNetDiagCommand("ping", ["-c", "2", "-W", "2", t], to);
+      const pingResult = runNetDiagCommand("ping", ["-c", "2", "-W", "2", resolvedTargets[index]], to);
       const isUp = pingResult.success && pingResult.output.includes("bytes from");
       results.push({ target: t, up: isUp, latency: isUp ? pingResult.output.match(/time[=<](\d+\.?\d*)/)?.[1] + "ms" : "N/A" });
     }
@@ -789,14 +833,12 @@ async function sidekick_netdiag({ action, target, port_range, timeout, format, n
       report.checks.ping = "Not run for URL target";
       report.checks.ssh = "Not run for URL target";
     } else {
+      report.checks.dns = resolvedCheck.addresses.join(", ");
       checkLimit();
-      const dnsResult = runNetDiagCommand("dig", ["+short", host, "A"], to);
-      report.checks.dns = dnsResult.output || "Failed";
-      checkLimit();
-      const pingResult = runNetDiagCommand("ping", ["-c", "2", "-W", "2", host], to);
+      const pingResult = runNetDiagCommand("ping", ["-c", "2", "-W", "2", probeTarget], to);
       report.checks.ping = pingResult.success && pingResult.output.includes("bytes from") ? "OK" : "Failed";
       checkLimit();
-      const portResult = runNetDiagCommand("nc", ["-z", "-w", "2", host, "22"], 3000);
+      const portResult = runNetDiagCommand("nc", ["-z", "-w", "2", probeTarget, "22"], 3000);
       report.checks.ssh = portResult.success && !portResult.output.includes("failed") ? "Open" : "Closed";
     }
 
@@ -1071,14 +1113,14 @@ const descriptors = Object.freeze([
     description: "Unified network diagnostics: DNS, routing, port scanning, connectivity checks, and local listeners.",
     schema: z.object({
       action: z.enum(["check", "dns", "route", "ports", "listeners", "connectivity"]),
-      target: z.string().describe("Host, IP, or HTTP(S) URL to diagnose; private URL checks require a network scope"),
-      network_scope: z.string().max(80).optional().describe("Current operator-created network scope for private HTTP(S) check targets"),
-      network_scope_revision: z.number().int().positive().optional().describe("Immutable current network-scope revision"),
-      port_range: z.string().optional().describe("Port range for scan (e.g., '80-443')"),
+      target: z.string().describe("Host, IP, or HTTP(S) URL to diagnose; private host-form probes require a network scope"),
+      network_scope: z.string().max(80).optional().describe("Current operator-created scope for HTTP(S) checks or host-form probes"),
+      network_scope_revision: z.number().int().positive().optional().describe("Explicit current network-scope revision; required when network_scope is set"),
+      port_range: z.string().optional().describe("Port range for scan, limited to 15 ports (e.g., '80-85')"),
       timeout: z.number().optional().default(5000),
       format: z.enum(["detailed", "compact", "json"]).optional().default("detailed"),
     }),
-    args: { action: "string (check|dns|route|ports|listeners|connectivity)", target: "string (host, IP, or HTTP(S) URL to diagnose)", network_scope: "string (optional; required for private HTTP(S) check targets)", network_scope_revision: "number (optional; immutable scope revision)", port_range: "string (optional, port range e.g. '80-443')", timeout: "number (optional, timeout in ms - default 5000)", format: "string (optional, detailed|compact|json - default detailed)" },
+    args: { action: "string (check|dns|route|ports|listeners|connectivity)", target: "string (host, IP, or HTTP(S) URL to diagnose)", network_scope: "string (optional; required for private HTTP(S) check or restricted host-form targets)", network_scope_revision: "number (required when network_scope is set)", port_range: "string (optional; max 15 ports, e.g. '80-85')", timeout: "number (optional, timeout in ms - default 5000)", format: "string (optional, detailed|compact|json - default detailed)" },
     risk: "high",
     category: "Monitoring",
     source: "builtin",

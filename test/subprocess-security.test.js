@@ -48,12 +48,12 @@ if (savedGitSsh === undefined) delete process.env.GIT_SSH;
 else process.env.GIT_SSH = savedGitSsh;
 
 (async () => {
-  for (const target of ["-x", "example.com; touch /tmp/pwned", "example.com\nwhoami", "a".repeat(2049)]) {
+  for (const target of ["-x", "@127.0.0.1", "https://example.com/path", "example.com; touch /tmp/pwned", "example.com\nwhoami", "a".repeat(2049)]) {
     const result = await TOOLS.netdiag({ action: "dns", target });
     assert.strictEqual(result.isError, true, `malformed target should be rejected: ${JSON.stringify(target)}`);
   }
 
-  for (const port_range of ["0-80", "80-65536", "443-22", "80;id", "80-443 extra"]) {
+  for (const port_range of ["0-80", "80-65536", "443-22", "80;id", "80-443 extra", "1-16"]) {
     const result = await TOOLS.netdiag({ action: "ports", target: "example.com", port_range });
     assert.strictEqual(result.isError, true, `malformed port range should be rejected: ${port_range}`);
   }

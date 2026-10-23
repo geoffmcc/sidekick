@@ -250,6 +250,7 @@ async function executeResolvedTool(descriptor, args, context, requestedName = de
     dev_change_summary: ["include_ignored"],
     semantic_repo: ["include", "exclude", "relevant_files"],
     dev_repo_profile: ["include", "exclude"],
+    netdiag: ["network_scope", "network_scope_revision"],
   }[descriptor.name];
   if (safetyArguments && safetyArguments.some(key => Object.prototype.hasOwnProperty.call(rawArgs, key) && parsed.data[key] === undefined)) {
     return errorResult(`Tool ${descriptor.name} is using a stale schema; refresh the executing capability before retrying`, "stale_tool_schema");

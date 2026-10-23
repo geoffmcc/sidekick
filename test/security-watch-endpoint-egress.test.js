@@ -8,6 +8,7 @@ const path = require("node:path");
 const { after, test } = require("node:test");
 const { createEndpointProbe } = require("../src/security/endpoint-probe");
 const { normalizeScope } = require("../src/security/network-scope");
+const { authorizeNetDiagTarget } = require("../src/security/netdiag-scope");
 const { createWatchScheduler } = require("../src/agent/watch-scheduler");
 const { createWatchRuntime } = require("../src/agent/watch-runtime");
 const { MAX_WATCH_FILE_BYTES } = require("../src/tools/watch-file");
@@ -72,6 +73,108 @@ test("option-like targets and non-HTTP schemes are rejected before a request is 
   await assert.rejects(probe.checkEndpoint("file:///etc/passwd"), error => Boolean(error.code));
   await assert.rejects(probe.checkEndpoint("http://user:password@example.test/"), error => Boolean(error.code));
   assert.equal(requests, 0);
+});
+
+test("host-form diagnostics pin DNS answers and require action-specific current scopes for private targets", async () => {
+  const probes = [{ protocol: "icmp" }, { protocol: "tcp", port: 22 }];
+  const publicTarget = await authorizeNetDiagTarget({
+    target: "public.example.test",
+    probes,
+  }, {
+    lookup: async () => [{ address: "198.51.100.8", family: 4 }],
+  });
+  assert.equal(publicTarget.ok, true);
+  assert.equal(publicTarget.address, "198.51.100.8");
+  assert.deepEqual(publicTarget.addresses, ["198.51.100.8"]);
+
+  const privateWithoutScope = await authorizeNetDiagTarget({
+    target: "127.0.0.1",
+    probes,
+  });
+  assert.equal(privateWithoutScope.ok, false);
+  assert.equal(privateWithoutScope.code, "network_scope_required");
+
+  let metadataLookups = 0;
+  const metadataHost = await authorizeNetDiagTarget({
+    target: "metadata.google.internal",
+    probes,
+  }, {
+    lookup: async () => {
+      metadataLookups += 1;
+      return [{ address: "203.0.113.20", family: 4 }];
+    },
+  });
+  assert.equal(metadataHost.ok, false);
+  assert.equal(metadataHost.code, "outbound_target_denied");
+  assert.equal(metadataLookups, 0, "permanently denied metadata hostnames are rejected before DNS");
+
+  const mixedAnswers = await authorizeNetDiagTarget({
+    target: "mixed.example.test",
+    probes,
+  }, {
+    lookup: async () => [
+      { address: "198.51.100.8", family: 4 },
+      { address: "10.1.2.3", family: 4 },
+    ],
+  });
+  assert.equal(mixedAnswers.ok, false);
+  assert.equal(mixedAnswers.code, "network_scope_required", "one private DNS answer requires scope for the entire answer set");
+
+  const policy = normalizeScope({
+    name: "netdiag_loopback",
+    allowed_hosts: ["router.example.test"],
+    allowed_ips: ["127.0.0.1"],
+    allowed_protocols: ["icmp", "tcp"],
+    allowed_ports: [22],
+    allow_private_addresses: true,
+  });
+  const scope = { ...policy, scope_id: "scope_netdiag", revision: 4, enabled: true, is_current: true };
+  let scopeReads = 0;
+  const authorized = await authorizeNetDiagTarget({
+    target: "router.example.test",
+    probes,
+    networkScope: "netdiag_loopback",
+    networkScopeRevision: 4,
+  }, {
+    getScope: (reference, revision) => {
+      assert.equal(reference, "netdiag_loopback");
+      assert.equal(revision, 4);
+      scopeReads += 1;
+      return scope;
+    },
+    lookup: async () => [{ address: "127.0.0.1", family: 4 }],
+  });
+  assert.equal(authorized.ok, true);
+  assert.equal(authorized.address, "127.0.0.1");
+  assert.equal(scopeReads, 2, "scope revision is revalidated after DNS resolution");
+
+  const unlistedPort = await authorizeNetDiagTarget({
+    target: "router.example.test",
+    probes: [{ protocol: "tcp", port: 23 }],
+    networkScope: "netdiag_loopback",
+    networkScopeRevision: 4,
+  }, {
+    getScope: () => scope,
+    lookup: async () => [{ address: "127.0.0.1", family: 4 }],
+  });
+  assert.equal(unlistedPort.ok, false);
+  assert.equal(unlistedPort.code, "network_scope_denied");
+  assert.match(unlistedPort.reason, /does not explicitly allow tcp port 23/);
+
+  const staleScope = await authorizeNetDiagTarget({
+    target: "router.example.test",
+    probes,
+    networkScope: "netdiag_loopback",
+    networkScopeRevision: 3,
+  }, {
+    getScope: (() => {
+      let reads = 0;
+      return () => reads++ === 0 ? scope : { ...scope, is_current: false };
+    })(),
+    lookup: async () => [{ address: "127.0.0.1", family: 4 }],
+  });
+  assert.equal(staleScope.ok, false);
+  assert.equal(staleScope.code, "network_scope_unavailable");
 });
 
 test("private endpoint probes require a live named network scope and do not follow redirects", async () => {
@@ -140,12 +243,19 @@ test("watch creation binds a private endpoint to the current scope revision and 
   const TOOLS = require("./helpers/authorized-context").withOwnerToolContext(tools.TOOLS, { source: "mcp" });
 
   let requests = 0;
+  let connections = 0;
   const server = http.createServer((_req, res) => { requests += 1; res.statusCode = 200; res.end("ok"); });
+  server.on("connection", () => { connections += 1; });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   const port = server.address().port;
   const target = `http://127.0.0.1:${port}/health`;
 
   try {
+    const unscopedHostProbe = await TOOLS.netdiag({ action: "ports", target: "127.0.0.1", port_range: `${port}-${port}` });
+    assert.equal(unscopedHostProbe.isError, true);
+    assert.equal(unscopedHostProbe.code, "network_scope_required");
+    assert.equal(connections, 0, "private host probes must fail before opening a TCP connection");
+
     const netdiagWithoutScope = await TOOLS.netdiag({ action: "check", target });
     assert.equal(netdiagWithoutScope.isError, true);
     assert.equal(netdiagWithoutScope.code, "network_scope_required");
@@ -157,7 +267,7 @@ test("watch creation binds a private endpoint to the current scope revision and 
     assert.equal(requests, 0);
 
     const scope = networkScopes.create({
-      name: "watch-egress-scope",
+      name: `watch-egress-${process.pid}-${Date.now()}`,
       allow_private_addresses: true,
       allowed_ips: ["127.0.0.1"],
       allowed_protocols: ["http"],
