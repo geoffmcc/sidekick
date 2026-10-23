@@ -67,12 +67,17 @@ non-zero if any hard check fails. It never weakens a security check.
 
 ## Configuration
 
+Remote control-plane connections use HTTPS so enrollment tokens and worker
+credentials are protected in transit. Plain HTTP is accepted only for loopback
+addresses such as `127.0.0.1` or `::1`; terminate TLS at a trusted reverse proxy
+for remote workers.
+
 Settings resolve with the precedence **CLI > environment > config file >
 defaults**. The (non-secret) config file is JSON, validated on load:
 
 ```json
 {
-  "serverUrl": "http://YOUR_REMOTE_IP:4097",
+  "serverUrl": "https://YOUR_SIDEKICK_HOST:4097",
   "nodeId": "node_…",
   "displayName": "lab-worker",
   "concurrency": 4,
@@ -154,16 +159,16 @@ contract above). Definitions and installers live in
 
 ```bash
 # Linux
-sudo SERVER_URL=http://host:4097 ENROLL_TOKEN=<token> \
+sudo SERVER_URL=https://host:4097 ENROLL_TOKEN=<token> \
   OLLAMA_URL=http://127.0.0.1:11434 OLLAMA_MODEL=qwen3.5:latest ./install-linux.sh
 # macOS
-sudo SERVER_URL=http://host:4097 ENROLL_TOKEN=<token> \
+sudo SERVER_URL=https://host:4097 ENROLL_TOKEN=<token> \
   OLLAMA_URL=http://127.0.0.1:11434 OLLAMA_MODEL=qwen3.5:latest ./install-macos.sh
 ```
 ```powershell
 # Windows (elevated) — winsw (the service wrapper) is bundled in the built
 # worker package as sidekick-compute-worker.exe; no download, no -WinswUrl
-.\install-windows.ps1 -ServerUrl http://host:4097 -EnrollToken <token> `
+.\install-windows.ps1 -ServerUrl https://host:4097 -EnrollToken <token> `
   -OllamaUrl http://127.0.0.1:11434 -OllamaModel qwen3.5:latest
 ```
 
@@ -186,7 +191,7 @@ official MSI puts it in `C:\Program Files\nodejs`), or point the installer at a
 specific binary:
 
 ```powershell
-.\install-windows.ps1 -ServerUrl http://host:4097 -EnrollToken <token> `
+.\install-windows.ps1 -ServerUrl https://host:4097 -EnrollToken <token> `
   -NodeExe "C:\Program Files\nodejs\node.exe"
 ```
 

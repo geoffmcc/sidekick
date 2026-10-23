@@ -9,6 +9,7 @@ const http = require("http");
 const https = require("https");
 const workerConfig = require("../compute/worker-config");
 const credentialStore = require("../compute/worker-credential");
+const { validateControlPlaneUrl } = require("../compute/control-plane-url");
 const { readSecret } = require("../core/runtime-secrets");
 const { getCanonicalRegistry } = require("../tools/canonical-registry");
 const toolContext = require("../tools/context");
@@ -88,7 +89,10 @@ function binaries() {
 function capabilities() { return { nodeId: nodeId(), executionHost: os.hostname(), nodeVersion: process.version, osType: os.type(), osRelease: os.release(), architecture: os.arch(), platform: process.platform, descriptorSetHash: descriptorSetHash(), binaries: binaries(), packs: Array.isArray(nodeConfig.packs) ? nodeConfig.packs.slice(0, 16) : [], workspaces: workspace ? [{ name: workspace.name, root: workspace.root, permissions: workspace.permissions, limits: workspace.limits }] : [], networkScopes: networkScopes(), browser: false, privilege: false, healthy: true }; }
 function request(method, endpoint, body, timeoutMs = 15000) {
   return new Promise((resolve, reject) => {
-    const url = new URL(endpoint, SERVER_URL); const transport = url.protocol === "https:" ? https : http; const data = body == null ? null : JSON.stringify(body);
+    let url;
+    try { validateControlPlaneUrl(SERVER_URL); url = new URL(endpoint, SERVER_URL); }
+    catch (error) { reject(error); return; }
+    const transport = url.protocol === "https:" ? https : http; const data = body == null ? null : JSON.stringify(body);
     const headers = { "content-type": "application/json", ...(data ? { "content-length": Buffer.byteLength(data) } : {}), ...(workerId && credential ? { authorization: `Bearer ${workerId}:${credential}` } : {}) };
     const req = transport.request({ hostname: url.hostname, port: url.port, path: url.pathname + url.search, method, headers }, response => {
       const chunks = [];

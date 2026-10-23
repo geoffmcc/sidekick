@@ -11,6 +11,7 @@ const workerReconnect = require("./worker-reconnect");
 const { readSecret } = require("./worker-secrets");
 const { resolveOutputTokenBudget } = require("./token-budget");
 const { collectGpuTelemetry, isLocalTelemetryEndpoint, sanitizeTelemetry } = require("./telemetry");
+const { validateControlPlaneUrl } = require("./control-plane-url");
 
 // OpenVINO executor — optional; gracefully absent when disabled or on non-Windows.
 let _openVinoExecutor = null;
@@ -147,7 +148,13 @@ function httpRequest(method, requestPath, body, extraHeaders = {}, options = {})
       settled = true;
       fn(value);
     };
-    const url = new URL(requestPath, SERVER_URL);
+    let url;
+    try {
+      url = new URL(requestPath, SERVER_URL);
+      // Control-plane routes carry enrollment tokens or durable worker credentials.
+      // Absolute local telemetry URLs are allowed without broadening that authority.
+      if (String(requestPath).startsWith("/")) validateControlPlaneUrl(SERVER_URL);
+    } catch (error) { finish(reject, error); return; }
     const mod = url.protocol === "https:" ? https : http;
     const bodyStr = body ? JSON.stringify(body) : null;
     const headers = { "Content-Type": "application/json", ...extraHeaders };
