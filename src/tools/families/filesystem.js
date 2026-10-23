@@ -95,6 +95,22 @@ function nodeSearch(pattern, targetPath, include) {
   return { content: [{ type: "text", text: redactSensitive(results.join("\n") || "(no matches)") }] };
 }
 
+function buildSearchArgs(searchCommand, pattern, targetPath, include) {
+  if (path.basename(searchCommand).toLowerCase().startsWith("rg")) {
+    const args = ["--json", "--max-count", "100"];
+    if (include) args.push("-g", include);
+    // Without `--`, an attacker-controlled pattern such as `--pre=...` is
+    // parsed as a ripgrep option and can execute a preprocessor command.
+    args.push("--", pattern, targetPath);
+    return args;
+  }
+
+  const args = ["-rn", "--max-count=100"];
+  if (include) args.push("--include=" + include);
+  args.push("--", pattern, targetPath);
+  return args;
+}
+
 async function sidekick_search({ pattern, path: searchPath, include }) {
   const authError = requireToolExecution({ tool: "filesystem.read" }, "tools.execute", "search");
   if (authError) return authError;
@@ -111,14 +127,10 @@ async function sidekick_search({ pattern, path: searchPath, include }) {
   try {
     let stdout;
     if (path.basename(searchCommand).toLowerCase().startsWith("rg")) {
-      const args = ["--json", "--max-count", "100"];
-      if (include) args.push("-g", include);
-      args.push(pattern, targetPath);
+      const args = buildSearchArgs(searchCommand, pattern, targetPath, include);
       stdout = execFileSync(searchCommand, args, { timeout: 30000, encoding: "utf-8", maxBuffer: 5 * 1024 * 1024, env: childProcessEnv() });
     } else {
-      const args = ["-rn", "--max-count=100"];
-      if (include) args.push("--include=" + include);
-      args.push(pattern, targetPath);
+      const args = buildSearchArgs(searchCommand, pattern, targetPath, include);
       stdout = execFileSync(searchCommand, args, { timeout: 30000, encoding: "utf-8", maxBuffer: 5 * 1024 * 1024, env: childProcessEnv() });
     }
     return { content: [{ type: "text", text: redactSensitive(stdout || "(no matches)") }] };
@@ -453,4 +465,4 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_read, sidekick_list, sidekick_search, sidekick_summarize, sidekick_filter, sidekick_write, sidekick_diff_files, sidekick_find };
+module.exports = { descriptors, sidekick_read, sidekick_list, sidekick_search, sidekick_summarize, sidekick_filter, sidekick_write, sidekick_diff_files, sidekick_find, buildSearchArgs };

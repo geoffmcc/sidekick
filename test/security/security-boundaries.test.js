@@ -27,6 +27,7 @@ const { normalizeDefinition } = require("../../src/workflows/definition");
 const packLifecycle = require("../../src/packs/lifecycle");
 const { redactSensitive, redactSensitiveKeysDeep } = require("../../src/redact");
 const { normalizeResult } = require("../../src/tools/result");
+const { buildSearchArgs } = require("../../src/tools/families/filesystem");
 
 let owner;
 
@@ -157,6 +158,16 @@ test("redaction covers nested credentials, encoded tokens, and structured result
   const result = normalizeResult({ content: [{ type: "text", text: JSON.stringify({ api_key: secret, credentialState: "configured" }) }] });
   assert.doesNotMatch(result.content[0].text, new RegExp(secret));
   assert.match(result.content[0].text, /configured/);
+});
+
+test("filesystem search patterns cannot become ripgrep or grep options", () => {
+  const hostilePattern = "--pre=write-side-effect";
+  for (const executable of ["/usr/bin/rg", "/usr/bin/grep"]) {
+    const args = buildSearchArgs(executable, hostilePattern, "/workspace", "*.txt");
+    const separator = args.indexOf("--");
+    assert.ok(separator >= 0, `${executable} arguments must terminate options`);
+    assert.deepEqual(args.slice(separator), ["--", hostilePattern, "/workspace"]);
+  }
 });
 
 test("workflow definitions reject forward references, executable syntax, and duplicate steps", () => {
