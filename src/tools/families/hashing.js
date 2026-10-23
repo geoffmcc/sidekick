@@ -6,6 +6,33 @@ const { z } = require("zod");
 const { enforcePathPolicy } = require("../path-policy");
 const { requireToolExecution } = require("../read-authorization");
 
+const HASH_STREAM_HIGH_WATER_MARK = 64 * 1024;
+const HASH_FILE_TIMEOUT_MS = 5 * 60 * 1000;
+
+function hashFile(filePath, algorithm, timeoutMs = HASH_FILE_TIMEOUT_MS) {
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash(algorithm);
+    const stream = fs.createReadStream(filePath, { highWaterMark: HASH_STREAM_HIGH_WATER_MARK });
+    let settled = false;
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn(value);
+    };
+    const timer = setTimeout(() => {
+      const error = new Error(`File hashing exceeded the ${timeoutMs}-ms time limit`);
+      error.code = "HASH_FILE_TIMEOUT";
+      finish(reject, error);
+      stream.destroy();
+    }, timeoutMs);
+    timer.unref?.();
+    stream.on("data", chunk => hash.update(chunk));
+    stream.once("error", error => finish(reject, error));
+    stream.once("end", () => finish(resolve, hash.digest("hex")));
+  });
+}
+
 async function sidekick_hash({ input, algorithm, verify, path: filePath }) {
   if (filePath) {
     const authError = requireToolExecution({ tool: "hash", path: filePath }, "tools.execute", "hash");
@@ -18,25 +45,23 @@ async function sidekick_hash({ input, algorithm, verify, path: filePath }) {
     return { content: [{ type: "text", text: `Invalid algorithm. Use: ${validAlgorithms.join(", ")}` }], isError: true };
   }
 
-  let data;
+  let hash;
 
   if (filePath) {
     const policyError = enforcePathPolicy(filePath, "read");
     if (policyError) return policyError;
-    // Hash a file.
+    // Stream files through a bounded buffer rather than allocating memory in
+    // proportion to an operator-authorized file's size.
     try {
-      data = fs.readFileSync(filePath);
+      hash = await hashFile(filePath, algo);
     } catch (e) {
       return { content: [{ type: "text", text: `File read error: ${e.message}` }], isError: true };
     }
   } else if (input) {
-    // Hash input string.
-    data = Buffer.from(input, "utf-8");
+    hash = crypto.createHash(algo).update(input, "utf-8").digest("hex");
   } else {
     return { content: [{ type: "text", text: "input or path required" }], isError: true };
   }
-
-  const hash = crypto.createHash(algo).update(data).digest("hex");
 
   if (verify) {
     const matches = hash === verify.toLowerCase();
@@ -70,4 +95,4 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_hash };
+module.exports = { descriptors, sidekick_hash, hashFile, HASH_STREAM_HIGH_WATER_MARK, HASH_FILE_TIMEOUT_MS };

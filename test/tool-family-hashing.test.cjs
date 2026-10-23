@@ -67,6 +67,15 @@ fs.writeFileSync(filePath, 'file contents\n', 'utf8');
       `SHA256: ${digest('sha256', fs.readFileSync(filePath))}`
     );
 
+    const largeFilePath = path.join(TEST_DATA_DIR, 'large-hash-fixture.bin');
+    const largeFile = Buffer.alloc(2 * 1024 * 1024, 0x41);
+    fs.writeFileSync(largeFilePath, largeFile);
+    assert.strictEqual(
+      text(await family.sidekick_hash({ path: largeFilePath })),
+      `SHA256: ${digest('sha256', largeFile)}`,
+      'file hashing must stream correctly across multiple fixed-size reads'
+    );
+
     const expected = digest('sha256', 'abc');
     assert.strictEqual(text(await family.sidekick_hash({ input: 'abc', verify: expected })), `✓ Hash matches (sha256: ${expected})`);
     assert.strictEqual(text(await family.sidekick_hash({ input: 'abc', verify: expected.toUpperCase() })), `✓ Hash matches (sha256: ${expected})`);
