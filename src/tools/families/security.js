@@ -14,6 +14,7 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const { z } = require("zod");
+const { performance } = require("node:perf_hooks");
 const { BoundedRegex } = require("../../core/bounded-regex");
 const { redactSensitive } = require("../../redact");
 const { enforcePathPolicy, getPathPolicyDecision } = require("../path-policy");
@@ -168,7 +169,7 @@ function anonymizeText(text, consistency, customPatterns) {
   });
 
   if (customPatterns && customPatterns.length > 0) {
-    const regexDeadline = Date.now() + 500;
+    const regexDeadline = performance.now() + 500;
     for (const cp of customPatterns) {
       const regex = new BoundedRegex(cp.pattern, "", { deadline: regexDeadline });
       result = regex.replace(result, cp.replacement);
@@ -176,7 +177,7 @@ function anonymizeText(text, consistency, customPatterns) {
   }
 
   const stored = loadAnonymizePatterns();
-  const regexDeadline = Date.now() + 500;
+  const regexDeadline = performance.now() + 500;
   for (const sp of stored.patterns) {
     const regex = new BoundedRegex(sp.pattern, "", { deadline: regexDeadline });
     result = regex.replace(result, sp.replacement);

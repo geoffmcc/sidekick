@@ -1,6 +1,7 @@
 "use strict";
 
 const vm = require("node:vm");
+const { performance } = require("node:perf_hooks");
 
 const MAX_PATTERN_LENGTH = 512;
 const DEFAULT_MATCH_TIMEOUT_MS = 20;
@@ -18,9 +19,11 @@ class BoundedRegex {
     this.context = vm.createContext({ regex, replaceRegex: new RegExp(pattern, `${flags}g`), value: "", replacement: "" });
     this.script = new vm.Script("regex.test(value)");
     this.replaceScript = new vm.Script("value.replace(replaceRegex, replacement)");
+    // vm is used only to apply Node's synchronous execution timeout to a fixed
+    // regex operation. It is not an isolation boundary for running user code.
     this.deadline = Number.isFinite(options.deadline)
       ? options.deadline
-      : Date.now() + (Number.isFinite(options.budgetMs) ? Math.max(1, options.budgetMs) : DEFAULT_BUDGET_MS);
+      : performance.now() + (Number.isFinite(options.budgetMs) ? Math.max(1, options.budgetMs) : DEFAULT_BUDGET_MS);
     this.matchTimeoutMs = Number.isFinite(options.matchTimeoutMs)
       ? Math.max(1, options.matchTimeoutMs)
       : DEFAULT_MATCH_TIMEOUT_MS;
@@ -35,11 +38,11 @@ class BoundedRegex {
   }
 
   run(script, values) {
-    const remaining = this.deadline - Date.now();
+    const remaining = this.deadline - performance.now();
     if (remaining <= 0) throw new Error("Regex evaluation exceeded its time budget");
     Object.assign(this.context, values);
     try {
-      return script.runInContext(this.context, { timeout: Math.max(1, Math.min(this.matchTimeoutMs, remaining)) });
+      return script.runInContext(this.context, { timeout: Math.max(1, Math.floor(Math.min(this.matchTimeoutMs, remaining))) });
     } catch (error) {
       if (error && error.code === "ERR_SCRIPT_EXECUTION_TIMEOUT") {
         throw new Error("Regex evaluation exceeded its time budget");
