@@ -10,6 +10,7 @@ const authorization = require("./core/authorization");
 const identity = require("./core/identity");
 const projectAccess = require("./core/project-access");
 const { createAgentCatalog } = require("./agent/catalog");
+const { createAgentExecutionContext, runWithContext } = require("./tools/context");
 const { persistedTaskAuthIdentity } = require("./agent/task-identity");
 const { authorizeRecoveredTask } = require("./agent/recovery-authorization");
 const { authorizeScheduledAgentDelay } = require("./agent/delay-policy");
@@ -800,7 +801,7 @@ Return ONLY valid JSON.`;
   }
 }
 
-async function runAgent(goal, taskId, parentContext = null, cancelController = null, resumeState = null) {
+async function runAgentImpl(goal, taskId, parentContext = null, cancelController = null, resumeState = null) {
   const steps = [];
   // Cooperative cancellation. The controller is aborted by the cancel route;
   // the derived flag is consumed by the tool loop and Brain between steps, and
@@ -1665,6 +1666,23 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
       console.error("Agent task " + taskId + " procedure suggestion failed: " + (e && e.message ? e.message : e));
     }
   }
+}
+
+// Agent inference, procedure suggestions, and other async work must execute
+// under the same authenticated task identity as governed tool dispatch. The
+// identity comes only from the authenticated request path or recovery gate;
+// absent identity remains absent and provider-secret use still fails closed.
+function runAgent(goal, taskId, parentContext = null, cancelController = null, resumeState = null) {
+  const executionContext = createAgentExecutionContext({
+    parentContext,
+    authIdentity: parentContext?.authIdentity || null,
+    actor: parentContext?.actorPrincipalId || parentContext?.requestedByPrincipalId || "agent",
+    taskId,
+    project: parentContext?.project || null,
+    sessionId: parentContext?.sessionId || null,
+    correlationId: taskId,
+  });
+  return runWithContext(executionContext, () => runAgentImpl(goal, taskId, parentContext, cancelController, resumeState));
 }
 
 const beginTaskRun = createTaskRunner({

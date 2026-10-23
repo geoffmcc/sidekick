@@ -30,6 +30,7 @@ let port;
 
 delete require.cache[require.resolve("../src/agent")];
 const agent = require("../src/agent");
+const { getExecutionContext } = require("../src/tools/context");
 const { createAgentProxyHeaders } = require("../src/security/agent-proxy-auth");
 const authenticatedTestPrincipal = require("./helpers/authorized-context").createOwnerContext({
   source: "agent",
@@ -88,8 +89,10 @@ function request(method, urlPath, body, extraHeaders = {}, signed = true, signin
 // Deterministic LLM. Reassign `fake` per test. Records the last messages seen on
 // each routing path so tests can assert the continuation brief reached them.
 const seen = { direct: null, tool: null };
+const seenInferencePrincipals = [];
 let fake = null;
 agent.__setLLMOverrideForTests((messages, options) => {
+  seenInferencePrincipals.push(getExecutionContext()?.authIdentity?.principal_id || null);
   const isToolLoop = options && options.format === "json";
   if (isToolLoop) seen.tool = messages; else seen.direct = messages;
   return Promise.resolve(fake(messages, options, isToolLoop));
@@ -230,6 +233,15 @@ let server;
     assert.strictEqual(detail.status, 200);
     assert.deepStrictEqual(detail.data.task.goal.success_criteria, ["criteria answer"]);
     assert.strictEqual(detail.data.task.goal.normalized_objective, "Answer with one criterion");
+  });
+
+  await ok("1b-auth-context) authenticated principal is preserved through agent inference", async () => {
+    fake = fakeDirect("authenticated inference context");
+    const before = seenInferencePrincipals.length;
+    const created = await request("POST", "/api/agent/run", { goal: "Answer with authenticated context" }, authenticatedTestHeaders);
+    assert.strictEqual(created.status, 200);
+    await waitForTranscript(created.data.taskId);
+    assert.ok(seenInferencePrincipals.slice(before).includes(authenticatedTestPrincipal.authIdentity.principal_id), "agent inference must retain the initiating authenticated principal");
   });
 
   await ok("1c) authenticated task projections cannot cross principal ownership", async () => {
