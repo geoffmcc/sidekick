@@ -7,6 +7,7 @@ const path = require("path");
 const { execFileSync } = require("child_process");
 const { childProcessEnv } = require("../src/security/child-process");
 const { resolveCommandOnPath } = require("../src/security/command-lookup");
+const { createArchiveSnapshot } = require("../src/tools/archive-snapshot");
 const { validateArchiveEntryNames, validateArchiveEntryTypes, validateZipEntryTypes, validateArchiveSourceType, archiveProcessEnv } = require("../src/tools/families/process-mgmt");
 
 for (const entry of [
@@ -116,13 +117,40 @@ try {
 const source = fs.readFileSync(path.join(__dirname, "..", "src", "tools", "families", "process-mgmt.js"), "utf8");
 assert.match(source, /validateArchiveEntryNames\(listing\.split\("\\n"\)\)/, "archive extraction must validate the complete listing first");
 assert.match(source, /validateArchiveEntryTypes\(typeListing\)/, "tar extraction must reject link and special-file entries before extraction");
-assert.match(source, /\["-tvzf", sourceAbsolute\]/, "tar member types must be inspected before extraction");
+assert.match(source, /\["-tvzf", archiveSource\]/, "tar member types must be inspected before extraction");
 assert.match(source, /validateZipEntryTypes\(typeListing\)/, "zip extraction must reject link and special-file entries before extraction");
-assert.match(source, /\["-Z", "-v", sourceAbsolute\]/, "zip central-directory Unix attributes must be inspected before extraction");
+assert.match(source, /\["-Z", "-v", archiveSource\]/, "zip central-directory Unix attributes must be inspected before extraction");
 assert.equal((source.match(/env: archiveProcessEnv\(\)/g) || []).length, 5, "all archive list, preflight, creation, and extraction processes must use sanitized environments");
-assert.match(source, /sourceStat = fs\.statSync\(sourcePath\)/, "archive source type must be verified before invoking archive commands");
+assert.match(source, /sourceStat = fs\.statSync\(sourceAbsolute\)/, "archive source type must be verified after canonicalization");
 assert.match(source, /validateArchiveSourceType\(sourceStat, action\)/, "archive operations must reject special source files");
-assert.match(source, /const extractTarget = output \? path\.resolve\(output\) : process\.cwd\(\)/, "archive extraction target must be explicit and canonicalized");
+assert.match(source, /snapshot = await createArchiveSnapshot\(sourceAbsolute, sourcePath\)/, "extract preflight and extraction must share a stable source snapshot");
+assert.match(source, /extractTarget = output \? path\.resolve\(output\) : process\.cwd\(\)/, "archive extraction target must be explicit and canonicalized");
 assert.match(source, /"-C", extractTarget/, "tar extraction must use the governed extraction target");
 assert.match(source, /"-d", extractTarget/, "zip extraction must use the governed extraction target");
-console.log("Phase 6 filesystem and archive security tests passed");
+
+(async () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-archive-snapshot-test-"));
+  try {
+    const original = path.join(temp, "bundle.tar.gz");
+    fs.writeFileSync(original, "validated archive bytes", { flag: "wx", mode: 0o600 });
+    const snapshot = await createArchiveSnapshot(original);
+    try {
+      fs.writeFileSync(original, "replacement bytes");
+      assert.equal(await fs.promises.readFile(snapshot.path, "utf8"), "validated archive bytes", "the staged archive is unaffected by source-path replacement");
+      assert.match(snapshot.path, /\.tar\.gz$/);
+      if (process.platform !== "win32") {
+        assert.equal((fs.statSync(path.dirname(snapshot.path)).mode & 0o777), 0o700, "staging directory is private to the service identity");
+        assert.equal((fs.statSync(snapshot.path).mode & 0o777), 0o600, "staged archive is readable only by the service identity");
+      }
+    } finally {
+      await snapshot.cleanup();
+    }
+    assert.equal(fs.existsSync(snapshot.path), false, "snapshot cleanup removes its private staging directory");
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+  console.log("Phase 6 filesystem and archive security tests passed");
+})().catch(error => {
+  console.error(error);
+  process.exitCode = 1;
+});

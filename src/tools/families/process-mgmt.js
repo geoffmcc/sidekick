@@ -19,6 +19,7 @@ const { z } = require("zod");
 const { redactSensitive } = require("../../redact");
 const { enforcePathPolicy } = require("../path-policy");
 const { requireToolExecution } = require("../read-authorization");
+const { createArchiveSnapshot } = require("../archive-snapshot");
 
 const ALLOWED_SERVICE_NAMES = Object.freeze([
   "sidekick-mcp", "sidekick-dashboard", "sidekick-agent", "sidekick-postgres",
@@ -244,72 +245,102 @@ async function sidekick_archive({ action, path: sourcePath, output, format }) {
     return { content: [{ type: "text", text: "Path not found: " + sourcePath }], isError: true };
   }
 
+  let sourceAbsolute;
+  try {
+    sourceAbsolute = fs.realpathSync(sourcePath);
+  } catch (error) {
+    return { content: [{ type: "text", text: `Unable to resolve archive source: ${error.message}` }], isError: true };
+  }
+  const canonicalSourcePolicyError = enforcePathPolicy(sourceAbsolute, "read");
+  if (canonicalSourcePolicyError) return canonicalSourcePolicyError;
+
   let sourceStat;
   try {
-    sourceStat = fs.statSync(sourcePath);
+    sourceStat = fs.statSync(sourceAbsolute);
   } catch (error) {
     return { content: [{ type: "text", text: `Unable to inspect archive source: ${error.message}` }], isError: true };
   }
   const sourceTypeError = validateArchiveSourceType(sourceStat, action);
   if (sourceTypeError) return { content: [{ type: "text", text: sourceTypeError }], isError: true };
 
-  const sourceAbsolute = path.resolve(sourcePath);
-
-  const fmt = format || "tar.gz";
-  let cmd;
-
-  if (action === "create") {
-    if (!output) {
-      return { content: [{ type: "text", text: "output required for create" }], isError: true };
+  let extractTarget;
+  if (action === "extract") {
+    if (!sourcePath.endsWith(".tar.gz") && !sourcePath.endsWith(".tgz") && !sourcePath.endsWith(".zip")) {
+      return { content: [{ type: "text", text: "Unsupported archive format" }], isError: true };
     }
-    const outputPolicyError = enforcePathPolicy(output, "write");
-    if (outputPolicyError) return outputPolicyError;
-    if (fmt === "tar.gz" || fmt === "tgz") {
-      cmd = ["tar", ["-czf", path.resolve(output), "-C", path.dirname(sourceAbsolute), path.basename(sourceAbsolute)]];
-    } else if (fmt === "zip") {
-      cmd = ["zip", ["-r", path.resolve(output), sourceAbsolute]];
-    } else {
-      return { content: [{ type: "text", text: "Invalid format. Use: tar.gz, tgz, or zip" }], isError: true };
-    }
-  } else if (action === "extract") {
-    const extractTarget = output ? path.resolve(output) : process.cwd();
+    extractTarget = output ? path.resolve(output) : process.cwd();
     const outputPolicyError = enforcePathPolicy(extractTarget, "write");
     if (outputPolicyError) return outputPolicyError;
+  }
+
+  let snapshot = null;
+  if (action === "extract") {
     try {
-      fs.mkdirSync(extractTarget, { recursive: true });
+      snapshot = await createArchiveSnapshot(sourceAbsolute, sourcePath);
+    } catch (error) {
+      return { content: [{ type: "text", text: `Unable to stage archive source: ${error.message}` }], isError: true };
+    }
+  }
+  const archiveSource = snapshot ? snapshot.path : sourceAbsolute;
+
+  try {
+    const fmt = format || "tar.gz";
+    let cmd;
+
+    if (action === "create") {
+      if (!output) {
+        return { content: [{ type: "text", text: "output required for create" }], isError: true };
+      }
+      const outputPolicyError = enforcePathPolicy(output, "write");
+      if (outputPolicyError) return outputPolicyError;
+      if (fmt === "tar.gz" || fmt === "tgz") {
+        cmd = ["tar", ["-czf", path.resolve(output), "-C", path.dirname(sourceAbsolute), path.basename(sourceAbsolute)]];
+      } else if (fmt === "zip") {
+        cmd = ["zip", ["-r", path.resolve(output), sourceAbsolute]];
+      } else {
+        return { content: [{ type: "text", text: "Invalid format. Use: tar.gz, tgz, or zip" }], isError: true };
+      }
+    } else if (action === "extract") {
+      try {
+        if (sourcePath.endsWith(".tar.gz") || sourcePath.endsWith(".tgz")) {
+          const listing = execFileSync("tar", ["-tzf", archiveSource], { timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024, env: archiveProcessEnv() });
+          validateArchiveEntryNames(listing.split("\n"));
+          const typeListing = execFileSync("tar", ["-tvzf", archiveSource], { timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024, env: archiveProcessEnv() });
+          validateArchiveEntryTypes(typeListing);
+          cmd = ["tar", ["-xzf", archiveSource, "-C", extractTarget, "--no-same-owner", "--no-overwrite-dir"]];
+        } else if (sourcePath.endsWith(".zip")) {
+          const listing = execFileSync("unzip", ["-Z1", archiveSource], { timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024, env: archiveProcessEnv() });
+          validateArchiveEntryNames(listing.split("\n"));
+          const typeListing = execFileSync("unzip", ["-Z", "-v", archiveSource], { timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024, env: archiveProcessEnv() });
+          validateZipEntryTypes(typeListing);
+          cmd = ["unzip", [archiveSource, "-d", extractTarget]];
+        } else {
+          return { content: [{ type: "text", text: "Unsupported archive format" }], isError: true };
+        }
+        fs.mkdirSync(extractTarget, { recursive: true });
+      } catch (e) {
+        const diagnostic = String(e.stderr || e.stdout || e.message).replaceAll(archiveSource, sourcePath);
+        return { content: [{ type: "text", text: redactSensitive("Archive preflight failed: " + diagnostic) }], isError: true };
+      }
+    } else if (action === "list") {
       if (sourcePath.endsWith(".tar.gz") || sourcePath.endsWith(".tgz")) {
-        const listing = execFileSync("tar", ["-tzf", sourceAbsolute], { timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024, env: archiveProcessEnv() });
-        validateArchiveEntryNames(listing.split("\n"));
-        const typeListing = execFileSync("tar", ["-tvzf", sourceAbsolute], { timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024, env: archiveProcessEnv() });
-        validateArchiveEntryTypes(typeListing);
-        cmd = ["tar", ["-xzf", sourceAbsolute, "-C", extractTarget, "--no-same-owner", "--no-overwrite-dir"]];
+        cmd = ["tar", ["-tzf", sourceAbsolute]];
       } else if (sourcePath.endsWith(".zip")) {
-        const listing = execFileSync("unzip", ["-Z1", sourceAbsolute], { timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024, env: archiveProcessEnv() });
-        validateArchiveEntryNames(listing.split("\n"));
-        const typeListing = execFileSync("unzip", ["-Z", "-v", sourceAbsolute], { timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024, env: archiveProcessEnv() });
-        validateZipEntryTypes(typeListing);
-        cmd = ["unzip", [sourceAbsolute, "-d", extractTarget]];
+        cmd = ["unzip", ["-l", sourceAbsolute]];
       } else {
         return { content: [{ type: "text", text: "Unsupported archive format" }], isError: true };
       }
-    } catch (e) {
-      return { content: [{ type: "text", text: redactSensitive("Archive preflight failed: " + (e.stderr || e.stdout || e.message)) }], isError: true };
     }
-  } else if (action === "list") {
-    if (sourcePath.endsWith(".tar.gz") || sourcePath.endsWith(".tgz")) {
-      cmd = ["tar", ["-tzf", sourceAbsolute]];
-    } else if (sourcePath.endsWith(".zip")) {
-      cmd = ["unzip", ["-l", sourceAbsolute]];
-    } else {
-      return { content: [{ type: "text", text: "Unsupported archive format" }], isError: true };
-    }
-  }
 
-  try {
-    const stdout = execFileSync(cmd[0], cmd[1], { timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024, env: archiveProcessEnv() });
-    return { content: [{ type: "text", text: redactSensitive(stdout || "OK") }] };
-  } catch (e) {
-    return { content: [{ type: "text", text: redactSensitive("Error: " + (e.stderr || e.stdout || e.message)) }], isError: true };
+    try {
+      const stdout = execFileSync(cmd[0], cmd[1], { timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024, env: archiveProcessEnv() });
+      return { content: [{ type: "text", text: redactSensitive((stdout || "OK").replaceAll(archiveSource, sourcePath)) }] };
+    } catch (e) {
+      const diagnostic = String(e.stderr || e.stdout || e.message).replaceAll(archiveSource, sourcePath);
+      return { content: [{ type: "text", text: redactSensitive("Error: " + diagnostic) }], isError: true };
+    }
+  } finally {
+    if (snapshot) await snapshot.cleanup();
   }
 }
 
