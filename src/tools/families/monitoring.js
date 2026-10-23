@@ -9,6 +9,7 @@ const { redactSensitive } = require("../../redact");
 const { enforcePathPolicy } = require("../path-policy");
 const { childProcessEnv } = require("../../security/child-process");
 const { requireToolExecution } = require("../read-authorization");
+const { BoundedRegex } = require("../../core/bounded-regex");
 
 function safeExecFileSync(program, args, options = {}) {
   return execFileSync(program, args, { ...options, env: childProcessEnv(options.env) });
@@ -18,7 +19,9 @@ async function sidekick_tail({ source, pattern, lines, since }) {
   const denied = requireToolExecution({ tool: "tail" }, "tools.execute", "tail");
   if (denied) return denied;
   const maxLines = lines || 50;
-  const re = pattern ? new RegExp(pattern, "i") : null;
+  const re = pattern && source !== "journalctl"
+    ? new BoundedRegex(pattern, "i")
+    : null;
   let content;
   if (source === "log.jsonl" || source === "log") {
     let parsed = dbStore.readToolLogs(1000);
@@ -498,7 +501,7 @@ async function sidekick_timeline({ action, since, until, sources, pattern, sever
     filtered = filtered.filter(e => e.severity === severity);
   }
   if (pattern) {
-    const regex = new RegExp(pattern, "i");
+    const regex = new BoundedRegex(pattern, "i");
     filtered = filtered.filter(e => regex.test(e.summary));
   }
 
@@ -744,7 +747,7 @@ const EXTRA_SCHEMAS = {
     since: z.string().describe("Start time (ISO or relative: 1h, 1d, 7d)"),
     until: z.string().optional().default("now"),
     sources: z.array(z.enum(["log.jsonl", "journalctl", "git", "files", "all"])).optional().default(["all"]),
-    pattern: z.string().optional().describe("Regex filter for event content"),
+    pattern: z.string().max(512).optional().describe("Regex filter for event content (maximum 512 characters)"),
     severity: z.enum(["error", "warn", "info", "all"]).optional().default("all"),
     format: z.enum(["compact", "detailed", "json"]).optional().default("compact"),
      max_events: z.number().optional().default(200),
@@ -770,7 +773,7 @@ const descriptors = Object.freeze([
     description: "Tail recent log entries with filtering. Sources: log.jsonl (sidekick logs), journalctl, or any file.",
     schema: z.object({
       source: z.string().describe("Source: log.jsonl, journalctl, or file path"),
-      pattern: z.string().optional().describe("Regex filter (for journalctl: service name)"),
+      pattern: z.string().max(512).optional().describe("Regex filter (for journalctl: service name; maximum 512 characters)"),
       lines: z.number().optional().describe("Number of lines to return (default: 50)"),
       since: z.string().optional().describe("Filter entries since this date (ISO date or relative: 1h, 1d)"),
     }),

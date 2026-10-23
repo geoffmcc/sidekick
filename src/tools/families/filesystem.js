@@ -9,6 +9,15 @@ const { z } = require("zod");
 const { redactSensitive } = require("../../redact");
 const { enforcePathPolicy } = require("../path-policy");
 const { requireToolExecution } = require("../read-authorization");
+const { BoundedRegex } = require("../../core/bounded-regex");
+
+function globToRegexSource(glob) {
+  return Array.from(String(glob), character => {
+    if (character === "*") return ".*";
+    if (character === "?") return ".";
+    return /[\\^$.*+?()[\]{}|]/.test(character) ? "\\" + character : character;
+  }).join("");
+}
 
 async function sidekick_read({ path: filePath }) {
   const authError = requireToolExecution({ tool: "filesystem.read" }, "tools.execute", "read");
@@ -45,13 +54,13 @@ async function sidekick_list({ path: dirPath }) {
 function nodeSearch(pattern, targetPath, include) {
   let matcher;
   try {
-    matcher = new RegExp(pattern);
+    matcher = new BoundedRegex(pattern);
   } catch (error) {
     return { content: [{ type: "text", text: "Search error: " + error.message }], isError: true };
   }
 
   const includeMatcher = include
-    ? new RegExp("^" + String(include).replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\\\*/g, ".*").replace(/\\\?/g, ".") + "$")
+    ? new BoundedRegex("^" + globToRegexSource(include) + "$")
     : null;
   const results = [];
   const maxResults = 100;
@@ -142,7 +151,7 @@ async function sidekick_summarize({ path: filePath, max_lines, strategy, pattern
     summary = lines.slice(-maxLines).join("\n");
   } else if (strat === "grep") {
     if (!pattern) return { content: [{ type: "text", text: "pattern required for grep strategy" }], isError: true };
-    const re = new RegExp(pattern, "i");
+    const re = new BoundedRegex(pattern, "i");
     const matched = [];
     for (let i = 0; i < lines.length && matched.length < maxLines; i++) {
       if (re.test(lines[i])) {
@@ -185,14 +194,14 @@ async function sidekick_filter({ path: targetPath, pattern, after, before, max_r
   if (stat.isFile()) {
     const content = fs.readFileSync(targetPath, "utf-8");
     const lines = content.split("\n");
-    const re = pattern ? new RegExp(pattern, "i") : null;
+    const re = pattern ? new BoundedRegex(pattern, "i") : null;
     for (let i = 0; i < lines.length && results.length < maxResults; i++) {
       if (!re || re.test(lines[i])) results.push({ line: i + 1, text: lines[i].substring(0, 200) });
     }
   } else if (stat.isDirectory()) {
     const afterDate = after ? new Date(after).getTime() : 0;
     const beforeDate = before ? new Date(before).getTime() : Infinity;
-    const re = pattern ? new RegExp(pattern, "i") : null;
+    const re = pattern ? new BoundedRegex(pattern, "i") : null;
     function walkDir(dir, depth) {
       if (depth > 5 || results.length >= maxResults) return;
       let entries;
@@ -281,8 +290,9 @@ async function sidekick_find({ path: searchPath, name, modified_after, modified_
   const beforeMs = modified_before ? new Date(modified_before).getTime() : Infinity;
   const sizeMin = size_min ? parseSize(size_min) : 0;
   const sizeMax = size_max ? parseSize(size_max) : Infinity;
-  const nameRe = name ? new RegExp("^" + name.replace(/\*/g, ".*").replace(/\?/g, ".") + "$", "i") : null;
-  const contentRe = content ? new RegExp(content, "i") : null;
+  const namePattern = name ? "^" + globToRegexSource(name) + "$" : null;
+  const nameRe = namePattern ? new BoundedRegex(namePattern, "i") : null;
+  const contentRe = content ? new BoundedRegex(content, "i") : null;
   const results = [];
   function walk(dir, depth) {
     if (depth > 8 || results.length >= maxResults) return;
@@ -351,9 +361,9 @@ const descriptors = Object.freeze([
     name: "search",
     description: "Search file contents using ripgrep or grep",
     schema: z.object({
-      pattern: z.string().describe("Regex pattern to search for"),
+      pattern: z.string().max(512).describe("Regex pattern to search for (maximum 512 characters)"),
       path: z.string().optional().describe("Directory to search in (defaults to current directory)"),
-      include: z.string().optional().describe("File pattern to include (e.g. '*.js', '*.ts')"),
+      include: z.string().max(512).optional().describe("File pattern to include (e.g. '*.js', '*.ts')"),
     }),
     args: { pattern: "string", path: "string (optional)", include: "string (optional)" },
     risk: "medium",
@@ -369,7 +379,7 @@ const descriptors = Object.freeze([
       path: z.string().describe("File path to summarize"),
       max_lines: z.number().optional().describe("Maximum lines to return (default: 50)"),
       strategy: z.enum(["head", "tail", "grep", "stats"]).optional().describe("Summarization strategy (default: head)"),
-      pattern: z.string().optional().describe("Regex pattern for grep strategy"),
+      pattern: z.string().max(512).optional().describe("Regex pattern for grep strategy (maximum 512 characters)"),
     }),
     args: { path: "string (file path)", max_lines: "number (optional, default 50)", strategy: "string (optional, head|tail|grep|stats - default head)", pattern: "string (optional, regex for grep strategy)" },
     risk: "medium",
@@ -383,7 +393,7 @@ const descriptors = Object.freeze([
     description: "Filter file contents or directory listings by pattern, date, or size before returning.",
     schema: z.object({
       path: z.string().describe("File or directory path to filter"),
-      pattern: z.string().optional().describe("Regex pattern to match"),
+      pattern: z.string().max(512).optional().describe("Regex pattern to match (maximum 512 characters)"),
       after: z.string().optional().describe("ISO date: include files modified after this date"),
       before: z.string().optional().describe("ISO date: include files modified before this date"),
       max_results: z.number().optional().describe("Maximum results to return (default: 50)"),
@@ -426,12 +436,12 @@ const descriptors = Object.freeze([
     description: "Advanced file finder: search by name pattern, date range, size range, and content pattern.",
     schema: z.object({
       path: z.string().describe("Directory to search in"),
-      name: z.string().optional().describe("File name glob pattern (e.g. '*.js')"),
+      name: z.string().max(512).optional().describe("File name glob pattern (e.g. '*.js')"),
       modified_after: z.string().optional().describe("ISO date: files modified after"),
       modified_before: z.string().optional().describe("ISO date: files modified before"),
       size_min: z.string().optional().describe("Minimum file size (e.g. '1KB', '1MB')"),
       size_max: z.string().optional().describe("Maximum file size (e.g. '10MB')"),
-      content: z.string().optional().describe("Regex pattern to match file contents"),
+      content: z.string().max(512).optional().describe("Regex pattern to match file contents (maximum 512 characters)"),
       max_results: z.number().optional().describe("Maximum results (default: 50)"),
     }),
     args: { path: "string (directory to search)", name: "string (optional, glob pattern e.g. '*.js')", modified_after: "string (optional, ISO date)", modified_before: "string (optional, ISO date)", size_min: "string (optional, e.g. '1KB', '1MB')", size_max: "string (optional, e.g. '10MB')", content: "string (optional, regex pattern to match file contents)", max_results: "number (optional, default 50)" },
