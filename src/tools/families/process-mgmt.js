@@ -26,6 +26,28 @@ const ALLOWED_SERVICE_NAMES = Object.freeze([
   "sidekick-metrics.timer", "nginx"
 ]);
 const ALLOWED_SERVICE_NAME_SET = new Set(ALLOWED_SERVICE_NAMES);
+const ALLOWED_PROCESS_SIGNALS = new Set(["HUP", "INT", "QUIT", "KILL", "TERM", "USR1", "USR2", "STOP", "CONT"]);
+
+function buildProcessKillCommand({ pid, name, signal }) {
+  const selectedSignal = signal || "TERM";
+  if (typeof selectedSignal !== "string" || !ALLOWED_PROCESS_SIGNALS.has(selectedSignal.toUpperCase())) {
+    throw new Error("signal is outside the supported process signal allowlist");
+  }
+  const flag = `-${selectedSignal.toUpperCase()}`;
+  if (pid !== undefined && pid !== null) {
+    if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error("pid must be a positive safe integer");
+    if (name !== undefined && name !== null && name !== "") throw new Error("provide either pid or name, not both");
+    return ["kill", [flag, "--", String(pid)]];
+  }
+  if (typeof name !== "string" || name.length < 1 || name.length > 128 || /[\0\r\n]/.test(name)) {
+    throw new Error("name must be a non-empty process name of at most 128 characters");
+  }
+  if (!name.trim()) throw new Error("name must not be whitespace");
+  // pkill interprets its name argument as an extended regular expression.
+  // Escape metacharacters and request a full-name match to avoid broad kills.
+  const literalPattern = name.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
+  return ["pkill", [flag, "-x", "--", literalPattern]];
+}
 
 function normalizeManagedService(service) {
   if (typeof service !== "string") return null;
@@ -64,11 +86,10 @@ async function sidekick_process({ action, filter, pid, name, signal }) {
     if (!pid && !name) {
       return { content: [{ type: "text", text: "pid or name required for kill" }], isError: true };
     }
-    const sig = signal || "TERM";
-    if (pid) {
-      cmd = ["kill", ["-" + sig, String(pid)]];
-    } else {
-      cmd = ["pkill", ["-" + sig, name]];
+    try {
+      cmd = buildProcessKillCommand({ pid, name, signal });
+    } catch (error) {
+      return { content: [{ type: "text", text: `Invalid process kill request: ${error.message}` }], isError: true };
     }
   } else if (action === "tree") {
     cmd = ["pstree", ["-p"]];
@@ -255,4 +276,4 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_process, sidekick_service, sidekick_archive, validateArchiveEntryNames, normalizeManagedService, ALLOWED_SERVICE_NAMES };
+module.exports = { descriptors, sidekick_process, sidekick_service, sidekick_archive, validateArchiveEntryNames, normalizeManagedService, ALLOWED_SERVICE_NAMES, buildProcessKillCommand, ALLOWED_PROCESS_SIGNALS };

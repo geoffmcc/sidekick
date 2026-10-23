@@ -5,7 +5,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
-const { normalizeManagedService, ALLOWED_SERVICE_NAMES } = require("../../src/tools/families/process-mgmt");
+const { normalizeManagedService, ALLOWED_SERVICE_NAMES, buildProcessKillCommand } = require("../../src/tools/families/process-mgmt");
 
 const root = path.join(__dirname, "../..");
 const ruleTemplate = fs.readFileSync(path.join(root, "systemd/sidekick-polkit.rules"), "utf8");
@@ -72,6 +72,20 @@ test("application allowlist exactly matches the Polkit unit allowlist", () => {
     name.endsWith(".timer") ? name : `${name}.service`
   );
   assert.deepEqual(polkitUnits, applicationUnits);
+});
+
+test("process kill requests restrict signals, validate PIDs, and match literal names", () => {
+  assert.deepEqual(buildProcessKillCommand({ pid: 123, signal: "term" }), ["kill", ["-TERM", "--", "123"]]);
+  assert.deepEqual(buildProcessKillCommand({ name: "worker.v2", signal: "KILL" }), ["pkill", ["-KILL", "-x", "--", "worker\\.v2"]]);
+  assert.deepEqual(buildProcessKillCommand({ name: ".*" }), ["pkill", ["-TERM", "-x", "--", "\\.\\*"]]);
+  assert.deepEqual(buildProcessKillCommand({ name: "-worker" }), ["pkill", ["-TERM", "-x", "--", "-worker"]]);
+  for (const input of [
+    { pid: 0 }, { pid: -1 }, { pid: 1.5 }, { pid: Number.MAX_SAFE_INTEGER + 1 },
+    { name: "worker", pid: 123 }, { name: "worker", signal: "TERM;KILL" },
+    { name: "worker", signal: "9" }, { name: "\nworker" },
+  ]) {
+    assert.throws(() => buildProcessKillCommand(input), `unsafe kill request accepted: ${JSON.stringify(input)}`);
+  }
 });
 
 test("bootstrap installs Polkit and narrowly scoped SSH deployment grants", () => {
