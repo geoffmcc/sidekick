@@ -10,6 +10,10 @@ const { redactSensitive } = require("../../redact");
 const { enforcePathPolicy } = require("../path-policy");
 const { requireToolExecution } = require("../read-authorization");
 const { BoundedRegex } = require("../../core/bounded-regex");
+const { readTextBounded, DEFAULT_FILE_READ_BYTES } = require("../../core/bounded-file-read");
+
+const MAX_FILE_CONTENT_BYTES = 50 * 1024 * 1024;
+const MAX_READ_OUTPUT_BYTES = 1024 * 1024;
 
 function globToRegexSource(glob) {
   return Array.from(String(glob), character => {
@@ -19,7 +23,7 @@ function globToRegexSource(glob) {
   }).join("");
 }
 
-async function sidekick_read({ path: filePath }) {
+async function sidekick_read({ path: filePath, offset = 0 }) {
   const authError = requireToolExecution({ tool: "filesystem.read" }, "tools.execute", "read");
   if (authError) return authError;
   const policyError = enforcePathPolicy(filePath, "read");
@@ -27,8 +31,18 @@ async function sidekick_read({ path: filePath }) {
   if (!fs.existsSync(filePath)) {
     return { content: [{ type: "text", text: "File not found: " + filePath }], isError: true };
   }
-  const content = fs.readFileSync(filePath, "utf-8");
-  return { content: [{ type: "text", text: redactSensitive(content) }] };
+  try {
+    const read = readTextBounded(filePath, { maxBytes: MAX_READ_OUTPUT_BYTES, offset });
+    const truncationNotice = read.truncated
+      ? `\n\n[truncated: returned ${read.bytesRead} bytes at offset ${offset} of ${read.size}; continue with offset ${offset + read.bytesRead}]`
+      : "";
+    return { content: [{ type: "text", text: redactSensitive(read.content + truncationNotice) }] };
+  } catch (error) {
+    const message = error.code === "FILE_READ_NOT_REGULAR"
+      ? "Path does not refer to a regular file"
+      : `Unable to read file: ${error.message}`;
+    return { content: [{ type: "text", text: message }], isError: true };
+  }
 }
 
 async function sidekick_list({ path: dirPath }) {
@@ -64,6 +78,7 @@ function nodeSearch(pattern, targetPath, include) {
     : null;
   const results = [];
   const maxResults = 100;
+  let truncatedFiles = 0;
 
   function visit(current, depth) {
     if (results.length >= maxResults || depth > 20) return;
@@ -73,7 +88,11 @@ function nodeSearch(pattern, targetPath, include) {
     if (stat.isFile()) {
       if (includeMatcher && !includeMatcher.test(path.basename(current))) return;
       let content;
-      try { content = fs.readFileSync(current, "utf-8"); } catch { return; }
+      try {
+        const read = readTextBounded(current, { maxBytes: MAX_READ_OUTPUT_BYTES });
+        content = read.content;
+        if (read.truncated) truncatedFiles++;
+      } catch { return; }
       for (const [index, line] of content.split(/\r?\n/).entries()) {
         if (matcher.test(line)) {
           results.push(`${current}:${index + 1}:${line}`);
@@ -92,7 +111,9 @@ function nodeSearch(pattern, targetPath, include) {
   }
 
   visit(targetPath, 0);
-  return { content: [{ type: "text", text: redactSensitive(results.join("\n") || "(no matches)") }] };
+  const text = results.join("\n") || "(no matches)";
+  const notice = truncatedFiles ? `\n[partial search: scanned the first ${MAX_READ_OUTPUT_BYTES} bytes of ${truncatedFiles} oversized file(s)]` : "";
+  return { content: [{ type: "text", text: redactSensitive(text + notice) }] };
 }
 
 function buildSearchArgs(searchCommand, pattern, targetPath, include) {
@@ -150,11 +171,13 @@ async function sidekick_summarize({ path: filePath, max_lines, strategy, pattern
   if (!fs.existsSync(filePath)) {
     return { content: [{ type: "text", text: "File not found: " + filePath }], isError: true };
   }
-  const stat = fs.statSync(filePath);
-  if (stat.size > 50 * 1024 * 1024) {
-    return { content: [{ type: "text", text: "File too large to summarize (>50MB): " + filePath }], isError: true };
+  let read;
+  try { read = readTextBounded(filePath, { maxBytes: MAX_FILE_CONTENT_BYTES, requireComplete: true }); }
+  catch (error) {
+      return { content: [{ type: "text", text: error.code === "FILE_READ_TOO_LARGE" ? `File too large to summarize (>50MB): ${filePath}` : `Unable to read file: ${error.message}` }], isError: true };
   }
-  const content = fs.readFileSync(filePath, "utf-8");
+  const stat = { size: read.size };
+  const content = read.content;
   const lines = content.split("\n");
   let summary;
   if (strat === "head") {
@@ -204,7 +227,11 @@ async function sidekick_filter({ path: targetPath, pattern, after, before, max_r
   const stat = fs.statSync(targetPath);
   const results = [];
   if (stat.isFile()) {
-    const content = fs.readFileSync(targetPath, "utf-8");
+    let content;
+    try { content = readTextBounded(targetPath, { maxBytes: MAX_FILE_CONTENT_BYTES, requireComplete: true }).content; }
+    catch (error) {
+      return { content: [{ type: "text", text: error.code === "FILE_READ_TOO_LARGE" ? `File exceeds the ${MAX_FILE_CONTENT_BYTES}-byte filter limit` : `Unable to read file: ${error.message}` }], isError: true };
+    }
     const lines = content.split("\n");
     const re = pattern ? new BoundedRegex(pattern, "i") : null;
     for (let i = 0; i < lines.length && results.length < maxResults; i++) {
@@ -245,8 +272,14 @@ async function sidekick_diff_files({ path_a, path_b, format }) {
   if (policyErrorB) return policyErrorB;
   if (!fs.existsSync(path_a)) return { content: [{ type: "text", text: "File not found: " + path_a }], isError: true };
   if (!fs.existsSync(path_b)) return { content: [{ type: "text", text: "File not found: " + path_b }], isError: true };
-  const contentA = fs.readFileSync(path_a, "utf-8");
-  const contentB = fs.readFileSync(path_b, "utf-8");
+  let contentA;
+  let contentB;
+  try {
+    contentA = readTextBounded(path_a, { maxBytes: MAX_FILE_CONTENT_BYTES, requireComplete: true }).content;
+    contentB = readTextBounded(path_b, { maxBytes: MAX_FILE_CONTENT_BYTES, requireComplete: true }).content;
+  } catch (error) {
+    return { content: [{ type: "text", text: error.code === "FILE_READ_TOO_LARGE" ? `Files exceed the ${MAX_FILE_CONTENT_BYTES}-byte per-file diff limit` : `Unable to read files: ${error.message}` }], isError: true };
+  }
   if (format === "summary") {
     const linesA = contentA.split("\n");
     const linesB = contentB.split("\n");
@@ -323,7 +356,7 @@ async function sidekick_find({ path: searchPath, name, modified_after, modified_
           if (s.size < sizeMin || s.size > sizeMax) continue;
           if (contentRe) {
             try {
-              const fileContent = fs.readFileSync(fullPath, "utf-8").substring(0, 1024 * 1024);
+              const fileContent = readTextBounded(fullPath, { maxBytes: DEFAULT_FILE_READ_BYTES }).content;
               if (!contentRe.test(fileContent)) continue;
             } catch (e) { continue; }
           }
@@ -349,9 +382,12 @@ function parseSize(str) {
 const descriptors = Object.freeze([
   Object.freeze({
     name: "read",
-    description: "Read a file from the remote filesystem",
-    schema: z.object({ path: z.string().describe("Absolute path to the file to read") }),
-    args: { path: "string" },
+    description: "Read up to 1 MiB from a file on the remote filesystem; use offset to continue a larger file",
+    schema: z.object({
+      path: z.string().describe("Absolute path to the file to read"),
+      offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional().default(0).describe("Byte offset for reading the next bounded file segment"),
+    }),
+    args: { path: "string", offset: "number (optional, byte offset; default 0)" },
     risk: "medium",
     category: "Core",
     source: "builtin",

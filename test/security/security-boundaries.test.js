@@ -27,8 +27,9 @@ const { normalizeDefinition } = require("../../src/workflows/definition");
 const packLifecycle = require("../../src/packs/lifecycle");
 const { redactSensitive, redactSensitiveKeysDeep } = require("../../src/redact");
 const { normalizeResult } = require("../../src/tools/result");
-const { buildSearchArgs } = require("../../src/tools/families/filesystem");
+const { descriptors: filesystemDescriptors, buildSearchArgs } = require("../../src/tools/families/filesystem");
 const { descriptors: monitoringDescriptors, resolveSnapshotPath } = require("../../src/tools/families/monitoring");
+const { readTextBounded } = require("../../src/core/bounded-file-read");
 
 let owner;
 
@@ -182,6 +183,24 @@ test("snapshot names cannot escape the snapshot storage directory", () => {
   const safePath = resolveSnapshotPath("release baseline.v1");
   assert.ok(safePath);
   assert.equal(path.dirname(safePath), path.resolve(process.env.SIDEKICK_DATA_DIR, "snapshots"));
+});
+
+test("filesystem text reads enforce byte limits and support bounded continuation", () => {
+  const descriptor = filesystemDescriptors.find(item => item.name === "read");
+  const file = path.join(dataDir, "bounded-read-fixture.txt");
+  const text = "0123456789abcdefghijklmnopqrstuvwxyz";
+  fs.writeFileSync(file, text);
+
+  const first = readTextBounded(file, { maxBytes: 12 });
+  assert.equal(first.content, text.slice(0, 12));
+  assert.equal(first.truncated, true);
+  const second = readTextBounded(file, { maxBytes: 12, offset: first.bytesRead });
+  assert.equal(second.content, text.slice(12, 24));
+  assert.equal(second.truncated, true);
+  assert.throws(() => readTextBounded(file, { maxBytes: 12, requireComplete: true }), error => error.code === "FILE_READ_TOO_LARGE");
+  assert.throws(() => readTextBounded(dataDir, { maxBytes: 12 }), error => error.code === "FILE_READ_NOT_REGULAR");
+  assert.equal(descriptor.schema.safeParse({ path: file, offset: 0 }).success, true);
+  assert.equal(descriptor.schema.safeParse({ path: file, offset: -1 }).success, false);
 });
 
 test("workflow definitions reject forward references, executable syntax, and duplicate steps", () => {
