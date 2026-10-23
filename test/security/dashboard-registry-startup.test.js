@@ -97,4 +97,11 @@ test("Dashboard startup does not deprecate pack tools in the shared registry", a
 
   const compat = require("../../src/tools").getToolDefsForSource("agent");
   assert.ok(compat.some(definition => definition.name === "jellyfin" && definition.enabled), "Agent discovery must include the healthy pack tool");
+  const { validatePlan } = require("../../src/brain/plan-validator");
+  const plan = validatePlan({
+    version: 1,
+    goal: "Inspect current Jellyfin sessions",
+    steps: [{ id: "sessions", type: "tool", tool: "jellyfin", arguments: { action: "list_sessions" } }],
+  }, { agentTools: compat });
+  assert.equal(plan.ok, true, `Agent plan validation should accept the restored Jellyfin tool: ${plan.errors.join(", ")}`);
 });
