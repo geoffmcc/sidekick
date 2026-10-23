@@ -276,6 +276,12 @@ async function executeResolvedTool(descriptor, args, context, requestedName = de
         details: { tool: descriptor.name, risk: effectiveRisk, code: "unauthenticated" },
       });
     } catch {}
+    if (context.authIdentity?.authentication_method === "legacy_api_key") {
+      return errorResult(
+        `This connection uses the legacy installation API key, which does not identify a principal and cannot authorize ${descriptor.name}. In Dashboard, open Identity → Connect an MCP client, create a service credential with the permissions this client needs, then configure the MCP client to reconnect with that credential.`,
+        "unauthenticated",
+      );
+    }
     return errorResult(`Authentication required for ${descriptor.name} operations`, "unauthenticated");
   }
 

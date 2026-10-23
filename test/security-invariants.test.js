@@ -272,6 +272,25 @@ test("database content and execution-log reads require authenticated medium-risk
   }
 });
 
+test("legacy installation API key denial explains scoped principal setup without granting authority", async () => {
+  const result = await dispatchTool({
+    name: "db_search",
+    args: { query: "synthetic" },
+    context: {
+      source: "mcp",
+      requestId: "legacy-key-no-principal",
+      authIdentity: { authentication_method: "legacy_api_key", scopes: ["legacy"] },
+    },
+  });
+
+  assert.equal(result.isError, true);
+  assert.equal(result.code, "unauthenticated");
+  assert.match(result.content[0].text, /legacy installation API key/);
+  assert.match(result.content[0].text, /does not identify a principal/);
+  assert.match(result.content[0].text, /Identity → Connect an MCP client/);
+  assert.match(result.content[0].text, /service credential/);
+});
+
 test("database query, search, log, and diff handlers reject direct calls before access", async () => {
   const family = require("../src/tools/families/database-inspection");
   const results = await Promise.all([
