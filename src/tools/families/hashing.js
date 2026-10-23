@@ -1,36 +1,13 @@
 "use strict";
 
 const crypto = require("crypto");
-const fs = require("fs");
 const { z } = require("zod");
 const { enforcePathPolicy } = require("../path-policy");
 const { requireToolExecution } = require("../read-authorization");
-
-const HASH_STREAM_HIGH_WATER_MARK = 64 * 1024;
-const HASH_FILE_TIMEOUT_MS = 5 * 60 * 1000;
+const { hashFile: hashFileDetails, HASH_STREAM_HIGH_WATER_MARK, HASH_FILE_TIMEOUT_MS } = require("../../core/stream-file-hash");
 
 function hashFile(filePath, algorithm, timeoutMs = HASH_FILE_TIMEOUT_MS) {
-  return new Promise((resolve, reject) => {
-    const hash = crypto.createHash(algorithm);
-    const stream = fs.createReadStream(filePath, { highWaterMark: HASH_STREAM_HIGH_WATER_MARK });
-    let settled = false;
-    const finish = (fn, value) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      fn(value);
-    };
-    const timer = setTimeout(() => {
-      const error = new Error(`File hashing exceeded the ${timeoutMs}-ms time limit`);
-      error.code = "HASH_FILE_TIMEOUT";
-      finish(reject, error);
-      stream.destroy();
-    }, timeoutMs);
-    timer.unref?.();
-    stream.on("data", chunk => hash.update(chunk));
-    stream.once("error", error => finish(reject, error));
-    stream.once("end", () => finish(resolve, hash.digest("hex")));
-  });
+  return hashFileDetails(filePath, algorithm, { timeoutMs }).then(result => result.hash);
 }
 
 async function sidekick_hash({ input, algorithm, verify, path: filePath }) {

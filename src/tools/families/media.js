@@ -37,6 +37,7 @@ const { detectFormat } = require("../../core/format");
 const { DATA_DIR } = require("../../db");
 const platformKernel = require("../../platform/kernel");
 const { readTextBounded } = require("../../core/bounded-file-read");
+const { hashFile: hashFileDetails } = require("../../core/stream-file-hash");
 
 const TRANSCRIPTION_JOB_ROOT = path.join(DATA_DIR, "transcription-jobs");
 const MAX_TRANSCRIPTION_OUTPUT_BYTES = 2 * 1024 * 1024;
@@ -830,7 +831,7 @@ async function sidekick_download({ url, output, format, audio_only }, runtime = 
 
     let artifact = null;
     if (managedDownload) {
-      const bytes = fs.readFileSync(canonicalFile);
+      const fileHash = await hashFileDetails(canonicalFile, "sha256", { maxBytes: maxDownloadBytes });
       const storageRef = path.relative(DATA_DIR, canonicalFile).split(path.sep).join("/");
       artifact = platformKernel.registerArtifact({
         type: "media_download",
@@ -838,8 +839,8 @@ async function sidekick_download({ url, output, format, audio_only }, runtime = 
         producer: "download",
         storage_ref: storageRef,
         content_type: mediaContentType(canonicalFile, audio_only),
-        byte_size: bytes.length,
-        content_hash: `sha256:${crypto.createHash("sha256").update(bytes).digest("hex")}`,
+        byte_size: fileHash.bytesRead,
+        content_hash: `sha256:${fileHash.hash}`,
         redaction_state: "not_required",
         verification: { verified: true, method: "sha256", source_url: url },
         metadata: { source_url: url, audio_only: Boolean(audio_only) },
