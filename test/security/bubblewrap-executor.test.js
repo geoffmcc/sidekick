@@ -52,6 +52,31 @@ test("missing Linux isolation backend fails closed", () => {
   );
 });
 
+test("sandbox executables require protected parent directories", () => {
+  const binary = path.resolve("sidekick-secure-runtime", "bwrap");
+  const directories = new Map();
+  let current = path.dirname(binary);
+  for (;;) {
+    directories.set(current, { uid: 0, mode: 0o40755 });
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  const fakeFs = {
+    statSync(target) {
+      const stat = directories.get(target);
+      if (!stat) throw new Error("missing test path");
+      return { ...stat, isDirectory: () => true };
+    },
+  };
+
+  assert.equal(executor.hasProtectedAncestors(binary, fakeFs), true);
+  directories.set(path.dirname(binary), { uid: 0, mode: 0o40775 });
+  assert.equal(executor.hasProtectedAncestors(binary, fakeFs), false, "group-writable parents permit executable replacement");
+  directories.set(path.dirname(binary), { uid: 1000, mode: 0o40755 });
+  assert.equal(executor.hasProtectedAncestors(binary, fakeFs), false, "service-owned parents are not trusted for launcher binaries");
+});
+
 test("bubblewrap starts only after namespace setup and clears inherited environment", { skip: process.platform !== "linux" || !fs.existsSync(executor.DEFAULT_BWRAP) }, async () => {
   process.env.BWRAP_SYNTHETIC_SECRET = "never-visible-to-child";
   const result = await executor.runBubblewrap({

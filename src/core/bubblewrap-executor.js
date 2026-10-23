@@ -54,6 +54,18 @@ function isImmutableRootSystemPath(resolved) {
   return true;
 }
 
+function hasProtectedAncestors(resolved, fsImpl = fs) {
+  let current = path.dirname(resolved);
+  for (;;) {
+    let stat;
+    try { stat = fsImpl.statSync(current); } catch { return false; }
+    if (!stat.isDirectory() || stat.uid !== 0 || (stat.mode & 0o022) !== 0) return false;
+    const parent = path.dirname(current);
+    if (parent === current) return true;
+    current = parent;
+  }
+}
+
 function resolveBubblewrap(binaryPath = process.env.SIDEKICK_BWRAP_PATH || DEFAULT_BWRAP) {
   if (process.platform !== "linux") {
     throw isolationError(`OS-enforced bash isolation is unavailable on ${process.platform}; command execution was not started`);
@@ -72,8 +84,9 @@ function resolveBubblewrap(binaryPath = process.env.SIDEKICK_BWRAP_PATH || DEFAU
     throw isolationError("The required bubblewrap executable is unavailable; command execution was not started");
   }
   const trustedOwner = stat.uid === 0 || (stat.uid === 65534 && isImmutableRootSystemPath(resolved));
-  if (!stat.isFile() || !trustedOwner || (stat.mode & 0o022) !== 0) {
-    throw isolationError("The bubblewrap executable must be a root-owned, non-writable regular file; command execution was not started", "isolation_configuration_invalid");
+  const trustedPath = hasProtectedAncestors(resolved) || (stat.uid === 65534 && isImmutableRootSystemPath(resolved));
+  if (!stat.isFile() || !trustedOwner || !trustedPath || (stat.mode & 0o022) !== 0) {
+    throw isolationError("The bubblewrap executable and its parent directories must be root-owned and non-writable; command execution was not started", "isolation_configuration_invalid");
   }
   return resolved;
 }
@@ -89,8 +102,9 @@ function resolvePrlimit() {
     throw isolationError("The required Linux resource-limit utility is unavailable; command execution was not started");
   }
   const trustedOwner = stat.uid === 0 || (stat.uid === 65534 && isImmutableRootSystemPath(resolved));
-  if (!stat.isFile() || !trustedOwner || (stat.mode & 0o022) !== 0) {
-    throw isolationError("The Linux resource-limit utility must be a root-owned, non-writable regular file; command execution was not started", "isolation_configuration_invalid");
+  const trustedPath = hasProtectedAncestors(resolved) || (stat.uid === 65534 && isImmutableRootSystemPath(resolved));
+  if (!stat.isFile() || !trustedOwner || !trustedPath || (stat.mode & 0o022) !== 0) {
+    throw isolationError("The Linux resource-limit utility and its parent directories must be root-owned and non-writable; command execution was not started", "isolation_configuration_invalid");
   }
   return resolved;
 }
@@ -323,6 +337,7 @@ module.exports = Object.freeze({
   MAX_COMMAND_LENGTH,
   MAX_TMPFS_BYTES,
   COMMAND_LIMITS,
+  hasProtectedAncestors,
   resolveBubblewrap,
   resolvePrlimit,
   resolveWorkspace,
