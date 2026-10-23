@@ -48,6 +48,8 @@ try {
   });
   assert.strictEqual(approvedEscalation.state, "approved");
   assert.strictEqual(approvedEscalation.approval_ref, `approval:escalation:${normalizedEscalation.escalation_id}`);
+  assert.throws(() => ops.updateEscalation(normalizedEscalation.escalation_id, "denied", { decided_by_principal_id: "principal:operator" }), /not open|already been decided/);
+  assert.strictEqual(ops.getEscalation(normalizedEscalation.escalation_id).state, "approved", "a repeated decision cannot overwrite the approved state");
   const resolvedEscalation = ops.updateEscalation(escalation.escalation_id, "resolved", { decided_by_principal_id: "principal:operator", approval_ref: "approval:test" });
   assert.strictEqual(resolvedEscalation.state, "resolved");
   assert.strictEqual(resolvedEscalation.decided_by_principal_id, "principal:operator");

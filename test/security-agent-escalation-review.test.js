@@ -123,6 +123,9 @@ test("authorized independent project reviewer can decide an escalation without i
   assert.equal(approved.data.escalation.state, "approved");
   assert.equal(approved.data.escalation.decided_by_principal_id, `principal:${reviewer.principal_id}`);
   assert.equal(approved.data.escalation.approval_ref, `approval:escalation:${escalation.escalation_id}`);
+  const replayedDecision = await request("POST", decisionRoute, { decision: "denied", reason: "attempt to replace the closed decision" }, reviewer.principal_id, reviewerScopes);
+  assert.equal(replayedDecision.status, 409, "a later decision cannot overwrite a closed escalation");
+  assert.equal(durableOperations.getEscalation(escalation.escalation_id).state, "approved", "the original approved state remains authoritative");
 
   const viewer = identity.createPrincipal({ type: "human", displayName: "Synthetic non-reviewer" });
   identity.assignRole(viewer.principal_id, "viewer", ownerContext.authIdentity.principal_id);
