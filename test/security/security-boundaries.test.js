@@ -33,6 +33,7 @@ const { readTextBounded } = require("../../src/core/bounded-file-read");
 const { tunnelStopPattern, createTunnelLog } = require("../../src/tools/families/networking");
 const { readJsonFile, writeJsonFile } = require("../../src/core/json-file-store");
 const proceduresStore = require("../../src/core/procedures-store");
+const { createMcpServer, isRegistrableProcedure } = require("../../src/mcp/server");
 
 let owner;
 
@@ -291,6 +292,29 @@ test("learned procedures use bounded atomic persistent storage", () => {
   assert.deepEqual(proceduresStore.loadProcedures(), {}, "oversized stored procedures are not loaded into the dynamic tool registry");
   proceduresStore.saveProcedures({});
   assert.deepEqual(proceduresStore.loadProcedures(), {});
+});
+
+test("MCP startup ignores unsafe or malformed persisted procedure definitions", () => {
+  const valid = { description: "safe stored procedure", parameters: {}, steps: [{ tool: "respond", args: { text: "hello" } }] };
+  assert.equal(isRegistrableProcedure("safe_persisted", valid), true);
+  assert.equal(isRegistrableProcedure("toString", valid), false);
+  assert.equal(isRegistrableProcedure("unsafe_parameters", { ...valid, parameters: { token: { type: "object" } } }), false);
+
+  proceduresStore.saveProcedures({
+    safe_persisted: valid,
+    toString: valid,
+    malformed_parameters: { ...valid, parameters: { token: { type: "object" } } },
+    git: valid,
+  });
+  try {
+    const server = createMcpServer(() => null);
+    assert.equal(Object.hasOwn(server._registeredTools, "safe_persisted"), true);
+    assert.equal(Object.hasOwn(server._registeredTools, "toString"), false);
+    assert.equal(Object.hasOwn(server._registeredTools, "malformed_parameters"), false);
+    assert.equal(Object.hasOwn(server._registeredTools, "git"), true, "the built-in registration remains intact");
+  } finally {
+    proceduresStore.saveProcedures({});
+  }
 });
 
 test("filesystem text reads enforce byte limits and support bounded continuation", () => {

@@ -28,6 +28,10 @@ function withCorrelationSchema(schema, argumentDescriptions = {}) {
 function buildProcedureSchema(parameters) {
   const shape = {};
   for (const [key, def] of Object.entries(parameters || {})) {
+    if (!/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(key) || Object.prototype.hasOwnProperty.call(Object.prototype, key) ||
+        !def || typeof def !== "object" || !["string", "number", "boolean"].includes(def.type)) {
+      throw new Error("Stored procedure parameter schema is invalid");
+    }
     let field;
     if (def.type === "number") {
       field = z.number().describe(def.description || key);
@@ -40,6 +44,25 @@ function buildProcedureSchema(parameters) {
     shape[key] = field;
   }
   return z.object(shape);
+}
+
+function isRegistrableProcedure(name, procedure) {
+  if (typeof name !== "string" || name.length < 1 || name.length > 128 || /[\0-\x1f\x7f]/.test(name) ||
+      Object.prototype.hasOwnProperty.call(Object.prototype, name) || !name.trim()) return false;
+  if (!procedure || typeof procedure !== "object" || Array.isArray(procedure) ||
+      typeof procedure.description !== "string" || procedure.description.length > 4000 ||
+      !Array.isArray(procedure.steps) || procedure.steps.length < 1 || procedure.steps.length > 20) return false;
+  const parameters = procedure.parameters || {};
+  if (!parameters || typeof parameters !== "object" || Array.isArray(parameters) || Object.keys(parameters).length > 32) return false;
+  for (const [key, definition] of Object.entries(parameters)) {
+    if (!/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(key) || Object.prototype.hasOwnProperty.call(Object.prototype, key) ||
+        !definition || typeof definition !== "object" || !["string", "number", "boolean"].includes(definition.type) ||
+        (definition.required !== undefined && typeof definition.required !== "boolean") ||
+        (definition.description !== undefined && (typeof definition.description !== "string" || definition.description.length > 240))) return false;
+  }
+  return procedure.steps.every(step => step && typeof step === "object" && !Array.isArray(step) &&
+    typeof step.tool === "string" && step.tool.length > 0 && step.tool.length <= 128 &&
+    step.args && typeof step.args === "object" && !Array.isArray(step.args));
 }
 
 /**
@@ -91,6 +114,7 @@ function createMcpServer(authIdentityProvider = () => null, options = {}) {
   });
 
   const builtinRegistry = getBuiltinRegistry();
+  const registeredToolNames = new Set(builtinRegistry.listInDefinitionOrder().map(descriptor => stripSidekickPrefix(descriptor.name)));
   for (const descriptor of builtinRegistry.listInDefinitionOrder()) {
     const mcpName = stripSidekickPrefix(descriptor.name);
     server.registerTool(mcpName, {
@@ -106,6 +130,7 @@ function createMcpServer(authIdentityProvider = () => null, options = {}) {
 
   const procedures = loadProcedures();
   for (const [procName, proc] of Object.entries(procedures)) {
+    if (!isRegistrableProcedure(procName, proc) || registeredToolNames.has(procName)) continue;
     const internalName = "sidekick_" + procName;
     if (builtinRegistry.has(internalName)) continue;
     const paramSchema = buildProcedureSchema(proc.parameters);
@@ -121,6 +146,7 @@ function createMcpServer(authIdentityProvider = () => null, options = {}) {
       return callMcpTool("teach", { action: "execute", name: procName, args },
         { ...toolCallContext(args, extra), generatedProcedure: internalName });
     });
+    registeredToolNames.add(procName);
   }
 
   const dynamicSchemas = dynamicTools.getDynamicToolSchemas();
@@ -142,4 +168,4 @@ function createMcpServer(authIdentityProvider = () => null, options = {}) {
   return server;
 }
 
-module.exports = { buildProcedureSchema, createMcpServer, toolCallContext };
+module.exports = { buildProcedureSchema, isRegistrableProcedure, createMcpServer, toolCallContext };
