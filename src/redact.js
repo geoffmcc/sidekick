@@ -78,6 +78,10 @@ function redactSensitive(text) {
     
     // Bearer tokens
     .replace(/Bearer\s+[A-Za-z0-9\-._~+/]+=*/gi, 'Bearer [REDACTED]')
+
+    // Credentials embedded in URLs (for example, Git remotes). Redact the
+    // complete userinfo so usernames are not persisted alongside passwords.
+    .replace(/([a-z][a-z0-9+.-]*:\/\/)[^/@\s:]+:[^/@\s]*@/gi, '$1[REDACTED]@')
     
     // Database connection strings
     .replace(/(postgres|mysql|mongodb(?:\+srv)?):\/\/([^:]+):([^@]+)@/gi, '$1://$2:[REDACTED]@')

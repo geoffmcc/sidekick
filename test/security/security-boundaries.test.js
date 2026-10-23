@@ -150,6 +150,10 @@ test("redaction covers nested credentials, encoded tokens, and structured result
   assert.equal(nested.safe, "visible");
   assert.doesNotMatch(redactSensitive(`token=${encodeURIComponent(secret)}`), new RegExp(secret));
 
+  const remote = redactSensitive("https://deploy-user:ordinary-password@git.example.test/team/repository.git");
+  assert.doesNotMatch(remote, /deploy-user|ordinary-password/);
+  assert.match(remote, /\[REDACTED\]@git\.example\.test\/team\/repository\.git/);
+
   const result = normalizeResult({ content: [{ type: "text", text: JSON.stringify({ api_key: secret, credentialState: "configured" }) }] });
   assert.doesNotMatch(result.content[0].text, new RegExp(secret));
   assert.match(result.content[0].text, /configured/);
