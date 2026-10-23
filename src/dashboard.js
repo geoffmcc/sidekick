@@ -83,10 +83,13 @@ fs.mkdirSync(DATA_DIR, { recursive: true });
 // The dashboard is a separate process in production. Converge migrations here
 // as well as in the MCP process so authentication routes never race startup.
 dbStore.runPendingMigrations();
-syncToolRegistry();
 
-// Restore persisted platform modules only after this process has converged
-// the shared database schema and synchronized the builtin tool registry.
+// Restore persisted platform modules before synchronizing the shared tool
+// registry. The registry is shared by MCP, Dashboard, and Agent processes;
+// syncing from this process before its modules are active would incorrectly
+// mark every pack-owned tool deprecated in the shared database. That hides
+// healthy capabilities from Agent planning even after this process restores
+// them locally.
 try {
   const builtinModules = require("./modules/builtin-modules");
   builtinModules.provisionBuiltinModules();
@@ -95,6 +98,10 @@ try {
 } catch (error) {
   console.error("[Modules] Builtin module provisioning failed:", String(error?.message || error).slice(0, 300));
 }
+
+// This is safe only after the process-local module registry reflects the
+// persisted enabled modules (matching src/index.js startup ordering).
+syncToolRegistry();
 
 const app = express();
 const dashboardErrors = createDashboardErrorBoundary({ fs, logFile: ERROR_LOG });

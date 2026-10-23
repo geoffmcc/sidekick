@@ -3,13 +3,14 @@
   "priority": 100,
   "tier": "security",
   "criticality": "required",
-  "resources": ["pure", "environment", "sqlite", "filesystem", "subprocess"],
+  "resources": ["pure", "environment", "sqlite", "filesystem", "subprocess", "ports"],
   "resource_contracts": {
     "pure": {"kind": "isolated", "provisioner": "in-process", "fixture": "in-process", "cleanup": "no-op", "cleanup_owner": "suite", "lock_identity": "pure", "supported_platforms": ["linux", "win32", "darwin"]},
     "environment": {"kind": "isolated", "provisioner": "environment-scope", "fixture": "process-environment", "cleanup": "no-op", "cleanup_owner": "runner", "lock_identity": "environment", "supported_platforms": ["linux", "win32", "darwin"]},
     "sqlite": {"kind": "isolated", "provisioner": "sqlite-file", "fixture": "sqlite-database", "cleanup": "owned-temp-tree", "cleanup_owner": "suite", "lock_identity": "sqlite", "supported_platforms": ["linux", "win32", "darwin"]},
     "filesystem": {"kind": "isolated", "provisioner": "temp-directory", "fixture": "filesystem-directory", "cleanup": "owned-temp-tree", "cleanup_owner": "suite", "lock_identity": "filesystem", "supported_platforms": ["linux", "win32", "darwin"]},
-    "subprocess": {"kind": "shared", "provisioner": "process-group", "fixture": "process-group", "cleanup": "no-op", "cleanup_owner": "runner", "lock_identity": "subprocess", "supported_platforms": ["linux", "win32", "darwin"]}
+    "subprocess": {"kind": "shared", "provisioner": "process-group", "fixture": "process-group", "cleanup": "no-op", "cleanup_owner": "runner", "lock_identity": "subprocess", "supported_platforms": ["linux", "win32", "darwin"]},
+    "ports": {"kind": "isolated", "provisioner": "loopback-port", "fixture": "loopback-port", "cleanup": "close-port", "cleanup_owner": "suite", "lock_identity": "ports", "supported_platforms": ["linux", "win32", "darwin"]}
   },
   "timeout_ms": 180000,
   "platforms": ["linux", "win32", "darwin"],

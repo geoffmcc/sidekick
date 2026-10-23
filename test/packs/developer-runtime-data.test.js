@@ -3,13 +3,13 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
-const os = require("node:os");
 const path = require("node:path");
 const { walk } = require("../../packs/developer/modules/developer-tools/lib/fsutil");
 
 test("Developer repository scans exclude Sidekick runtime data without spending source budget", t => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-developer-data-scan-"));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const fixtureRoot = process.env.SIDEKICK_TEST_FILESYSTEM_ROOT;
+  assert.ok(fixtureRoot, "test runner must provide an owned filesystem fixture");
+  const root = path.join(fixtureRoot, "developer-runtime-data");
 
   fs.mkdirSync(path.join(root, "src"), { recursive: true });
   fs.mkdirSync(path.join(root, "data", "browser", "chromium"), { recursive: true });
