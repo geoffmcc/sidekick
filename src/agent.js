@@ -10,7 +10,8 @@ const authorization = require("./core/authorization");
 const identity = require("./core/identity");
 const projectAccess = require("./core/project-access");
 const { createAgentCatalog } = require("./agent/catalog");
-const { createAgentExecutionContext, runWithContext } = require("./tools/context");
+const { runWithContext } = require("./tools/context");
+const { createTaskExecutionContext } = require("./agent/task-execution-context");
 const { persistedTaskAuthIdentity } = require("./agent/task-identity");
 const { authorizeRecoveredTask } = require("./agent/recovery-authorization");
 const { authorizeScheduledAgentDelay } = require("./agent/delay-policy");
@@ -1673,15 +1674,7 @@ async function runAgentImpl(goal, taskId, parentContext = null, cancelController
 // identity comes only from the authenticated request path or recovery gate;
 // absent identity remains absent and provider-secret use still fails closed.
 async function runAgent(goal, taskId, parentContext = null, cancelController = null, resumeState = null) {
-  const executionContext = createAgentExecutionContext({
-    parentContext,
-    authIdentity: parentContext?.authIdentity || null,
-    actor: parentContext?.actorPrincipalId || parentContext?.requestedByPrincipalId || "agent",
-    taskId,
-    project: parentContext?.project || null,
-    sessionId: parentContext?.sessionId || null,
-    correlationId: taskId,
-  });
+  const executionContext = createTaskExecutionContext(parentContext, taskId);
   return runWithContext(executionContext, () => runAgentImpl(goal, taskId, parentContext, cancelController, resumeState));
 }
 
