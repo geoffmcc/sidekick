@@ -517,6 +517,9 @@ function createJobHandler(req, res) {
       taskId: body.taskId || body.task_id,
       sessionId: body.sessionId || body.session_id,
       requestingActor: req.authIdentity.principal_id,
+      ...((body.requestPayload || body.request_payload)?.async === true && ["chat", "generate"].includes(body.jobType || body.job_type)
+        ? { executionAuthority: require("./compute/job-authority").captureExecutionAuthority(req.authIdentity, "compute.jobs.create") }
+        : {}),
       dataClassification: body.dataClassification || body.data_classification || "private",
       protocolVersion: body.protocolVersion || body.protocol_version || "1",
       capabilityRequirements: body.capabilityRequirements || body.capability_requirements || {},

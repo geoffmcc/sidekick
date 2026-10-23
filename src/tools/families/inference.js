@@ -22,6 +22,7 @@ const compute = require("../../compute");
 const toolContext = require("../context");
 const { resolveOutputTokenBudget } = require("../../compute/token-budget");
 const { requireToolExecution, requireCanonicalInvocation } = require("../read-authorization");
+const { captureExecutionAuthority } = require("../../compute/job-authority");
 
 let inferenceService = null;
 try { inferenceService = require("../../compute/inference-service"); } catch {}
@@ -243,6 +244,7 @@ async function runLlm({ prompt, system, temperature, async: asyncMode, timeout_m
         source: context.source,
         project: context.project,
         requestingActor: context.actor,
+        executionAuthority: captureExecutionAuthority(context.authIdentity, "tools.execute"),
         rootExecutionId: context.rootExecutionId,
         parentExecutionId: context.executionId,
         taskId: context.taskId,

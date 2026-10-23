@@ -8,6 +8,8 @@ const inferenceService = require("./inference-service");
 const jobManager = require("./job-manager");
 const workerManager = require("./worker-manager");
 const { redactSensitive } = require("../redact");
+const { createInternalExecutionContext, runWithContext } = require("../tools/context");
+const { restoreExecutionAuthority } = require("./job-authority");
 
 const POLL_INTERVAL_MS = 250;
 const MAX_DIRECT_CONCURRENCY = 16;
@@ -80,11 +82,26 @@ async function execute(claimed) {
   if (renewTimer.unref) renewTimer.unref();
 
   try {
+    const authIdentity = restoreExecutionAuthority(jobManager.getExecutionAuthority(job.jobId));
+    if (!authIdentity) {
+      const error = new Error("durable inference authority is missing, expired, revoked, or no longer permitted");
+      error.code = "AUTHORIZATION_REVOKED";
+      throw error;
+    }
+    const executionContext = createInternalExecutionContext({
+      source: job.source || "compute_direct",
+      actor: job.requestingActor || authIdentity.principal_id,
+      project: job.project,
+      taskId: job.taskId,
+      sessionId: job.sessionId,
+      rootExecutionId: job.rootExecutionId,
+      executionId: job.parentExecutionId,
+      authIdentity,
+    });
     let result;
-    if (job.jobType === "chat") {
-      result = await runChatToCompletion(job, payload, leaseId);
-    } else {
-      result = await inferenceService.generate(payload.prompt, {
+    result = await runWithContext(executionContext, async () => {
+      if (job.jobType === "chat") return runChatToCompletion(job, payload, leaseId);
+      return inferenceService.generate(payload.prompt, {
         system: payload.system,
         temperature: payload.temperature,
         maxTokens: payload.maxTokens,
@@ -93,7 +110,7 @@ async function execute(claimed) {
         dataClassification: job.dataClassification,
         preferences: { allowFallback: true },
       });
-    }
+    });
     // A cancel that arrived during generation discards the result cleanly:
     // ack (finalizing 'cancelling' → 'cancelled'), never publish.
     if (cancellationRequested(job.jobId, leaseId)) {

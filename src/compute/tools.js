@@ -468,6 +468,9 @@ async function sidekick_compute_jobs({ action, job_id, ...args }) {
             idempotencyKey: args.idempotency_key,
             project: scopedProject,
             source,
+            ...((requestPayload.async === true && ["chat", "generate"].includes(args.job_type))
+              ? { executionAuthority: require("./job-authority").captureExecutionAuthority(context.authIdentity, "compute.jobs.create") }
+              : {}),
           });
           return ok(j);
         } catch (e) {
