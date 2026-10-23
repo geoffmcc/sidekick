@@ -1672,7 +1672,7 @@ async function runAgentImpl(goal, taskId, parentContext = null, cancelController
 // under the same authenticated task identity as governed tool dispatch. The
 // identity comes only from the authenticated request path or recovery gate;
 // absent identity remains absent and provider-secret use still fails closed.
-function runAgent(goal, taskId, parentContext = null, cancelController = null, resumeState = null) {
+async function runAgent(goal, taskId, parentContext = null, cancelController = null, resumeState = null) {
   const executionContext = createAgentExecutionContext({
     parentContext,
     authIdentity: parentContext?.authIdentity || null,
