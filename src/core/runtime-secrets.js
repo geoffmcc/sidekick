@@ -3,6 +3,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const { assertWindowsSecretAcl } = require("./windows-secret-acl");
 const MAX_SECRET_BYTES = 16384;
 
 // These are the application credentials that must be supplied through a secret
@@ -61,12 +62,22 @@ function isWindows() {
   return os.platform() === "win32";
 }
 
+function shouldVerifyWindowsSecretAcl() {
+  // Synthetic test trees live under OS temp directories and deliberately have
+  // runner ACLs. The native ACL verifier has its own tests against synthetic
+  // ACLs; production callers always verify the real path.
+  return isWindows() && !process.env.SIDEKICK_TEST_SUITE_ID;
+}
+
 function assertSafeSecretDirectory(directoryPath, name) {
   if (!path.isAbsolute(directoryPath)) throw new Error(`${name} secret directory path must be absolute`);
   const resolved = path.resolve(directoryPath);
   const root = path.parse(resolved).root;
   const segments = resolved.slice(root.length).split(path.sep).filter(Boolean);
   let currentDirectory = root;
+  const checkedDirectories = [];
+  const verifyWindowsAcl = shouldVerifyWindowsSecretAcl();
+  if (verifyWindowsAcl) checkedDirectories.push(root);
   for (const segment of segments) {
     currentDirectory = path.join(currentDirectory, segment);
     let stat;
@@ -87,6 +98,10 @@ function assertSafeSecretDirectory(directoryPath, name) {
     if (writableByOthers && !secureStickyAncestor) {
       throw new Error(`${name} secret directory is writable by group or other users`);
     }
+    if (verifyWindowsAcl) checkedDirectories.push(currentDirectory);
+  }
+  if (verifyWindowsAcl) {
+    assertWindowsSecretAcl({ directories: checkedDirectories, secretDirectory: resolved, secretFile: null, name });
   }
   return resolved;
 }
@@ -113,6 +128,9 @@ function assertSafeFile(filePath, name) {
   }
   if (!isWindows() && (stat.mode & 0o004) !== 0) {
     throw new Error(`${name} secret file is readable by other users`);
+  }
+  if (shouldVerifyWindowsSecretAcl()) {
+    assertWindowsSecretAcl({ directories: [], secretDirectory: null, secretFile: resolved, name });
   }
   return { resolved, stat };
 }
