@@ -20,6 +20,7 @@
 const https = require("https");
 const MAX_GITHUB_RESPONSE_BYTES = 8 * 1024 * 1024;
 const MAX_GITHUB_PAGES = 50;
+const MAX_GITHUB_REQUEST_BYTES = 1024 * 1024;
 
 function readGithubResponseText(response, maxBytes = MAX_GITHUB_RESPONSE_BYTES) {
   return new Promise((resolve, reject) => {
@@ -74,6 +75,35 @@ function getGithubArg(args, names) {
     if (args[name] !== undefined && args[name] !== null && args[name] !== "") return args[name];
   }
   return args.value;
+}
+
+function validateRepoName(repo) {
+  return typeof repo === "string" && repo.length <= 201 && /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo) &&
+    !repo.split("/").some(part => part === "." || part === "..");
+}
+
+function isGithubNumericId(value) {
+  return (typeof value === "number" && Number.isSafeInteger(value) && value > 0) ||
+    (typeof value === "string" && /^[1-9]\d{0,9}$/.test(value));
+}
+
+function isGithubCommitId(value) {
+  return typeof value === "string" && /^[a-f\d]{1,64}$/i.test(value);
+}
+
+function validateGithubRef(value) {
+  if (typeof value !== "string" || value.length < 1 || value.length > 255 || !/^[A-Za-z0-9_./-]+$/.test(value)) return false;
+  return value.split("/").every(part => part && part !== "." && part !== ".." && !part.endsWith(".lock"));
+}
+
+function serializeGithubBody(body) {
+  if (!body) return { body: null };
+  let bodyStr;
+  try { bodyStr = JSON.stringify(body); } catch { return { error: "GitHub API request body is not serializable" }; }
+  if (Buffer.byteLength(bodyStr) > MAX_GITHUB_REQUEST_BYTES) {
+    return { error: `GitHub API request body exceeded ${MAX_GITHUB_REQUEST_BYTES} bytes` };
+  }
+  return { body: bodyStr };
 }
 
 // The GitHub connector is the governing authority for this integration when one
@@ -231,9 +261,13 @@ async function githubRequest(token, method, endpoint, body) {
       agent: githubHttpAgent,
       servername: url.hostname.replace(/^\[|\]$/g, "")
     };
-    let bodyStr = null;
-    if (body) {
-      bodyStr = JSON.stringify(body);
+    const serializedBody = serializeGithubBody(body);
+    if (serializedBody.error) {
+      resolve({ status: 0, headers: {}, data: serializedBody.error });
+      return;
+    }
+    const bodyStr = serializedBody.body;
+    if (bodyStr) {
       options.headers["Content-Type"] = "application/json";
       options.headers["Content-Length"] = Buffer.byteLength(bodyStr);
     }
@@ -299,10 +333,6 @@ async function githubPaginatedRequest(token, endpoint, dataKey) {
   }
 
   return { response: lastResponse, items };
-}
-
-function validateRepoName(repo) {
-  return typeof repo === "string" && /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo);
 }
 
 function getCiRevisionSelector(args) {
@@ -444,6 +474,9 @@ async function sidekick_ci_status(args = {}) {
 
   const selector = getCiRevisionSelector(args);
   if (selector.error) return { content: [{ type: "text", text: selector.error }], isError: true };
+  if (selector.type === "pr" && !isGithubNumericId(selector.value)) return { content: [{ type: "text", text: "Invalid pull request number" }], isError: true };
+  if (selector.type === "sha" && !isGithubCommitId(selector.value)) return { content: [{ type: "text", text: "Invalid commit SHA" }], isError: true };
+  if (selector.type === "ref" && !validateGithubRef(selector.value)) return { content: [{ type: "text", text: "Invalid Git reference" }], isError: true };
 
   const token = resolveGithubToken();
   if (!token) return githubCredentialMissing();
@@ -460,7 +493,8 @@ async function sidekick_ci_status(args = {}) {
       if (!ref) return { content: [{ type: "text", text: "GitHub PR response did not include head.sha" }], isError: true };
     }
 
-    const encodedRef = encodeURIComponent(ref);
+    if (!validateGithubRef(ref)) return { content: [{ type: "text", text: "GitHub returned an invalid commit reference" }], isError: true };
+    const encodedRef = String(ref).split("/").map(encodeURIComponent).join("/");
     const [checks, legacy] = await Promise.all([
       githubPaginatedRequest(token, `/repos/${args.repo}/commits/${encodedRef}/check-runs?per_page=100`, "check_runs"),
       githubPaginatedRequest(token, `/repos/${args.repo}/commits/${encodedRef}/status?per_page=100`, "statuses")
@@ -484,6 +518,7 @@ async function sidekick_ci_status(args = {}) {
 async function sidekick_github({ action, repo, args: extraArgs }) {
   const authorizationError = requireToolExecution({ tool: "github", action: action || null, repo: repo || null }, "tools.execute_high", "github");
   if (authorizationError) return authorizationError;
+  if (!validateRepoName(repo)) return { content: [{ type: "text", text: "Invalid repository. Expected owner/repository format" }], isError: true };
   const parsedArgs = parseGithubArgs(extraArgs);
   const token = resolveGithubToken();
 
@@ -514,8 +549,10 @@ async function sidekick_github({ action, repo, args: extraArgs }) {
         agent: githubHttpAgent,
         servername: url.hostname.replace(/^\[|\]$/g, "")
       };
-      if (body) {
-        const bodyStr = JSON.stringify(body);
+      const serializedBody = serializeGithubBody(body);
+      if (serializedBody.error) return resolve({ status: 0, data: serializedBody.error });
+      const bodyStr = serializedBody.body;
+      if (bodyStr) {
         options.headers["Content-Type"] = "application/json";
         options.headers["Content-Length"] = Buffer.byteLength(bodyStr);
       }
@@ -537,7 +574,7 @@ async function sidekick_github({ action, repo, args: extraArgs }) {
       });
       req.on("error", (err) => resolve({ status: 0, data: err.message }));
       req.setTimeout(30000, () => { req.destroy(); resolve({ status: 0, data: "timeout" }); });
-      if (body) req.write(JSON.stringify(body));
+      if (bodyStr) req.write(bodyStr);
       req.end();
       }).catch(error => resolve({ status: 0, data: error.message }));
     });
@@ -560,7 +597,7 @@ async function sidekick_github({ action, repo, args: extraArgs }) {
     },
     pr_get: async () => {
       const num = getGithubArg(parsedArgs, ["number", "pr", "pull", "pull_number"]);
-      if (!num) return { content: [{ type: "text", text: "PR number required" }], isError: true };
+      if (!isGithubNumericId(num)) return { content: [{ type: "text", text: "Valid PR number required" }], isError: true };
       const res = await ghRequest("GET", `/repos/${repo}/pulls/${num}`);
       if (res.status !== 200) return { content: [{ type: "text", text: JSON.stringify(res.data) }], isError: true };
       const pr = res.data;
@@ -568,7 +605,7 @@ async function sidekick_github({ action, repo, args: extraArgs }) {
     },
     pr_merge: async () => {
       const num = getGithubArg(parsedArgs, ["number", "pr", "pull", "pull_number"]);
-      if (!num) return { content: [{ type: "text", text: "PR number required" }], isError: true };
+      if (!isGithubNumericId(num)) return { content: [{ type: "text", text: "Valid PR number required" }], isError: true };
       const method = parsedArgs.method || parsedArgs.merge_method || "squash";
       const res = await ghRequest("PUT", `/repos/${repo}/pulls/${num}/merge`, { merge_method: method });
       if (res.status !== 200) return { content: [{ type: "text", text: JSON.stringify(res.data) }], isError: true };
@@ -589,14 +626,14 @@ async function sidekick_github({ action, repo, args: extraArgs }) {
     },
     issue_close: async () => {
       const num = getGithubArg(parsedArgs, ["number", "issue", "issue_number"]);
-      if (!num) return { content: [{ type: "text", text: "issue number required" }], isError: true };
+      if (!isGithubNumericId(num)) return { content: [{ type: "text", text: "Valid issue number required" }], isError: true };
       const res = await ghRequest("PATCH", `/repos/${repo}/issues/${num}`, { state: "closed" });
       if (res.status !== 200) return { content: [{ type: "text", text: JSON.stringify(res.data) }], isError: true };
       return { content: [{ type: "text", text: `Closed issue #${num}` }] };
     },
     commit_status: async () => {
       const sha = getGithubArg(parsedArgs, ["sha", "ref", "commit", "commit_sha"]);
-      if (!sha) return { content: [{ type: "text", text: "commit SHA required" }], isError: true };
+      if (!isGithubCommitId(sha)) return { content: [{ type: "text", text: "Valid commit SHA required" }], isError: true };
       const res = await ghRequest("GET", `/repos/${repo}/commits/${sha}/status`);
       if (res.status !== 200) return { content: [{ type: "text", text: JSON.stringify(res.data) }], isError: true };
       const statuses = res.data.statuses.map(s => `${s.context}: ${s.state} - ${s.description || ""}`);
@@ -627,8 +664,8 @@ async function sidekick_github({ action, repo, args: extraArgs }) {
 const SCHEMAS = {
   github: z.object({
     action: z.enum(["pr_list", "pr_create", "pr_get", "pr_merge", "issue_list", "issue_create", "issue_close", "commit_status", "release_create", "repo_info"]).describe("GitHub action to perform"),
-    repo: z.string().describe("Repository in format 'owner/repo'"),
-    args: z.string().optional().describe("Additional arguments (JSON string or value depending on action)")
+    repo: z.string().max(201).regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/).describe("Repository in format 'owner/repo'"),
+    args: z.string().max(MAX_GITHUB_REQUEST_BYTES).optional().describe("Additional arguments (JSON string or value depending on action)")
   }),
   ci_status: z.object({
     repo: z.string().describe("Repository in format 'owner/repo'"),
@@ -684,4 +721,10 @@ module.exports = {
   readGithubResponseText,
   MAX_GITHUB_RESPONSE_BYTES,
   MAX_GITHUB_PAGES,
+  MAX_GITHUB_REQUEST_BYTES,
+  validateRepoName,
+  validateGithubRef,
+  isGithubNumericId,
+  isGithubCommitId,
+  serializeGithubBody,
 };
