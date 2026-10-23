@@ -58,3 +58,10 @@ test("transcription output reads are bounded and report truncation", () => {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("transcription outputs are confined to each invocation's private directory", () => {
+  const root = path.join(os.tmpdir(), "sidekick-private-transcription-fixture");
+  assert.equal(media.transcriptionOutputPath("whisper.cpp", "recording.wav", root), path.join(root, "transcript.txt"));
+  assert.equal(media.transcriptionOutputPath("faster-whisper", "recording.wav", root), path.join(root, "recording.txt"));
+  assert.equal(path.dirname(media.transcriptionOutputPath("whisper", "..\\outside.wav", root)), root);
+});

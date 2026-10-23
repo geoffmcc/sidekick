@@ -165,6 +165,12 @@ function transcriptionArgs(backend, device, audioPath, model, language, outputDi
   return [audioPath, "--model", model, "--output_format", "txt", "--output_dir", outputDir, "--device", device, ...(backend === "faster-whisper" ? ["--compute_type", "auto"] : []), ...(language ? ["--language", language] : [])];
 }
 
+function transcriptionOutputPath(backend, audioPath, outputDir) {
+  return backend === "whisper.cpp"
+    ? path.join(outputDir, "transcript.txt")
+    : path.join(outputDir, path.basename(audioPath).replace(/\.[^.]+$/, "") + ".txt");
+}
+
 function finishTranscriptionJob(job, patch) {
   Object.assign(job, patch, { updated_at: new Date().toISOString() });
   saveTranscriptionJob(job);
@@ -192,9 +198,7 @@ function startTranscriptionJob({ audioPath, model, language, backend, device: re
   child.on("error", error => finishTranscriptionJob(job, { status: "failed", error: error.message }));
   child.on("close", code => {
     if (job.status === "cancelled") return;
-    const txtPath = selected.name === "whisper.cpp"
-      ? path.join(outputDir, "transcript.txt")
-      : path.join(outputDir, `${path.basename(audioPath).replace(/\.[^.]+$/, "")}.txt`);
+    const txtPath = transcriptionOutputPath(selected.name, audioPath, outputDir);
     if (code === 0 && fs.existsSync(txtPath)) {
       try {
         finishTranscriptionJob(job, { status: "completed", output: readTranscriptionText(txtPath) || "(no speech detected)" });
@@ -372,20 +376,19 @@ async function sidekick_transcribe({ path: audioPath, model, language, async: ru
       const { child, ...publicJob } = job;
       return { content: [{ type: "text", text: JSON.stringify(publicJob) }] };
     }
-    const args = transcriptionArgs(selected.name, device, audioPath, m, lang, "/tmp");
-    const result = safeExecFileSync(selected.command, args, { timeout: 600000, maxBuffer: 2 * 1024 * 1024 });
-
-    const tmpTxtPath = selected.name === "whisper.cpp"
-      ? "/tmp/transcript.txt"
-      : `/tmp/${path.basename(audioPath).replace(/\.[^.]+$/, ".txt")}`;
-    if (fs.existsSync(tmpTxtPath)) {
-      let text;
-      try { text = readTranscriptionText(tmpTxtPath); }
-      finally { fs.unlinkSync(tmpTxtPath); }
-      return { content: [{ type: "text", text: text || "(no speech detected)" }] };
+    const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-transcribe-"));
+    try {
+      const args = transcriptionArgs(selected.name, device, audioPath, m, lang, outputDir);
+      const result = safeExecFileSync(selected.command, args, { timeout: 600000, maxBuffer: 2 * 1024 * 1024 });
+      const outputPath = transcriptionOutputPath(selected.name, audioPath, outputDir);
+      if (fs.existsSync(outputPath)) {
+        const text = readTranscriptionText(outputPath);
+        return { content: [{ type: "text", text: text || "(no speech detected)" }] };
+      }
+      return { content: [{ type: "text", text: result || "(no speech detected)" }] };
+    } finally {
+      fs.rmSync(outputDir, { recursive: true, force: true });
     }
-
-    return { content: [{ type: "text", text: result || "(no speech detected)" }] };
   } catch (e) {
     if (e.message.includes("not found") || e.message.includes("ENOENT")) {
       return { content: [{ type: "text", text: "Error: whisper not installed. Run: pip3 install openai-whisper" }], isError: true };
@@ -966,4 +969,4 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_ocr, sidekick_media, sidekick_transcribe, sidekick_analytics, sidekick_insight_report, sidekick_download, localCudaAvailable, localVulkanAvailable, readTranscriptionText, MAX_TRANSCRIPTION_OUTPUT_BYTES };
+module.exports = { descriptors, sidekick_ocr, sidekick_media, sidekick_transcribe, sidekick_analytics, sidekick_insight_report, sidekick_download, localCudaAvailable, localVulkanAvailable, readTranscriptionText, transcriptionOutputPath, MAX_TRANSCRIPTION_OUTPUT_BYTES };
