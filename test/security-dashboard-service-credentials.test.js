@@ -3,6 +3,9 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 
+const dashboardMarkup = fs.readFileSync(path.join(__dirname, "../src/dashboard.html"), "utf8");
+const dashboardClientCode = fs.readFileSync(path.join(__dirname, "../static/dashboard.js"), "utf8");
+
 const dataDir = path.join(__dirname, `test-data-service-credential-${Date.now()}-${process.pid}`);
 fs.mkdirSync(dataDir, { recursive: true });
 process.env.SIDEKICK_DATA_DIR = dataDir;
@@ -37,6 +40,14 @@ function response() {
     set(name, value) { this.headers[name] = value; return this; },
   };
 }
+
+test("MCP client setup distinguishes standard tool execution from pack permissions", () => {
+  assert.match(dashboardMarkup, /Use standard tools \(low and medium risk\)/);
+  assert.match(dashboardMarkup, /View and manage Capability Packs/);
+  assert.match(dashboardMarkup, /Pack access is separate from standard tool execution[\s\S]*pack permissions alone do not grant that access/);
+  assert.match(dashboardClientCode, /mcpGrantTools[^\n]*tools\.execute/);
+  assert.match(dashboardClientCode, /mcpGrantPacks[^\n]*packs\.read', 'packs\.manage/);
+});
 
 test("service credential provisioning is atomic, audited, narrowly scoped, and revocable", () => {
   const handler = handlers.get("POST /api/auth/service-credentials");
