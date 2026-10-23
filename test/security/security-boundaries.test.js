@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { spawnSync } = require("node:child_process");
 const { after, before, test } = require("node:test");
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-security-boundaries-"));
@@ -161,10 +162,25 @@ test("redaction covers nested credentials, encoded tokens, and structured result
   const remote = redactSensitive(remoteInput);
   assert.doesNotMatch(remote, /deploy-user|ordinary-password/);
   assert.match(remote, /\[REDACTED\]@git\.example\.test\/team\/repository\.git/);
+  const longSchemeRemote = `${"a".repeat(80)}://deploy-user:ordinary-password@git.example.test/team/repository.git`;
+  const redactedLongSchemeRemote = redactSensitive(longSchemeRemote);
+  assert.doesNotMatch(redactedLongSchemeRemote, /deploy-user|ordinary-password/);
 
   const result = normalizeResult({ content: [{ type: "text", text: JSON.stringify({ api_key: secret, credentialState: "configured" }) }] });
   assert.doesNotMatch(result.content[0].text, new RegExp(secret));
   assert.match(result.content[0].text, /configured/);
+});
+
+test("redaction stays bounded on long untrusted strings that resemble URL schemes", () => {
+  const redactModule = path.resolve(__dirname, "../../src/redact.js");
+  const script = `const { redactSensitive } = require(${JSON.stringify(redactModule)}); const plain = "x".repeat(500000); const urls = "x://a/".repeat(100000); if (redactSensitive(plain) !== plain || redactSensitive(urls) !== urls) process.exit(2);`;
+  const result = spawnSync(process.execPath, ["-e", script], {
+    encoding: "utf8",
+    timeout: 3000,
+    maxBuffer: 1024 * 1024,
+  });
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, result.stderr || "redaction child process failed");
 });
 
 test("filesystem search patterns cannot become ripgrep or grep options", () => {

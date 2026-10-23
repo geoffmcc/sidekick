@@ -50,10 +50,44 @@ function redactSensitiveKeysDeep(value, key = "") {
   return typeof value === "string" ? redactSensitive(value) : value;
 }
 
+function redactUrlCredentials(text) {
+  let output = "";
+  let copyFrom = 0;
+  let searchFrom = 0;
+  while (true) {
+    const delimiter = text.indexOf("://", searchFrom);
+    if (delimiter < 0) break;
+
+    let schemeStart = delimiter - 1;
+    while (schemeStart >= 0 && /[a-z0-9+.-]/i.test(text[schemeStart])) schemeStart--;
+    schemeStart++;
+    if (schemeStart >= delimiter || !/[a-z]/i.test(text[schemeStart])
+      || (schemeStart > 0 && /[a-z0-9+.-]/i.test(text[schemeStart - 1]))) {
+      searchFrom = delimiter + 3;
+      continue;
+    }
+
+    const authorityStart = delimiter + 3;
+    let authorityEnd = authorityStart;
+    while (authorityEnd < text.length && !/[\/?#\s]/.test(text[authorityEnd])) authorityEnd++;
+    const authority = text.slice(authorityStart, authorityEnd);
+    const at = authority.indexOf("@");
+    const colon = authority.indexOf(":");
+    if (at >= 0 && colon > 0 && colon < at) {
+      output += text.slice(copyFrom, authorityStart) + "[REDACTED]@";
+      copyFrom = authorityStart + at + 1;
+      searchFrom = copyFrom;
+    } else {
+      searchFrom = delimiter + 3;
+    }
+  }
+  return copyFrom === 0 ? text : output + text.slice(copyFrom);
+}
+
 function redactSensitive(text) {
   if (typeof text !== 'string') return text;
   
-  return text
+  const redacted = text
     // SSH private keys (RSA, EC, DSA, OPENSSH)
     .replace(/-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END [A-Z ]+PRIVATE KEY-----/g, '[REDACTED PRIVATE KEY]')
     
@@ -79,19 +113,17 @@ function redactSensitive(text) {
     // Bearer tokens
     .replace(/Bearer\s+[A-Za-z0-9\-._~+/]+=*/gi, 'Bearer [REDACTED]')
 
-    // Credentials embedded in URLs (for example, Git remotes). Redact the
-    // complete userinfo so usernames are not persisted alongside passwords.
-    .replace(/([a-z][a-z0-9+.-]*:\/\/)[^/@\s:]+:[^/@\s]*@/gi, '$1[REDACTED]@')
-    
+    ;
+  return redactUrlCredentials(redacted)
     // Database connection strings
     .replace(/(postgres|mysql|mongodb(?:\+srv)?):\/\/([^:]+):([^@]+)@/gi, '$1://$2:[REDACTED]@')
     .replace(/(postgres|mysql|mongodb(?:\+srv)?):\/\/[^\s]+/gi, '[REDACTED DATABASE URL]')
-    
+
     // Stripe keys (constructed to avoid secret scanners)
     .replace(new RegExp('sk_' + 'live_[A-Za-z0-9]{24,}', 'g'), '[REDACTED STRIPE SECRET KEY]')
     .replace(new RegExp('rk_' + 'live_[A-Za-z0-9]{24,}', 'g'), '[REDACTED STRIPE RESTRICTED KEY]')
     .replace(new RegExp('pk_' + 'live_[A-Za-z0-9]{24,}', 'g'), '[REDACTED STRIPE PUBLISHABLE KEY]')
-    
+
     // JWT tokens
     .replace(/eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '[REDACTED JWT]');
 }
