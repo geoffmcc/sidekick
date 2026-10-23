@@ -163,6 +163,7 @@ const { createTaskRunner } = require("./agent/task-run");
 const { createHandoffContinuity } = require("./agent/handoff-continuity");
 const { createResumedTaskFinalizer } = require("./agent/recovery");
 const { createContinuationJobStarter } = require("./agent/continuation-jobs");
+const { resolveTaskProjectScope, taskProjectForExecution } = require("./agent/project-scope");
 const { createDelayScheduler } = require("./agent/delay-scheduler");
 const { createDelayExecution } = require("./agent/delay-execution");
 const { createWatchRuntime } = require("./agent/watch-runtime");
@@ -812,10 +813,11 @@ async function runAgentImpl(goal, taskId, parentContext = null, cancelController
   const cancelFlag = { get aborted() { return !!(cancelSignal && cancelSignal.aborted); } };
   // A follow-up child inherits the parent's project identity when the child's
   // own goal doesn't infer one, so a thread stays scoped consistently.
-  const inferredProject = inferProjectFromText(goal) || (parentContext && parentContext.project) || null;
-  const durableProfile = durableTaskStore.getTask(taskId)?.profile || "standard";
+  const durableTask = durableTaskStore.getTask(taskId);
+  const inferredProject = taskProjectForExecution(durableTask, { goal, parentProject: parentContext && parentContext.project, principalId: parentContext?.authIdentity?.principal_id, inferProjectFromText });
+  const durableProfile = durableTask?.profile || "standard";
   const profileRuntime = PROFILE_RUNTIME[durableProfile] || PROFILE_RUNTIME.standard;
-  const durableGoal = durableTaskStore.getTask(taskId)?.goal || {};
+  const durableGoal = durableTask?.goal || {};
   let cognitiveRuntime = null;
   let taskSpec = null;
   try {
@@ -1937,7 +1939,8 @@ app.post("/api/agent/run", (req, res) => {
         if (goalSpec.authority_boundary !== undefined && (typeof goalSpec.authority_boundary !== "string" || goalSpec.authority_boundary.length > 1000)) return res.status(400).json({ error: "goal_spec.authority_boundary is invalid" });
       }
       const authIdentity = requestAuthIdentity(req);
-      if (requestedProject && authIdentity && !projectAccess.hasProjectPermission(authIdentity.principal_id, requestedProject, "agent.tasks.read", "read", authIdentity.scopes, authIdentity.delegation_id || null)) {
+      const taskProject = resolveTaskProjectScope({ requestedProject, goal: goalCheck.goal, principalId: authIdentity?.principal_id, inferProjectFromText });
+      if (taskProject && authIdentity && !projectAccess.hasProjectPermission(authIdentity.principal_id, taskProject, "agent.tasks.read", "read", authIdentity.scopes, authIdentity.delegation_id || null)) {
         return res.status(403).json({ error: "active Agent task access to the requested project is required" });
       }
       const requestedEnvelope = body.authority_envelope || {};
@@ -1952,7 +1955,7 @@ app.post("/api/agent/run", (req, res) => {
   const effectiveRequestedEnvelope = serviceIdentity
     ? { allowed_effects: ["read_only"], changes_allowed: false, external_effects_allowed: false, production_allowed: false, child_task_count: 0 }
     : (body.authority_envelope || {});
-  beginTaskRun(res, { goal: goalCheck.goal, goalSpec, profile: body.profile || "standard", workspaceRef: body.workspace_ref || null, authorityEnvelope: effectiveRequestedEnvelope, handoffId: body.handoff_id || null, parentContext: (authIdentity || requestedProject || serviceIdentity) ? { ...(requestedProject ? { project: requestedProject } : {}), ...(serviceIdentity ? { serviceIdentity } : {}), ...(authIdentity ? { requestedByPrincipalId: authIdentity.principal_id, actorPrincipalId: authIdentity.principal_id, authIdentity } : {}) } : null });
+  beginTaskRun(res, { goal: goalCheck.goal, goalSpec, profile: body.profile || "standard", workspaceRef: body.workspace_ref || null, authorityEnvelope: effectiveRequestedEnvelope, handoffId: body.handoff_id || null, parentContext: (authIdentity || taskProject || serviceIdentity) ? { ...(taskProject ? { project: taskProject } : {}), ...(serviceIdentity ? { serviceIdentity } : {}), ...(authIdentity ? { requestedByPrincipalId: authIdentity.principal_id, actorPrincipalId: authIdentity.principal_id, authIdentity } : {}) } : null });
 });
 
 // Durable control-room projection. This is a read surface over the task store;
@@ -2602,7 +2605,6 @@ const startApprovalContinuationJobs = createContinuationJobStarter({
   callLLM,
   callAgentTool,
   redactSensitive,
-  inferProjectFromText,
   finalizeResumedTask,
   stepTimeoutMs: BRAIN_STEP_TIMEOUT_MS,
   getLiveAgentToolDefs,

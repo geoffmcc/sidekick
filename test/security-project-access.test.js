@@ -65,7 +65,7 @@ test("project grants attenuate access and revoke immediately", () => {
   assert.equal(taskBelongsToIdentity({ principal_id: operator.principal_id, scopes: null }, task), false, "project membership revocation immediately hides the owner's project-scoped task");
   assert.equal(taskBelongsToIdentity({ principal_id: operator.principal_id, scopes: [] }, task), false, "empty credential scopes cannot retain task access");
   const agentSource = fs.readFileSync(path.join(__dirname, "../src/agent.js"), "utf8");
-  assert.match(agentSource, /requestedProject && authIdentity && !projectAccess\.hasProjectPermission\(authIdentity\.principal_id, requestedProject, "agent\.tasks\.read"/);
+  assert.match(agentSource, /taskProject && authIdentity && !projectAccess\.hasProjectPermission\(authIdentity\.principal_id, taskProject, "agent\.tasks\.read"/);
 });
 
 test("project access changes roll back when their authoritative audit event cannot be written", () => {
