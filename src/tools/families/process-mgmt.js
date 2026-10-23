@@ -27,6 +27,21 @@ const ALLOWED_SERVICE_NAMES = Object.freeze([
 ]);
 const ALLOWED_SERVICE_NAME_SET = new Set(ALLOWED_SERVICE_NAMES);
 const ALLOWED_PROCESS_SIGNALS = new Set(["HUP", "INT", "QUIT", "KILL", "TERM", "USR1", "USR2", "STOP", "CONT"]);
+// Archive utilities have their own option-bearing environment variables. They
+// must not alter either the preflight listing or the eventual operation.
+const ARCHIVE_ENV_OVERRIDES = Object.freeze({
+  TAR_OPTIONS: null,
+  GZIP: null,
+  ZIPOPT: null,
+  UNZIP: null,
+  UNZIPOPT: null,
+  ZIPINFO: null,
+  ZIPINFOOPT: null,
+});
+
+function archiveProcessEnv() {
+  return childProcessEnv(ARCHIVE_ENV_OVERRIDES);
+}
 
 function buildProcessKillCommand({ pid, name, signal }) {
   const selectedSignal = signal || "TERM";
@@ -82,6 +97,36 @@ function validateArchiveEntryTypes(listing) {
     if (!match) throw new Error("archive member type listing is invalid");
     if (match[1] !== "-" && match[1] !== "d") {
       throw new Error("archive contains a link or special file entry");
+    }
+  }
+  return true;
+}
+
+function validateZipEntryTypes(listing) {
+  if (typeof listing !== "string" || listing.length === 0) {
+    throw new Error("zip member types could not be verified");
+  }
+  const normalized = listing.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const starts = [...normalized.matchAll(/^Central directory entry #\d+:\s*$/gim)].map(match => match.index);
+  if (starts.length === 0) throw new Error("zip member metadata could not be verified");
+
+  // Info-ZIP emits one verbose section per central-directory member. Unix
+  // creator entries must expose their Unix mode; unknown or malformed metadata
+  // fails closed rather than allowing an uninspected symlink through.
+  for (let index = 0; index < starts.length; index++) {
+    const section = normalized.slice(starts[index], starts[index + 1] ?? normalized.length);
+    const origin = section.match(/^\s*file system or operating system of origin:\s*(.*?)\s*$/im);
+    if (!origin || !origin[1]) throw new Error("zip member origin could not be verified");
+
+    const attributeLines = [...section.matchAll(/^\s*Unix file attributes\s*\([^)]*\):\s*([bcdhlps-][rwxStTs-]{9})\s*$/gim)];
+    if (attributeLines.length > 1 || (/unix/i.test(origin[1]) && attributeLines.length !== 1)) {
+      throw new Error("zip member Unix attributes could not be verified");
+    }
+    if (attributeLines.length === 1) {
+      const memberType = attributeLines[0][1][0];
+      if (memberType !== "-" && memberType !== "d") {
+        throw new Error("zip contains a link or special file entry");
+      }
     }
   }
   return true;
@@ -233,14 +278,16 @@ async function sidekick_archive({ action, path: sourcePath, output, format }) {
     try {
       fs.mkdirSync(extractTarget, { recursive: true });
       if (sourcePath.endsWith(".tar.gz") || sourcePath.endsWith(".tgz")) {
-        const listing = execFileSync("tar", ["-tzf", sourceAbsolute], { timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024, env: childProcessEnv() });
+        const listing = execFileSync("tar", ["-tzf", sourceAbsolute], { timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024, env: archiveProcessEnv() });
         validateArchiveEntryNames(listing.split("\n"));
-        const typeListing = execFileSync("tar", ["-tvzf", sourceAbsolute], { timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024, env: childProcessEnv() });
+        const typeListing = execFileSync("tar", ["-tvzf", sourceAbsolute], { timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024, env: archiveProcessEnv() });
         validateArchiveEntryTypes(typeListing);
         cmd = ["tar", ["-xzf", sourceAbsolute, "-C", extractTarget, "--no-same-owner", "--no-overwrite-dir"]];
       } else if (sourcePath.endsWith(".zip")) {
-        const listing = execFileSync("unzip", ["-Z1", sourceAbsolute], { timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024, env: childProcessEnv() });
+        const listing = execFileSync("unzip", ["-Z1", sourceAbsolute], { timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024, env: archiveProcessEnv() });
         validateArchiveEntryNames(listing.split("\n"));
+        const typeListing = execFileSync("unzip", ["-Z", "-v", sourceAbsolute], { timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024, env: archiveProcessEnv() });
+        validateZipEntryTypes(typeListing);
         cmd = ["unzip", [sourceAbsolute, "-d", extractTarget]];
       } else {
         return { content: [{ type: "text", text: "Unsupported archive format" }], isError: true };
@@ -259,7 +306,7 @@ async function sidekick_archive({ action, path: sourcePath, output, format }) {
   }
 
   try {
-    const stdout = execFileSync(cmd[0], cmd[1], { timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024, env: childProcessEnv() });
+    const stdout = execFileSync(cmd[0], cmd[1], { timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024, env: archiveProcessEnv() });
     return { content: [{ type: "text", text: redactSensitive(stdout || "OK") }] };
   } catch (e) {
     return { content: [{ type: "text", text: redactSensitive("Error: " + (e.stderr || e.stdout || e.message)) }], isError: true };
@@ -317,4 +364,4 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_process, sidekick_service, sidekick_archive, validateArchiveEntryNames, validateArchiveEntryTypes, validateArchiveSourceType, normalizeManagedService, ALLOWED_SERVICE_NAMES, buildProcessKillCommand, ALLOWED_PROCESS_SIGNALS };
+module.exports = { descriptors, sidekick_process, sidekick_service, sidekick_archive, validateArchiveEntryNames, validateArchiveEntryTypes, validateZipEntryTypes, validateArchiveSourceType, archiveProcessEnv, normalizeManagedService, ALLOWED_SERVICE_NAMES, buildProcessKillCommand, ALLOWED_PROCESS_SIGNALS };
