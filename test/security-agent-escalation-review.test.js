@@ -6,6 +6,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const http = require("node:http");
+const express = require("express");
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-escalation-review-"));
 process.env.NODE_ENV = "test";
@@ -24,6 +25,7 @@ const { createTask } = require("../src/agent/task-model");
 const taskStore = require("../src/agent/task-store");
 const durableOperations = require("../src/agent/durable-operations");
 const { createAgentProxyHeaders } = require("../src/security/agent-proxy-auth");
+const { registerAgentProxyRoutes } = require("../src/dashboard/agent-proxy-routes");
 const { createOwnerContext } = require("./helpers/authorized-context");
 const agent = require("../src/agent");
 
@@ -131,6 +133,60 @@ test("authorized independent project reviewer can decide an escalation without i
 test("Dashboard exposes only the signed escalation decision relay", () => {
   const source = fs.readFileSync(path.join(__dirname, "../src/dashboard/agent-proxy-routes.js"), "utf8");
   assert.match(source, /app\.post\("\/api\/agent\/tasks\/:taskId\/escalations\/:escalationId\/decision", relay\("POST", true\)\)/);
+});
+
+test("Dashboard Agent relay preserves independent reviewer identity for escalation decisions", async () => {
+  const relayApp = express();
+  relayApp.use(express.json());
+  relayApp.use((req, _res, next) => {
+    req.authPrincipal = { principal_id: reviewer.principal_id, scopes: ["agent.tasks.read", "approvals.grant"] };
+    next();
+  });
+  registerAgentProxyRoutes({
+    app: relayApp,
+    http,
+    agentPort: port,
+    agentProxySecret: process.env.SIDEKICK_AGENT_PROXY_KEY,
+    errorResponse(_req, res, error) { res.status(502).json({ error: error.message }); },
+  });
+  const relay = relayApp.listen(0, "127.0.0.1");
+  await new Promise(resolve => relay.once("listening", resolve));
+  try {
+    const proxyTask = createTask({
+      task_id: "c0ffee02",
+      objective: "Review escalation through Dashboard proxy",
+      profile: "standard",
+      project_id: project,
+      actor_principal_id: ownerContext.authIdentity.principal_id,
+      requested_by_principal_id: ownerContext.authIdentity.principal_id,
+    });
+    taskStore.insertTask(proxyTask);
+    const proxyEscalation = durableOperations.createEscalation({
+      task_id: proxyTask.task_id,
+      requested_operation: "Restart the isolated test service",
+      reason: "An independent reviewer must decide",
+      target_ref: "resource:proxy-review-test",
+      risk_class: "medium",
+      effect_class: "reversible",
+    });
+    const route = `/api/agent/tasks/${proxyTask.task_id}/escalations/${proxyEscalation.escalation_id}/decision`;
+    const response = await new Promise((resolve, reject) => {
+      const body = JSON.stringify({ decision: "approved", reason: "Reviewed through Dashboard proxy" });
+      const req = http.request({ hostname: "127.0.0.1", port: relay.address().port, path: route, method: "POST", agent: false, headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) } }, res => {
+        let text = "";
+        res.setEncoding("utf8");
+        res.on("data", chunk => { text += chunk; });
+        res.on("end", () => resolve({ status: res.statusCode, data: JSON.parse(text) }));
+      });
+      req.on("error", reject);
+      req.end(body);
+    });
+    assert.equal(response.status, 200, JSON.stringify(response.data));
+    assert.equal(response.data.escalation.decided_by_principal_id, `principal:${reviewer.principal_id}`);
+    assert.equal(response.data.escalation.approval_ref, `approval:escalation:${proxyEscalation.escalation_id}`);
+  } finally {
+    await new Promise(resolve => relay.close(resolve));
+  }
 });
 
 test.after(async () => {
