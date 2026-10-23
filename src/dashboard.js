@@ -14,6 +14,7 @@ const dbStore = require("./db");
 const identity = require("./core/identity");
 const authentication = require("./core/authentication");
 const { AuthRateLimiter } = require("./core/auth-rate-limit");
+const { BoundedRateLimiter } = require("./core/bounded-rate-limiter");
 const authorization = require("./core/authorization");
 const { allowedActions } = require("./evolve/lifecycle");
 const { redactSensitive } = require("./redact");
@@ -265,19 +266,12 @@ function ipInRange(ip, cidr) {
   return (ipNum & mask) === (rangeNum & mask);
 }
 
-// Rate limiting (in-memory, per IP)
-const rateLimit = new Map();
+// Rate limiting (bounded in-memory token bucket, per IP)
 const RATE_LIMIT_WINDOW = parseInt(process.env.SIDEKICK_DASHBOARD_RATE_LIMIT_WINDOW_MS || String(15 * 60 * 1000), 10);
 const RATE_LIMIT_MAX = parseInt(process.env.SIDEKICK_DASHBOARD_RATE_LIMIT_MAX || "1500", 10);
+const rateLimit = new BoundedRateLimiter({ limit: RATE_LIMIT_MAX, windowMs: RATE_LIMIT_WINDOW, maxKeys: 10_000 });
 
-function checkRateLimit(ip) {
-  const now = Date.now();
-  const timestamps = (rateLimit.get(ip) || []).filter(t => now - t < RATE_LIMIT_WINDOW);
-  if (timestamps.length >= RATE_LIMIT_MAX) return false;
-  timestamps.push(now);
-  rateLimit.set(ip, timestamps);
-  return true;
-}
+function checkRateLimit(ip) { return rateLimit.consume(ip).allowed; }
 
 function shouldRateLimit(req) {
   if (req.path.startsWith('/static/')) return false;
