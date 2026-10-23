@@ -482,7 +482,9 @@ test("MCP centrally separates service credentials and Dashboard diagnostics use 
   const secrets = fs.readFileSync(path.join(root, "src/core/runtime-secrets.js"), "utf8");
   const scheduling = fs.readFileSync(path.join(root, "src/tools/families/scheduling.js"), "utf8");
   assert.match(agent, /readSecret\("SIDEKICK_AGENT_PROXY_KEY", \{ required: true \}\)/);
-  assert.doesNotMatch(agent, /SIDEKICK_API_KEY|assertDistinctProxySecret|assertDistinctAgentSchedulerSecret/);
+  assert.doesNotMatch(agent, /SIDEKICK_API_KEY|assertDistinctProxySecret/);
+  assert.match(agent, /assertDistinctAgentSchedulerSecret\(agentProxySecret, agentSchedulerSecret\)/,
+    "Agent independently refuses scheduler-key reuse with its Dashboard proxy credential");
   assert.doesNotMatch(dashboard, /SIDEKICK_API_KEY|MCP_API_KEY|assertDistinctProxySecret/);
   assert.match(dashboard, /"Authorization": "Bearer " \+ \(req\.dashboardSessionToken \|\| ""\)/);
   assert.match(dashboard, /readSecret\("SIDEKICK_AGENT_PROXY_KEY", \{ required: true \}\)/);
@@ -490,6 +492,8 @@ test("MCP centrally separates service credentials and Dashboard diagnostics use 
   assert.match(authRoutes, /req\.dashboardSessionToken = session\.token/);
   assert.match(index, /assertDistinctProxySecret\(API_KEY, agentProxyKey\)/);
   assert.match(index, /assertDistinctAgentSchedulerSecret\(agentProxyKey, agentSchedulerKey\)/);
+  assert.match(index, /if \(!IS_LOCAL && process\.env\.NODE_ENV !== "test"\)/,
+    "credential separation is mandatory in deployed runtimes while isolated test fixtures may omit service credentials");
   assert.match(secrets, /SIDEKICK_AGENT_PROXY_KEY:\s*"sidekick_agent_proxy_key"/);
   assert.match(secrets, /"SIDEKICK_AGENT_PROXY_KEY"/);
   assert.match(agent, /offeredService === "scheduler" \? agentSchedulerSecret : agentProxySecret/);

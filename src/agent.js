@@ -17,12 +17,13 @@ const { authorizeRecoveredTask } = require("./agent/recovery-authorization");
 const { authorizeScheduledAgentDelay } = require("./agent/delay-policy");
 const { createEscalationApprovalRef } = require("./agent/escalation-approval");
 const { readSecret } = require("./core/runtime-secrets");
-const { verifyAgentProxyRequest, createSqliteNonceConsumer } = require("./security/agent-proxy-auth");
+const { verifyAgentProxyRequest, createSqliteNonceConsumer, assertDistinctAgentSchedulerSecret } = require("./security/agent-proxy-auth");
 const { taskBelongsToIdentity, canReviewUnownedTask, isAllowedServiceRoute } = require("./agent/task-access");
 const agentProxySecret = process.env.NODE_ENV === "test"
   ? (readSecret("SIDEKICK_AGENT_PROXY_KEY") || "test-agent-proxy-key")
   : readSecret("SIDEKICK_AGENT_PROXY_KEY", { required: true });
 const agentSchedulerSecret = readSecret("SIDEKICK_AGENT_SCHEDULER_KEY");
+if (agentSchedulerSecret) assertDistinctAgentSchedulerSecret(agentProxySecret, agentSchedulerSecret);
 
 const {
   getLiveAgentToolDefs,

@@ -55,7 +55,7 @@ Authorization: Bearer YOUR_SIDEKICK_API_KEY
 
 Query-string API keys are not supported because URLs are routinely exposed in logs, browser history, proxy metadata, and referrer headers.
 
-Set `SIDEKICK_API_KEY` to a strong non-placeholder value before starting the MCP server. Dashboard and Agent do not load this installation-wide client credential. MCP startup validates that its API key, the Dashboard-to-Agent proxy key, and any configured scheduler key are distinct.
+Set `SIDEKICK_API_KEY` to a strong non-placeholder value before starting the MCP server. Dashboard and Agent do not load this installation-wide client credential. MCP startup validates that its API key differs from the Dashboard-to-Agent proxy key and that any configured scheduler key differs from the proxy key. Agent independently rejects scheduler/proxy key reuse before serving requests.
 
 The Dashboard summary obtains protected MCP session diagnostics with the current authenticated Dashboard identity session. MCP authorizes those details using `dashboard.operations.read` (or `system.configure`); the Dashboard does not use the global MCP API key as an internal service credential.
 
@@ -68,7 +68,8 @@ services require the secret before startup outside test mode.
 MCP scheduling tools use `SIDEKICK_AGENT_SCHEDULER_KEY`
 (`sidekick_agent_scheduler_key`) for timer reloads. It must be distinct from
 the Dashboard proxy key; MCP startup also verifies that the proxy key differs
-from the MCP API key, which makes the three configured values distinct. The Agent accepts this identity
+from the MCP API key, which makes the three configured values distinct. MCP
+and Agent both reject scheduler/proxy key reuse. The Agent accepts this identity
 only on the exact delay/watch reload POST routes; absent configuration blocks
 new delay/watch definitions before they are persisted.
 
