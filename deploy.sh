@@ -427,6 +427,12 @@ if [ "$SCP_MODE" = true ]; then
   run_remote "chmod 700 $REMOTE_DIR/scripts/ensure-secret-config.sh" >/dev/null
   changed+=("ensure-secret-config.sh")
 
+  if ! copy_to_vps "$PROJECT_DIR/scripts/verify-runtime-secrets.js" "$REMOTE_DIR/scripts/verify-runtime-secrets.js" >/dev/null; then
+    echo -e "\033[31mERROR: Failed to copy verify-runtime-secrets.js\033[0m"
+    exit 1
+  fi
+  changed+=("verify-runtime-secrets.js")
+
   if ! copy_to_vps "$PROJECT_DIR/docs/knowledge-seed.sql" "$REMOTE_DIR/docs/knowledge-seed.sql" >/dev/null; then
     echo -e "\033[31mERROR: Failed to copy knowledge-seed.sql\033[0m"
     exit 1

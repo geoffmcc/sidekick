@@ -453,6 +453,11 @@ try {
     Run-Remote "chmod 700 $REMOTE_DIR/scripts/ensure-secret-config.sh" | Out-Null
     $changed += "ensure-secret-config.sh"
 
+    if (-not (Copy-ToVPS (Join-Path $PROJECT_DIR "scripts\verify-runtime-secrets.js") "$REMOTE_DIR/scripts/verify-runtime-secrets.js")) {
+      throw "Failed to copy verify-runtime-secrets.js"
+    }
+    $changed += "verify-runtime-secrets.js"
+
     if (-not (Copy-ToVPS (Join-Path $PROJECT_DIR "docs\knowledge-seed.sql") "$REMOTE_DIR/docs/knowledge-seed.sql")) {
       throw "Failed to copy knowledge-seed.sql"
     }
