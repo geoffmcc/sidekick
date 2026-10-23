@@ -279,7 +279,16 @@ async function executeResolvedTool(descriptor, args, context, requestedName = de
     return errorResult("Approval evaluation failed", "approval_evaluation_failed");
   }
   const effectiveRisk = approvalDecision?.risk;
-  const requiresIdentity = !options.testExecution && (descriptor.name === "secret" || descriptor.name === "predict" || effectiveRisk !== "low");
+  const permission = requiredToolPermission(descriptor, executionArgs);
+  // A low-risk action may still carry a narrower permission (for example,
+  // tools.catalog.read or workflows.read). Do not let an identityless legacy
+  // API key bypass those grants merely because the action does not need an
+  // approval. Pure low-risk utilities that use the generic tools.execute
+  // permission keep their legacy compatibility behavior.
+  const requiresScopedIdentity = Boolean(descriptor.authorizationPermission) || permission !== "tools.execute";
+  const requiresIdentity = !options.testExecution && (
+    descriptor.name === "secret" || descriptor.name === "predict" || effectiveRisk !== "low" || requiresScopedIdentity
+  );
   if (requiresIdentity && !context.authIdentity?.principal_id) {
     try {
       recordSecurityEvent("authorization.denied", {
@@ -303,7 +312,6 @@ async function executeResolvedTool(descriptor, args, context, requestedName = de
   // visible as a separate authentication method.
   let nodeAuthorization = null;
   if (context.authIdentity?.principal_id) {
-    const permission = requiredToolPermission(descriptor, executionArgs);
     const decision = authorization.authorize({
       principalId: context.authIdentity.principal_id,
       permission,
