@@ -884,6 +884,8 @@ assert.ok(deployShContent.includes('ensure_secret_config'), 'deploy.sh should co
 assert.ok(deployPs1Content.includes('Ensure-SecretConfig'), 'deploy.ps1 should configure protected secret settings');
 assert.ok(deployShContent.includes('ensure-secret-config.sh'), 'deploy.sh should sync the secret config helper');
 assert.ok(deployPs1Content.includes('ensure-secret-config.sh'), 'deploy.ps1 should sync the secret config helper');
+assert.ok(fs.readFileSync(path.join(__dirname, '..', 'scripts', 'ensure-secret-config.sh'), 'utf8').includes('verify-runtime-secrets.js'), 'deploy secret setup must validate runtime credentials before service restart');
+assert.ok(fs.existsSync(path.join(__dirname, '..', 'scripts', 'verify-runtime-secrets.js')), 'deployment must include the required runtime-secret preflight');
 assert.ok(bootstrapShContent.includes('/etc/sidekick/secrets'), 'bootstrap.sh should create the protected secret directory');
 assert.ok(bootstrapShContent.includes('generate_secret_file'), 'bootstrap.sh should generate missing core secret files');
 assert.ok(bootstrapShContent.includes('chmod 600'), 'bootstrap.sh should protect generated secret files');

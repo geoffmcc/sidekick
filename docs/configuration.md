@@ -116,6 +116,13 @@ variables are rejected; production and development runtimes require a
 configured file. The test harness may inject synthetic fixtures only for
 isolated tests.
 
+Both deployment scripts validate the required MCP and Agent Bridge credentials
+before restarting services. If a required file is absent, unsafe, or contains
+the same value as the other credential, deployment stops with the file name
+and reason. It does not generate replacement credentials because doing so
+would invalidate existing clients or service trust; provision distinct
+protected files, then rerun the deploy.
+
 Local MCP stdio calls use a scoped principal credential from
 `sidekick_mcp_credential` (or an explicit `SIDEKICK_MCP_CREDENTIAL_FILE` path).
 The credential is revalidated for each tool call, so revocation, expiry, or

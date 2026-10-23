@@ -20,6 +20,7 @@ const { dispatchTool } = require("../src/tools/dispatcher");
 const { getStaticToolRisk } = require("../src/tools/metadata");
 const { collectSnapshotRows } = require("../src/db/snapshot-bounds");
 const { createEscalationApprovalRef, validateEscalationApprovalRef } = require("../src/agent/escalation-approval");
+const { verifyRequiredRuntimeSecrets } = require("../scripts/verify-runtime-secrets");
 
 const root = path.resolve(__dirname, "..");
 
@@ -453,6 +454,35 @@ test("Agent proxy credential is separate from the MCP client credential in produ
   assert.throws(() => assertDistinctProxySecret("", "synthetic-proxy-key"), /both be configured/);
   assert.equal(assertDistinctAgentSchedulerSecret("synthetic-mcp-key", "synthetic-proxy-key", "synthetic-scheduler-key"), true);
   assert.throws(() => assertDistinctAgentSchedulerSecret("synthetic-mcp-key", "synthetic-proxy-key", "synthetic-proxy-key"), /must be distinct/);
+});
+
+test("deployment secret preflight fails closed before restart when required credentials are unsafe", (t) => {
+  const tempDir = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "sidekick-secret-preflight-"));
+  t.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
+  const apiPath = path.join(tempDir, "sidekick_api_key");
+  const proxyPath = path.join(tempDir, "sidekick_agent_proxy_key");
+  const writeSecrets = (api, proxy) => {
+    fs.writeFileSync(apiPath, `${api}\n`, { mode: 0o600 });
+    fs.writeFileSync(proxyPath, `${proxy}\n`, { mode: 0o600 });
+  };
+
+  assert.throws(() => verifyRequiredRuntimeSecrets(tempDir), /SIDEKICK_API_KEY is missing/);
+  writeSecrets("synthetic-api-key", "synthetic-proxy-key");
+  assert.equal(verifyRequiredRuntimeSecrets(tempDir), true);
+  writeSecrets("synthetic-api-key", "synthetic-api-key");
+  assert.throws(() => verifyRequiredRuntimeSecrets(tempDir), /must differ/);
+  writeSecrets("sk-your-key-here", "synthetic-proxy-key");
+  assert.throws(() => verifyRequiredRuntimeSecrets(tempDir), /placeholder/);
+
+  writeSecrets("synthetic-api-key", "synthetic-proxy-key");
+  if (process.platform !== "win32") {
+    fs.chmodSync(tempDir, 0o777);
+    assert.throws(() => verifyRequiredRuntimeSecrets(tempDir), /directory is writable by group or other users/);
+    fs.chmodSync(tempDir, 0o700);
+  }
+  fs.rmSync(proxyPath);
+  fs.symlinkSync(apiPath, proxyPath);
+  assert.throws(() => verifyRequiredRuntimeSecrets(tempDir), /regular, non-symlink/);
 });
 
 test("Agent proxy identity requires a fresh request-bound signature and rejects replay", () => {

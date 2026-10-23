@@ -31,3 +31,8 @@ else
 fi
 chmod 600 "$ENV_FILE"
 echo "Protected secret directory configured: $SECRET_DIR"
+
+# Refuse a deployment before service restarts if required process credentials
+# are missing, unsafe, or accidentally shared. Do not generate replacements:
+# doing so would silently invalidate existing clients and service trust.
+node "$APP_DIR/scripts/verify-runtime-secrets.js" "$SECRET_DIR"
