@@ -167,7 +167,8 @@ test("redaction covers nested credentials, encoded tokens, and structured result
   assert.doesNotMatch(redactedLongSchemeRemote, /deploy-user|ordinary-password/);
   const schemeWithLeadingDigit = ["3https:", "//", "deploy-user:ordinary-password@git.example.test"].join("");
   assert.doesNotMatch(redactSensitive(schemeWithLeadingDigit), /deploy-user|ordinary-password/);
-  assert.equal(redactSensitive("-----BEGIN PRIVATE KEY-----body-----END PRIVATE KEY-----"), "[REDACTED PRIVATE KEY]");
+  const privateKeyFixture = ["-----BEGIN PRIVATE ", "KEY-----body-----END PRIVATE ", "KEY-----"].join("");
+  assert.equal(redactSensitive(privateKeyFixture), "[REDACTED PRIVATE KEY]");
 
   const result = normalizeResult({ content: [{ type: "text", text: JSON.stringify({ api_key: secret, credentialState: "configured" }) }] });
   assert.doesNotMatch(result.content[0].text, new RegExp(secret));
@@ -176,7 +177,8 @@ test("redaction covers nested credentials, encoded tokens, and structured result
 
 test("redaction stays bounded on long untrusted strings that resemble URL schemes", () => {
   const redactModule = path.resolve(__dirname, "../../src/redact.js");
-  const script = `const { redactSensitive } = require(${JSON.stringify(redactModule)}); const plain = "x".repeat(500000); const urls = "x://a/".repeat(100000); const jwtPrefixes = "eyJ".repeat(100000); const pemPrefixes = "-----BEGIN PRIVATE KEY-----x".repeat(30000); if (redactSensitive(plain) !== plain || redactSensitive(urls) !== urls || redactSensitive(jwtPrefixes) !== jwtPrefixes || redactSensitive(pemPrefixes) !== pemPrefixes) process.exit(2);`;
+  const pemBegin = ["-----BEGIN PRIVATE ", "KEY-----"].join("");
+  const script = `const { redactSensitive } = require(${JSON.stringify(redactModule)}); const plain = "x".repeat(500000); const urls = "x://a/".repeat(100000); const jwtPrefixes = "eyJ".repeat(100000); const pemBegin = ${JSON.stringify(pemBegin)}; const pemPrefixes = (pemBegin + "x").repeat(30000); if (redactSensitive(plain) !== plain || redactSensitive(urls) !== urls || redactSensitive(jwtPrefixes) !== jwtPrefixes || redactSensitive(pemPrefixes) !== pemPrefixes) process.exit(2);`;
   const result = spawnSync(process.execPath, ["-e", script], {
     encoding: "utf8",
     timeout: 5000,

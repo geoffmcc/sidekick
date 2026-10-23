@@ -58,7 +58,6 @@ async function sidekick_tail({ source, pattern, lines, since }) {
     if (!fs.existsSync(source)) {
       return { content: [{ type: "text", text: "File not found: " + source }], isError: true };
     }
-    let content;
     try { content = readTextBounded(source, { maxBytes: MAX_MONITORING_FILE_BYTES, requireComplete: true }).content; }
     catch (error) {
       const message = error.code === "FILE_READ_TOO_LARGE"
