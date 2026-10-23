@@ -20,8 +20,25 @@ function test(name, fn) {
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'wcred-'));
 let seq = 0;
-function freshPath() { return path.join(TMP, `sub-${++seq}`, 'worker-credential.json'); }
 const isWin = process.platform === 'win32';
+function freshPath() {
+  const directory = path.join(TMP, `sub-${++seq}`);
+  fs.mkdirSync(directory, { recursive: true });
+  if (isWin) {
+    const systemRoot = process.env.SystemRoot || 'C:\\Windows';
+    const whoami = path.join(systemRoot, 'System32', 'whoami.exe');
+    const icacls = path.join(systemRoot, 'System32', 'icacls.exe');
+    const env = { SystemRoot: systemRoot, WINDIR: systemRoot, PATH: path.join(systemRoot, 'System32') };
+    const identity = execFileSync(whoami, ['/user', '/fo', 'csv', '/nh'], { encoding: 'utf8', windowsHide: true, env }).trim();
+    const sid = identity.match(/,\s*"(S-1-[0-9-]+)"\s*$/)?.[1];
+    assert.ok(sid, 'test process SID is available');
+    execFileSync(icacls, [directory, '/reset'], { stdio: 'ignore', windowsHide: true, env });
+    execFileSync(icacls, [directory, '/inheritance:r', '/grant:r', `*${sid}:(OI)(CI)F`, '*S-1-5-18:(OI)(CI)F', '*S-1-5-32-544:(OI)(CI)F'], {
+      stdio: 'ignore', windowsHide: true, env,
+    });
+  }
+  return path.join(directory, 'worker-credential.json');
+}
 
 const record = { workerId: 'wk_abc123', nodeId: 'node_deadbeef00112233', credential: 'wksec_topsecretvalue' };
 
@@ -107,6 +124,12 @@ test('Windows credential ACL grants the effective process SID and remains readab
   const acl = execFileSync(icacls, [p], { encoding: 'utf8', windowsHide: true });
   assert.ok(acl.toLowerCase().includes(account.toLowerCase()), 'ACL explicitly grants the effective process account');
   assert.strictEqual(cred.load(p).credential, record.credential, 'current process token can read the ACL-protected credential');
+  execFileSync(icacls, [p, '/grant', '*S-1-5-32-545:R'], { stdio: 'ignore', windowsHide: true });
+  assert.strictEqual(cred.verifyWindowsAcl(p), false, 'untrusted BUILTIN\\Users read ACE is rejected');
+  assert.strictEqual(cred.load(p), null, 'credential is not loaded while its ACL is unsafe');
+  cred.remove(p);
+  cred.save(record, p);
+  assert.strictEqual(cred.load(p).credential, record.credential, 'credential can be safely re-enrolled after an ACL violation');
 });
 
 // --- remove / park / restore / discard (re-enrollment support) ---

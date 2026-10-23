@@ -140,7 +140,13 @@ test('credential ACL grants LocalSystem read so the service can start', () => {
   assert.ok(/\/inheritance:r/.test(body), 'must still drop inherited ACEs');
   assert.ok(/WHOAMI/.test(body) && /\/user/.test(body) && /\*\$\{sid\}:F/.test(body), 'must grant the effective process token SID full control');
   assert.ok(/sid !== "S-1-5-18"/.test(body), 'must not replace LocalSystem full control with a later read-only ACE');
-  assert.ok(/Unable to apply the current process ACL/.test(body), 'must fail closed when the credential ACL cannot be secured');
+  assert.ok(/Unable to secure the worker credential file/.test(body), 'must fail closed when the credential ACL cannot be secured');
+  assert.ok(/verifyWindowsAcl\(credPath\)/.test(body) && /lstatSync\(credPath\)/.test(body),
+    'must reject reparse points and verify Windows ACLs before loading a credential');
+  assert.ok(/applyWindowsDirectoryAcl\(dir\)/.test(body) && /lstatSync\(directoryPath\)/.test(body),
+    'must secure the dedicated credential directory and reject reparse-point directories');
+  assert.ok(/applyWindowsAcl\(tempPath\)/.test(body) && body.indexOf('applyWindowsAcl(tempPath)') < body.indexOf('JSON.stringify(payload'),
+    'must secure the temporary file before writing secret bytes');
 });
 test('enroll verifies an existing credential instead of silently keeping it', () => {
   const body = read(path.join(ROOT, 'src', 'compute', 'worker-agent.js'));
