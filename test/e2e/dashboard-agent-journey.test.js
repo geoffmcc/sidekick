@@ -96,9 +96,16 @@ test("tool-backed Agent task shows dispatch completion and durable history after
 
 test("Dashboard displays escalation details and requester self-approval remains blocked", async () => {
   await withDiagnostics(page, fixture, "agent-escalation-review", async () => {
-    const started = await fixture.request("POST", "/api/agent/run", { goal: "Review dashboard escalation controls", project: "e2e_escalation_review" });
-    assert.equal(started.status, 200, JSON.stringify(started.body));
-    const taskId = started.body.taskId;
+    await page.goto(`${fixture.baseUrl}/#agent`, { waitUntil: "domcontentloaded" });
+    await page.locator("#page-agent.active").waitFor({ state: "attached" });
+    await page.locator("#agentGoal").fill("Review dashboard escalation controls");
+    await page.locator("#agentProject").fill("e2e_escalation_review");
+    const startedResponse = page.waitForResponse(response => response.url().includes("/api/agent/run") && response.request().method() === "POST");
+    await page.locator("#agentGo").click();
+    const started = await startedResponse;
+    assert.equal(started.status(), 200, await started.text());
+    const startedBody = await started.json();
+    const taskId = startedBody.taskId;
     assert.ok(taskId, "task creation returns its durable task id");
     const escalationResponse = await fixture.request("POST", `/api/agent/tasks/${encodeURIComponent(taskId)}/escalations`, {
       requested_operation: "Restart the isolated test service",
@@ -110,12 +117,6 @@ test("Dashboard displays escalation details and requester self-approval remains 
     assert.equal(escalationResponse.status, 201, JSON.stringify(escalationResponse.body));
     const escalationId = escalationResponse.body.escalation.escalation_id;
 
-    await page.goto(`${fixture.baseUrl}/#agent`, { waitUntil: "domcontentloaded" });
-    await page.locator("#page-agent.active").waitFor({ state: "attached" });
-    await page.locator("#agentHistoryToggle").click();
-    const historyItem = page.locator("#agentHistory .history-item").filter({ hasText: "Review dashboard escalation controls" });
-    await historyItem.waitFor({ state: "visible", timeout: 30000 });
-    await historyItem.click();
     const review = page.locator("#agentDurableEscalation");
     await review.getByRole("button", { name: "Approve this request" }).waitFor({ state: "visible", timeout: 30000 });
     assert.match(await review.innerText(), /Restart the isolated test service/);
