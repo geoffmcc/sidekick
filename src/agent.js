@@ -1835,6 +1835,11 @@ function requireTaskAccess(req, res, task) {
   res.status(404).json({ error: "task not found" });
   return false;
 }
+function requireTaskReviewAccess(req, res, task) {
+  if (taskBelongsToRequest(req, task) || canReviewUnownedTask(requestAuthIdentity(req), task)) return true;
+  res.status(404).json({ error: "task not found" });
+  return false;
+}
 function legacyTaskAccessible(req, taskId) {
   const auth = requestAuthIdentity(req);
   if (!auth) return true;
@@ -1869,6 +1874,12 @@ function enforceTaskRouteAccess(req, res, next) {
   // do not turn their existing 422/stream-specific errors into an IDOR-shaped
   // 404 before the route can inspect the authoritative source.
   if (!task) return next();
+  const routePath = `${req.baseUrl || ""}${req.path || ""}`;
+  const approvalReviewRoute = (req.method === "GET"
+      && (routePath === `/api/agent/tasks/${req.params.taskId}` || routePath === `/api/agent/tasks/${req.params.taskId}/control-room`))
+    || (req.method === "POST"
+      && new RegExp(`^/api/agent/tasks/${req.params.taskId}/escalations/[A-Za-z0-9_.:-]{1,180}/decision$`).test(routePath));
+  if (approvalReviewRoute && canReviewUnownedTask(requestAuthIdentity(req), task)) return next();
   if (!requireTaskAccess(req, res, task)) return;
   next();
 }
@@ -1948,7 +1959,8 @@ app.post("/api/agent/run", (req, res) => {
 // the transient SSE stream is never authoritative.
 app.get("/api/agent/tasks", (req, res) => {
   try {
-    const tasks = durableTaskStore.listTasks({ project_id: req.query && req.query.project, state: req.query && req.query.state, limit: req.query && req.query.limit, offset: req.query && req.query.offset }).filter(task => taskBelongsToRequest(req, task));
+    const reviewIdentity = requestAuthIdentity(req);
+    const tasks = durableTaskStore.listTasks({ project_id: req.query && req.query.project, state: req.query && req.query.state, limit: req.query && req.query.limit, offset: req.query && req.query.offset }).filter(task => taskBelongsToRequest(req, task) || canReviewUnownedTask(reviewIdentity, task));
     res.json({ tasks, count: tasks.length, source: "durable_task_store" });
   } catch { res.status(503).json({ error: "durable task state unavailable" }); }
 });
@@ -1958,7 +1970,7 @@ app.get("/api/agent/tasks/:taskId", (req, res) => {
   try {
     const task = durableTaskStore.getTask(req.params.taskId);
     if (!task) return res.status(404).json({ error: "task not found" });
-    if (!requireTaskAccess(req, res, task)) return;
+    if (!requireTaskReviewAccess(req, res, task)) return;
       res.json({ task, plans: durableTaskStore.listPlans(task.task_id), hierarchical_plans: durableOperations.listPlans(task.task_id), failures: durableTaskStore.listFailures(task.task_id), repairs: durableOperations.listRepairs(task.task_id), work_packages: durableOperations.listWorkPackages(task.task_id), workspace_transactions: durableWorkspaceTransactions.listTransactions(task.task_id), events: durableTaskStore.listEvents(task.task_id), receipts: durableReceiptStore.listReceipts(task.task_id), verification_recipes: durableReceiptStore.listRecipes(task.task_id), verification_outcomes: durableReceiptStore.listOutcomes(task.task_id), escalations: durableOperations.listEscalations(task.task_id), brain_v3: { task_specs: brainRuntime.listSpecs(task.task_id), belief: brainRuntime.latestBelief(task.task_id), traces: brainRuntime.listTraces(task.task_id, 4), graph: brainRuntime.listGraph(task.task_id) } });
   } catch { res.status(503).json({ error: "durable task state unavailable" }); }
 });
@@ -1970,7 +1982,7 @@ app.get("/api/agent/tasks/:taskId/control-room", (req, res) => {
   try {
     const task = durableTaskStore.getTask(req.params.taskId);
     if (!task) return res.status(404).json({ error: "task not found" });
-    if (!requireTaskAccess(req, res, task)) return;
+    if (!requireTaskReviewAccess(req, res, task)) return;
       res.json({ ok: true, source: "durable_task_store", task, plan: durableTaskStore.listPlans(task.task_id), hierarchical_plans: durableOperations.listPlans(task.task_id), failures: durableTaskStore.listFailures(task.task_id), repairs: durableOperations.listRepairs(task.task_id), work_packages: durableOperations.listWorkPackages(task.task_id), workspace_transactions: durableWorkspaceTransactions.listTransactions(task.task_id), receipts: durableReceiptStore.listReceipts(task.task_id), verification: durableReceiptStore.listRecipes(task.task_id), verification_outcomes: durableReceiptStore.listOutcomes(task.task_id), escalations: durableOperations.listEscalations(task.task_id), events: durableTaskStore.listEvents(task.task_id), brain_v3: { task_specs: brainRuntime.listSpecs(task.task_id), belief: brainRuntime.latestBelief(task.task_id), traces: brainRuntime.listTraces(task.task_id, 4), graph: brainRuntime.listGraph(task.task_id) } });
   } catch { res.status(503).json({ error: "durable task state unavailable" }); }
 });
@@ -2005,7 +2017,7 @@ app.post("/api/agent/tasks/:taskId/escalations/:escalationId/decision", (req, re
     const task = durableTaskStore.getTask(req.params.taskId);
     const escalation = durableOperations.getEscalation(req.params.escalationId);
     if (!task || !escalation || escalation.task_id !== task.task_id) return res.status(404).json({ error: "escalation not found" });
-    if (!requireTaskAccess(req, res, task)) return;
+    if (!requireTaskReviewAccess(req, res, task)) return;
     const body = req.body || {};
     if (Object.keys(body).some(key => !new Set(["decision", "reason"]).has(key)) || !["approved", "denied", "resolved"].includes(body.decision)) return res.status(400).json({ error: "decision must be approved, denied, or resolved" });
     const auth = requestAuthIdentity(req); const principal = auth && identity.getPrincipal(auth.principal_id);
@@ -2018,7 +2030,7 @@ app.post("/api/agent/tasks/:taskId/escalations/:escalationId/decision", (req, re
     // approval records authorize a specific tool/argument digest and cannot
     // be repurposed as task-wide approval for another operation.
     const approvalRef = body.decision === "approved" ? createEscalationApprovalRef(escalation.escalation_id) : null;
-    const updated = durableOperations.updateEscalation(escalation.escalation_id, body.decision, { decided_by_principal_id: auth.principal_id, approval_ref: approvalRef });
+    const updated = durableOperations.updateEscalation(escalation.escalation_id, body.decision, { decided_by_principal_id: `principal:${auth.principal_id}`, approval_ref: approvalRef });
     durableTaskStore.recordGuidance(task.task_id, `Escalation ${escalation.escalation_id} ${body.decision}: ${redactSensitive(String(body.reason || "operator decision")).slice(0, 500)}`, auth.principal_id);
     res.json({ ok: true, escalation: updated, approval: { decision: body.decision, reference: approvalRef, principal_id: auth.principal_id, inherited: false } });
   } catch (error) { res.status(409).json({ error: redactSensitive(error.message) }); }

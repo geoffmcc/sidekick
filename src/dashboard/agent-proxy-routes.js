@@ -34,6 +34,7 @@ function registerAgentProxyRoutes({ app, http, agentPort, agentProxySecret, erro
   app.get("/api/agent/tasks/:taskId/control-room", relay("GET"));
   app.post("/api/agent/tasks/:taskId/plans", relay("POST", true));
   app.post("/api/agent/tasks/:taskId/escalations", relay("POST", true));
+  app.post("/api/agent/tasks/:taskId/escalations/:escalationId/decision", relay("POST", true));
   app.post("/api/agent/tasks/:taskId/work-packages", relay("POST", true));
   app.post("/api/agent/tasks/:taskId/work-packages/:packageId/claim", relay("POST", true));
   app.get("/api/agent/tasks/:taskId/workspace-transactions", relay("GET"));
