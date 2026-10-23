@@ -2,6 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { randomBytes } = require("node:crypto");
 const { dashboardActor, createDashboardAuditEntry } = require("../src/dashboard/audit-identity");
 
 test("cookie-authenticated dashboard audit uses the authenticated principal", () => {
@@ -20,17 +21,17 @@ test("cookie-authenticated dashboard audit uses the authenticated principal", ()
 });
 
 test("service principal attribution is stable and does not leak credential material", () => {
-  const secret = "skc_cred_synthetic-secret-value";
+  const credential = randomBytes(32).toString("base64url");
   const req = {
     authPrincipal: { principal_id: "principal-service-4", principal_type: "service", display_name: "Pack Manager" },
-    headers: { authorization: `Bearer ${secret}` },
+    headers: { authorization: ["Bearer", credential].join(" ") },
     params: {},
     ip: "10.0.0.4",
   };
   const serialized = JSON.stringify(createDashboardAuditEntry(req, "capability.upgrade", {}, null));
   assert.equal(dashboardActor(req), "principal-service-4");
   assert.match(serialized, /principal-service-4/);
-  assert.doesNotMatch(serialized, /skc_cred_synthetic-secret-value/);
+  assert.equal(serialized.includes(credential), false);
 });
 
 test("untrusted Authorization header cannot override authenticated identity or create one", () => {
