@@ -9,6 +9,7 @@ process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
 process.env.SIDEKICK_BLACKBOX_DAILY_LIMIT = '50';
 
 const legacyId = 'bb_legacy_fixture';
+const unsafeLegacyId = '../escape-target';
 fs.writeFileSync(path.join(TEST_DATA_DIR, 'blackbox.json'), JSON.stringify({
   incidents: {
     [legacyId]: {
@@ -16,7 +17,8 @@ fs.writeFileSync(path.join(TEST_DATA_DIR, 'blackbox.json'), JSON.stringify({
       captured: Date.now() - 60000,
       sources: ['services', 'logs'],
       size: 42
-    }
+    },
+    [unsafeLegacyId]: { name: 'unsafe legacy fixture', captured: Date.now(), sources: [] }
   }
 }, null, 2));
 fs.writeFileSync(path.join(TEST_DATA_DIR, 'blackbox', legacyId), '# legacy payload\nTOKEN=secret-token-value\nservice failed\n');
@@ -32,6 +34,8 @@ const TOOLS = withOwnerToolContext(rawTools, { source: 'test', project: 'sidekic
 process.env.SIDEKICK_TOOL_POLICY = 'open';
 process.env.SIDEKICK_APPROVAL_MODE = 'off';
 const dbStore = require('../src/db');
+const legacyMigrationCheck = blackbox.migrateLegacy();
+assert.ok(legacyMigrationCheck.errors.some(error => /unsafe id/i.test(error)), 'unsafe legacy IDs are rejected before payload access');
 
 console.log('Running Black Box Tests...\n');
 
