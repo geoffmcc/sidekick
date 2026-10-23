@@ -7,6 +7,11 @@ set -euo pipefail
 sudo apt-get update
 sudo apt-get install --no-install-recommends -y bubblewrap apparmor apparmor-profiles apparmor-utils
 
+# setup-node places its runtime under /opt/hostedtoolcache, which is correctly
+# hidden from Sidekick's sandbox. Copy the selected CI runtime into the mounted
+# system path so shell integration tests can invoke it without exposing /opt.
+sudo install -m 0755 "$(command -v node)" /usr/local/bin/node
+
 probe_bubblewrap() {
   local -a args=(--unshare-all --die-with-parent --new-session --cap-drop ALL)
   local mount

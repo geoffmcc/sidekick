@@ -21,7 +21,7 @@ const runBash = (command) => dispatcher.callInternalTool('bash', { command }, ow
 
 console.log('Running Bash Tool Tests...\n');
 
-const nodeExecutable = process.platform === 'win32' ? `"${process.execPath}"` : process.execPath;
+const nodeExecutable = process.platform === 'win32' ? `"${process.execPath}"` : 'node';
 const sandboxAvailable = process.platform === 'linux' && fs.existsSync('/usr/bin/bwrap');
 
 (async () => {
