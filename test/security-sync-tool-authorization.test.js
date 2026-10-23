@@ -20,7 +20,7 @@ const { getCanonicalRegistry } = require("../src/tools/canonical-registry");
 
 const owner = identity.bootstrapOwner({ username: "sync_tools_owner", password: "synthetic sufficiently long password" });
 const operator = require('./helpers/authorized-identity').createHumanUser(identity, { username: "sync_tools_operator", password: "synthetic sufficiently long password" });
-identity.assignRole(operator.principal_id, "operator", owner.principal_id);
+identity.assignRole(operator.principal_id, "operator", owner);
 const registry = getCanonicalRegistry();
 const descriptors = Object.fromEntries(["sync_identity", "sync_export", "sync_import", "sync_diff"].map(name => [name, registry.get(name)]));
 

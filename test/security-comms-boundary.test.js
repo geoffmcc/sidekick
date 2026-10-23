@@ -28,8 +28,8 @@ test("configured notification credentials require secrets.use in addition to too
   const ownerContext = createOwnerContext();
   const identity = require("../src/core/identity");
   const limited = require('./helpers/authorized-identity').createPrincipal(identity, { type: "service", displayName: "Synthetic notify-only principal" });
-  identity.grantPrincipalPermission(limited.principal_id, "tools.execute", ownerContext.authIdentity.principal_id);
-  identity.grantPrincipalPermission(limited.principal_id, "tools.execute_high", ownerContext.authIdentity.principal_id);
+  identity.grantPrincipalPermission(limited.principal_id, "tools.execute", ownerContext.authIdentity);
+  identity.grantPrincipalPermission(limited.principal_id, "tools.execute_high", ownerContext.authIdentity);
   const context = { source: "test", authIdentity: { principal_id: limited.principal_id } };
   const result = await dispatchTestTool({ descriptor, args: { channel: "slack", message: "synthetic" }, context });
   assert.equal(result.isError, true);

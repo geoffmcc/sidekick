@@ -75,9 +75,10 @@ function audit(eventType, principalIdValue, actorPrincipalId, details = {}) {
 }
 
 function identityAuthority(actorIdentity) {
-  const actorPrincipalId = typeof actorIdentity === "string"
-    ? actorIdentity
-    : actorIdentity?.principal_id || actorIdentity?.principalId;
+  if (!actorIdentity || typeof actorIdentity !== "object" || Array.isArray(actorIdentity)) {
+    throw new Error("Identity mutations require an authenticated identity context");
+  }
+  const actorPrincipalId = actorIdentity.principal_id || actorIdentity.principalId;
   const scopes = actorIdentity?.scopes ?? actorIdentity?.credentialScopes;
   if (scopes !== undefined && scopes !== null && !Array.isArray(scopes)) throw new Error("identity authority scopes are invalid");
   const principalIdValue = typeof actorPrincipalId === "string" ? actorPrincipalId.trim() : "";
@@ -284,9 +285,9 @@ function canAssignLegacyDashboardAdministrator(principalIdValue) {
 
 function grantPrincipalPermission(principalIdValue, permission, actorIdentity) {
   const targetId = requiredText(principalIdValue, "principal_id");
-  const actorPrincipalId = typeof actorIdentity === "string" ? actorIdentity : actorIdentity?.principal_id;
+  const { actorPrincipalId, authorizationContext } = identityAuthority(actorIdentity);
   const authorization = require("./authorization");
-  const authority = { principalId: actorPrincipalId, ...(Array.isArray(actorIdentity?.scopes) ? { credentialScopes: actorIdentity.scopes } : {}), delegationId: actorIdentity?.delegation_id || null };
+  const authority = authorizationContext;
   if (!actorPrincipalId || !authorization.authorize({ ...authority, permission: "roles.manage" }).ok) {
     throw new Error("Permission grants require roles.manage");
   }
@@ -307,13 +308,9 @@ function grantPrincipalPermission(principalIdValue, permission, actorIdentity) {
 
 function revokePrincipalPermission(principalIdValue, permission, actorIdentity) {
   const targetId = requiredText(principalIdValue, "principal_id");
-  const actorPrincipalId = typeof actorIdentity === "string" ? actorIdentity : actorIdentity?.principal_id;
+  const { actorPrincipalId, authorizationContext } = identityAuthority(actorIdentity);
   const authorization = require("./authorization");
-  const authority = {
-    principalId: actorPrincipalId,
-    ...(Array.isArray(actorIdentity?.scopes) ? { credentialScopes: actorIdentity.scopes } : {}),
-    delegationId: actorIdentity?.delegation_id || null,
-  };
+  const authority = authorizationContext;
   if (!actorPrincipalId || !authorization.authorize({ ...authority, permission: "roles.manage" }).ok) {
     throw new Error("Permission changes require roles.manage");
   }

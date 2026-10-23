@@ -400,7 +400,7 @@ test('task approval rechecks the approver credential scope', () => {
   const fixtureOwner = identity.listPrincipals({ type: 'human' }).find(item => item.roles.includes('owner'))
     || identity.bootstrapOwner({ username: 'approval_fixture_owner', password: 'synthetic approval fixture owner password' });
   const principal = require('./helpers/authorized-identity').createPrincipal(identity, { type: 'human', displayName: 'Scoped approval reviewer' });
-  identity.assignRole(principal.principal_id, 'administrator', fixtureOwner.principal_id);
+  identity.assignRole(principal.principal_id, 'administrator', fixtureOwner);
   const { taskId, approvalId } = parkFixture();
   const outcome = continuation.approve({
     approvalId,

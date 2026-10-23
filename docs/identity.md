@@ -85,6 +85,12 @@ scopes and delegation. Principal creator attribution is bound to that actor and
 cannot be supplied for another identity. The initial Owner is created only
 through the separate one-time `bootstrapOwner` path.
 
+All other identity mutations also require an identity context object. Bare
+principal ID strings are rejected so they cannot erase credential scopes or
+delegation context before authorization. Context objects supplied by
+same-process callers are not an unforgeable boundary against compromised Core
+code.
+
 Database schema and statistics reads use the dedicated medium-risk
 `database.inspect` permission rather than generic `tools.execute`. Migration
 098 grants it to Owner, Administrator, and Operator roles to preserve existing

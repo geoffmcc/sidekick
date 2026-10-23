@@ -54,7 +54,7 @@ try {
   const owner = identity.bootstrapOwner({ username: "owner", password: "correct horse battery staple", displayName: "Owner" });
   const authorizedIdentityFixtures = require("./helpers/authorized-identity");
   const operator = authorizedIdentityFixtures.createHumanUser(identity, { username: "operator", password: "another correct password", displayName: "Operator" }, owner);
-  identity.assignRole(operator.principal_id, "operator", owner.principal_id);
+  identity.assignRole(operator.principal_id, "operator", owner);
   const agent = authorizedIdentityFixtures.createPrincipal(identity, { type: "agent", displayName: "Build Agent" }, owner);
 
   test("authorization evaluates permissions rather than role names", () => {
@@ -67,7 +67,7 @@ try {
     assert.strictEqual(authorization.authorize({ principalId: operator.principal_id, permission: "connectors.manage" }).code, "forbidden");
     assert.strictEqual(authorization.authorize({ principalId: operator.principal_id, permission: "database.inspect" }).ok, true, "operator DB inspection workflow retains an explicit grant");
     const viewer = authorizedIdentityFixtures.createHumanUser(identity, { username: "viewer_no_db", password: "another sufficiently long password" }, owner);
-    identity.assignRole(viewer.principal_id, "viewer", owner.principal_id);
+    identity.assignRole(viewer.principal_id, "viewer", owner);
     assert.strictEqual(authorization.authorize({ principalId: viewer.principal_id, permission: "database.inspect" }).code, "forbidden", "viewer role does not receive database inspection");
     assert.strictEqual(authorization.authorize({ principalId: operator.principal_id, permission: "dashboard.operations.read" }).code, "forbidden");
     assert.strictEqual(authorization.authorize({ principalId: operator.principal_id, permission: "dashboard.operations.manage" }).code, "forbidden");
@@ -117,30 +117,30 @@ try {
   });
 
   test("disabled principals cannot authorize", () => {
-    identity.setPrincipalEnabled(operator.principal_id, false, owner.principal_id);
+    identity.setPrincipalEnabled(operator.principal_id, false, owner);
     assert.strictEqual(authorization.authorize({ principalId: operator.principal_id, permission: "workflows.execute" }).code, "principal-disabled");
   });
 
   test("Owner promotion and final-Owner protection require authority", () => {
-    assert.throws(() => identity.assignRole(agent.principal_id, "owner"), /authorized actor/);
-    identity.assignRole(agent.principal_id, "owner", owner.principal_id);
-    identity.setPrincipalEnabled(owner.principal_id, false, agent.principal_id);
-    assert.throws(() => identity.removeRole(agent.principal_id, "owner", agent.principal_id), /final usable Owner/);
+    assert.throws(() => identity.assignRole(agent.principal_id, "owner"), /authenticated identity context/);
+    identity.assignRole(agent.principal_id, "owner", owner);
+    identity.setPrincipalEnabled(owner.principal_id, false, agent);
+    assert.throws(() => identity.removeRole(agent.principal_id, "owner", agent), /final usable Owner/);
   });
 
   test("ordinary role grants and removals require roles.manage at the identity boundary", () => {
     const target = authorizedIdentityFixtures.createPrincipal(identity, { type: "service", displayName: "Unauthorized role target" }, agent);
-    assert.throws(() => identity.assignRole(target.principal_id, "administrator", operator.principal_id), /roles.manage/);
+    assert.throws(() => identity.assignRole(target.principal_id, "administrator", operator), /roles.manage/);
     assert.deepEqual(identity.getPrincipal(target.principal_id).roles, []);
-    assert.throws(() => identity.removeRole(operator.principal_id, "operator", operator.principal_id), /roles.manage/);
+    assert.throws(() => identity.removeRole(operator.principal_id, "operator", operator), /roles.manage/);
     assert.deepEqual(identity.getPrincipal(operator.principal_id).roles, ["operator"]);
   });
 
   test("principal enable and disable require principals.manage at the identity boundary", () => {
     const target = authorizedIdentityFixtures.createPrincipal(identity, { type: "service", displayName: "Unauthorized state target" }, agent);
-    assert.throws(() => identity.setPrincipalEnabled(target.principal_id, false, target.principal_id), /principals.manage/);
+    assert.throws(() => identity.setPrincipalEnabled(target.principal_id, false, target), /principals.manage/);
     assert.equal(identity.getPrincipal(target.principal_id).enabled, true);
-    assert.throws(() => identity.setPrincipalEnabled(target.principal_id, true, target.principal_id), /principals.manage/);
+    assert.throws(() => identity.setPrincipalEnabled(target.principal_id, true, target), /principals.manage/);
     assert.equal(identity.getPrincipal(target.principal_id).enabled, true);
   });
 
@@ -148,10 +148,10 @@ try {
     const activeOwner = identity.getPrincipal(agent.principal_id);
     const subject = authorizedIdentityFixtures.createHumanUser(identity, { username: "profile_subject", password: "synthetic subject password" }, activeOwner);
     const viewer = authorizedIdentityFixtures.createHumanUser(identity, { username: "profile_viewer", password: "synthetic viewer password" }, activeOwner);
-    identity.assignRole(viewer.principal_id, "viewer", activeOwner.principal_id);
-    assert.throws(() => identity.updatePrincipal(subject.principal_id, { displayName: "Tampered" }, viewer.principal_id), /users.manage/);
-    assert.throws(() => identity.updateUsername(subject.principal_id, "tampered_name", viewer.principal_id), /users.manage/);
-    assert.throws(() => identity.changePassword(subject.principal_id, "synthetic unauthorized reset", viewer.principal_id), /users.manage/);
+    identity.assignRole(viewer.principal_id, "viewer", activeOwner);
+    assert.throws(() => identity.updatePrincipal(subject.principal_id, { displayName: "Tampered" }, viewer), /users.manage/);
+    assert.throws(() => identity.updateUsername(subject.principal_id, "tampered_name", viewer), /users.manage/);
+    assert.throws(() => identity.changePassword(subject.principal_id, "synthetic unauthorized reset", viewer), /users.manage/);
     assert.equal(identity.getPrincipal(subject.principal_id).display_name, "profile_subject");
     assert.equal(identity.getHumanUser(subject.principal_id).username, "profile_subject");
     assert.ok(identity.verifyUserPassword("profile_subject", "synthetic subject password"));
@@ -159,8 +159,8 @@ try {
 
   test("adopted legacy Dashboard account cannot self-promote after Owner bootstrap", () => {
     assert.equal(identity.canCompleteFirstOwnerSetup(adoptedLegacy.principal_id), false);
-    assert.throws(() => identity.assignRole(adoptedLegacy.principal_id, "owner", adoptedLegacy.principal_id), /authorized actor/);
-    assert.throws(() => identity.assignRole(adoptedLegacy.principal_id, "administrator", adoptedLegacy.principal_id), /roles.manage/);
+    assert.throws(() => identity.assignRole(adoptedLegacy.principal_id, "owner", adoptedLegacy), /authorized actor/);
+    assert.throws(() => identity.assignRole(adoptedLegacy.principal_id, "administrator", adoptedLegacy), /roles.manage/);
     assert.deepEqual(identity.getPrincipal(adoptedLegacy.principal_id).roles, []);
   });
 

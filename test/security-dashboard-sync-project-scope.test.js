@@ -20,7 +20,7 @@ const { registerSyncRoutes } = require("../src/dashboard/sync-routes");
 
 const owner = identity.bootstrapOwner({ username: "dashboard_sync_scope_owner", password: "synthetic sufficiently long password" });
 const operator = require('./helpers/authorized-identity').createHumanUser(identity, { username: "dashboard_sync_scope_operator", password: "synthetic sufficiently long password" });
-identity.assignRole(operator.principal_id, "operator", owner.principal_id);
+identity.assignRole(operator.principal_id, "operator", owner);
 platformKernel.registerProject({ project_id: "dashboard_sync_scope_project", owner_actor_id: owner.principal_id });
 projectAccess.grantProjectAccess({ actorPrincipalId: owner.principal_id, principalId: operator.principal_id, project: "dashboard_sync_scope_project", accessLevel: "write" });
 

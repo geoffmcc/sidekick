@@ -28,7 +28,7 @@ const ownerCredential = authentication.createCredential({
   actorContext: ownerContext,
 });
 const administrator = require('./helpers/authorized-identity').createPrincipal(identity, { type: "service", displayName: "compute admin test administrator", createdByPrincipalId: owner.principal_id, actorPrincipalId: owner.principal_id });
-identity.assignRole(administrator.principal_id, "administrator", owner.principal_id);
+identity.assignRole(administrator.principal_id, "administrator", owner);
 const adminCredential = authentication.createCredential({
   principalId: administrator.principal_id,
   displayName: "synthetic compute administrator credential",
@@ -37,7 +37,7 @@ const adminCredential = authentication.createCredential({
   actorContext: ownerContext,
 });
 const member = require('./helpers/authorized-identity').createPrincipal(identity, { type: "service", displayName: "compute project member", createdByPrincipalId: owner.principal_id, actorPrincipalId: owner.principal_id });
-identity.assignRole(member.principal_id, "administrator", owner.principal_id);
+identity.assignRole(member.principal_id, "administrator", owner);
 const memberCredential = authentication.createCredential({
   principalId: member.principal_id,
   displayName: "synthetic project member credential",
@@ -46,7 +46,7 @@ const memberCredential = authentication.createCredential({
   actorContext: ownerContext,
 });
 const operator = require('./helpers/authorized-identity').createPrincipal(identity, { type: "service", displayName: "compute admin test operator", createdByPrincipalId: owner.principal_id, actorPrincipalId: owner.principal_id });
-identity.assignRole(operator.principal_id, "operator", owner.principal_id);
+identity.assignRole(operator.principal_id, "operator", owner);
 const operatorCredential = authentication.createCredential({
   principalId: operator.principal_id,
   displayName: "synthetic compute operator credential",

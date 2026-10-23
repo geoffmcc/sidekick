@@ -44,22 +44,22 @@ try {
   });
   test("human lifecycle preserves stable identity through rename-independent disable/enable", () => {
     const user = require("./helpers/authorized-identity").createHumanUser(identity, { username: "alice", password: "another correct password", displayName: "Alice" });
-    const renamed = identity.updatePrincipal(user.principal_id, { displayName: "Alice Renamed" }, bootstrapOwner.principal_id);
+    const renamed = identity.updatePrincipal(user.principal_id, { displayName: "Alice Renamed" }, bootstrapOwner);
     assert.strictEqual(renamed.principal_id, user.principal_id);
     assert.strictEqual(renamed.display_name, "Alice Renamed");
-    assert.strictEqual(identity.updateUsername(user.principal_id, "alice-renamed", bootstrapOwner.principal_id).principal_id, user.principal_id);
-    const disabled = identity.setPrincipalEnabled(user.principal_id, false, bootstrapOwner.principal_id);
+    assert.strictEqual(identity.updateUsername(user.principal_id, "alice-renamed", bootstrapOwner).principal_id, user.principal_id);
+    const disabled = identity.setPrincipalEnabled(user.principal_id, false, bootstrapOwner);
     assert.strictEqual(disabled.principal_id, user.principal_id);
     assert.strictEqual(disabled.enabled, false);
     assert.strictEqual(identity.verifyUserPassword("alice-renamed", "another correct password"), null);
-    const enabled = identity.setPrincipalEnabled(user.principal_id, true, bootstrapOwner.principal_id);
+    const enabled = identity.setPrincipalEnabled(user.principal_id, true, bootstrapOwner);
     assert.strictEqual(enabled.principal_id, user.principal_id);
     assert.ok(identity.verifyUserPassword("alice-renamed", "another correct password"));
   });
   test("non-human principals are typed and roles are explicit", () => {
     const agent = require("./helpers/authorized-identity").createPrincipal(identity, { type: "agent", displayName: "Claude Code" });
     assert.strictEqual(agent.principal_type, "agent");
-    assert.throws(() => identity.assignRole(agent.principal_id, "operator", agent.principal_id), /roles.manage/);
+    assert.throws(() => identity.assignRole(agent.principal_id, "operator", agent), /roles.manage/);
     assert.throws(() => identity.assignRole(agent.principal_id, "root"), /Unsupported role/);
   });
   test("lifecycle audit contains stable principal IDs and no password material", () => {

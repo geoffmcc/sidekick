@@ -248,7 +248,7 @@ function promoteFirstDashboardOwner(principal) {
   try {
     const db = dbStore.getDb();
     if (!db.prepare("SELECT 1 FROM principal_roles WHERE role_name = 'owner' LIMIT 1").get()) {
-      return identity.assignRole(principal.principal_id, "owner", principal.principal_id);
+      return identity.assignRole(principal.principal_id, "owner", principal);
     }
   } catch {}
   return principal;

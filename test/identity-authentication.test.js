@@ -18,15 +18,15 @@ function test(name, fn) { fn(); passed++; console.log(`  ✓ ${name}`); }
 try {
   const owner = identity.bootstrapOwner({ username: "owner", password: "correct horse battery staple", displayName: "Owner" });
   const agent = require('./helpers/authorized-identity').createPrincipal(identity, { type: "agent", displayName: "Build Agent", createdByPrincipalId: owner.principal_id });
-  identity.assignRole(agent.principal_id, "operator", owner.principal_id);
+  identity.assignRole(agent.principal_id, "operator", owner);
   const ownerContext = { principal_id: owner.principal_id };
   const packService = require('./helpers/authorized-identity').createPrincipal(identity, { type: "service", displayName: "MCP Pack Manager", createdByPrincipalId: owner.principal_id, actorPrincipalId: owner.principal_id });
-  identity.grantPrincipalPermission(packService.principal_id, "packs.read", owner.principal_id);
-  identity.grantPrincipalPermission(packService.principal_id, "packs.manage", owner.principal_id);
+  identity.grantPrincipalPermission(packService.principal_id, "packs.read", owner);
+  identity.grantPrincipalPermission(packService.principal_id, "packs.manage", owner);
   const scopedRoleManager = require('./helpers/authorized-identity').createPrincipal(identity, { type: "service", displayName: "Scoped role manager", createdByPrincipalId: owner.principal_id, actorPrincipalId: owner.principal_id });
-  identity.grantPrincipalPermission(scopedRoleManager.principal_id, "roles.manage", owner.principal_id);
+  identity.grantPrincipalPermission(scopedRoleManager.principal_id, "roles.manage", owner);
   const scopedUserManager = require('./helpers/authorized-identity').createPrincipal(identity, { type: "service", displayName: "Scoped user manager", createdByPrincipalId: owner.principal_id, actorPrincipalId: owner.principal_id });
-  identity.grantPrincipalPermission(scopedUserManager.principal_id, "users.manage", owner.principal_id);
+  identity.grantPrincipalPermission(scopedUserManager.principal_id, "users.manage", owner);
 
   test("Core principal and human-user creation require scoped service authorization", () => {
     const principalCount = db.getDb().prepare("SELECT COUNT(*) AS count FROM principals").get().count;
@@ -78,6 +78,19 @@ try {
 
   test("identity role mutations preserve credential scope attenuation at the service boundary", () => {
     const target = require('./helpers/authorized-identity').createPrincipal(identity, { type: "service", displayName: "Scoped role target", createdByPrincipalId: owner.principal_id, actorPrincipalId: owner.principal_id });
+    const userTarget = require('./helpers/authorized-identity').createHumanUser(identity, { username: "scoped_actor_target", password: "synthetic scoped actor target password", actorPrincipalId: owner.principal_id });
+    for (const [label, operation] of [
+      ["role assignment", () => identity.assignRole(target.principal_id, "operator", scopedRoleManager.principal_id)],
+      ["role removal", () => identity.removeRole(target.principal_id, "operator", scopedRoleManager.principal_id)],
+      ["principal state", () => identity.setPrincipalEnabled(target.principal_id, false, scopedRoleManager.principal_id)],
+      ["principal profile", () => identity.updatePrincipal(userTarget.principal_id, { displayName: "Spoofed" }, scopedRoleManager.principal_id)],
+      ["username", () => identity.updateUsername(userTarget.principal_id, "spoofed_name", scopedRoleManager.principal_id)],
+      ["password", () => identity.changePassword(userTarget.principal_id, "synthetic spoofed password change", scopedRoleManager.principal_id)],
+      ["permission grant", () => identity.grantPrincipalPermission(target.principal_id, "memory.read", scopedRoleManager.principal_id)],
+      ["permission revoke", () => identity.revokePrincipalPermission(target.principal_id, "packs.read", scopedRoleManager.principal_id)],
+    ]) {
+      assert.throws(operation, /authenticated identity context/, `bare principal IDs cannot authorize ${label}`);
+    }
     assert.throws(() => identity.assignRole(target.principal_id, "operator", { principal_id: scopedRoleManager.principal_id, scopes: [] }), /roles.manage/);
     identity.assignRole(target.principal_id, "operator", { principal_id: scopedRoleManager.principal_id, scopes: ["roles.manage"] });
     assert.ok(identity.getPrincipal(target.principal_id).roles.includes("operator"));
@@ -137,10 +150,10 @@ try {
     assert.deepStrictEqual(authenticated.scopes, ["packs.read", "packs.manage"]);
     assert.strictEqual(authorization.authorize({ principalId: packService.principal_id, permission: "packs.manage", credentialScopes: authenticated.scopes }).ok, true);
     assert.strictEqual(authorization.authorize({ principalId: packService.principal_id, permission: "tools.execute", credentialScopes: authenticated.scopes }).code, "forbidden");
-    assert.throws(() => identity.grantPrincipalPermission(packService.principal_id, "tools.execute", packService.principal_id), /roles.manage/);
-    assert.throws(() => identity.revokePrincipalPermission(packService.principal_id, "packs.read", packService.principal_id), /roles.manage/);
+    assert.throws(() => identity.grantPrincipalPermission(packService.principal_id, "tools.execute", packService), /roles.manage/);
+    assert.throws(() => identity.revokePrincipalPermission(packService.principal_id, "packs.read", packService), /roles.manage/);
     assert.deepStrictEqual(identity.getPrincipalPermissions(packService.principal_id), ["packs.manage", "packs.read"], "a service principal cannot rewrite its own grants");
-    identity.revokePrincipalPermission(packService.principal_id, "packs.manage", owner.principal_id);
+    identity.revokePrincipalPermission(packService.principal_id, "packs.manage", owner);
     assert.strictEqual(authorization.authorize({ principalId: packService.principal_id, permission: "packs.manage", credentialScopes: authenticated.scopes }).code, "forbidden", "revoking the principal grant takes effect for existing credentials");
   });
 
@@ -155,7 +168,7 @@ try {
   test("disabled principals invalidate both sessions and credentials", () => {
     const created = authentication.createCredential({ principalId: agent.principal_id, displayName: "Disable API", scopes: [], createdByPrincipalId: owner.principal_id, actorContext: ownerContext });
     const session = authentication.createSession(agent.principal_id);
-    identity.setPrincipalEnabled(agent.principal_id, false, owner.principal_id);
+    identity.setPrincipalEnabled(agent.principal_id, false, owner);
     assert.strictEqual(authentication.authenticateCredential(created.token), null);
     assert.strictEqual(authentication.getSession(session.token), null);
   });

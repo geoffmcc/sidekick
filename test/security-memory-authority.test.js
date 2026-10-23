@@ -22,7 +22,7 @@ const { getCanonicalRegistry } = require("../src/tools/canonical-registry");
 
 const owner = identity.bootstrapOwner({ username: "memory_authority_owner", password: "synthetic sufficiently long password" });
 const operator = require('./helpers/authorized-identity').createHumanUser(identity, { username: "memory_authority_operator", password: "synthetic sufficiently long password" });
-identity.assignRole(operator.principal_id, "operator", owner.principal_id);
+identity.assignRole(operator.principal_id, "operator", owner);
 platformKernel.registerProject({ project_id: "memory_authority_project", owner_actor_id: owner.principal_id });
 projectAccess.grantProjectAccess({ actorPrincipalId: owner.principal_id, principalId: operator.principal_id, project: "memory_authority_project", accessLevel: "write" });
 const registry = getCanonicalRegistry();

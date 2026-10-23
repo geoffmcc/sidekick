@@ -32,7 +32,7 @@ function createCertificationIdentity() {
     // with narrow per-operation credential scopes. The Owner explicitly
     // authorizes this role grant; certification execution scopes omit
     // projects.access.manage and other administrative permissions.
-    identity.assignRole(principal.principal_id, "administrator", owner.principal_id);
+    identity.assignRole(principal.principal_id, "administrator", owner);
     if (!kernel.getProject(PROJECT)) {
       kernel.registerProject({ project_id: PROJECT, display_name: "Isolated certification", source: "certification" });
     }
@@ -47,7 +47,7 @@ function createCertificationIdentity() {
     });
     accessGranted = true;
   } catch (error) {
-    try { identity.setPrincipalEnabled(principal.principal_id, false, owner.principal_id); } catch {}
+    try { identity.setPrincipalEnabled(principal.principal_id, false, owner); } catch {}
     throw error;
   }
 
@@ -74,7 +74,7 @@ function createCertificationIdentity() {
         // Retain the audit-visible project row; do not delete persistent data.
         // It has no owner and no certification principal retains membership.
       } catch (error) { cleanupError = error; }
-      try { identity.setPrincipalEnabled(principal.principal_id, false, owner.principal_id); }
+      try { identity.setPrincipalEnabled(principal.principal_id, false, owner); }
       catch (error) { cleanupError ||= error; }
       if (cleanupError) throw new Error("Certification service identity cleanup failed", { cause: cleanupError });
     },

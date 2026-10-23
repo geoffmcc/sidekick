@@ -26,7 +26,7 @@ db.runPendingMigrations();
 test("durable task recovery uses the live credential record after database restore", () => {
   const owner = identity.bootstrapOwner({ username: "durable_recovery_owner", password: "synthetic durable recovery owner password" });
   const principal = require('./helpers/authorized-identity').createPrincipal(identity, { type: "service", displayName: "Synthetic recovery principal", createdByPrincipalId: owner.principal_id, actorPrincipalId: owner.principal_id });
-  identity.assignRole(principal.principal_id, "operator", owner.principal_id);
+  identity.assignRole(principal.principal_id, "operator", owner);
   const created = authentication.createCredential({
     principalId: principal.principal_id,
     displayName: "Synthetic durable task credential",

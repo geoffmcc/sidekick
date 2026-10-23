@@ -20,9 +20,9 @@ function test(name, fn) { fn(); passed++; console.log(`  ✓ ${name}`); }
 try {
   const owner = identity.bootstrapOwner({ username: "owner", password: "correct horse battery staple" });
   const viewer = require('./helpers/authorized-identity').createHumanUser(identity, { username: "viewer", password: "another correct password" });
-  identity.assignRole(viewer.principal_id, "viewer", owner.principal_id);
+  identity.assignRole(viewer.principal_id, "viewer", owner);
   const administrator = require('./helpers/authorized-identity').createHumanUser(identity, { username: "administrator", password: "third correct password" });
-  identity.assignRole(administrator.principal_id, "administrator", owner.principal_id);
+  identity.assignRole(administrator.principal_id, "administrator", owner);
   const agent = require('./helpers/authorized-identity').createPrincipal(identity, { type: "agent", displayName: "Build Agent", actorPrincipalId: owner.principal_id });
 
   const parked = continuation.park({

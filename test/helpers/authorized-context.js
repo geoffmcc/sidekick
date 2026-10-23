@@ -7,7 +7,7 @@ function createServiceContext({ role = "operator", source = "test", scopes = nul
   const owner = identity.listPrincipals({ type: "human" }).find(item => item.roles.includes("owner"))
     || identity.bootstrapOwner({ username: "test-owner", password: "test-owner-password-123" });
   const principal = identity.createPrincipal({ type: "service", displayName: `Test ${role} principal`, actorIdentity: owner });
-  identity.assignRole(principal.principal_id, role, owner.principal_id);
+  identity.assignRole(principal.principal_id, role, owner);
   if (project) require("../../src/platform/kernel").registerProject({ project_id: project, owner_actor_id: principal.principal_id, source: "test" });
   return { source, project, authIdentity: { principal_id: principal.principal_id, principal_type: "service", scopes } };
 }

@@ -112,7 +112,7 @@ test("production dispatch rejects caller descriptors and the continuation seam r
 test("authorization narrows credentials and delegation to current authority", () => {
   const delegate = require('../helpers/authorized-identity').createPrincipal(identity, { type: "agent", displayName: "Boundary Agent" });
   const secondOwner = require('../helpers/authorized-identity').createPrincipal(identity, { type: "human", displayName: "Second Owner" });
-  identity.assignRole(secondOwner.principal_id, "owner", owner.principal_id);
+  identity.assignRole(secondOwner.principal_id, "owner", owner);
   const delegation = authorization.createDelegation({
     delegatorPrincipalId: owner.principal_id,
     delegatePrincipalId: delegate.principal_id,
@@ -123,9 +123,9 @@ test("authorization narrows credentials and delegation to current authority", ()
   assert.equal(authorization.authorize({ principalId: delegate.principal_id, permission: "workflows.execute", delegationId: delegation.delegation_id }).ok, true);
   assert.equal(authorization.authorize({ principalId: delegate.principal_id, permission: "workflows.execute", delegationId: delegation.delegation_id, credentialScopes: ["users.read"] }).code, "forbidden");
 
-  identity.setPrincipalEnabled(owner.principal_id, false, secondOwner.principal_id);
+  identity.setPrincipalEnabled(owner.principal_id, false, secondOwner);
   assert.equal(authorization.authorize({ principalId: delegate.principal_id, permission: "workflows.execute", delegationId: delegation.delegation_id }).code, "delegation-revoked-or-expired");
-  identity.setPrincipalEnabled(owner.principal_id, true, secondOwner.principal_id);
+  identity.setPrincipalEnabled(owner.principal_id, true, secondOwner);
   authorization.revokeDelegation(delegation.delegation_id, owner);
 });
 

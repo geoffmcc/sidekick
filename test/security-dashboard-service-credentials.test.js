@@ -90,7 +90,7 @@ test("service credential provisioning is atomic, audited, narrowly scoped, and r
   assert.equal(authentication.authenticateCredential(res.body.token), null, "rotation revokes the previous token");
   assert.deepEqual(authentication.authenticateCredential(rotated.body.token).scopes, ["packs.read", "packs.manage"]);
 
-  identity.setPrincipalEnabled(auth.principal_id, false, owner.principal_id);
+  identity.setPrincipalEnabled(auth.principal_id, false, owner);
   assert.equal(authentication.authenticateCredential(rotated.body.token), null, "disabling the service identity immediately invalidates its credential");
 });
 
@@ -111,7 +111,7 @@ test("generic credential routes cannot create, rotate, or revoke another princip
     password: "synthetic credential administrator password",
     actorPrincipalId: owner.principal_id,
   });
-  identity.assignRole(administrator.principal_id, "administrator", owner.principal_id);
+  identity.assignRole(administrator.principal_id, "administrator", owner);
 
   const before = authentication.listCredentials(owner.principal_id).length;
   const create = response();

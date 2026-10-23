@@ -35,7 +35,7 @@ const packHealth = packLifecycle.health("security-research");
 if (packHealth.status !== "healthy") throw new Error(`security-research test pack did not activate: ${JSON.stringify(packHealth)}`);
 
 const outsider = require('./helpers/authorized-identity').createPrincipal(identity, { type: "service", displayName: "Source test restricted principal" });
-identity.assignRole(outsider.principal_id, "administrator", owner.principal_id);
+identity.assignRole(outsider.principal_id, "administrator", owner);
 const limitedContext = {
   source: "internal",
   authIdentity: { principal_id: outsider.principal_id, principal_type: "service", scopes: ["tools.execute_high"] },

@@ -29,7 +29,7 @@ const owner = identity.bootstrapOwner({
   displayName: "Synthetic secret resolution owner",
 });
 const operator = require('./helpers/authorized-identity').createPrincipal(identity, { type: "service", displayName: "Synthetic secret resolution operator" });
-identity.assignRole(operator.principal_id, "operator", owner.principal_id);
+identity.assignRole(operator.principal_id, "operator", owner);
 const delegation = authorization.createDelegation({
   delegatorPrincipalId: owner.principal_id,
   delegatePrincipalId: operator.principal_id,

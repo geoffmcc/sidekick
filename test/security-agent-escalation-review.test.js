@@ -50,7 +50,7 @@ const escalation = durableOperations.createEscalation({
 });
 
 const reviewer = require('./helpers/authorized-identity').createPrincipal(identity, { type: "human", displayName: "Synthetic escalation reviewer" });
-identity.assignRole(reviewer.principal_id, "administrator", ownerContext.authIdentity.principal_id);
+identity.assignRole(reviewer.principal_id, "administrator", ownerContext.authIdentity);
 projectAccess.grantProjectAccess({
   actorPrincipalId: ownerContext.authIdentity.principal_id,
   principalId: reviewer.principal_id,
@@ -128,7 +128,7 @@ test("authorized independent project reviewer can decide an escalation without i
   assert.equal(durableOperations.getEscalation(escalation.escalation_id).state, "approved", "the original approved state remains authoritative");
 
   const viewer = require('./helpers/authorized-identity').createPrincipal(identity, { type: "human", displayName: "Synthetic non-reviewer" });
-  identity.assignRole(viewer.principal_id, "viewer", ownerContext.authIdentity.principal_id);
+  identity.assignRole(viewer.principal_id, "viewer", ownerContext.authIdentity);
   const denied = await request("GET", `${taskRoute}/control-room`, undefined, viewer.principal_id, ["agent.tasks.read"]);
   assert.equal(denied.status, 404, "project outsiders without approval authority cannot inspect the task");
 });

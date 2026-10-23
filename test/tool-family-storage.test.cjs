@@ -32,7 +32,7 @@ console.log('Running Storage Family Tests...');
     const identity = require('../src/core/identity');
     const fixtureOwner = identity.bootstrapOwner({ username: 'storage_fixture_owner', password: 'synthetic storage fixture owner password' });
     const testPrincipal = require('./helpers/authorized-identity').createPrincipal(identity, { type: 'service', displayName: 'Storage test principal' });
-    identity.assignRole(testPrincipal.principal_id, 'administrator', fixtureOwner.principal_id);
+    identity.assignRole(testPrincipal.principal_id, 'administrator', fixtureOwner);
     require('../src/platform/kernel').registerProject({ project_id: 'testproj', owner_actor_id: testPrincipal.principal_id, source: 'test' });
     const authenticatedContext = { source: 'mcp', authIdentity: { principal_id: testPrincipal.principal_id, principal_type: 'service', scopes: null } };
     const invoke = (name, args) => tools.dispatchTool({ name, args, context: authenticatedContext });

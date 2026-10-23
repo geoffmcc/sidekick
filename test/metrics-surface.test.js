@@ -52,8 +52,8 @@ console.log('Running Metrics Surface Tests...');
     const ownerContext = createOwnerContext();
     const identity = require('../src/core/identity');
     const metricsPrincipal = require('./helpers/authorized-identity').createPrincipal(identity, { type: 'service', displayName: 'Synthetic metrics-only principal' });
-    identity.grantPrincipalPermission(metricsPrincipal.principal_id, 'tools.execute', ownerContext.authIdentity.principal_id);
-    identity.grantPrincipalPermission(metricsPrincipal.principal_id, 'tools.execute_high', ownerContext.authIdentity.principal_id);
+    identity.grantPrincipalPermission(metricsPrincipal.principal_id, 'tools.execute', ownerContext.authIdentity);
+    identity.grantPrincipalPermission(metricsPrincipal.principal_id, 'tools.execute_high', ownerContext.authIdentity);
     const limitedContext = { source: 'test', authIdentity: { principal_id: metricsPrincipal.principal_id } };
     const limited = await dispatchTestTool({
       descriptor: rawObservability.descriptors.find(item => item.name === 'metrics'),

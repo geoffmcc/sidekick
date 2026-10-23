@@ -30,19 +30,19 @@ test("role and delegation changes roll back when their audit record cannot be wr
     WHEN NEW.event_type IN ('role.assigned', 'role.removed') AND NEW.principal_id = '${roleTarget.principal_id}'
     BEGIN SELECT RAISE(ABORT, 'synthetic audit failure'); END`);
   try {
-    assert.throws(() => identity.assignRole(roleTarget.principal_id, "operator", owner.principal_id), /synthetic audit failure/);
+    assert.throws(() => identity.assignRole(roleTarget.principal_id, "operator", owner), /synthetic audit failure/);
     assert.equal(authorization.authorize({ principalId: roleTarget.principal_id, permission: "workflows.execute" }).ok, false,
       "failed role grant leaves no authority behind");
   } finally {
     db.exec("DROP TRIGGER reject_role_audit");
   }
 
-  identity.assignRole(roleTarget.principal_id, "operator", owner.principal_id);
+  identity.assignRole(roleTarget.principal_id, "operator", owner);
   db.exec(`CREATE TRIGGER reject_role_audit BEFORE INSERT ON identity_audit_events
     WHEN NEW.event_type = 'role.removed' AND NEW.principal_id = '${roleTarget.principal_id}'
     BEGIN SELECT RAISE(ABORT, 'synthetic audit failure'); END`);
   try {
-    assert.throws(() => identity.removeRole(roleTarget.principal_id, "operator", owner.principal_id), /synthetic audit failure/);
+    assert.throws(() => identity.removeRole(roleTarget.principal_id, "operator", owner), /synthetic audit failure/);
     assert.equal(authorization.authorize({ principalId: roleTarget.principal_id, permission: "workflows.execute" }).ok, true,
       "failed role revocation preserves the prior authority state");
   } finally {
@@ -87,12 +87,12 @@ test("role and delegation changes roll back when their audit record cannot be wr
 test("service permission changes roll back when their audit record cannot be written", () => {
   const service = require('./helpers/authorized-identity').createPrincipal(identity, { type: "service", displayName: "Atomic service grants", createdByPrincipalId: owner.principal_id, actorPrincipalId: owner.principal_id });
   rejectAudit("principal.permission_granted", "reject_service_permission_grant_audit", () => {
-    assert.throws(() => identity.grantPrincipalPermission(service.principal_id, "memory.read", owner.principal_id), /synthetic audit failure/);
+    assert.throws(() => identity.grantPrincipalPermission(service.principal_id, "memory.read", owner), /synthetic audit failure/);
     assert.deepEqual(identity.getPrincipalPermissions(service.principal_id), []);
   });
-  identity.grantPrincipalPermission(service.principal_id, "memory.read", owner.principal_id);
+  identity.grantPrincipalPermission(service.principal_id, "memory.read", owner);
   rejectAudit("principal.permission_revoked", "reject_service_permission_revoke_audit", () => {
-    assert.throws(() => identity.revokePrincipalPermission(service.principal_id, "memory.read", owner.principal_id), /synthetic audit failure/);
+    assert.throws(() => identity.revokePrincipalPermission(service.principal_id, "memory.read", owner), /synthetic audit failure/);
     assert.deepEqual(identity.getPrincipalPermissions(service.principal_id), ["memory.read"]);
   });
 });
@@ -112,34 +112,34 @@ test("principal and human-user creation roll back completely when audit insertio
 test("profile, username, enabled-state, and password mutations roll back when audit insertion fails", () => {
   const user = require('./helpers/authorized-identity').createHumanUser(identity, { username: "atomic_profile_user", password: "synthetic sufficiently long original password", actorPrincipalId: owner.principal_id });
   rejectAudit("principal.updated", "reject_principal_update_audit", () => {
-    assert.throws(() => identity.updatePrincipal(user.principal_id, { displayName: "Changed name" }, owner.principal_id), /synthetic audit failure/);
+    assert.throws(() => identity.updatePrincipal(user.principal_id, { displayName: "Changed name" }, owner), /synthetic audit failure/);
     assert.equal(identity.getPrincipal(user.principal_id).display_name, "atomic_profile_user");
   });
   rejectAudit("user.username_changed", "reject_username_audit", () => {
-    assert.throws(() => identity.updateUsername(user.principal_id, "atomic_new_username", owner.principal_id), /synthetic audit failure/);
+    assert.throws(() => identity.updateUsername(user.principal_id, "atomic_new_username", owner), /synthetic audit failure/);
     assert.equal(identity.getHumanUser(user.principal_id).username, "atomic_profile_user");
   });
   rejectAudit("principal.disabled", "reject_principal_disable_audit", () => {
-    assert.throws(() => identity.setPrincipalEnabled(user.principal_id, false, owner.principal_id), /synthetic audit failure/);
+    assert.throws(() => identity.setPrincipalEnabled(user.principal_id, false, owner), /synthetic audit failure/);
     assert.equal(identity.getPrincipal(user.principal_id).enabled, true);
   });
   const disableSession = authentication.createSession(user.principal_id);
   rejectAudit("principal.disabled", "reject_principal_disable_with_session_audit", () => {
-    assert.throws(() => identity.setPrincipalEnabled(user.principal_id, false, owner.principal_id), /synthetic audit failure/);
+    assert.throws(() => identity.setPrincipalEnabled(user.principal_id, false, owner), /synthetic audit failure/);
     assert.ok(authentication.getSession(disableSession.token), "failed disable preserves the active session");
   });
-  identity.setPrincipalEnabled(user.principal_id, false, owner.principal_id);
+  identity.setPrincipalEnabled(user.principal_id, false, owner);
   assert.equal(identity.getPrincipal(user.principal_id).enabled, false);
   assert.equal(authentication.getSession(disableSession.token), null, "successful disable invalidates sessions transactionally");
-  identity.setPrincipalEnabled(user.principal_id, true, owner.principal_id);
+  identity.setPrincipalEnabled(user.principal_id, true, owner);
   const passwordSession = authentication.createSession(user.principal_id);
   rejectAudit("user.password_changed", "reject_password_audit", () => {
-    assert.throws(() => identity.changePassword(user.principal_id, "synthetic sufficiently long changed password", owner.principal_id), /synthetic audit failure/);
+    assert.throws(() => identity.changePassword(user.principal_id, "synthetic sufficiently long changed password", owner), /synthetic audit failure/);
     assert.ok(identity.verifyUserPassword("atomic_profile_user", "synthetic sufficiently long original password"));
     assert.equal(db.prepare("SELECT COUNT(*) AS count FROM identity_sessions WHERE principal_id = ? AND invalidated_at IS NOT NULL").get(user.principal_id).count, 1,
       "failed password mutation does not invalidate the active session");
   });
-  identity.changePassword(user.principal_id, "synthetic sufficiently long changed password", owner.principal_id);
+  identity.changePassword(user.principal_id, "synthetic sufficiently long changed password", owner);
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM identity_sessions WHERE principal_id = ? AND invalidated_at IS NULL").get(user.principal_id).count, 0,
     "successful password mutation invalidates active sessions transactionally");
   assert.ok(identity.verifyUserPassword("atomic_profile_user", "synthetic sufficiently long changed password"));

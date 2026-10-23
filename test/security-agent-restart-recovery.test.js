@@ -38,7 +38,7 @@ test("fresh Agent process parks an orphaned task when its credential was revoked
     const kernel = require("../src/platform/kernel");
     const owner = identity.bootstrapOwner({ username: "restart_recovery_owner", password: "synthetic restart recovery owner password" });
     const principal = require('./helpers/authorized-identity').createPrincipal(identity, { type: "service", displayName: "Synthetic restart recovery principal", createdByPrincipalId: owner.principal_id, actorPrincipalId: owner.principal_id });
-    identity.assignRole(principal.principal_id, "operator", owner.principal_id);
+    identity.assignRole(principal.principal_id, "operator", owner);
     const credential = authentication.createCredential({
       principalId: principal.principal_id,
       displayName: "Synthetic restart recovery credential",

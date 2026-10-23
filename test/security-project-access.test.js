@@ -31,7 +31,7 @@ const predictEngine = require("../src/predict");
 
 const owner = identity.bootstrapOwner({ username: "access_owner", password: "a sufficiently long owner password" });
 const operator = require('./helpers/authorized-identity').createHumanUser(identity, { username: "access_operator", password: "a sufficiently long operator password" });
-identity.assignRole(operator.principal_id, "operator", owner.principal_id);
+identity.assignRole(operator.principal_id, "operator", owner);
 const denied = require('./helpers/authorized-identity').createHumanUser(identity, { username: "access_denied", password: "a sufficiently long denied password" });
 platformKernel.registerProject({ project_id: "memory_a", owner_actor_id: owner.principal_id });
 platformKernel.registerProject({ project_id: "memory_b", owner_actor_id: owner.principal_id });
@@ -41,7 +41,7 @@ const secretB = db.upsertMemory({ type: "fact", project: "memory_b", content: "P
 
 test("Agent cross-principal learning review requires project membership in addition to approvals.grant", () => {
   const reviewer = require('./helpers/authorized-identity').createHumanUser(identity, { username: "scoped_learning_reviewer", password: "a sufficiently long reviewer password" });
-  identity.assignRole(reviewer.principal_id, "administrator", owner.principal_id);
+  identity.assignRole(reviewer.principal_id, "administrator", owner);
   const task = { task_id: "agt_cross_project_review", project_id: "memory_b", actor_principal_id: denied.principal_id };
   const scopedReviewer = { principal_id: reviewer.principal_id, scopes: ["approvals.grant"] };
   assert.equal(canReviewUnownedTask(scopedReviewer, task), false, "approval permission alone cannot read a source task in an ungranted project");
@@ -110,18 +110,18 @@ test("role and delegation authority changes roll back when their audit event fai
     WHEN NEW.event_type = 'role.assigned' AND NEW.principal_id = '${roleTarget.principal_id}'
     BEGIN SELECT RAISE(ABORT, 'synthetic role audit failure'); END`);
   try {
-    assert.throws(() => identity.assignRole(roleTarget.principal_id, "operator", owner.principal_id), /synthetic role audit failure/);
+    assert.throws(() => identity.assignRole(roleTarget.principal_id, "operator", owner), /synthetic role audit failure/);
     assert.equal(authorization.authorize({ principalId: roleTarget.principal_id, permission: "workflows.execute" }).ok, false,
       "failed role audit must roll back the permission grant");
   } finally {
     connection.exec("DROP TRIGGER reject_role_grant_audit");
   }
-  identity.assignRole(roleTarget.principal_id, "operator", owner.principal_id);
+  identity.assignRole(roleTarget.principal_id, "operator", owner);
   connection.exec(`CREATE TRIGGER reject_role_revoke_audit BEFORE INSERT ON identity_audit_events
     WHEN NEW.event_type = 'role.removed' AND NEW.principal_id = '${roleTarget.principal_id}'
     BEGIN SELECT RAISE(ABORT, 'synthetic role audit failure'); END`);
   try {
-    assert.throws(() => identity.removeRole(roleTarget.principal_id, "operator", owner.principal_id), /synthetic role audit failure/);
+    assert.throws(() => identity.removeRole(roleTarget.principal_id, "operator", owner), /synthetic role audit failure/);
     assert.equal(authorization.authorize({ principalId: roleTarget.principal_id, permission: "workflows.execute" }).ok, true,
       "failed role audit must roll back permission revocation");
   } finally {
@@ -1098,7 +1098,7 @@ test("handoff extraction cannot write memories into an ungranted project", async
 
 test("revoked and disabled principals cannot retain project access", () => {
   projectAccess.grantProjectAccess({ actorPrincipalId: owner.principal_id, principalId: operator.principal_id, project: "memory_a", accessLevel: "write" });
-  identity.setPrincipalEnabled(operator.principal_id, false, owner.principal_id);
+  identity.setPrincipalEnabled(operator.principal_id, false, owner);
   assert.equal(projectAccess.hasProjectAccess(operator.principal_id, "memory_a", "write"), false);
 });
 
