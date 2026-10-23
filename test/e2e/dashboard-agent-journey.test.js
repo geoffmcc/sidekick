@@ -94,7 +94,7 @@ test("tool-backed Agent task shows dispatch completion and durable history after
   });
 });
 
-test("authorized Dashboard reviewer can inspect and approve an open Agent escalation", async () => {
+test("Dashboard displays escalation details and requester self-approval remains blocked", async () => {
   await withDiagnostics(page, fixture, "agent-escalation-review", async () => {
     const started = await fixture.request("POST", "/api/agent/run", { goal: "Review dashboard escalation controls", project: "e2e_escalation_review" });
     assert.equal(started.status, 200, JSON.stringify(started.body));
@@ -122,10 +122,11 @@ test("authorized Dashboard reviewer can inspect and approve an open Agent escala
     assert.match(await review.innerText(), /resource:e2e-test-service/);
 
     page.once("dialog", dialog => dialog.accept());
+    const decisionResponse = page.waitForResponse(response => response.url().includes(`/api/agent/tasks/${taskId}/escalations/${escalationId}/decision`));
     await review.getByRole("button", { name: "Approve this request" }).click();
-    await review.getByText(/State: approved/).waitFor({ state: "visible", timeout: 30000 });
+    assert.equal((await decisionResponse).status(), 403, "the server rejects requester self-approval from the Dashboard");
     const decided = await fixture.request("GET", `/api/agent/tasks/${encodeURIComponent(taskId)}`);
     assert.equal(decided.status, 200);
-    assert.equal(decided.body.escalations.find(item => item.escalation_id === escalationId)?.state, "approved");
+    assert.equal(decided.body.escalations.find(item => item.escalation_id === escalationId)?.state, "open");
   });
 });
