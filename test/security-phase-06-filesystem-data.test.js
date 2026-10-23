@@ -8,7 +8,7 @@ const { execFileSync } = require("child_process");
 const { childProcessEnv } = require("../src/security/child-process");
 const { resolveCommandOnPath } = require("../src/security/command-lookup");
 const { createArchiveSnapshot } = require("../src/tools/archive-snapshot");
-const { validateArchiveEntryNames, validateArchiveEntryDestinations, validateArchiveEntryTypes, validateZipEntryTypes, validateArchiveSourceType, archiveProcessEnv, MAX_ARCHIVE_ENTRIES } = require("../src/tools/families/process-mgmt");
+const { validateArchiveEntryNames, validateArchiveEntryDestinations, validateArchiveEntryTypes, validateZipEntryTypes, validateTarExpandedSize, validateZipExpandedSize, sumArchiveEntrySizes, assertArchiveFitsDestination, validateArchiveSourceType, archiveProcessEnv, MAX_ARCHIVE_ENTRIES, MAX_ARCHIVE_EXPANDED_BYTES, ARCHIVE_FREE_SPACE_RESERVE_BYTES } = require("../src/tools/families/process-mgmt");
 
 for (const entry of [
   "../outside.txt",
@@ -38,8 +38,15 @@ for (const typeListing of [
 }
 assert.throws(() => validateArchiveEntryTypes("unrecognized tar output\n"), /listing is invalid/);
 assert.throws(() => validateArchiveEntryTypes(""), /could not be verified/);
+assert.strictEqual(validateTarExpandedSize("-rw-r--r-- 0 0 1 Jan 01 00:00 file.txt\ndrwxr-xr-x 0 0 0 Jan 01 00:00 folder/\n"), 1);
+assert.strictEqual(validateTarExpandedSize("-rw-r--r-- 0/0 2048 2026-10-23 19:36 modern.txt\n"), 2048, "GNU tar ISO-date listings expose the member size");
+assert.throws(() => validateTarExpandedSize("unrecognized listing\n"), /size listing is invalid/);
+assert.throws(() => validateTarExpandedSize(`-rw-r--r-- 0/0 ${MAX_ARCHIVE_EXPANDED_BYTES + 1} 2026-10-23 19:36 oversized.bin\n`), /expanded-size limit/);
+assert.throws(() => sumArchiveEntrySizes([1.5]), /safe integer limit/);
+assert.throws(() => sumArchiveEntrySizes([Number.MAX_SAFE_INTEGER, 1]), /expanded-size limit/);
 
 const zipEntry = mode => `Central directory entry #1:\n---------------------------\n\n  entry\n  file system or operating system of origin: Unix\n  Unix file attributes (100644 octal):            ${mode}\n`;
+const zipSizeEntry = (index, size) => `Central directory entry #${index}:\n---------------------------\n\n  entry\n  uncompressed size: ${size} bytes\n`;
 assert.strictEqual(validateZipEntryTypes(zipEntry("-rw-r--r--")), true);
 assert.strictEqual(validateZipEntryTypes("Central directory entry #1:\n  file system or operating system of origin: MS-DOS, OS/2 or NT FAT\n  MS-DOS file attributes (00 hex):            none\n"), true);
 for (const mode of ["lrwxrwxrwx", "hrw-r--r--", "prw-r--r--", "brw-r--r--", "crw-r--r--"]) {
@@ -47,6 +54,21 @@ for (const mode of ["lrwxrwxrwx", "hrw-r--r--", "prw-r--r--", "brw-r--r--", "crw
 }
 assert.throws(() => validateZipEntryTypes("unrecognized zipinfo output\n"), /metadata could not be verified/);
 assert.throws(() => validateZipEntryTypes("Central directory entry #1:\n  file system or operating system of origin: Unix\n"), /attributes could not be verified/);
+assert.strictEqual(validateZipExpandedSize(zipSizeEntry(1, 10) + zipSizeEntry(2, 20)), 30);
+assert.throws(() => validateZipExpandedSize("Central directory entry #1:\n  entry\n"), /member size could not be verified/);
+assert.throws(() => validateZipExpandedSize(zipSizeEntry(1, MAX_ARCHIVE_EXPANDED_BYTES + 1)), /expanded-size limit/);
+assert.strictEqual(archiveProcessEnv().LC_ALL, "C", "archive metadata parsing uses a stable locale");
+assert.strictEqual(archiveProcessEnv().LANG, "C", "archive metadata parsing uses a stable language");
+
+const destinationStats = fs.statfsSync(os.tmpdir(), { bigint: true });
+const availableBytes = destinationStats.bavail * destinationStats.bsize;
+assert.strictEqual(assertArchiveFitsDestination(os.tmpdir(), 0), true);
+if (availableBytes > BigInt(ARCHIVE_FREE_SPACE_RESERVE_BYTES)) {
+  const justOverUsable = Number(availableBytes - BigInt(ARCHIVE_FREE_SPACE_RESERVE_BYTES) + 1n);
+  if (Number.isSafeInteger(justOverUsable) && justOverUsable <= MAX_ARCHIVE_EXPANDED_BYTES) {
+    assert.throws(() => assertArchiveFitsDestination(os.tmpdir(), justOverUsable), /does not fit in destination free space/);
+  }
+}
 
 function makeZipFixture(name, unixMode) {
   const filename = Buffer.from(name, "utf8");
@@ -124,8 +146,10 @@ const source = fs.readFileSync(path.join(__dirname, "..", "src", "tools", "famil
 assert.equal((source.match(/validateArchiveEntryNames\(entries\);/g) || []).length, 2, "tar and zip extraction must validate every listed entry name");
 assert.match(source, /validateArchiveEntryDestinations\(canonicalExtractTarget, entries\)/, "archive extraction must reject existing destination symlinks before writing");
 assert.match(source, /validateArchiveEntryTypes\(typeListing\)/, "tar extraction must reject link and special-file entries before extraction");
-assert.match(source, /\["-tvzf", archiveSource\]/, "tar member types must be inspected before extraction");
+assert.match(source, /validateTarExpandedSize\(typeListing\)/, "tar extraction must bound expanded data before writing");
+assert.match(source, /\["--numeric-owner", "-tvzf", archiveSource\]/, "tar member sizes must not be confused by archive-controlled owner names");
 assert.match(source, /validateZipEntryTypes\(typeListing\)/, "zip extraction must reject link and special-file entries before extraction");
+assert.match(source, /validateZipExpandedSize\(typeListing\)/, "zip extraction must bound expanded data before writing");
 assert.match(source, /\["-Z", "-v", archiveSource\]/, "zip central-directory Unix attributes must be inspected before extraction");
 assert.equal((source.match(/env: archiveProcessEnv\(\)/g) || []).length, 5, "all archive list, preflight, creation, and extraction processes must use sanitized environments");
 assert.match(source, /sourceStat = fs\.statSync\(sourceAbsolute\)/, "archive source type must be verified after canonicalization");

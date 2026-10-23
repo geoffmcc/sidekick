@@ -23,6 +23,8 @@ const { createArchiveSnapshot } = require("../archive-snapshot");
 
 const MAX_ARCHIVE_ENTRIES = 10000;
 const MAX_ARCHIVE_DESTINATION_COMPONENTS = 100000;
+const MAX_ARCHIVE_EXPANDED_BYTES = 2 * 1024 * 1024 * 1024;
+const ARCHIVE_FREE_SPACE_RESERVE_BYTES = 256 * 1024 * 1024;
 const ALLOWED_SERVICE_NAMES = Object.freeze([
   "sidekick-mcp", "sidekick-dashboard", "sidekick-agent", "sidekick-postgres",
   "sidekick-redis", "sidekick-qdrant", "sidekick-influxdb", "sidekick-grafana",
@@ -43,7 +45,92 @@ const ARCHIVE_ENV_OVERRIDES = Object.freeze({
 });
 
 function archiveProcessEnv() {
-  return childProcessEnv(ARCHIVE_ENV_OVERRIDES);
+  return childProcessEnv({ ...ARCHIVE_ENV_OVERRIDES, LC_ALL: "C", LANG: "C" });
+}
+
+function sumArchiveEntrySizes(sizes) {
+  if (!Array.isArray(sizes) || sizes.length > MAX_ARCHIVE_ENTRIES) {
+    throw new Error("archive member sizes could not be verified");
+  }
+  let total = 0;
+  for (const size of sizes) {
+    if (!Number.isSafeInteger(size) || size < 0 || total > Number.MAX_SAFE_INTEGER - size) {
+      throw new Error("archive member size is invalid or exceeds the safe integer limit");
+    }
+    total += size;
+    if (total > MAX_ARCHIVE_EXPANDED_BYTES) {
+      throw new Error(`archive exceeds the ${MAX_ARCHIVE_EXPANDED_BYTES}-byte expanded-size limit`);
+    }
+  }
+  return total;
+}
+
+function validateTarExpandedSize(listing) {
+  if (typeof listing !== "string" || listing.length === 0) {
+    throw new Error("tar member sizes could not be verified");
+  }
+  const lines = listing.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+  while (lines.length && lines[lines.length - 1] === "") lines.pop();
+  if (lines.length === 0 || lines.length > MAX_ARCHIVE_ENTRIES) {
+    throw new Error("tar member sizes could not be verified");
+  }
+  const sizes = [];
+  const month = "Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec";
+  const monthDate = new RegExp(`(?:^|\\s)(?:${month})\\s+\\d{1,2}\\s+(?:\\d{2}:\\d{2}(?::\\d{2})?|\\d{4})(?:\\s|$)`);
+  for (const line of lines) {
+    const mode = /^([bcdhlps-])([rwxStTs-]{9})\s/.exec(line);
+    if (!mode) throw new Error("tar member size listing is invalid");
+    const isoDate = /(?:^|\s)\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(?::\d{2})?(?:\s|$)/.exec(line);
+    const dateMatch = isoDate || monthDate.exec(line);
+    if (!dateMatch) throw new Error("tar member date and size could not be verified");
+    const prefix = line.slice(0, dateMatch.index);
+    const precedingNumbers = [...prefix.matchAll(/(?:^|\s)(\d+)(?=\s|$)/g)];
+    const sizeText = precedingNumbers.at(-1)?.[1];
+    if (!sizeText || !Number.isSafeInteger(Number(sizeText))) {
+      throw new Error("tar member size could not be verified");
+    }
+    sizes.push(Number(sizeText));
+  }
+  return sumArchiveEntrySizes(sizes);
+}
+
+function validateZipExpandedSize(listing) {
+  if (typeof listing !== "string" || listing.length === 0) {
+    throw new Error("zip member sizes could not be verified");
+  }
+  const normalized = listing.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const starts = [...normalized.matchAll(/^Central directory entry #\d+:\s*$/gim)].map(match => match.index);
+  if (starts.length === 0 || starts.length > MAX_ARCHIVE_ENTRIES) {
+    throw new Error("zip member sizes could not be verified");
+  }
+  const sizes = [];
+  for (let index = 0; index < starts.length; index++) {
+    const section = normalized.slice(starts[index], starts[index + 1] ?? normalized.length);
+    const entries = [...section.matchAll(/^\s*uncompressed size:\s*(\d+)\s+bytes?\s*$/gim)];
+    if (entries.length !== 1 || !Number.isSafeInteger(Number(entries[0][1]))) {
+      throw new Error("zip member size could not be verified");
+    }
+    sizes.push(Number(entries[0][1]));
+  }
+  return sumArchiveEntrySizes(sizes);
+}
+
+function assertArchiveFitsDestination(root, expandedBytes) {
+  if (!Number.isSafeInteger(expandedBytes) || expandedBytes < 0 || expandedBytes > MAX_ARCHIVE_EXPANDED_BYTES) {
+    throw new Error("archive expanded size is invalid or exceeds the configured limit");
+  }
+  let availableBytes;
+  try {
+    const stats = fs.statfsSync(root, { bigint: true });
+    availableBytes = stats.bavail * stats.bsize;
+  } catch {
+    throw new Error("archive destination free space could not be verified; extraction was not started");
+  }
+  const usableBytes = availableBytes - BigInt(ARCHIVE_FREE_SPACE_RESERVE_BYTES);
+  if (usableBytes < 0n || BigInt(expandedBytes) > usableBytes) {
+    throw new Error("archive does not fit in destination free space while preserving the required reserve");
+  }
+  return true;
 }
 
 function buildProcessKillCommand({ pid, name, signal }) {
@@ -356,28 +443,32 @@ async function sidekick_archive({ action, path: sourcePath, output, format }) {
     } else if (action === "extract") {
       try {
         if (sourcePath.endsWith(".tar.gz") || sourcePath.endsWith(".tgz")) {
+          const typeListing = execFileSync("tar", ["--numeric-owner", "-tvzf", archiveSource], { timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024, env: archiveProcessEnv() });
+          validateArchiveEntryTypes(typeListing);
+          const expandedBytes = validateTarExpandedSize(typeListing);
           const listing = execFileSync("tar", ["-tzf", archiveSource], { timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024, env: archiveProcessEnv() });
           const entries = listing.split("\n");
           validateArchiveEntryNames(entries);
-          const typeListing = execFileSync("tar", ["-tvzf", archiveSource], { timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024, env: archiveProcessEnv() });
-          validateArchiveEntryTypes(typeListing);
           fs.mkdirSync(extractTarget, { recursive: true });
           const canonicalExtractTarget = fs.realpathSync(extractTarget);
           const canonicalOutputPolicyError = enforcePathPolicy(canonicalExtractTarget, "write");
           if (canonicalOutputPolicyError) throw new Error("archive destination is outside the allowed write scope");
           validateArchiveEntryDestinations(canonicalExtractTarget, entries);
+          assertArchiveFitsDestination(canonicalExtractTarget, expandedBytes);
           cmd = ["tar", ["-xzf", archiveSource, "-C", canonicalExtractTarget, "--no-same-owner", "--no-overwrite-dir"]];
         } else if (sourcePath.endsWith(".zip")) {
+          const typeListing = execFileSync("unzip", ["-Z", "-v", archiveSource], { timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024, env: archiveProcessEnv() });
+          validateZipEntryTypes(typeListing);
+          const expandedBytes = validateZipExpandedSize(typeListing);
           const listing = execFileSync("unzip", ["-Z1", archiveSource], { timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024, env: archiveProcessEnv() });
           const entries = listing.split("\n");
           validateArchiveEntryNames(entries);
-          const typeListing = execFileSync("unzip", ["-Z", "-v", archiveSource], { timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024, env: archiveProcessEnv() });
-          validateZipEntryTypes(typeListing);
           fs.mkdirSync(extractTarget, { recursive: true });
           const canonicalExtractTarget = fs.realpathSync(extractTarget);
           const canonicalOutputPolicyError = enforcePathPolicy(canonicalExtractTarget, "write");
           if (canonicalOutputPolicyError) throw new Error("archive destination is outside the allowed write scope");
           validateArchiveEntryDestinations(canonicalExtractTarget, entries);
+          assertArchiveFitsDestination(canonicalExtractTarget, expandedBytes);
           cmd = ["unzip", [archiveSource, "-d", canonicalExtractTarget]];
         } else {
           return { content: [{ type: "text", text: "Unsupported archive format" }], isError: true };
@@ -459,4 +550,4 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_process, sidekick_service, sidekick_archive, validateArchiveEntryNames, validateArchiveEntryDestinations, validateArchiveEntryTypes, validateZipEntryTypes, validateArchiveSourceType, archiveProcessEnv, MAX_ARCHIVE_ENTRIES, MAX_ARCHIVE_DESTINATION_COMPONENTS, normalizeManagedService, ALLOWED_SERVICE_NAMES, buildProcessKillCommand, ALLOWED_PROCESS_SIGNALS };
+module.exports = { descriptors, sidekick_process, sidekick_service, sidekick_archive, validateArchiveEntryNames, validateArchiveEntryDestinations, validateArchiveEntryTypes, validateZipEntryTypes, validateTarExpandedSize, validateZipExpandedSize, sumArchiveEntrySizes, assertArchiveFitsDestination, validateArchiveSourceType, archiveProcessEnv, MAX_ARCHIVE_ENTRIES, MAX_ARCHIVE_DESTINATION_COMPONENTS, MAX_ARCHIVE_EXPANDED_BYTES, ARCHIVE_FREE_SPACE_RESERVE_BYTES, normalizeManagedService, ALLOWED_SERVICE_NAMES, buildProcessKillCommand, ALLOWED_PROCESS_SIGNALS };
