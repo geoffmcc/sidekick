@@ -240,7 +240,7 @@ test("session begin and continuation require current project memory permissions"
   const allowed = await dispatcher.callAgentTool("session", { action: "begin", goal: "authorized scoped session", project: "memory_a" }, auth);
   assert.equal(allowed.isError, undefined);
   const session = JSON.parse(allowed.content[0].text).session;
-  const narrowlyScopedBegin = await dispatcher.callAgentTool("session", { action: "begin", goal: "least-privilege scoped session", project: "memory_a" }, {
+  const narrowlyScopedBegin = await dispatcher.callMcpTool("session", { action: "begin", goal: "least-privilege scoped session", project: "memory_a" }, {
     authIdentity: { principal_id: operator.principal_id, principal_type: "human", scopes: ["memory.read", "memory.write"] },
   });
   assert.equal(narrowlyScopedBegin.isError, undefined, "memory-scoped credentials can create continuity without the broad tools.execute grant");
@@ -248,7 +248,7 @@ test("session begin and continuation require current project memory permissions"
     authIdentity: { principal_id: operator.principal_id, principal_type: "human", scopes: ["memory.read"] },
   });
   assert.equal(readOnlyBegin.code, "authorization_denied", "read-only memory credentials cannot begin a session");
-  const narrowlyScopedStatus = await dispatcher.callAgentTool("session", { action: "status", id: session.id }, {
+  const narrowlyScopedStatus = await dispatcher.callMcpTool("session", { action: "status", id: session.id }, {
     authIdentity: { principal_id: operator.principal_id, principal_type: "human", scopes: ["memory.read"] },
   });
   assert.equal(narrowlyScopedStatus.isError, undefined, "read-only memory credentials can read an owned session");
@@ -876,7 +876,7 @@ test("resume pointers are project-scoped and require an authenticated identity",
   const items = JSON.parse(listed.content[0].text).items;
   assert.ok(items.some(item => item.project === "memory_a"));
   assert.ok(items.every(item => item.project === "memory_a"), "unbound list filters every project by current read access");
-  const narrowlyScopedList = await dispatcher.callAgentTool("resume", { action: "list", format: "json" }, {
+  const narrowlyScopedList = await dispatcher.callMcpTool("resume", { action: "list", format: "json" }, {
     authIdentity: { principal_id: operator.principal_id, principal_type: "human", scopes: ["memory.read"] },
   });
   assert.notEqual(narrowlyScopedList.isError, true, narrowlyScopedList.content?.[0]?.text);
