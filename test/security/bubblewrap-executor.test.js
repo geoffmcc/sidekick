@@ -44,6 +44,15 @@ test("unsupported platforms fail closed without starting a host shell", () => {
   assert.throws(() => executor.buildBubblewrapArgs({ command: "echo must-not-run" }), error => error.code === "isolation_unavailable");
 });
 
+test("sandbox output limits always resolve to a positive finite hard ceiling", () => {
+  assert.equal(executor.normalizeOutputBufferLimit(undefined), executor.DEFAULT_OUTPUT_BUFFER_BYTES);
+  assert.equal(executor.normalizeOutputBufferLimit(4096), 4096);
+  assert.equal(executor.normalizeOutputBufferLimit(executor.MAX_OUTPUT_BUFFER_BYTES * 2), executor.MAX_OUTPUT_BUFFER_BYTES);
+  for (const value of [0, -1, NaN, Infinity, "50000000", null]) {
+    assert.equal(executor.normalizeOutputBufferLimit(value), executor.DEFAULT_OUTPUT_BUFFER_BYTES, `invalid limit ${String(value)} uses the safe default`);
+  }
+});
+
 test("missing Linux isolation backend fails closed", () => {
   if (process.platform !== "linux") return;
   assert.throws(
@@ -125,6 +134,18 @@ test("command resource limits are kernel-enforced and cannot be raised by the sa
   assert.match(result.stdout, /FSIZE\s+268435456\s+268435456/);
   assert.match(result.stdout, /CORE\s+0\s+0/);
   assert.match(result.stdout, /raise-denied$/);
+});
+
+test("stdout and stderr share one bounded sandbox output budget", { skip: process.platform !== "linux" || !fs.existsSync(executor.DEFAULT_BWRAP) }, async () => {
+  const outputLimit = 1024;
+  const result = await executor.runBubblewrap({
+    command: "printf '%0700d' 0; printf '%0700d' 0 >&2",
+    source: "mcp",
+    maxBuffer: outputLimit,
+  });
+  assert.equal(result.outputExceeded, true);
+  assert.equal(result.exitCode, null);
+  assert.ok(Buffer.byteLength(result.stdout, "utf8") + Buffer.byteLength(result.stderr, "utf8") <= outputLimit);
 });
 
 test("workspace binding permits scoped writes and hides unrelated host files and network", { skip: process.platform !== "linux" || !fs.existsSync(executor.DEFAULT_BWRAP) }, async () => {

@@ -9,6 +9,8 @@ const pathPolicy = require("../tools/path-policy");
 const DEFAULT_BWRAP = "/usr/bin/bwrap";
 const MAX_COMMAND_LENGTH = 65536;
 const MAX_TMPFS_BYTES = 256 * 1024 * 1024;
+const DEFAULT_OUTPUT_BUFFER_BYTES = 10 * 1024 * 1024;
+const MAX_OUTPUT_BUFFER_BYTES = 50 * 1024 * 1024;
 const COMMAND_LIMITS = Object.freeze({
   cpuSeconds: 300,
   processes: 64,
@@ -18,6 +20,13 @@ const COMMAND_LIMITS = Object.freeze({
 const SANDBOX_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 const SYSTEM_MOUNTS = ["/usr", "/bin", "/lib", "/lib64", "/sbin"];
 const PRLIMIT = "/usr/bin/prlimit";
+
+function normalizeOutputBufferLimit(value) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return DEFAULT_OUTPUT_BUFFER_BYTES;
+  }
+  return Math.max(1, Math.min(Math.floor(value), MAX_OUTPUT_BUFFER_BYTES));
+}
 
 function isolationError(message, code = "isolation_unavailable") {
   const error = new Error(message);
@@ -214,8 +223,9 @@ function composeBubblewrapArgs({ command, canonicalWorkspace, workspaceFd, execu
   return { executable, args, workspace: canonicalWorkspace };
 }
 
-async function runBubblewrap({ command, workspace = null, source = "mcp", timeoutMs, signal, maxBuffer = 10 * 1024 * 1024 } = {}) {
+async function runBubblewrap({ command, workspace = null, source = "mcp", timeoutMs, signal, maxBuffer = DEFAULT_OUTPUT_BUFFER_BYTES } = {}) {
   validateCommand(command);
+  const outputBufferLimit = normalizeOutputBufferLimit(maxBuffer);
   const executable = resolveBubblewrap();
   resolvePrlimit();
   const workspaceBinding = openAuthorizedWorkspace(workspace, source);
@@ -252,6 +262,7 @@ async function runBubblewrap({ command, workspace = null, source = "mcp", timeou
 
     let stdout = "";
     let stderr = "";
+    let outputBytes = 0;
     let statusBuffer = "";
     let childStarted = false;
     let settled = false;
@@ -265,12 +276,13 @@ async function runBubblewrap({ command, workspace = null, source = "mcp", timeou
       fn(value);
     };
     const append = (current, chunk) => {
-      const combined = current + chunk.toString("utf8");
-      if (Buffer.byteLength(combined, "utf8") > maxBuffer) {
+      if (outputBytes + chunk.length > outputBufferLimit) {
         outputExceeded = true;
         child.kill("SIGKILL");
         return current;
       }
+      outputBytes += chunk.length;
+      const combined = current + chunk.toString("utf8");
       return combined;
     };
     const timer = setTimeout(() => {
@@ -336,7 +348,10 @@ module.exports = Object.freeze({
   DEFAULT_BWRAP,
   MAX_COMMAND_LENGTH,
   MAX_TMPFS_BYTES,
+  DEFAULT_OUTPUT_BUFFER_BYTES,
+  MAX_OUTPUT_BUFFER_BYTES,
   COMMAND_LIMITS,
+  normalizeOutputBufferLimit,
   hasProtectedAncestors,
   resolveBubblewrap,
   resolvePrlimit,
