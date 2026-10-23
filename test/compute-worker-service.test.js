@@ -162,6 +162,27 @@ test('windows installer refuses a non-admin-writable node.exe', () => {
   assert.ok(/ChangePermissions/.test(rights[1]) && /TakeOwnership/.test(rights[1]),
     'must catch ACL-rewrite rights, not just direct writes');
 });
+test('windows installer protects the complete LocalSystem executable and config trees', () => {
+  const body = read(path.join(PKG, 'install-windows.ps1'));
+  assert.ok(/Get-NonAdminWriters -Path \$InstallDir -IncludeDescendants/.test(body),
+    'must inspect every executable and directory under the service install root');
+  assert.ok(/non-administrator \$\(\$acl\.Owner\)/.test(body),
+    'must reject files or directories owned by an untrusted principal');
+  assert.ok(/UnsafeAncestorRights/.test(body) && /Refusing to create InstallDir beneath an unsafe parent/.test(body) &&
+    /Refusing to create ConfigDir beneath an unsafe parent/.test(body),
+  'must reject ancestors that let an untrusted user replace an installation or config directory');
+  assert.ok(/Set-SidekickPrivateAclTree -Path \$ConfigDir/.test(body) &&
+    /Refusing to secure a reparse point inside Sidekick configuration/.test(body),
+  'must reset config ownership and ACLs throughout the tree and reject reparse points');
+  assert.ok(/SetAccessRuleProtection\(\$true, \$false\)/.test(body) &&
+    /S-1-5-18/.test(body) && /S-1-5-32-544/.test(body),
+  'config ACLs must be protected and limited to LocalSystem and Administrators');
+  assert.ok(/\.config\.\$\(\[Guid\]::NewGuid\(\)\.ToString\('N'\)\)\.tmp/.test(body) &&
+    /Move-Item -LiteralPath \$ConfigTempPath -Destination \$ConfigPath/.test(body),
+  'config must be written through a unique temporary file in its secured directory');
+  assert.ok(body.indexOf('Set-SidekickPrivateAclTree -Path $ConfigDir') < body.indexOf('$Config | ConvertTo-Json'),
+    'config ACLs must be secured before writing configuration');
+});
 test('elevated installer paths do not resolve system binaries by bare name', () => {
   const ps = read(path.join(PKG, 'install-windows.ps1'));
   assert.ok(!/&\s*sc\.exe/.test(ps), 'sc.exe must be called by absolute path');
