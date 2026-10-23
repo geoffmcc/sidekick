@@ -20,6 +20,7 @@
 const https = require("https");
 const MAX_GITHUB_RESPONSE_BYTES = 8 * 1024 * 1024;
 const MAX_GITHUB_PAGES = 50;
+const MAX_GITHUB_PAGINATED_RESPONSE_BYTES = 16 * 1024 * 1024;
 const MAX_GITHUB_REQUEST_BYTES = 1024 * 1024;
 
 function readGithubResponseText(response, maxBytes = MAX_GITHUB_RESPONSE_BYTES) {
@@ -285,7 +286,7 @@ async function githubRequest(token, method, endpoint, body) {
           parsed = data;
         }
         noteGithubResponse(res.statusCode);
-        resolve({ status: res.statusCode, headers: res.headers || {}, data: parsed });
+        resolve({ status: res.statusCode, headers: res.headers || {}, data: parsed, bytes: Buffer.byteLength(data, "utf8") });
       }).catch(err => resolve({ status: 0, headers: {}, data: err.message }));
     });
     req.on("error", (err) => resolve({ status: 0, headers: {}, data: err.message }));
@@ -305,16 +306,23 @@ function parseGithubLinkHeader(linkHeader) {
   return links;
 }
 
-function endpointFromGithubUrl(url) {
-  const parsed = new URL(url);
+function endpointFromGithubUrl(url, expectedUrl) {
+  let parsed;
+  try { parsed = new URL(url); } catch { return null; }
+  const expected = new URL(expectedUrl);
+  if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.origin !== expected.origin || parsed.pathname !== expected.pathname) return null;
   return parsed.pathname + parsed.search;
 }
 
 async function githubPaginatedRequest(token, endpoint, dataKey) {
-  let next = endpoint;
+  const apiBase = resolveGithubApiBase();
+  const initialUrl = new URL(apiBase + endpoint);
+  const expectedUrl = initialUrl.href;
+  let next = initialUrl.pathname + initialUrl.search;
   const items = [];
   let lastResponse = null;
   let pageCount = 0;
+  let totalBytes = 0;
 
   while (next) {
     if (pageCount >= MAX_GITHUB_PAGES) {
@@ -324,12 +332,21 @@ async function githubPaginatedRequest(token, endpoint, dataKey) {
     const res = await githubRequest(token, "GET", next);
     lastResponse = res;
     if (res.status < 200 || res.status >= 300) return { response: res, items };
+    totalBytes += Number(res.bytes) || 0;
+    if (totalBytes > MAX_GITHUB_PAGINATED_RESPONSE_BYTES) {
+      return { response: { status: 0, headers: {}, data: `GitHub API pagination exceeded ${MAX_GITHUB_PAGINATED_RESPONSE_BYTES} total response bytes` }, items };
+    }
 
     const pageItems = dataKey ? res.data?.[dataKey] : res.data;
     if (Array.isArray(pageItems)) items.push(...pageItems);
 
     const links = parseGithubLinkHeader(res.headers.link);
-    next = links.next ? endpointFromGithubUrl(links.next) : null;
+    if (links.next) {
+      next = endpointFromGithubUrl(links.next, expectedUrl);
+      if (!next) return { response: { status: 0, headers: {}, data: "GitHub API returned an unsafe pagination URL" }, items };
+    } else {
+      next = null;
+    }
   }
 
   return { response: lastResponse, items };
@@ -721,6 +738,8 @@ module.exports = {
   readGithubResponseText,
   MAX_GITHUB_RESPONSE_BYTES,
   MAX_GITHUB_PAGES,
+  MAX_GITHUB_PAGINATED_RESPONSE_BYTES,
+  endpointFromGithubUrl,
   MAX_GITHUB_REQUEST_BYTES,
   validateRepoName,
   validateGithubRef,

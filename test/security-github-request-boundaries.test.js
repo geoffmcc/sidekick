@@ -48,3 +48,19 @@ test("GitHub API request JSON is bounded before opening a request", () => {
   const tooLarge = github.serializeGithubBody({ body: "x".repeat(github.MAX_GITHUB_REQUEST_BYTES) });
   assert.match(tooLarge.error, /request body exceeded/);
 });
+
+test("GitHub pagination stays on the authorized HTTPS resource path", () => {
+  const expected = "https://api.github.com/repos/owner/repository/commits/abc123/status?per_page=100";
+  assert.equal(
+    github.endpointFromGithubUrl("https://api.github.com/repos/owner/repository/commits/abc123/status?per_page=100&page=2", expected),
+    "/repos/owner/repository/commits/abc123/status?per_page=100&page=2",
+  );
+  for (const next of [
+    "https://api.github.com/user",
+    "https://api.github.com/repos/other/private",
+    "https://attacker.example/repos/owner/repository/commits/abc123/status?page=2",
+    "http://api.github.com/repos/owner/repository/commits/abc123/status?page=2",
+    "https://user@api.github.com/repos/owner/repository/commits/abc123/status?page=2",
+  ]) assert.equal(github.endpointFromGithubUrl(next, expected), null, next);
+  assert.equal(github.MAX_GITHUB_PAGINATED_RESPONSE_BYTES, 16 * 1024 * 1024);
+});
