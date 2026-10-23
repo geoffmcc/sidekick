@@ -74,6 +74,23 @@ function audit(eventType, principalIdValue, actorPrincipalId, details = {}) {
   dbStore.getDb().prepare(`INSERT INTO identity_audit_events (event_id, event_type, principal_id, actor_principal_id, details_json, created_at) VALUES (?, ?, ?, ?, ?, ?)`).run(eventId(), eventType, principalIdValue || null, actorPrincipalId || null, JSON.stringify(details), now());
 }
 
+function identityAuthority(actorIdentity) {
+  const actorPrincipalId = typeof actorIdentity === "string"
+    ? actorIdentity
+    : actorIdentity?.principal_id || actorIdentity?.principalId;
+  const scopes = actorIdentity?.scopes ?? actorIdentity?.credentialScopes;
+  if (scopes !== undefined && scopes !== null && !Array.isArray(scopes)) throw new Error("identity authority scopes are invalid");
+  const principalIdValue = typeof actorPrincipalId === "string" ? actorPrincipalId.trim() : "";
+  return {
+    actorPrincipalId: principalIdValue,
+    authorizationContext: {
+      principalId: principalIdValue,
+      ...(Array.isArray(scopes) ? { credentialScopes: scopes } : {}),
+      delegationId: actorIdentity?.delegation_id || actorIdentity?.delegationId || null,
+    },
+  };
+}
+
 function recordAuditEvent(eventType, principalIdValue, actorPrincipalId = null, details = {}) {
   requiredText(eventType, "event_type", 120);
   audit(eventType, principalIdValue, actorPrincipalId, details);
@@ -174,17 +191,18 @@ function updateUsername(id, username, actorPrincipalId = null) {
   })();
 }
 
-function assignRole(principalIdValue, role, actorPrincipalId = null) {
+function assignRole(principalIdValue, role, actorIdentity = null) {
   validateRole(role);
   const principal = getPrincipal(principalIdValue);
   if (!principal) throw new Error("principal not found");
+  const { actorPrincipalId, authorizationContext } = identityAuthority(actorIdentity);
   // The legacy Dashboard bridge has two explicit onboarding cases: complete
   // first-owner setup while no Owner exists, or map the authenticated legacy
   // Basic Auth administrator to an Administrator role. Every other role
   // mutation requires current roles.manage authority.
   const firstOwnerException = role === "owner" && actorPrincipalId === principal.principal_id && canCompleteFirstOwnerSetup(principal.principal_id);
   const legacyDashboardAdminException = role === "administrator" && actorPrincipalId === principal.principal_id && canAssignLegacyDashboardAdministrator(principal.principal_id);
-  const authorized = actorPrincipalId && require("./authorization").authorize({ principalId: actorPrincipalId, permission: "roles.manage" }).ok;
+  const authorized = actorPrincipalId && require("./authorization").authorize({ ...authorizationContext, permission: "roles.manage" }).ok;
   if (!firstOwnerException && !legacyDashboardAdminException && !authorized) {
     throw new Error(role === "owner" ? "Owner promotion requires an authorized actor" : "Role assignment requires roles.manage");
   }
@@ -199,7 +217,7 @@ function assignRole(principalIdValue, role, actorPrincipalId = null) {
       throw new Error("Legacy Dashboard administrator assignment is no longer available");
     }
     if (!firstOwnerException && !legacyDashboardAdminException &&
-        !require("./authorization").authorize({ principalId: actorPrincipalId, permission: "roles.manage" }).ok) {
+        !require("./authorization").authorize({ ...authorizationContext, permission: "roles.manage" }).ok) {
       throw new Error(role === "owner" ? "Owner promotion requires an authorized actor" : "Role assignment requires roles.manage");
     }
     db.prepare("INSERT INTO principal_roles (principal_id, role_name, assigned_by_principal_id, assigned_at) VALUES (?, ?, ?, ?)").run(principal.principal_id, role, actorPrincipalId, now());
@@ -280,16 +298,18 @@ function getPrincipalPermissions(principalIdValue) {
     .all(requiredText(principalIdValue, "principal_id")).map(row => row.permission);
 }
 
-function removeRole(principalIdValue, role, actorPrincipalId = null) {
+function removeRole(principalIdValue, role, actorIdentity = null) {
   validateRole(role);
+  const { actorPrincipalId, authorizationContext } = identityAuthority(actorIdentity);
   const principal = getPrincipal(principalIdValue);
   if (!principal) throw new Error("principal not found");
-  if (!actorPrincipalId || !require("./authorization").authorize({ principalId: actorPrincipalId, permission: "roles.manage" }).ok) {
+  const authorization = require("./authorization");
+  if (!actorPrincipalId || !authorization.authorize({ ...authorizationContext, permission: "roles.manage" }).ok) {
     throw new Error(role === "owner" ? "Owner demotion requires roles.manage" : "Role removal requires roles.manage");
   }
   const db = dbStore.getDb();
   db.transaction(() => {
-    if (!require("./authorization").authorize({ principalId: actorPrincipalId, permission: "roles.manage" }).ok) {
+    if (!authorization.authorize({ ...authorizationContext, permission: "roles.manage" }).ok) {
       throw new Error(role === "owner" ? "Owner demotion requires roles.manage" : "Role removal requires roles.manage");
     }
     if (role === "owner") {
@@ -320,18 +340,19 @@ function bootstrapOwner({ username, password, displayName, metadata = {} } = {})
   }
 }
 
-function setPrincipalEnabled(id, enabled, actorPrincipalId = null) {
+function setPrincipalEnabled(id, enabled, actorIdentity = null) {
   if (typeof enabled !== "boolean") throw new Error("enabled must be a boolean");
   const principal = getPrincipal(id);
   if (!principal) throw new Error("principal not found");
+  const { actorPrincipalId, authorizationContext } = identityAuthority(actorIdentity);
   const authorization = require("./authorization");
-  if (!actorPrincipalId || !authorization.authorize({ principalId: actorPrincipalId, permission: "principals.manage" }).ok) {
+  if (!actorPrincipalId || !authorization.authorize({ ...authorizationContext, permission: "principals.manage" }).ok) {
     throw new Error("Principal state changes require principals.manage");
   }
   const timestamp = now();
   const db = dbStore.getDb();
   return db.transaction(() => {
-    if (!authorization.authorize({ principalId: actorPrincipalId, permission: "principals.manage" }).ok) {
+    if (!authorization.authorize({ ...authorizationContext, permission: "principals.manage" }).ok) {
       throw new Error("Principal state changes require principals.manage");
     }
     const currentPrincipal = getPrincipal(id);

@@ -23,6 +23,8 @@ try {
   const packService = identity.createPrincipal({ type: "service", displayName: "MCP Pack Manager", createdByPrincipalId: owner.principal_id, actorPrincipalId: owner.principal_id });
   identity.grantPrincipalPermission(packService.principal_id, "packs.read", owner.principal_id);
   identity.grantPrincipalPermission(packService.principal_id, "packs.manage", owner.principal_id);
+  const scopedRoleManager = identity.createPrincipal({ type: "service", displayName: "Scoped role manager", createdByPrincipalId: owner.principal_id, actorPrincipalId: owner.principal_id });
+  identity.grantPrincipalPermission(scopedRoleManager.principal_id, "roles.manage", owner.principal_id);
 
   test("server-side browser sessions are opaque, expiring, and invalidatable", () => {
     const created = authentication.createSession(owner.principal_id, { userAgent: "test", ipAddress: "127.0.0.1" });
@@ -51,6 +53,15 @@ try {
     assert.throws(() => authentication.revokeCredential(credential.credential.credential_id), /authenticated identity context/);
     assert.throws(() => authentication.rotateCredential(credential.credential.credential_id), /authenticated identity context/);
     assert.ok(authentication.authenticateCredential(credential.token), "denied lifecycle calls preserve the live credential");
+  });
+
+  test("identity role mutations preserve credential scope attenuation at the service boundary", () => {
+    const target = identity.createPrincipal({ type: "service", displayName: "Scoped role target", createdByPrincipalId: owner.principal_id, actorPrincipalId: owner.principal_id });
+    assert.throws(() => identity.assignRole(target.principal_id, "operator", { principal_id: scopedRoleManager.principal_id, scopes: [] }), /roles.manage/);
+    identity.assignRole(target.principal_id, "operator", { principal_id: scopedRoleManager.principal_id, scopes: ["roles.manage"] });
+    assert.ok(identity.getPrincipal(target.principal_id).roles.includes("operator"));
+    assert.throws(() => identity.setPrincipalEnabled(target.principal_id, false, { principal_id: scopedRoleManager.principal_id, scopes: ["roles.manage"] }), /principals.manage/);
+    assert.equal(identity.getPrincipal(target.principal_id).enabled, true);
   });
 
   test("scoped machine credential is revealed once and stores only a verifier", () => {

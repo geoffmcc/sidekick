@@ -191,7 +191,7 @@ function registerAuthRoutes({
     if (req.body?.role && !requireIdentityPermission(req, res, "roles.manage")) return;
     try {
       const principal = identity.createHumanUser({ username: req.body?.username, password: req.body?.password, displayName: req.body?.display_name, actorPrincipalId: req.authPrincipal.principal_id });
-      if (req.body?.role) identity.assignRole(principal.principal_id, req.body.role, req.authPrincipal.principal_id);
+      if (req.body?.role) identity.assignRole(principal.principal_id, req.body.role, req.authPrincipal);
       res.status(201).json({ principal: identity.getPrincipal(principal.principal_id) });
     } catch (error) {
       return errorResponse(req, res, error, { status: 400, code: "user_create_failed", component: "auth" });
@@ -221,7 +221,7 @@ function registerAuthRoutes({
     if (!requireIdentityPermission(req, res, "principals.manage")) return;
     if (!['enable', 'disable'].includes(req.params.state)) return res.status(404).json({ error: "Unknown principal state" });
     try {
-      const principal = identity.setPrincipalEnabled(req.params.id, req.params.state === 'enable', req.authPrincipal.principal_id);
+      const principal = identity.setPrincipalEnabled(req.params.id, req.params.state === 'enable', req.authPrincipal);
       if (req.params.state === 'disable') authentication.invalidatePrincipalSessions(principal.principal_id, req.authPrincipal.principal_id);
       res.json({ principal });
     } catch (error) {
@@ -238,7 +238,7 @@ function registerAuthRoutes({
       identity.canCompleteFirstOwnerSetup?.(req.params.id) === true;
     if (!adoptedSelfPromotion && !requireIdentityPermission(req, res, "roles.manage")) return;
     try {
-      res.status(201).json({ principal: identity.assignRole(req.params.id, req.body?.role, req.authPrincipal.principal_id) });
+      res.status(201).json({ principal: identity.assignRole(req.params.id, req.body?.role, req.authPrincipal) });
     } catch (error) {
       return errorResponse(req, res, error, { status: 400, code: "invalid_request", component: "auth" });
     }
@@ -247,7 +247,7 @@ function registerAuthRoutes({
   app.delete("/api/auth/principals/:id/roles/:role", (req, res) => {
     if (!requireIdentityPermission(req, res, "roles.manage")) return;
     try {
-      res.json({ principal: identity.removeRole(req.params.id, req.params.role, req.authPrincipal.principal_id) });
+      res.json({ principal: identity.removeRole(req.params.id, req.params.role, req.authPrincipal) });
     } catch (error) {
       return errorResponse(req, res, error, { status: 400, code: "invalid_request", component: "auth" });
     }
