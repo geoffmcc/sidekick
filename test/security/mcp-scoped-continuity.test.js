@@ -217,3 +217,31 @@ test("MCP tool catalog uses a read-only scope without granting ordinary tool exe
   assert.equal(catalogDenied.isError, true);
   assert.match(catalogDenied.content?.[0]?.text || "", /required permission: tools\.catalog\.read/);
 });
+
+test("MCP pack-only credentials explain catalog and continuity denials with exact required scopes", async () => {
+  const principal = identity.createPrincipal({
+    type: "service",
+    displayName: "Synthetic pack-only diagnostic client",
+    createdByPrincipalId: owner.principal_id,
+    actorIdentity: owner,
+  });
+  identity.grantPrincipalPermission(principal.principal_id, "packs.read", owner);
+  const token = authentication.createCredential({
+    principalId: principal.principal_id,
+    displayName: "Synthetic packs.read-only credential",
+    scopes: ["packs.read"],
+    createdByPrincipalId: owner.principal_id,
+    actorContext: owner,
+  }).token;
+
+  const packRead = await callTool(token, "capability", { action: "list", limit: 1 });
+  assert.notEqual(packRead.isError, true, packRead.content?.[0]?.text);
+
+  const continuityRead = await callTool(token, "session", { action: "status" });
+  assert.equal(continuityRead.isError, true);
+  assert.match(continuityRead.content?.[0]?.text || "", /required permission: memory\.read/);
+
+  const catalogRead = await callTool(token, "tools", { action: "overview" });
+  assert.equal(catalogRead.isError, true);
+  assert.match(catalogRead.content?.[0]?.text || "", /required permission: tools\.catalog\.read/);
+});
