@@ -69,6 +69,18 @@ function validateArchiveEntryNames(entries) {
   return true;
 }
 
+function validateArchiveSourceType(stat, action) {
+  if (!stat || typeof stat.isFile !== "function" || typeof stat.isDirectory !== "function") {
+    return "archive source type could not be verified";
+  }
+  if (action === "create") {
+    return stat.isFile() || stat.isDirectory()
+      ? null
+      : "archive creation source must be a regular file or directory";
+  }
+  return stat.isFile() ? null : "archive source must be a regular file";
+}
+
 async function sidekick_process({ action, filter, pid, name, signal }) {
   const denied = requireToolExecution({ tool: "process" }, "tools.execute_high", "process");
   if (denied) return denied;
@@ -168,6 +180,15 @@ async function sidekick_archive({ action, path: sourcePath, output, format }) {
   if (!fs.existsSync(sourcePath)) {
     return { content: [{ type: "text", text: "Path not found: " + sourcePath }], isError: true };
   }
+
+  let sourceStat;
+  try {
+    sourceStat = fs.statSync(sourcePath);
+  } catch (error) {
+    return { content: [{ type: "text", text: `Unable to inspect archive source: ${error.message}` }], isError: true };
+  }
+  const sourceTypeError = validateArchiveSourceType(sourceStat, action);
+  if (sourceTypeError) return { content: [{ type: "text", text: sourceTypeError }], isError: true };
 
   const sourceAbsolute = path.resolve(sourcePath);
 
@@ -276,4 +297,4 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_process, sidekick_service, sidekick_archive, validateArchiveEntryNames, normalizeManagedService, ALLOWED_SERVICE_NAMES, buildProcessKillCommand, ALLOWED_PROCESS_SIGNALS };
+module.exports = { descriptors, sidekick_process, sidekick_service, sidekick_archive, validateArchiveEntryNames, validateArchiveSourceType, normalizeManagedService, ALLOWED_SERVICE_NAMES, buildProcessKillCommand, ALLOWED_PROCESS_SIGNALS };
