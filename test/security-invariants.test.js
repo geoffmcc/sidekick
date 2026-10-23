@@ -21,7 +21,7 @@ const { getStaticToolRisk } = require("../src/tools/metadata");
 const { collectSnapshotRows } = require("../src/db/snapshot-bounds");
 const { createEscalationApprovalRef, validateEscalationApprovalRef } = require("../src/agent/escalation-approval");
 const { verifyRequiredRuntimeSecrets } = require("../scripts/verify-runtime-secrets");
-const { boundedFindResultLimit, MAX_DIRECTORY_LIST_ENTRIES, MAX_FIND_RESULTS, MAX_FIND_SCAN_ENTRIES } = require("../src/tools/families/filesystem");
+const { boundedResultLimit, MAX_DIRECTORY_LIST_ENTRIES, MAX_FIND_RESULTS, MAX_FIND_SCAN_ENTRIES, MAX_FILTER_RESULTS, MAX_FILTER_SCAN_ENTRIES, MAX_SUMMARY_LINES } = require("../src/tools/families/filesystem");
 
 const root = path.resolve(__dirname, "..");
 
@@ -284,12 +284,15 @@ test("filesystem directory listing and search have fixed result and scan ceiling
   assert.equal(MAX_DIRECTORY_LIST_ENTRIES, 500);
   assert.equal(MAX_FIND_RESULTS, 500);
   assert.equal(MAX_FIND_SCAN_ENTRIES, 10000);
-  assert.equal(boundedFindResultLimit(undefined), 50);
-  assert.equal(boundedFindResultLimit(-1), 50);
-  assert.equal(boundedFindResultLimit(1.5), 50);
-  assert.equal(boundedFindResultLimit(1), 1);
-  assert.equal(boundedFindResultLimit(500), 500);
-  assert.equal(boundedFindResultLimit(100000), 500);
+  assert.equal(MAX_FILTER_RESULTS, 500);
+  assert.equal(MAX_FILTER_SCAN_ENTRIES, 10000);
+  assert.equal(MAX_SUMMARY_LINES, 500);
+  assert.equal(boundedResultLimit(undefined), 50);
+  assert.equal(boundedResultLimit(-1), 50);
+  assert.equal(boundedResultLimit(1.5), 50);
+  assert.equal(boundedResultLimit(1), 1);
+  assert.equal(boundedResultLimit(500), 500);
+  assert.equal(boundedResultLimit(100000), 500);
 });
 
 test("database content and execution-log reads require authenticated medium-risk execution", async () => {

@@ -18,10 +18,28 @@ const MAX_READ_OUTPUT_BYTES = 1024 * 1024;
 const MAX_DIRECTORY_LIST_ENTRIES = 500;
 const MAX_FIND_RESULTS = 500;
 const MAX_FIND_SCAN_ENTRIES = 10000;
+const MAX_FILTER_RESULTS = 500;
+const MAX_FILTER_SCAN_ENTRIES = 10000;
+const MAX_SUMMARY_LINES = 500;
 
-function boundedFindResultLimit(value) {
-  return Number.isSafeInteger(value) && value > 0 ? Math.min(value, MAX_FIND_RESULTS) : 50;
+function boundedResultLimit(value, max = MAX_FIND_RESULTS) {
+  return Number.isSafeInteger(value) && value > 0 ? Math.min(value, max) : 50;
 }
+
+function* iterateTextLines(content) {
+  let offset = 0;
+  let line = 1;
+  while (offset <= content.length) {
+    const newline = content.indexOf("\n", offset);
+    const end = newline < 0 ? content.length : newline;
+    yield { number: line, text: content.slice(offset, end) };
+    if (newline < 0) return;
+    offset = newline + 1;
+    line++;
+  }
+}
+
+function displayLine(line) { return String(line || "").slice(0, 200); }
 
 function globToRegexSource(glob) {
   return Array.from(String(glob), character => {
@@ -186,8 +204,15 @@ async function sidekick_search({ pattern, path: searchPath, include }) {
 async function sidekick_summarize({ path: filePath, max_lines, strategy, pattern }) {
   const authError = requireToolExecution({ tool: "filesystem.read" }, "tools.execute", "summarize");
   if (authError) return authError;
-  const maxLines = max_lines || 50;
+  const maxLines = boundedResultLimit(max_lines, MAX_SUMMARY_LINES);
   const strat = strategy || "head";
+  if (!["head", "tail", "grep", "stats"].includes(strat)) {
+    return { content: [{ type: "text", text: "Invalid strategy. Use: head, tail, grep, stats" }], isError: true };
+  }
+  if (strat === "grep" && !pattern) return { content: [{ type: "text", text: "pattern required for grep strategy" }], isError: true };
+  let re = null;
+  try { if (strat === "grep") re = new BoundedRegex(pattern, "i"); }
+  catch (error) { return { content: [{ type: "text", text: `Invalid pattern: ${error.message}` }], isError: true }; }
   const policyError = enforcePathPolicy(filePath, "read");
   if (policyError) return policyError;
   if (!fs.existsSync(filePath)) {
@@ -200,47 +225,60 @@ async function sidekick_summarize({ path: filePath, max_lines, strategy, pattern
   }
   const stat = { size: read.size };
   const content = read.content;
-  const lines = content.split("\n");
-  let summary;
-  if (strat === "head") {
-    summary = lines.slice(0, maxLines).join("\n");
-  } else if (strat === "tail") {
-    summary = lines.slice(-maxLines).join("\n");
-  } else if (strat === "grep") {
-    if (!pattern) return { content: [{ type: "text", text: "pattern required for grep strategy" }], isError: true };
-    const re = new BoundedRegex(pattern, "i");
-    const matched = [];
-    for (let i = 0; i < lines.length && matched.length < maxLines; i++) {
-      if (re.test(lines[i])) {
-        const start = Math.max(0, i - 1);
-        const end = Math.min(lines.length, i + 2);
-        for (let j = start; j < end; j++) {
-          if (!matched.includes(lines[j])) matched.push(lines[j]);
-        }
-      }
+  const selected = [];
+  const includedLines = new Set();
+  let totalLines = 0;
+  let nonEmptyLines = 0;
+  let firstLine = null;
+  let lastLine = null;
+  let previousLine = null;
+  let includeFollowingLine = false;
+  let matches = 0;
+  const addGrepLine = line => {
+    if (!line || includedLines.has(line.number)) return;
+    includedLines.add(line.number);
+    selected.push(displayLine(line.text));
+  };
+  for (const line of iterateTextLines(content)) {
+    totalLines++;
+    if (line.text.trim()) nonEmptyLines++;
+    if (firstLine === null) firstLine = line.text;
+    lastLine = line.text;
+    if (strat === "head" && selected.length < maxLines) selected.push(displayLine(line.text));
+    else if (strat === "tail") {
+      selected.push(displayLine(line.text));
+      if (selected.length > maxLines) selected.shift();
+    } else if (strat === "grep") {
+      if (includeFollowingLine) addGrepLine(line);
+      if (matches < maxLines && re.test(line.text)) {
+        matches++;
+        addGrepLine(previousLine);
+        addGrepLine(line);
+        includeFollowingLine = true;
+      } else includeFollowingLine = false;
     }
-    summary = matched.join("\n");
-  } else if (strat === "stats") {
-    const nonEmpty = lines.filter(l => l.trim().length > 0);
+    previousLine = line;
+  }
+
+  let summary;
+  if (strat === "stats") {
     summary = [
       "File: " + filePath,
       "Size: " + stat.size + " bytes",
-      "Total lines: " + lines.length,
-      "Non-empty lines: " + nonEmpty.length,
-      "First line: " + (lines[0] || "(empty)"),
-      "Last line: " + (lines[lines.length - 1] || "(empty)")
+      "Total lines: " + totalLines,
+      "Non-empty lines: " + nonEmptyLines,
+      "First line: " + (displayLine(firstLine) || "(empty)"),
+      "Last line: " + (displayLine(lastLine) || "(empty)")
     ].join("\n");
-  } else {
-    return { content: [{ type: "text", text: "Invalid strategy. Use: head, tail, grep, stats" }], isError: true };
-  }
-  const header = "[Summary: " + lines.length + " lines, strategy=" + strat + (strat === "grep" ? ", pattern=" + pattern : "") + "]\n";
+  } else summary = selected.join("\n");
+  const header = "[Summary: " + totalLines + " lines, strategy=" + strat + (strat === "grep" ? ", pattern=" + pattern : "") + "]\n";
   return { content: [{ type: "text", text: redactSensitive(header + summary) }] };
 }
 
 async function sidekick_filter({ path: targetPath, pattern, after, before, max_results }) {
   const authError = requireToolExecution({ tool: "filesystem.read" }, "tools.execute", "filter");
   if (authError) return authError;
-  const maxResults = max_results || 50;
+  const maxResults = boundedResultLimit(max_results, MAX_FILTER_RESULTS);
   const policyError = enforcePathPolicy(targetPath, "read");
   if (policyError) return policyError;
   if (!fs.existsSync(targetPath)) {
@@ -254,33 +292,57 @@ async function sidekick_filter({ path: targetPath, pattern, after, before, max_r
     catch (error) {
       return { content: [{ type: "text", text: error.code === "FILE_READ_TOO_LARGE" ? `File exceeds the ${MAX_FILE_CONTENT_BYTES}-byte filter limit` : `Unable to read file: ${error.message}` }], isError: true };
     }
-    const lines = content.split("\n");
     const re = pattern ? new BoundedRegex(pattern, "i") : null;
-    for (let i = 0; i < lines.length && results.length < maxResults; i++) {
-      if (!re || re.test(lines[i])) results.push({ line: i + 1, text: lines[i].substring(0, 200) });
+    let offset = 0;
+    let lineNumber = 1;
+    let resultLimited = false;
+    while (offset <= content.length && results.length < maxResults) {
+      const newline = content.indexOf("\n", offset);
+      const end = newline < 0 ? content.length : newline;
+      const line = content.slice(offset, end);
+      if (!re || re.test(line)) results.push({ line: lineNumber, text: line.substring(0, 200) });
+      if (newline < 0) break;
+      offset = newline + 1;
+      lineNumber++;
     }
+    resultLimited = results.length >= maxResults && offset < content.length;
+    const response = [{ type: "text", text: redactSensitive(JSON.stringify(results, null, 2)) }];
+    if (resultLimited) response.push({ type: "text", text: `[partial filter: result limit of ${maxResults} reached]` });
+    return { content: response };
   } else if (stat.isDirectory()) {
     const afterDate = after ? new Date(after).getTime() : 0;
     const beforeDate = before ? new Date(before).getTime() : Infinity;
     const re = pattern ? new BoundedRegex(pattern, "i") : null;
-    function walkDir(dir, depth) {
-      if (depth > 5 || results.length >= maxResults) return;
-      let entries;
-      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
-      for (const entry of entries) {
-        if (results.length >= maxResults) break;
+    let scannedEntries = 0;
+    let resultLimited = false;
+    let scanLimited = false;
+    async function walkDir(dir, depth) {
+      if (depth > 5) return;
+      if (results.length >= maxResults) { resultLimited = true; return; }
+      if (scannedEntries >= MAX_FILTER_SCAN_ENTRIES) { scanLimited = true; return; }
+      let directory;
+      try { directory = await fs.promises.opendir(dir); } catch { return; }
+      for await (const entry of directory) {
+        if (results.length >= maxResults) { resultLimited = true; break; }
+        if (scannedEntries >= MAX_FILTER_SCAN_ENTRIES) { scanLimited = true; break; }
+        scannedEntries++;
         const fullPath = path.join(dir, entry.name);
         try {
-          const s = fs.statSync(fullPath);
+          const s = fs.lstatSync(fullPath);
+          if (s.isSymbolicLink()) continue;
           if (entry.isDirectory()) {
-            if (!entry.name.startsWith(".") && entry.name !== "node_modules") walkDir(fullPath, depth + 1);
+            if (!entry.name.startsWith(".") && entry.name !== "node_modules") await walkDir(fullPath, depth + 1);
           } else if (entry.isFile() && s.mtimeMs >= afterDate && s.mtimeMs <= beforeDate && (!re || re.test(entry.name))) {
             results.push({ path: fullPath, size: s.size, modified: s.mtime.toISOString().slice(0, 19) });
           }
         } catch (e) {}
       }
     }
-    walkDir(targetPath, 0);
+    await walkDir(targetPath, 0);
+    const response = [{ type: "text", text: redactSensitive(JSON.stringify(results, null, 2)) }];
+    if (resultLimited) response.push({ type: "text", text: `[partial filter: result limit of ${maxResults} reached]` });
+    if (scanLimited) response.push({ type: "text", text: `[partial filter: stopped after ${MAX_FILTER_SCAN_ENTRIES} entries]` });
+    return { content: response };
   }
   return { content: [{ type: "text", text: redactSensitive(JSON.stringify(results, null, 2)) }] };
 }
@@ -378,7 +440,7 @@ async function sidekick_write({ path: filePath, content }) {
 async function sidekick_find({ path: searchPath, name, modified_after, modified_before, size_min, size_max, content, max_results }) {
   const authError = requireToolExecution({ tool: "filesystem.read" }, "tools.execute", "find");
   if (authError) return authError;
-  const maxResults = boundedFindResultLimit(max_results);
+  const maxResults = boundedResultLimit(max_results, MAX_FIND_RESULTS);
   const policyError = enforcePathPolicy(searchPath, "read");
   if (policyError) return policyError;
   if (!fs.existsSync(searchPath)) return { content: [{ type: "text", text: "Path not found: " + searchPath }], isError: true };
@@ -487,7 +549,7 @@ const descriptors = Object.freeze([
     description: "Summarize large files before returning to reduce token usage. Strategies: head, tail, grep, stats.",
     schema: z.object({
       path: z.string().describe("File path to summarize"),
-      max_lines: z.number().optional().describe("Maximum lines to return (default: 50)"),
+      max_lines: z.number().int().min(1).max(MAX_SUMMARY_LINES).optional().describe(`Maximum lines or matches to return (default: 50, maximum: ${MAX_SUMMARY_LINES})`),
       strategy: z.enum(["head", "tail", "grep", "stats"]).optional().describe("Summarization strategy (default: head)"),
       pattern: z.string().max(512).optional().describe("Regex pattern for grep strategy (maximum 512 characters)"),
     }),
@@ -506,7 +568,7 @@ const descriptors = Object.freeze([
       pattern: z.string().max(512).optional().describe("Regex pattern to match (maximum 512 characters)"),
       after: z.string().optional().describe("ISO date: include files modified after this date"),
       before: z.string().optional().describe("ISO date: include files modified before this date"),
-      max_results: z.number().optional().describe("Maximum results to return (default: 50)"),
+      max_results: z.number().int().min(1).max(MAX_FILTER_RESULTS).optional().describe(`Maximum results to return (default: 50, maximum: ${MAX_FILTER_RESULTS})`),
     }),
     args: { path: "string (file or directory path)", pattern: "string (optional, regex pattern)", after: "string (optional, ISO date for files modified after)", before: "string (optional, ISO date for files modified before)", max_results: "number (optional, default 50)" },
     risk: "medium",
@@ -563,4 +625,4 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_read, sidekick_list, sidekick_search, sidekick_summarize, sidekick_filter, sidekick_write, sidekick_diff_files, sidekick_find, buildSearchArgs, boundedFindResultLimit, MAX_DIRECTORY_LIST_ENTRIES, MAX_FIND_RESULTS, MAX_FIND_SCAN_ENTRIES };
+module.exports = { descriptors, sidekick_read, sidekick_list, sidekick_search, sidekick_summarize, sidekick_filter, sidekick_write, sidekick_diff_files, sidekick_find, buildSearchArgs, boundedResultLimit, MAX_DIRECTORY_LIST_ENTRIES, MAX_FIND_RESULTS, MAX_FIND_SCAN_ENTRIES, MAX_FILTER_RESULTS, MAX_FILTER_SCAN_ENTRIES, MAX_SUMMARY_LINES };
