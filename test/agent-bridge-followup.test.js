@@ -34,7 +34,10 @@ const { getExecutionContext } = require("../src/tools/context");
 const { createAgentProxyHeaders } = require("../src/security/agent-proxy-auth");
 const authenticatedTestPrincipal = require("./helpers/authorized-context").createOwnerContext({
   source: "agent",
-  scopes: ["agent.tasks.read", "tools.execute", "tools.execute_high", "memory.read", "memory.write", "workflows.execute"],
+  // Registered read-only workflows dispatch the core tool catalog through
+  // the canonical dispatcher, so the test identity needs that explicit read
+  // permission in addition to permission to execute the workflow itself.
+  scopes: ["agent.tasks.read", "tools.execute", "tools.execute_high", "tools.catalog.read", "memory.read", "memory.write", "workflows.execute"],
   project: "agent_test_project",
 });
 const authenticatedTestHeaders = {
