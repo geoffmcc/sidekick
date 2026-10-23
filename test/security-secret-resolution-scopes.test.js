@@ -21,6 +21,7 @@ const { runWithContext } = require("../src/tools/context");
 const { resolveSecretRef } = require("../src/connectors/resolve");
 const providerRegistry = require("../src/compute/provider-registry");
 const { resolveProviderApiKey } = require("../src/compute/provider-credentials");
+const inferenceService = require("../src/compute/inference-service");
 
 const owner = identity.bootstrapOwner({
   username: `secret_resolution_owner_${process.pid}`,
@@ -88,6 +89,20 @@ test("provider credential resolution preserves delegated permission limits", () 
   const context = executionContext({ principal_id: operator.principal_id, delegation_id: delegation.delegation_id });
   assert.throws(
     () => runWithContext(context, () => resolveProviderApiKey(provider)),
+    error => error.code === "forbidden",
+  );
+});
+
+test("provider adapters do not cache decrypted credentials across authorization contexts", () => {
+  const service = inferenceService;
+  const ownerContext = executionContext({ principal_id: owner.principal_id });
+  const authorizedAdapter = runWithContext(ownerContext, () => service._getAdapter(provider));
+  assert.ok(authorizedAdapter, "authorized call can construct the provider adapter");
+  assert.equal(service._adapterCache.has(`${provider.providerId}:${provider.endpoint}`), false, "secret-bearing adapter is not retained in the shared cache");
+
+  const restrictedContext = executionContext({ principal_id: operator.principal_id, scopes: ["workflows.execute"] });
+  assert.throws(
+    () => runWithContext(restrictedContext, () => service._getAdapter(provider)),
     error => error.code === "forbidden",
   );
 });

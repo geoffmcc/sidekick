@@ -25,24 +25,26 @@ class InferenceService {
       throw new Error("Mock providers are test-only and cannot serve production inference");
     }
     const cacheKey = provider.providerId + ":" + provider.endpoint;
-    if (this._adapterCache.has(cacheKey)) return this._adapterCache.get(cacheKey);
     let adapter;
-    if (provider.providerType === "ollama") {
-      const OllamaProvider = require("../providers/ollama-provider");
-      adapter = new OllamaProvider({ endpoint: provider.endpoint, name: provider.displayName });
-    } else if (provider.providerType === "openai-compatible") {
+    if (provider.providerType === "openai-compatible") {
+      // This adapter contains a decrypted provider credential. Do not retain
+      // it across calls: later callers must re-authorize `secrets.use` and
+      // observe credential/delegation revocation before any provider request.
+      // The adapter may still be reused within one dispatch by its caller.
+      this._adapterCache.delete(cacheKey);
       const OpenAICompatibleProvider = require("../providers/openai-compatible-provider");
-      // Resolve the provider's credential reference through the secret authority
-      // as late as possible (here, at first dispatch) rather than trusting the
-      // adapter's protected credential authority. The plaintext key never touches
-      // the provider record, an API response, or a log line.
       const { resolveProviderApiKey } = require("./provider-credentials");
       const apiKey = resolveProviderApiKey(provider);
-      adapter = new OpenAICompatibleProvider({
+      return new OpenAICompatibleProvider({
         endpoint: provider.endpoint,
         name: provider.displayName,
         ...(apiKey ? { apiKey } : {}),
       });
+    }
+    if (this._adapterCache.has(cacheKey)) return this._adapterCache.get(cacheKey);
+    if (provider.providerType === "ollama") {
+      const OllamaProvider = require("../providers/ollama-provider");
+      adapter = new OllamaProvider({ endpoint: provider.endpoint, name: provider.displayName });
     } else if (provider.providerType === "mock") {
       const MockProvider = require("../providers/mock-provider");
       adapter = new MockProvider({ name: provider.displayName });
