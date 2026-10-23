@@ -137,6 +137,17 @@ required permission and project grant. Explicit low-risk inventory remains
 available under the configured source policy. Direct API routes must enforce
 their own permission checks and are audited separately.
 
+MCP HTTP bearer authentication also accepts an active Dashboard identity
+session token. The session is resolved against current server-side state on
+each request, so expiration, logout, and principal disablement take effect
+immediately. It carries the principal's current role authority without
+machine-credential scope attenuation; use a named scoped service credential
+for unattended MCP clients. Keep browser session tokens in the HttpOnly
+Dashboard cookie and do not copy them into client configuration, logs, or
+persistent machine settings. This bearer support does not itself route
+Dashboard or Agent tool dispatch through MCP; those processes still use local
+dispatch in the current architecture.
+
 For integrations that need a durable machine identity, the first-run Dashboard
 opens Identity after Owner setup and offers **Connect an MCP client**. The flow
 creates a separate named service identity for each agent and lets the Owner

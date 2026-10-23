@@ -193,6 +193,32 @@ function authenticateCredential(token) {
   return { ...safeCredential(row), principal_type: row.principal_type, principal_display_name: row.display_name, last_used_at: lastUsed };
 }
 
+// Normalize the two supported principal-bearing HTTP bearer forms. Browser
+// session tokens remain opaque and revocable: getSession checks current expiry,
+// invalidation, and principal state on every request. The legacy installation
+// API key is intentionally handled separately by its compatibility middleware
+// because it does not identify a principal.
+function authenticateBearerIdentity(token) {
+  const credential = authenticateCredential(token);
+  if (credential) {
+    return {
+      principal_id: credential.principal_id,
+      principal_type: credential.principal_type,
+      scopes: credential.scopes,
+      credential_id: credential.credential_id,
+      authentication_method: "scoped_credential",
+    };
+  }
+  const session = getSession(token);
+  if (!session) return null;
+  return {
+    principal_id: session.principal_id,
+    principal_type: session.principal_type,
+    scopes: null,
+    authentication_method: "browser_session",
+  };
+}
+
 function revokeCredential(credentialId, actorContext = null) {
   const idValue = requiredText(credentialId, "credential_id");
   const db = dbStore.getDb();
@@ -266,4 +292,4 @@ function rotateCredential(credentialId, actorContext = null) {
   })();
 }
 
-module.exports = Object.freeze({ SESSION_TTL_MS, RECOVERY_TTL_MS, createSession, getSession, isSessionActive, invalidateSession, invalidatePrincipalSessions, createCredential, getCredential, listCredentials, authenticateCredential, revokeCredential, rotateCredential, createOwnerRecoveryToken, recoverOwnerPassword });
+module.exports = Object.freeze({ SESSION_TTL_MS, RECOVERY_TTL_MS, createSession, getSession, isSessionActive, invalidateSession, invalidatePrincipalSessions, createCredential, getCredential, listCredentials, authenticateCredential, authenticateBearerIdentity, revokeCredential, rotateCredential, createOwnerRecoveryToken, recoverOwnerPassword });

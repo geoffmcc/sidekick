@@ -109,11 +109,12 @@ app.get("/health", (req, res) => {
   const uptimeStr = `${hours}h ${minutes}m ${seconds}s`;
 
   const token = getBearerToken(req);
-  const credential = authentication.authenticateCredential(token);
-  const includeDetails = timingSafeCompare(token, API_KEY) || Boolean(credential && authorization.authorize({
-    principalId: credential.principal_id,
+  const authIdentity = authentication.authenticateBearerIdentity(token);
+  const includeDetails = timingSafeCompare(token, API_KEY) || Boolean(authIdentity && authorization.authorize({
+    principalId: authIdentity.principal_id,
     permission: "system.configure",
-    credentialScopes: credential.scopes,
+    credentialScopes: authIdentity.scopes,
+    delegationId: authIdentity.delegation_id || null,
   }).ok);
 
   const payload = {
@@ -151,11 +152,12 @@ app.get("/privacy", (req, res) => {
 app.get("/readiness", (req, res) => {
   const ready = Object.keys(startupFailures).length === 0;
   const token = getBearerToken(req);
-  const credential = authentication.authenticateCredential(token);
-  const includeDetails = timingSafeCompare(token, API_KEY) || Boolean(credential && authorization.authorize({
-    principalId: credential.principal_id,
+  const authIdentity = authentication.authenticateBearerIdentity(token);
+  const includeDetails = timingSafeCompare(token, API_KEY) || Boolean(authIdentity && authorization.authorize({
+    principalId: authIdentity.principal_id,
     permission: "system.configure",
-    credentialScopes: credential.scopes,
+    credentialScopes: authIdentity.scopes,
+    delegationId: authIdentity.delegation_id || null,
   }).ok);
   res.status(ready ? 200 : 503).json({
     status: ready ? "ready" : "not_ready",
@@ -167,15 +169,9 @@ app.get("/readiness", (req, res) => {
 app.use((req, res, next) => {
   if (isComputeAuthBypassPath(req.path)) return next();
   const token = getBearerToken(req);
-  const credential = authentication.authenticateCredential(token);
-  if (credential) {
-    req.authIdentity = {
-      principal_id: credential.principal_id,
-      principal_type: credential.principal_type,
-      scopes: credential.scopes,
-      credential_id: credential.credential_id,
-      authentication_method: "scoped_credential",
-    };
+  const authIdentity = authentication.authenticateBearerIdentity(token);
+  if (authIdentity) {
+    req.authIdentity = authIdentity;
     return next();
   }
   if (timingSafeCompare(token, API_KEY)) {
@@ -187,9 +183,7 @@ app.use((req, res, next) => {
   if (!token) {
     return res.status(401).json({ error: "Authentication required", code: "unauthenticated" });
   }
-  if (!credential) {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
+  return res.status(401).json({ error: "Unauthorized" });
 });
 
 app.use(express.json({ limit: MAX_MCP_REQUEST_BODY_BYTES }));
