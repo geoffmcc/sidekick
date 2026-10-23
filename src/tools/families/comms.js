@@ -18,6 +18,7 @@ const toolContext = require("../context");
 const authorization = require("../../core/authorization");
 const { requireCanonicalInvocation, requireToolExecution, requirePermission } = require("../read-authorization");
 const MAX_NOTIFICATION_ERROR_BYTES = 64 * 1024;
+const MAX_NOTIFICATION_REQUEST_BYTES = 1024 * 1024;
 
 function readBoundedNotificationError(response, maxBytes = MAX_NOTIFICATION_ERROR_BYTES) {
   return new Promise(resolve => {
@@ -50,6 +51,35 @@ function readBoundedNotificationError(response, maxBytes = MAX_NOTIFICATION_ERRO
     response.on("close", finish);
     response.on("error", finish);
   });
+}
+
+function validateEmailHeaders(recipient, title) {
+  if (typeof recipient !== "string" || recipient.length > 320 || /[\r\n\0]/.test(recipient)) {
+    return "Email recipient must be a single bounded address without control characters";
+  }
+  if (typeof title === "string" && (title.length > 500 || /[\r\n\0]/.test(title))) {
+    return "Email subject must be no longer than 500 characters and contain no control characters";
+  }
+  return null;
+}
+
+async function resolveSmtpDestination(host, port) {
+  const hostText = String(host || "").trim();
+  const portNumber = Number(port);
+  if (!Number.isInteger(portNumber) || portNumber < 1 || portNumber > 65535) {
+    return { refusal: "SMTP_PORT must be an integer from 1 through 65535", code: "invalid_smtp_configuration" };
+  }
+  let endpoint;
+  try {
+    endpoint = new URL(`https://${hostText}`);
+  } catch {
+    return { refusal: "SMTP_HOST must be a valid hostname or IP address", code: "invalid_smtp_configuration" };
+  }
+  if (!hostText || endpoint.username || endpoint.password || endpoint.port || endpoint.pathname !== "/" || endpoint.search || endpoint.hash) {
+    return { refusal: "SMTP_HOST must contain only a hostname or IP address, without credentials, port, or path", code: "invalid_smtp_configuration" };
+  }
+  endpoint.port = String(portNumber);
+  return resolveOutboundUrl(endpoint.href, "SMTP endpoint", { allowPrivate: true });
 }
 
 function loadWebhooks() {
@@ -127,8 +157,11 @@ async function sidekick_notify({ channel, webhook_url, recipient, message, title
       return { content: [{ type: "text", text: "recipient required for email" }], isError: true };
     }
 
+    const headerError = validateEmailHeaders(recipient, title);
+    if (headerError) return { content: [{ type: "text", text: headerError }], isError: true, code: "invalid_email_header" };
+
     const smtpHost = process.env.SMTP_HOST || "smtp.gmail.com";
-    const smtpPort = parseInt(process.env.SMTP_PORT || "587", 10);
+    const smtpPort = process.env.SMTP_PORT || "587";
     const secretDenied = requirePermission("secrets.use", { tool: "notify", secrets: ["SMTP_USER", "SMTP_PASS"] });
     if (secretDenied) return secretDenied;
     const smtpUser = readSecret("SMTP_USER");
@@ -140,21 +173,35 @@ async function sidekick_notify({ channel, webhook_url, recipient, message, title
 
     const subject = title || "Sidekick Notification";
     const emailContent = `From: ${smtpUser}\nTo: ${recipient}\nSubject: ${subject}\n\n${message}`;
+    if (Buffer.byteLength(emailContent, "utf8") > MAX_NOTIFICATION_REQUEST_BYTES) {
+      return { content: [{ type: "text", text: `Email notification exceeds ${MAX_NOTIFICATION_REQUEST_BYTES} bytes` }], isError: true, code: "notification_too_large" };
+    }
+    const destination = await resolveSmtpDestination(smtpHost, smtpPort);
+    if (destination.refusal) {
+      return { content: [{ type: "text", text: destination.refusal }], isError: true, code: destination.code || "outbound_target_denied" };
+    }
+    const smtpUrl = destination.url;
 
     return new Promise((resolve) => {
       const req = https.request({
-        hostname: smtpHost,
-        port: smtpPort,
+        hostname: destination.address,
+        port: smtpUrl.port || 443,
         path: "/",
         method: "POST",
         auth: `${smtpUser}:${smtpPass}`,
         headers: {
           "Content-Type": "text/plain",
-          "Content-Length": Buffer.byteLength(emailContent)
+          "Content-Length": Buffer.byteLength(emailContent),
+          Host: smtpUrl.host,
         },
+        servername: smtpUrl.hostname.replace(/^\[|\]$/g, ""),
         timeout: 30000
       }, (res) => {
-        resolve({ content: [{ type: "text", text: "Email sent to " + recipient }] });
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          resolve({ content: [{ type: "text", text: "Email sent to " + recipient }] });
+        } else {
+          resolve({ content: [{ type: "text", text: `Email relay returned HTTP ${res.statusCode || 0}` }], isError: true, code: "email_relay_failed" });
+        }
         res.destroy();
       });
       req.on("error", (err) => resolve({ content: [{ type: "text", text: "Email error: " + err.message }], isError: true }));
@@ -227,10 +274,10 @@ const descriptors = Object.freeze([
     description: "Send notifications to Discord, Slack, or email",
     schema: z.object({
       channel: z.enum(["discord", "slack", "email"]).describe("Notification channel"),
-      webhook_url: z.string().optional().describe("Webhook URL (required for discord/slack)"),
-      recipient: z.string().optional().describe("Email recipient (required for email)"),
-      message: z.string().describe("Message content to send"),
-      title: z.string().optional().describe("Optional title/subject"),
+      webhook_url: z.string().max(4096).optional().describe("Webhook URL (required for discord/slack; maximum 4096 characters)"),
+      recipient: z.string().max(320).optional().describe("Email recipient (required for email; maximum 320 characters)"),
+      message: z.string().max(MAX_NOTIFICATION_REQUEST_BYTES).describe(`Message content to send (maximum ${MAX_NOTIFICATION_REQUEST_BYTES} characters)`),
+      title: z.string().max(500).optional().describe("Optional title/subject (maximum 500 characters)"),
     }),
     args: { channel: "string", webhook_url: "string (optional)", recipient: "string (optional)", message: "string", title: "string (optional)" },
     risk: "medium",
@@ -256,4 +303,4 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_notify, sidekick_webhook, readBoundedNotificationError, MAX_NOTIFICATION_ERROR_BYTES };
+module.exports = { descriptors, sidekick_notify, sidekick_webhook, readBoundedNotificationError, MAX_NOTIFICATION_ERROR_BYTES, MAX_NOTIFICATION_REQUEST_BYTES, validateEmailHeaders, resolveSmtpDestination };
