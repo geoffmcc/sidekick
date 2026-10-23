@@ -52,4 +52,20 @@ test("runtime secret reader and deploy preflight reject world-readable credentia
   fs.chmodSync(apiKeyPath, 0o644);
   assert.throws(() => readSecret("SIDEKICK_API_KEY"), /secret file is readable by other users/);
   assert.throws(() => verifyRequiredRuntimeSecrets(secretDirectory), /SIDEKICK_API_KEY secret file is readable by other users/);
+
+  const unsafeParent = path.join(fixtureRoot, "unsafe-secret-parent");
+  const unsafeDirectory = path.join(unsafeParent, "secrets");
+  fs.mkdirSync(unsafeDirectory, { recursive: true, mode: 0o700 });
+  const unsafeApiKeyPath = path.join(unsafeDirectory, "sidekick_api_key");
+  const unsafeAgentProxyPath = path.join(unsafeDirectory, "sidekick_agent_proxy_key");
+  fs.writeFileSync(unsafeApiKeyPath, "synthetic-api-key\n", { mode: 0o600 });
+  fs.writeFileSync(unsafeAgentProxyPath, "synthetic-agent-proxy-key\n", { mode: 0o600 });
+  fs.chmodSync(unsafeDirectory, 0o700);
+  fs.chmodSync(unsafeApiKeyPath, 0o600);
+  fs.chmodSync(unsafeAgentProxyPath, 0o600);
+  fs.chmodSync(unsafeParent, 0o777);
+
+  process.env.SIDEKICK_SECRET_DIR = unsafeDirectory;
+  assert.throws(() => readSecret("SIDEKICK_API_KEY"), /secret directory is writable by group or other users/);
+  assert.throws(() => verifyRequiredRuntimeSecrets(unsafeDirectory), /SIDEKICK_SECRET_DIR secret directory is writable by group or other users/);
 });

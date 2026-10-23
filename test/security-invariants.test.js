@@ -527,7 +527,7 @@ test("deployment secret preflight fails closed before restart when required cred
   writeSecrets("synthetic-api-key", "synthetic-proxy-key");
   if (process.platform !== "win32") {
     fs.chmodSync(tempDir, 0o777);
-    assert.throws(() => verifyRequiredRuntimeSecrets(tempDir), /SIDEKICK_SECRET_DIR is writable by group or other users/);
+    assert.throws(() => verifyRequiredRuntimeSecrets(tempDir), /SIDEKICK_SECRET_DIR secret directory is writable by group or other users/);
     fs.chmodSync(tempDir, 0o700);
   }
   fs.rmSync(proxyPath);

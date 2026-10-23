@@ -2,6 +2,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const { assertSafeSecretDirectory } = require("../src/core/runtime-secrets");
 
 const REQUIRED_SECRETS = Object.freeze({
   SIDEKICK_API_KEY: "sidekick_api_key",
@@ -47,19 +48,7 @@ function readRequiredSecret(directory, variableName, fileName) {
 
 function verifyRequiredRuntimeSecrets(directory) {
   if (!path.isAbsolute(directory)) throw new Error("SIDEKICK_SECRET_DIR must be an absolute path");
-  const resolved = path.resolve(directory);
-  let stat;
-  try {
-    stat = fs.lstatSync(resolved);
-  } catch {
-    throw new Error(`SIDEKICK_SECRET_DIR is unavailable: ${resolved}`);
-  }
-  if (stat.isSymbolicLink() || !stat.isDirectory()) {
-    throw new Error("SIDEKICK_SECRET_DIR must be a directory and must not be a symlink");
-  }
-  if (process.platform !== "win32" && (stat.mode & 0o022) !== 0) {
-    throw new Error("SIDEKICK_SECRET_DIR is writable by group or other users");
-  }
+  const resolved = assertSafeSecretDirectory(directory, "SIDEKICK_SECRET_DIR");
 
   const values = Object.entries(REQUIRED_SECRETS).map(([name, file]) =>
     readRequiredSecret(resolved, name, file));

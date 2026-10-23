@@ -61,34 +61,41 @@ function isWindows() {
   return os.platform() === "win32";
 }
 
-function assertSafeFile(filePath, name) {
-  if (!path.isAbsolute(filePath)) throw new Error(`${name} secret path must be absolute`);
-  const resolved = path.resolve(filePath);
-  const secretDirectory = path.dirname(resolved);
-  const root = path.parse(secretDirectory).root;
-  const segments = secretDirectory.slice(root.length).split(path.sep).filter(Boolean);
+function assertSafeSecretDirectory(directoryPath, name) {
+  if (!path.isAbsolute(directoryPath)) throw new Error(`${name} secret directory path must be absolute`);
+  const resolved = path.resolve(directoryPath);
+  const root = path.parse(resolved).root;
+  const segments = resolved.slice(root.length).split(path.sep).filter(Boolean);
   let currentDirectory = root;
   for (const segment of segments) {
     currentDirectory = path.join(currentDirectory, segment);
-    let directoryStat;
+    let stat;
     try {
-      directoryStat = fs.lstatSync(currentDirectory);
+      stat = fs.lstatSync(currentDirectory);
     } catch {
       throw new Error(`${name} secret directory is unavailable`);
     }
-    if (directoryStat.isSymbolicLink() || !directoryStat.isDirectory()) {
+    if (stat.isSymbolicLink() || !stat.isDirectory()) {
       throw new Error(`${name} secret directory must be a real directory`);
     }
-    // A writable containing directory permits replacing an otherwise
-    // protected file. Sticky system temp directories are safe ancestors, but
-    // the immediate directory containing the secret must remain private or
-    // read-only (for example, a root-owned /run/secrets mount).
-    const writableByOthers = !isWindows() && (directoryStat.mode & 0o022) !== 0;
-    const secureStickyAncestor = currentDirectory !== secretDirectory && (directoryStat.mode & 0o1000) !== 0;
+
+    // An attacker able to replace a parent directory entry can swap the
+    // protected secrets directory itself. A sticky system temp ancestor is
+    // safe because users cannot rename entries they do not own.
+    const writableByOthers = !isWindows() && (stat.mode & 0o022) !== 0;
+    const secureStickyAncestor = currentDirectory !== resolved && (stat.mode & 0o1000) !== 0;
     if (writableByOthers && !secureStickyAncestor) {
       throw new Error(`${name} secret directory is writable by group or other users`);
     }
   }
+  return resolved;
+}
+
+function assertSafeFile(filePath, name) {
+  if (!path.isAbsolute(filePath)) throw new Error(`${name} secret path must be absolute`);
+  const resolved = path.resolve(filePath);
+  const secretDirectory = path.dirname(resolved);
+  assertSafeSecretDirectory(secretDirectory, name);
   let stat;
   try {
     stat = fs.lstatSync(resolved);
@@ -191,4 +198,4 @@ function isFileBacked(name) {
   return Boolean(secretFilePath(name));
 }
 
-module.exports = { FILE_SECRET_NAMES, SECRET_FILE_NAMES, readSecret, hasSecret, isFileBacked };
+module.exports = { FILE_SECRET_NAMES, SECRET_FILE_NAMES, assertSafeSecretDirectory, readSecret, hasSecret, isFileBacked };
