@@ -51,6 +51,49 @@ try {
   assert.strictEqual(isFileBacked("SIDEKICK_AGENT_SCHEDULER_KEY"), true);
   assert.strictEqual(hasSecret("SIDEKICK_API_KEY"), true);
 
+  fs.writeFileSync(path.join(tempDir, "sidekick_api_key"), Buffer.alloc(16385, 0x61), { mode: 0o600 });
+  assert.throws(() => readSecret("SIDEKICK_API_KEY"), /secret file is too large/);
+  fs.writeFileSync(path.join(tempDir, "sidekick_api_key"), "file-value\n", { mode: 0o600 });
+
+  if (process.platform !== "win32") {
+    fs.chmodSync(tempDir, 0o770);
+    assert.throws(() => readSecret("SIDEKICK_API_KEY"), /secret directory is writable by group or other users/);
+    fs.chmodSync(tempDir, 0o700);
+
+    const racePath = path.join(tempDir, "race_secret");
+    const displacedPath = `${racePath}.displaced`;
+    fs.writeFileSync(racePath, "original-secret-value\n", { mode: 0o600 });
+    process.env.SIDEKICK_API_KEY_FILE = racePath;
+    const originalOpenSync = fs.openSync;
+    let replaced = false;
+    fs.openSync = function(target, ...args) {
+      if (!replaced && path.resolve(String(target)) === racePath) {
+        replaced = true;
+        fs.renameSync(racePath, displacedPath);
+        fs.writeFileSync(racePath, "replacement-secret-value\n", { mode: 0o600 });
+      }
+      return originalOpenSync.call(fs, target, ...args);
+    };
+    try {
+      assert.throws(() => readSecret("SIDEKICK_API_KEY"), /secret file changed or became unsafe while opening/);
+    } finally {
+      fs.openSync = originalOpenSync;
+      delete process.env.SIDEKICK_API_KEY_FILE;
+      fs.rmSync(racePath, { force: true });
+      fs.rmSync(displacedPath, { force: true });
+    }
+
+    const realAncestor = path.join(tempDir, "real-ancestor");
+    const nestedSecretDir = path.join(realAncestor, "secrets");
+    const linkedAncestor = path.join(tempDir, "linked-ancestor");
+    fs.mkdirSync(nestedSecretDir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(nestedSecretDir, "sidekick_api_key"), "nested-secret\n", { mode: 0o600 });
+    fs.symlinkSync(realAncestor, linkedAncestor, "dir");
+    process.env.SIDEKICK_API_KEY_FILE = path.join(linkedAncestor, "secrets", "sidekick_api_key");
+    assert.throws(() => readSecret("SIDEKICK_API_KEY"), /secret directory must be a real directory/);
+    delete process.env.SIDEKICK_API_KEY_FILE;
+  }
+
   fs.writeFileSync(path.join(tempDir, "sidekick_api_key"), "", { mode: 0o600 });
   assert.throws(() => readSecret("SIDEKICK_API_KEY"), /secret file is invalid/);
 
@@ -72,6 +115,9 @@ try {
   process.env.SIDEKICK_SECRET_DIR = tempDir;
   assert.strictEqual(readSecret("GROQ_API_KEY"), "");
   assert.throws(() => readSecret("GROQ_API_KEY", { required: true }), /secret file is unavailable/);
+  process.env.SIDEKICK_SECRET_DIR = path.join(tempDir, "missing-secret-directory");
+  assert.strictEqual(readSecret("GROQ_API_KEY"), "");
+  assert.throws(() => readSecret("GROQ_API_KEY", { required: true }), /secret directory is unavailable/);
   console.log("runtime secret tests passed");
 } finally {
   for (const [key, value] of Object.entries(saved)) {

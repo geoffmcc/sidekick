@@ -3,6 +3,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const MAX_SECRET_BYTES = 16384;
 
 // These are the application credentials that must be supplied through a secret
 // file. Other environment variables remain ordinary configuration.
@@ -63,6 +64,31 @@ function isWindows() {
 function assertSafeFile(filePath, name) {
   if (!path.isAbsolute(filePath)) throw new Error(`${name} secret path must be absolute`);
   const resolved = path.resolve(filePath);
+  const secretDirectory = path.dirname(resolved);
+  const root = path.parse(secretDirectory).root;
+  const segments = secretDirectory.slice(root.length).split(path.sep).filter(Boolean);
+  let currentDirectory = root;
+  for (const segment of segments) {
+    currentDirectory = path.join(currentDirectory, segment);
+    let directoryStat;
+    try {
+      directoryStat = fs.lstatSync(currentDirectory);
+    } catch {
+      throw new Error(`${name} secret directory is unavailable`);
+    }
+    if (directoryStat.isSymbolicLink() || !directoryStat.isDirectory()) {
+      throw new Error(`${name} secret directory must be a real directory`);
+    }
+    // A writable containing directory permits replacing an otherwise
+    // protected file. Sticky system temp directories are safe ancestors, but
+    // the immediate directory containing the secret must remain private or
+    // read-only (for example, a root-owned /run/secrets mount).
+    const writableByOthers = !isWindows() && (directoryStat.mode & 0o022) !== 0;
+    const secureStickyAncestor = currentDirectory !== secretDirectory && (directoryStat.mode & 0o1000) !== 0;
+    if (writableByOthers && !secureStickyAncestor) {
+      throw new Error(`${name} secret directory is writable by group or other users`);
+    }
+  }
   let stat;
   try {
     stat = fs.lstatSync(resolved);
@@ -78,7 +104,7 @@ function assertSafeFile(filePath, name) {
   if (!isWindows() && (stat.mode & 0o022) !== 0) {
     throw new Error(`${name} secret file is writable by group or other users`);
   }
-  return resolved;
+  return { resolved, stat };
 }
 
 function secretFilePath(name) {
@@ -94,25 +120,50 @@ function readSecret(name, options = {}) {
   const explicitFile = process.env[`${name}_FILE`];
   const filePath = secretFilePath(name);
   if (filePath) {
-    let resolved;
+    let safeFile;
     try {
-      resolved = assertSafeFile(filePath, name);
+      safeFile = assertSafeFile(filePath, name);
     } catch (error) {
       // A shared secret directory may legitimately omit optional integrations.
       // Explicit per-secret paths and required credentials always fail closed.
-      if (!explicitFile && !options.required && /secret file is unavailable$/.test(error.message)) return "";
+      if (!explicitFile && !options.required && /secret (?:file|directory) is unavailable$/.test(error.message)) return "";
       throw error;
     }
-    let value;
+    let fd;
     try {
-      value = fs.readFileSync(resolved, { encoding: "utf8", flag: "r" });
+      const flags = fs.constants.O_RDONLY |
+        (fs.constants.O_NOFOLLOW || 0) |
+        (fs.constants.O_NONBLOCK || 0);
+      fd = fs.openSync(safeFile.resolved, flags);
+      const opened = fs.fstatSync(fd);
+      if (!opened.isFile() ||
+          (safeFile.stat.dev !== opened.dev || safeFile.stat.ino !== opened.ino) ||
+          (!isWindows() && (opened.mode & 0o022) !== 0)) {
+        throw new Error(`${name} secret file changed or became unsafe while opening`);
+      }
+      if (opened.size > MAX_SECRET_BYTES) throw new Error(`${name} secret file is too large`);
+      const buffer = Buffer.alloc(MAX_SECRET_BYTES + 1);
+      let bytesRead = 0;
+      while (bytesRead < buffer.length) {
+        const count = fs.readSync(fd, buffer, bytesRead, buffer.length - bytesRead, null);
+        if (count === 0) break;
+        bytesRead += count;
+      }
+      if (bytesRead > MAX_SECRET_BYTES) throw new Error(`${name} secret file is too large`);
+      let value = buffer.subarray(0, bytesRead).toString("utf8");
+      value = value.replace(/\r?\n$/, "");
+      if (!value || value.includes("\0")) throw new Error(`${name} secret file is invalid`);
+      return value;
     } catch (error) {
+      if (error.message === `${name} secret file is too large` ||
+          error.message === `${name} secret file is invalid` ||
+          error.message === `${name} secret file changed or became unsafe while opening`) throw error;
       throw new Error(`${name} secret file could not be read`);
+    } finally {
+      if (fd !== undefined) {
+        try { fs.closeSync(fd); } catch {}
+      }
     }
-    if (Buffer.byteLength(value, "utf8") > 16384) throw new Error(`${name} secret file is too large`);
-    value = value.replace(/\r?\n$/, "");
-    if (!value || value.includes("\0")) throw new Error(`${name} secret file is invalid`);
-    return value;
   }
 
   // Test fixtures may inject deterministic values, but production and local
