@@ -34,9 +34,16 @@ function resolveProviderApiKey(provider) {
   let ref = null;
   try { ref = providerRegistry.getAuthSecretRef(provider.providerId); } catch { ref = null; }
   if (ref) {
-    const principalId = getExecutionContext()?.authIdentity?.principal_id || null;
+    const authIdentity = getExecutionContext()?.authIdentity || null;
+    const principalId = authIdentity?.principal_id || null;
     if (principalId) {
-      const decision = authorization.authorize({ principalId, permission: "secrets.use", resource: ref });
+      const decision = authorization.authorize({
+        principalId,
+        permission: "secrets.use",
+        credentialScopes: authIdentity.scopes,
+        delegationId: authIdentity.delegation_id || authIdentity.delegationId || null,
+        resource: ref,
+      });
       if (!decision.ok) {
         const error = new Error("provider credential use is not authorized");
         error.code = decision.code;

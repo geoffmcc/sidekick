@@ -23,9 +23,16 @@ try { kernel = require("../platform/kernel"); } catch { kernel = null; }
 // failures throw before decryption so callers cannot fall through to a weaker
 // credential source.
 function authorizeSecretUse(context, resource) {
-  const principalId = context?.authIdentity?.principal_id || null;
+  const authIdentity = context?.authIdentity || null;
+  const principalId = authIdentity?.principal_id || null;
   if (!principalId) return { ok: true, compatibility: true };
-  return authorization.authorize({ principalId, permission: "secrets.use", resource });
+  return authorization.authorize({
+    principalId,
+    permission: "secrets.use",
+    credentialScopes: authIdentity.scopes,
+    delegationId: authIdentity.delegation_id || authIdentity.delegationId || null,
+    resource,
+  });
 }
 
 function resolveSecretRef(secretRef, { context = getExecutionContext(), requireIdentity = false } = {}) {
