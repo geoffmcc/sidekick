@@ -106,7 +106,7 @@ test("legacy bounded-shell callers get the OS boundary, no host filesystem, and 
   const port = server.address().port;
   const client = `const net=require("node:net");const s=net.connect(${port},"127.0.0.1");s.setTimeout(500);s.on("connect",()=>{console.error("HOST_NETWORK_VISIBLE");process.exit(9)});s.on("error",()=>{console.log("NETWORK_ISOLATED")});s.on("timeout",()=>{console.error("NETWORK_TIMEOUT");process.exit(8)})`;
   try {
-    assert.equal(runBoundedShell(`/usr/bin/node -e ${shellQuote(client)}`).trim(), "NETWORK_ISOLATED");
+    assert.equal(runBoundedShell(`node -e ${shellQuote(client)}`).trim(), "NETWORK_ISOLATED");
   } finally {
     await new Promise(resolve => server.close(resolve));
     try { fs.unlinkSync(isolatedWrite); } catch {}
@@ -151,7 +151,7 @@ test("workspace binding permits scoped writes and hides unrelated host files and
   const port = server.address().port;
   const client = `const net=require("node:net");const s=net.connect(${port},"127.0.0.1");s.setTimeout(500);s.on("connect",()=>{console.error("HOST_NETWORK_VISIBLE");process.exit(9)});s.on("error",()=>{console.log("NETWORK_ISOLATED")});s.on("timeout",()=>{console.error("NETWORK_TIMEOUT");process.exit(8)})`;
   try {
-    const network = await executor.runBubblewrap({ command: `/usr/bin/node -e ${shellQuote(client)}`, source: "mcp" });
+    const network = await executor.runBubblewrap({ command: `node -e ${shellQuote(client)}`, source: "mcp" });
     assert.equal(network.exitCode, 0, network.stderr);
     assert.equal(network.stdout.trim(), "NETWORK_ISOLATED");
   } finally {
@@ -165,7 +165,7 @@ test("nested isolated commands stay contained or fail closed", { skip: process.p
   process.env.SIDEKICK_DENIED_PATHS = "";
   const nested = 'const executor=require("/workspace/src/core/bubblewrap-executor.js");executor.runBubblewrap({command:"printf nested-namespace-ok"}).then(result=>{if(result.exitCode!==0){console.error(result.stderr);process.exit(9)}process.stdout.write(result.stdout)}).catch(error=>{if(!["isolation_unavailable","sandbox_initialization_failed"].includes(error.code)){console.error(error.code);process.exit(10)}process.stdout.write("nested-isolation-refused:"+error.code)})';
   const result = await executor.runBubblewrap({
-    command: `/usr/bin/node -e ${shellQuote(nested)}`,
+    command: `node -e ${shellQuote(nested)}`,
     workspace: repository,
     source: "mcp",
   });
