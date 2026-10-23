@@ -295,6 +295,39 @@ test("filesystem directory and content reads reject identityless callers before 
   assert.equal(insufficient.isError, true);
   assert.equal(insufficient.code, "forbidden", "ordinary execution scope cannot authorize a critical direct handler");
   assert.equal(fs.existsSync(writeTarget), false, "insufficient authority must be rejected before mutation");
+
+  const priorAllowedPaths = process.env.SIDEKICK_MCP_ALLOWED_PATHS;
+  process.env.SIDEKICK_MCP_ALLOWED_PATHS = dataDir;
+  try {
+    fs.writeFileSync(writeTarget, "old content", { mode: 0o640 });
+    const authorizedWrite = await dispatcher.callMcpTool("write", { path: writeTarget, content: "complete replacement" }, {
+      authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+    });
+    assert.equal(authorizedWrite.isError, undefined, "authorized writes remain available");
+    assert.equal(fs.readFileSync(writeTarget, "utf8"), "complete replacement", "the target is atomically replaced with complete content");
+    if (process.platform !== "win32") assert.equal(fs.statSync(writeTarget).mode & 0o777, 0o640, "replacement preserves the existing mode");
+
+    const symlinkTarget = path.join(dataDir, "filesystem-write-symlink-target.txt");
+    const symlink = path.join(dataDir, "filesystem-write-symlink.txt");
+    fs.writeFileSync(symlinkTarget, "target must remain unchanged");
+    let symlinkCreated = false;
+    try {
+      fs.symlinkSync(symlinkTarget, symlink, "file");
+      symlinkCreated = true;
+    } catch (error) {
+      if (!/[Pp]ermission|privilege|not supported/i.test(String(error && error.message))) throw error;
+    }
+    if (symlinkCreated) {
+      const symlinkWrite = await dispatcher.callMcpTool("write", { path: symlink, content: "must not follow link" }, {
+        authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+      });
+      assert.equal(symlinkWrite.code, "invalid_path");
+      assert.equal(fs.readFileSync(symlinkTarget, "utf8"), "target must remain unchanged");
+    }
+  } finally {
+    if (priorAllowedPaths === undefined) delete process.env.SIDEKICK_MCP_ALLOWED_PATHS;
+    else process.env.SIDEKICK_MCP_ALLOWED_PATHS = priorAllowedPaths;
+  }
 });
 
 test("database metadata, host scanning, and file hashing reject identityless callers", async () => {

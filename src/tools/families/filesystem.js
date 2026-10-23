@@ -11,6 +11,7 @@ const { enforcePathPolicy } = require("../path-policy");
 const { requireToolExecution } = require("../read-authorization");
 const { BoundedRegex } = require("../../core/bounded-regex");
 const { readTextBounded, DEFAULT_FILE_READ_BYTES } = require("../../core/bounded-file-read");
+const { writeTextFile } = require("../../core/json-file-store");
 
 const MAX_FILE_CONTENT_BYTES = 50 * 1024 * 1024;
 const MAX_READ_OUTPUT_BYTES = 1024 * 1024;
@@ -318,10 +319,39 @@ async function sidekick_write({ path: filePath, content }) {
   if (authError) return authError;
   const policyError = enforcePathPolicy(filePath, "write");
   if (policyError) return policyError;
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, content, "utf-8");
-  const stat = fs.statSync(filePath);
-  return { content: [{ type: "text", text: "Written " + stat.size + " bytes to " + filePath }] };
+  if (typeof content !== "string") {
+    return { content: [{ type: "text", text: "File content must be text" }], isError: true, code: "invalid_argument" };
+  }
+  const byteSize = Buffer.byteLength(content, "utf8");
+  if (byteSize > MAX_FILE_CONTENT_BYTES) {
+    return { content: [{ type: "text", text: `File content exceeds the ${MAX_FILE_CONTENT_BYTES}-byte write limit` }], isError: true, code: "size_limit_exceeded" };
+  }
+
+  let mode = 0o666;
+  try {
+    const existing = fs.lstatSync(filePath);
+    if (existing.isSymbolicLink() || !existing.isFile()) {
+      return { content: [{ type: "text", text: "Write target must be a regular, non-symlink file" }], isError: true, code: "invalid_path" };
+    }
+    mode = existing.mode & 0o777;
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      return { content: [{ type: "text", text: `Unable to inspect write target: ${error.message}` }], isError: true, code: "write_failed" };
+    }
+  }
+
+  try {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    const recheckedPolicyError = enforcePathPolicy(filePath, "write");
+    if (recheckedPolicyError) return recheckedPolicyError;
+    // Atomic replacement prevents readers from observing a truncated or
+    // partially-written file. The helper creates a unique exclusive temp file,
+    // enforces the byte cap again, and publishes with rename.
+    writeTextFile(filePath, content, { maxBytes: MAX_FILE_CONTENT_BYTES, mode });
+    return { content: [{ type: "text", text: `Written ${byteSize} bytes to ${filePath}` }] };
+  } catch (error) {
+    return { content: [{ type: "text", text: `Unable to write file: ${error.message}` }], isError: true, code: "write_failed" };
+  }
 }
 
 async function sidekick_find({ path: searchPath, name, modified_after, modified_before, size_min, size_max, content, max_results }) {
@@ -471,7 +501,7 @@ const descriptors = Object.freeze([
   Object.freeze({
     name: "write",
     description: "Write content to a file on the remote machine",
-    schema: z.object({ path: z.string().describe("Absolute path to write to"), content: z.string().describe("File content to write") }),
+    schema: z.object({ path: z.string().describe("Absolute path to write to"), content: z.string().max(MAX_FILE_CONTENT_BYTES).describe(`File content (maximum ${MAX_FILE_CONTENT_BYTES} characters; 50 MiB UTF-8 write limit)`) }),
     args: { path: "string", content: "string" },
     risk: "critical",
     category: "Core",
