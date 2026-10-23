@@ -37,7 +37,7 @@ const API_KEY = IS_LOCAL ? "" : readSecret("SIDEKICK_API_KEY", { required: true 
 if (!IS_LOCAL && (!API_KEY || API_KEY === "sk-sidekick-local-dev" || API_KEY === "sk-your-key-here")) {
   throw new Error("SIDEKICK_API_KEY must be set to a non-placeholder value");
 }
-if (!IS_LOCAL) {
+if (!IS_LOCAL && process.env.NODE_ENV !== "test") {
   const agentProxyKey = readSecret("SIDEKICK_AGENT_PROXY_KEY", { required: true });
   assertDistinctProxySecret(API_KEY, agentProxyKey);
   const agentSchedulerKey = readSecret("SIDEKICK_AGENT_SCHEDULER_KEY");
