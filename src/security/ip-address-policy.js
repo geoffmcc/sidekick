@@ -57,6 +57,14 @@ function embeddedIPv4Address(host) {
   const wellKnownNat64 = [0x00, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0];
   if (wellKnownNat64.every((byte, index) => bytes[index] === byte)) return bytesToIPv4(bytes, 12);
 
+  // RFC 8215 reserves 64:ff9b:1::/48 for local-use translation. RFC 6052's
+  // /48 layout places the first two IPv4 octets after the prefix, then the
+  // reserved u octet, followed by the remaining two octets.
+  const localUseNat64 = [0x00, 0x64, 0xff, 0x9b, 0x00, 0x01];
+  if (localUseNat64.every((byte, index) => bytes[index] === byte) && bytes[8] === 0 && bytes.slice(11).every(byte => byte === 0)) {
+    return `${bytes[6]}.${bytes[7]}.${bytes[9]}.${bytes[10]}`;
+  }
+
   // 6to4 embeds its IPv4 destination in bits 16..47.
   if (bytes[0] === 0x20 && bytes[1] === 0x02) return bytesToIPv4(bytes, 2);
   return null;
@@ -118,6 +126,8 @@ function isPrivateAddress(host) {
   }
   if (version === 6) {
     if (normalized === "::1" || normalized === "::") return true;
+    const bytes = ipv6Bytes(normalized);
+    if (bytes && [0x00, 0x64, 0xff, 0x9b, 0x00, 0x01].every((byte, index) => bytes[index] === byte)) return true;
     if (/^f[cd]/.test(normalized)) return true;
     const embedded = embeddedIPv4Address(normalized);
     return embedded ? isPrivateAddress(embedded) : false;

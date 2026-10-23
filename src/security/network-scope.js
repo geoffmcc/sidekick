@@ -83,7 +83,10 @@ function normalizeCidr(value, name) {
 }
 function ipv6Text(value) {
   const parts = [];
-  for (let i = 7; i >= 0; i--) parts.unshift(((value >> BigInt(i * 16)) & 0xffffn).toString(16));
+  // Shifting from the most-significant hextet down already produces network
+  // order. Using unshift here reverses every IPv6 prefix during CIDR
+  // normalization, which can silently change the operator's intended scope.
+  for (let i = 7; i >= 0; i--) parts.push(((value >> BigInt(i * 16)) & 0xffffn).toString(16));
   let bestStart = -1, bestLength = 0;
   for (let i = 0; i < 8;) { if (parts[i] !== "0") { i++; continue; } const start = i; while (i < 8 && parts[i] === "0") i++; if (i - start > bestLength) { bestStart = start; bestLength = i - start; } }
   if (bestLength > 1) parts.splice(bestStart, bestLength, "");
