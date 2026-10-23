@@ -278,11 +278,11 @@ function makeAsyncChatJob(extraPayload = {}, extra = {}) {
       delegatePrincipalId: delegate.principal_id,
       permissions: ["tools.execute"],
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
-      actorPrincipalId: directRunnerOwner.principal_id,
+      actorContext: directRunnerOwner,
     });
     const authority = captureExecutionAuthority({ principal_id: delegate.principal_id, delegation_id: delegation.delegation_id }, "tools.execute");
     const job = makeAsyncChatJob({}, { executionAuthority: authority });
-    authorization.revokeDelegation(delegation.delegation_id, directRunnerOwner.principal_id);
+    authorization.revokeDelegation(delegation.delegation_id, directRunnerOwner);
     let dispatches = 0;
     inferenceService.chat = async () => { dispatches++; return { content: "must not run" }; };
     directJobRunner.runOnce();

@@ -100,6 +100,7 @@ test("the real dispatcher denies a scheduled effect after its delegation is revo
     delegatorPrincipalId: owner.principal_id,
     delegatePrincipalId: delegate.principal_id,
     permissions: ["tools.execute"],
+    actorContext: owner,
   });
   const credential = authentication.createCredential({
     principalId: delegate.principal_id,
@@ -118,7 +119,7 @@ test("the real dispatcher denies a scheduled effect after its delegation is revo
     context: { authIdentity: delegatedIdentity, project: "scheduled-project", taskId: delay.id, source: "agent" },
     secret: process.env.SIDEKICK_SECRET_KEY,
   });
-  authorization.revokeDelegation(delegation.delegation_id, owner.principal_id);
+  authorization.revokeDelegation(delegation.delegation_id, owner);
 
   const calls = [];
   const { execute } = runner(delay, calls);

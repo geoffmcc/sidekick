@@ -133,18 +133,18 @@ test("role and delegation authority changes roll back when their audit event fai
     WHEN NEW.event_type = 'delegation.created' AND NEW.principal_id = '${delegate.principal_id}'
     BEGIN SELECT RAISE(ABORT, 'synthetic delegation audit failure'); END`);
   try {
-    assert.throws(() => authorization.createDelegation({ delegatorPrincipalId: owner.principal_id, delegatePrincipalId: delegate.principal_id, permissions: ["memory.read"] }), /synthetic delegation audit failure/);
+    assert.throws(() => authorization.createDelegation({ delegatorPrincipalId: owner.principal_id, delegatePrincipalId: delegate.principal_id, permissions: ["memory.read"], actorContext: owner }), /synthetic delegation audit failure/);
     assert.equal(connection.prepare("SELECT COUNT(*) AS count FROM identity_delegations WHERE delegate_principal_id = ?").get(delegate.principal_id).count, 0,
       "failed delegation audit must roll back delegated authority");
   } finally {
     connection.exec("DROP TRIGGER reject_delegation_grant_audit");
   }
-  const delegation = authorization.createDelegation({ delegatorPrincipalId: owner.principal_id, delegatePrincipalId: delegate.principal_id, permissions: ["memory.read"] });
+  const delegation = authorization.createDelegation({ delegatorPrincipalId: owner.principal_id, delegatePrincipalId: delegate.principal_id, permissions: ["memory.read"], actorContext: owner });
   connection.exec(`CREATE TRIGGER reject_delegation_revoke_audit BEFORE INSERT ON identity_audit_events
     WHEN NEW.event_type = 'delegation.revoked' AND json_extract(NEW.details_json, '$.delegation_id') = '${delegation.delegation_id}'
     BEGIN SELECT RAISE(ABORT, 'synthetic delegation audit failure'); END`);
   try {
-    assert.throws(() => authorization.revokeDelegation(delegation.delegation_id, owner.principal_id), /synthetic delegation audit failure/);
+    assert.throws(() => authorization.revokeDelegation(delegation.delegation_id, owner), /synthetic delegation audit failure/);
     assert.equal(authorization.getDelegation(delegation.delegation_id).revoked_at, null,
       "failed revocation audit must roll back delegation revocation");
   } finally {
@@ -206,6 +206,7 @@ test("memory project helpers preserve delegated authority attenuation and rechec
     delegatorPrincipalId: owner.principal_id,
     delegatePrincipalId: operator.principal_id,
     permissions: ["predictions.read"],
+    actorContext: owner,
   });
   const delegatedIdentity = {
     principal_id: operator.principal_id,
@@ -218,7 +219,7 @@ test("memory project helpers preserve delegated authority attenuation and rechec
   const delegatedContext = toolContext.createMcpExecutionContext({ authIdentity: delegatedIdentity, project: "memory_a" });
   assert.throws(() => toolContext.runWithContext(delegatedContext, () => require("../src/tools/families/memory-scope").scopedProject("memory_a")), /scope denied/);
 
-  authorization.revokeDelegation(delegation.delegation_id, owner.principal_id);
+  authorization.revokeDelegation(delegation.delegation_id, owner);
   assert.equal(projectAccess.hasProjectAccess(operator.principal_id, "memory_a", "read", null, delegation.delegation_id), false,
     "revocation remains effective in direct project-access helper calls");
 });
@@ -934,14 +935,14 @@ test("Predict revalidates delegated permission and project membership on each ca
     delegatePrincipalId: delegate.principal_id,
     permissions: ["predictions.read"],
     expiresAt: new Date(Date.now() + 60_000).toISOString(),
-    actorPrincipalId: operator.principal_id,
+    actorContext: { principal_id: operator.principal_id },
   });
   const context = { authIdentity: { principal_id: delegate.principal_id, principal_type: "agent", delegation_id: delegation.delegation_id } };
   const allowed = await dispatcher.callAgentTool("predict", { action: "list" }, context);
   assert.equal(allowed.isError, undefined);
   assert.ok(JSON.parse(allowed.content[0].text).predictions.every(prediction => prediction.project === "memory_a"));
 
-  require("../src/core/authorization").revokeDelegation(delegation.delegation_id, operator.principal_id);
+  require("../src/core/authorization").revokeDelegation(delegation.delegation_id, { principal_id: operator.principal_id });
   const revoked = await dispatcher.callAgentTool("predict", { action: "list" }, context);
   assert.equal(revoked.isError, true);
   assert.equal(revoked.code, "authorization_denied", "revoked authority is reevaluated at dispatch");

@@ -97,11 +97,18 @@ try {
   });
 
   test("delegation is a subset of delegator authority and revocable", () => {
-    const delegation = authorization.createDelegation({ delegatorPrincipalId: operator.principal_id, delegatePrincipalId: agent.principal_id, permissions: ["workflows.execute"], expiresAt: new Date(Date.now() + 60_000).toISOString(), actorPrincipalId: operator.principal_id });
+    assert.throws(() => authorization.createDelegation({ delegatorPrincipalId: owner.principal_id, delegatePrincipalId: agent.principal_id, permissions: ["workflows.execute"], actorContext: { principal_id: operator.principal_id } }), /authorized administrator/);
+    const delegation = authorization.createDelegation({ delegatorPrincipalId: operator.principal_id, delegatePrincipalId: agent.principal_id, permissions: ["workflows.execute"], expiresAt: new Date(Date.now() + 60_000).toISOString(), actorContext: { principal_id: operator.principal_id } });
+    const administratorDelegation = authorization.createDelegation({ delegatorPrincipalId: operator.principal_id, delegatePrincipalId: agent.principal_id, permissions: ["workflows.execute"], actorContext: { principal_id: owner.principal_id } });
+    assert.equal(administratorDelegation.created_by_principal_id, owner.principal_id, "an authorized administrator may act for a delegator with current authority");
+    authorization.revokeDelegation(administratorDelegation.delegation_id, { principal_id: owner.principal_id });
     assert.strictEqual(authorization.authorize({ principalId: agent.principal_id, permission: "workflows.execute", delegationId: delegation.delegation_id }).ok, true);
     assert.strictEqual(authorization.authorize({ principalId: agent.principal_id, permission: "tools.execute", delegationId: delegation.delegation_id }).code, "forbidden");
-    assert.throws(() => authorization.createDelegation({ delegatorPrincipalId: operator.principal_id, delegatePrincipalId: agent.principal_id, permissions: ["users.manage"] }), /lacks permission/);
-    authorization.revokeDelegation(delegation.delegation_id, operator.principal_id);
+    assert.throws(() => authorization.createDelegation({ delegatorPrincipalId: operator.principal_id, delegatePrincipalId: agent.principal_id, permissions: ["users.manage"], actorContext: { principal_id: operator.principal_id } }), /lacks permission/);
+    assert.throws(() => authorization.revokeDelegation(delegation.delegation_id), /authenticated identity context/);
+    assert.throws(() => authorization.revokeDelegation(delegation.delegation_id, { principal_id: agent.principal_id }), /authorized administrator/);
+    authorization.revokeDelegation(delegation.delegation_id, { principal_id: operator.principal_id });
+    assert.throws(() => authorization.revokeDelegation(delegation.delegation_id), /authenticated identity context/, "already-revoked records still require an actor before returning their details");
     assert.strictEqual(authorization.authorize({ principalId: agent.principal_id, permission: "workflows.execute", delegationId: delegation.delegation_id }).code, "delegation-revoked-or-expired");
   });
 

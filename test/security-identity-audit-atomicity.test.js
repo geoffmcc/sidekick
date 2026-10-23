@@ -58,6 +58,7 @@ test("role and delegation changes roll back when their audit record cannot be wr
       delegatorPrincipalId: owner.principal_id,
       delegatePrincipalId: delegate.principal_id,
       permissions: ["memory.read"],
+      actorContext: owner,
     }), /synthetic audit failure/);
     assert.equal(db.prepare("SELECT COUNT(*) AS count FROM identity_delegations WHERE delegate_principal_id = ?").get(delegate.principal_id).count, 0,
       "failed delegation grant leaves no delegated authority behind");
@@ -69,12 +70,13 @@ test("role and delegation changes roll back when their audit record cannot be wr
     delegatorPrincipalId: owner.principal_id,
     delegatePrincipalId: delegate.principal_id,
     permissions: ["memory.read"],
+    actorContext: owner,
   });
   db.exec(`CREATE TRIGGER reject_delegation_audit BEFORE INSERT ON identity_audit_events
     WHEN NEW.event_type = 'delegation.revoked' AND NEW.principal_id = '${delegate.principal_id}'
     BEGIN SELECT RAISE(ABORT, 'synthetic audit failure'); END`);
   try {
-    assert.throws(() => authorization.revokeDelegation(delegation.delegation_id, owner.principal_id), /synthetic audit failure/);
+    assert.throws(() => authorization.revokeDelegation(delegation.delegation_id, owner), /synthetic audit failure/);
     assert.equal(authorization.getDelegation(delegation.delegation_id).revoked_at, null,
       "failed delegation revocation preserves the prior authority state");
   } finally {

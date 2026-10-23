@@ -35,7 +35,7 @@ const delegation = authorization.createDelegation({
   delegatePrincipalId: operator.principal_id,
   permissions: ["workflows.execute"],
   expiresAt: new Date(Date.now() + 60_000).toISOString(),
-  actorPrincipalId: owner.principal_id,
+  actorContext: owner,
 });
 
 const secretValue = "synthetic-provider-credential-never-real";

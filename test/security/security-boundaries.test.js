@@ -117,7 +117,7 @@ test("authorization narrows credentials and delegation to current authority", ()
     delegatorPrincipalId: owner.principal_id,
     delegatePrincipalId: delegate.principal_id,
     permissions: ["workflows.execute"],
-    actorPrincipalId: owner.principal_id,
+    actorContext: owner,
   });
 
   assert.equal(authorization.authorize({ principalId: delegate.principal_id, permission: "workflows.execute", delegationId: delegation.delegation_id }).ok, true);
@@ -126,7 +126,7 @@ test("authorization narrows credentials and delegation to current authority", ()
   identity.setPrincipalEnabled(owner.principal_id, false, secondOwner.principal_id);
   assert.equal(authorization.authorize({ principalId: delegate.principal_id, permission: "workflows.execute", delegationId: delegation.delegation_id }).code, "delegation-revoked-or-expired");
   identity.setPrincipalEnabled(owner.principal_id, true, secondOwner.principal_id);
-  authorization.revokeDelegation(delegation.delegation_id, owner.principal_id);
+  authorization.revokeDelegation(delegation.delegation_id, owner);
 });
 
 test("security audit records server-derived provenance without password material", () => {

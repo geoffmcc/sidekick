@@ -282,7 +282,7 @@ function registerAuthRoutes({
       }
     }
     try {
-      const delegation = authorization.createDelegation({ delegatorPrincipalId, delegatePrincipalId: req.body?.delegate_principal_id, permissions: req.body?.permissions, expiresAt: req.body?.expires_at, actorPrincipalId: req.authPrincipal.principal_id });
+      const delegation = authorization.createDelegation({ delegatorPrincipalId, delegatePrincipalId: req.body?.delegate_principal_id, permissions: req.body?.permissions, expiresAt: req.body?.expires_at, actorContext: req.authPrincipal });
       res.status(201).json({ delegation });
     } catch (error) {
       return errorResponse(req, res, error, { status: 400, code: "invalid_request", component: "auth" });
@@ -303,7 +303,7 @@ function registerAuthRoutes({
       return res.status(403).json({ error: "Delegation revocation exceeds the request authority", code: "insufficient_delegation" });
     }
     try {
-      res.json({ delegation: authorization.revokeDelegation(req.params.id, principal.principal_id) });
+      res.json({ delegation: authorization.revokeDelegation(req.params.id, principal) });
     } catch (error) {
       return errorResponse(req, res, error, { status: 403, code: "insufficient_delegation", component: "auth" });
     }
