@@ -6,7 +6,7 @@ const { mkdtempSync, mkdirSync, writeFileSync } = require("node:fs");
 const { tmpdir } = require("node:os");
 const path = require("node:path");
 const { applyMutation, buildReport, getSpecs, loadPolicy, shouldFail } = require("../scripts/test-mutation");
-const { evaluatePolicy, loadPolicy: loadCoveragePolicy } = require("../scripts/test-coverage");
+const { coverageInvocation, evaluatePolicy, loadPolicy: loadCoveragePolicy } = require("../scripts/test-coverage");
 const { classifyPath, importSpecifiers, runChangedTests, selectChangedTests } = require("../scripts/test-changed");
 const {
   buildFlakeReport,
@@ -64,6 +64,13 @@ test("coverage policy inventories every security boundary with stronger branch g
   assert.deepStrictEqual(policy.security_domains.map(domain => domain.name), policy.critical_domains);
   assert.ok(policy.security_domains.every(domain => domain.production_files.length && domain.file_minimums));
   assert.ok(policy.security_domains.every(domain => domain.minimums.branches > policy.minimums.branches));
+});
+
+test("coverage gate launches the pinned c8 JavaScript entry point through Node", () => {
+  const invocation = coverageInvocation(["--version"]);
+  assert.equal(invocation.command, process.execPath);
+  assert.match(invocation.args[0], /node_modules[\\/]c8[\\/]bin[\\/]c8\.js$/);
+  assert.deepStrictEqual(invocation.args.slice(1), ["--version"]);
 });
 
 test("coverage policy evaluates domains and files independently", () => {
