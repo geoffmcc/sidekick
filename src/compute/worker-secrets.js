@@ -1,11 +1,30 @@
 const fs = require("fs");
 const path = require("path");
-const { assertSafeSecretDirectory } = require("../core/runtime-secrets");
 
 const SECRET_FILES = Object.freeze({
   SIDEKICK_ENROLL_TOKEN: "sidekick_enroll_token",
   COMPUTE_TOKEN: "compute_token",
 });
+
+// Keep this check local: the standalone worker package is intentionally
+// forbidden from depending on Core. Mirror the Core secret-directory rule so
+// the same credentials remain protected in the packaged worker runtime.
+function assertSafeSecretDirectory(directoryPath) {
+  if (!path.isAbsolute(directoryPath)) throw new Error("secret directory path must be absolute");
+  const resolved = path.resolve(directoryPath);
+  const root = path.parse(resolved).root;
+  const segments = resolved.slice(root.length).split(path.sep).filter(Boolean);
+  let currentDirectory = root;
+  for (const segment of segments) {
+    currentDirectory = path.join(currentDirectory, segment);
+    const stat = fs.lstatSync(currentDirectory);
+    if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error("secret directory is not a real directory");
+    const writableByOthers = process.platform !== "win32" && (stat.mode & 0o022) !== 0;
+    const secureStickyAncestor = currentDirectory !== resolved && (stat.mode & 0o1000) !== 0;
+    if (writableByOthers && !secureStickyAncestor) throw new Error("secret directory is writable by other users");
+  }
+  return resolved;
+}
 
 function readSecret(name) {
   const fileName = SECRET_FILES[name];
@@ -15,7 +34,7 @@ function readSecret(name) {
   if (!directory || !path.isAbsolute(directory)) return "";
   let safeDirectory;
   try {
-    safeDirectory = assertSafeSecretDirectory(directory, name);
+    safeDirectory = assertSafeSecretDirectory(directory);
   } catch {
     return "";
   }
