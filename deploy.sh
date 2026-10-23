@@ -69,7 +69,10 @@ wait_sidekick_services() {
   done
 
   echo -e "\033[31mERROR: Sidekick services did not all become active within ${timeout_seconds} seconds. Current states: ${states}\033[0m" >&2
-  echo "Inspect with: sudo journalctl -u sidekick-mcp -u sidekick-agent -u sidekick-dashboard" >&2
+  echo "Inspect logs with separate commands:" >&2
+  echo "  sudo journalctl -u sidekick-mcp" >&2
+  echo "  sudo journalctl -u sidekick-agent" >&2
+  echo "  sudo journalctl -u sidekick-dashboard" >&2
   return 1
 }
 

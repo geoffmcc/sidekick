@@ -75,7 +75,7 @@ function Wait-SidekickServices {
     if ($elapsed -lt $timeoutSeconds) { Start-Sleep -Seconds $intervalSeconds }
   }
 
-  throw "Sidekick services did not all become active within $timeoutSeconds seconds. Current states: $($states -join ', '). Inspect with sudo journalctl -u sidekick-mcp -u sidekick-agent -u sidekick-dashboard."
+  throw "Sidekick services did not all become active within $timeoutSeconds seconds. Current states: $($states -join ', '). Inspect logs with separate commands: sudo journalctl -u sidekick-mcp; sudo journalctl -u sidekick-agent; sudo journalctl -u sidekick-dashboard."
 }
 
 function Sync-SidekickSystemdUnits {

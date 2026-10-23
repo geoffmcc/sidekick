@@ -894,6 +894,8 @@ assert.ok(deployShContent.includes("sudo systemctl status $service"), 'deploy.sh
 assert.ok(deployPs1Content.includes('sudo systemctl status $service'), 'deploy.ps1 readiness checks must use the exact sudo-authorized per-service status command');
 assert.ok(!deployShContent.includes('systemctl is-active'), 'deploy.sh must not require an ungranted is-active sudo command');
 assert.ok(!deployPs1Content.includes('systemctl is-active'), 'deploy.ps1 must not require an ungranted is-active sudo command');
+assert.ok(deployShContent.includes('sudo journalctl -u sidekick-mcp') && deployShContent.includes('sudo journalctl -u sidekick-agent') && deployShContent.includes('sudo journalctl -u sidekick-dashboard'), 'deploy.sh must provide log diagnostics matching per-unit sudo grants');
+assert.ok(deployPs1Content.includes('sudo journalctl -u sidekick-mcp; sudo journalctl -u sidekick-agent; sudo journalctl -u sidekick-dashboard'), 'deploy.ps1 must provide log diagnostics matching per-unit sudo grants');
 assert.ok(deployShContent.includes('[[ "$status" == "active" ]]'), 'deploy.sh must not report inactive services as healthy');
 assert.ok(deployPs1Content.includes('$status.Trim() -eq "active"'), 'deploy.ps1 must not report inactive services as healthy');
 assert.ok(deployShContent.lastIndexOf('wait_sidekick_services || exit 1') < deployShContent.indexOf('=== Deploy complete ==='), 'deploy.sh must report completion only after service readiness');
