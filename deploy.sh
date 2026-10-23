@@ -579,7 +579,7 @@ for svc in sidekick-mcp sidekick-dashboard sidekick-agent sidekick-execution-nod
     exit 1
   fi
   status=$(run_remote "sudo systemctl status $svc 2>&1 | grep 'Active:' | awk '{print \$2}'") || true
-  if [[ "$status" == *"active"* ]]; then
+  if [[ "$status" == "active" ]]; then
     echo -e "  \033[32m$svc : $status\033[0m"
   else
     echo -e "  \033[31m$svc : $status\033[0m"

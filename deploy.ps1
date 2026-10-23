@@ -647,7 +647,7 @@ try {
       throw "$svc service unit missing"
     }
     $status = Run-Remote "sudo systemctl status $svc 2>&1 | grep 'Active:' | awk '{print `$2}'"
-    $color = if ($status -match "active") { "Green" } else { "Red" }
+    $color = if ($status.Trim() -eq "active") { "Green" } else { "Red" }
     Write-Host ("  $svc : ".PadRight(30)) -NoNewline
     Write-Host $status -ForegroundColor $color
   }
