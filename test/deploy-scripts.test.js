@@ -888,6 +888,14 @@ assert.ok(fs.readFileSync(path.join(__dirname, '..', 'scripts', 'ensure-secret-c
 assert.ok(fs.existsSync(path.join(__dirname, '..', 'scripts', 'verify-runtime-secrets.js')), 'deployment must include the required runtime-secret preflight');
 assert.ok(deployShContent.includes('scripts/verify-runtime-secrets.js'), 'deploy.sh SCP mode must copy the runtime-secret preflight');
 assert.ok(deployPs1Content.includes('scripts\\verify-runtime-secrets.js'), 'deploy.ps1 SCP mode must copy the runtime-secret preflight');
+assert.ok(deployShContent.includes('wait_sidekick_services || exit 1'), 'deploy.sh must fail unless required services become active');
+assert.ok(deployPs1Content.includes('Wait-SidekickServices'), 'deploy.ps1 must fail unless required services become active');
+assert.ok(deployShContent.includes("sudo systemctl status $service"), 'deploy.sh readiness checks must use the exact sudo-authorized per-service status command');
+assert.ok(deployPs1Content.includes('sudo systemctl status $service'), 'deploy.ps1 readiness checks must use the exact sudo-authorized per-service status command');
+assert.ok(!deployShContent.includes('systemctl is-active'), 'deploy.sh must not require an ungranted is-active sudo command');
+assert.ok(!deployPs1Content.includes('systemctl is-active'), 'deploy.ps1 must not require an ungranted is-active sudo command');
+assert.ok(deployShContent.lastIndexOf('wait_sidekick_services || exit 1') < deployShContent.indexOf('=== Deploy complete ==='), 'deploy.sh must report completion only after service readiness');
+assert.ok(deployPs1Content.lastIndexOf('Wait-SidekickServices') < deployPs1Content.indexOf('=== Deploy complete ==='), 'deploy.ps1 must report completion only after service readiness');
 assert.ok(bootstrapShContent.includes('/etc/sidekick/secrets'), 'bootstrap.sh should create the protected secret directory');
 assert.ok(bootstrapShContent.includes('generate_secret_file'), 'bootstrap.sh should generate missing core secret files');
 assert.ok(bootstrapShContent.includes('chmod 600'), 'bootstrap.sh should protect generated secret files');

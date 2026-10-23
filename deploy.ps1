@@ -57,6 +57,27 @@ function Restart-SidekickService {
   if ($LASTEXITCODE -ne 0) { throw "Failed to restart $Name" }
 }
 
+function Wait-SidekickServices {
+  $timeoutSeconds = 220
+  $intervalSeconds = 5
+  $services = @("sidekick-mcp", "sidekick-agent", "sidekick-dashboard")
+  for ($elapsed = 0; $elapsed -le $timeoutSeconds; $elapsed += $intervalSeconds) {
+    $states = @()
+    $allActive = $true
+    foreach ($service in $services) {
+      $state = Run-Remote "sudo systemctl status $service 2>&1 | grep 'Active:' | awk '{print `$2}'"
+      $state = ($state -join "").Trim()
+      $stateLabel = if ($state) { $state } else { "unknown" }
+      $states += "$service=$stateLabel"
+      if ($state -ne "active") { $allActive = $false }
+    }
+    if ($allActive) { return }
+    if ($elapsed -lt $timeoutSeconds) { Start-Sleep -Seconds $intervalSeconds }
+  }
+
+  throw "Sidekick services did not all become active within $timeoutSeconds seconds. Current states: $($states -join ', '). Inspect with sudo journalctl -u sidekick-mcp -u sidekick-agent -u sidekick-dashboard."
+}
+
 function Sync-SidekickSystemdUnits {
   Write-Host "  installing updated Sidekick systemd units..." -ForegroundColor Yellow
   $units = @("sidekick-mcp.service", "sidekick-agent.service", "sidekick-dashboard.service")
@@ -607,6 +628,9 @@ try {
     Restart-SidekickService "sidekick-agent"
     Restart-SidekickService "sidekick-dashboard"
   }
+
+  Write-Host "  waiting for MCP, Agent, and Dashboard readiness..." -ForegroundColor Yellow
+  Wait-SidekickServices
 
   Write-Host ""
   Write-Host "=== Deploy complete ===" -ForegroundColor Cyan

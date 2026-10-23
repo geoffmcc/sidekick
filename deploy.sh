@@ -51,6 +51,28 @@ run_remote() { ssh -i "$SSH_KEY" $SSH_OPTS "$VPS" "$@" 2>&1; }
 copy_to_vps() { scp -i "$SSH_KEY" $SSH_OPTS "$1" "$VPS:$2" 2>&1; }
 restart_service() { echo -e "  \033[33mrestarting $1...\033[0m"; run_remote "sudo systemctl restart $1" >/dev/null; }
 
+wait_sidekick_services() {
+  local timeout_seconds=220 interval_seconds=5 elapsed=0 states active_count service state all_active
+  local services=(sidekick-mcp sidekick-agent sidekick-dashboard)
+  while (( elapsed <= timeout_seconds )); do
+    states=""
+    all_active=true
+    for service in "${services[@]}"; do
+      state=$(run_remote "sudo systemctl status $service 2>&1 | grep 'Active:' | awk '{print \$2}'") || true
+      state=$(printf '%s' "$state" | tr -d '\r' | tr -d '[:space:]')
+      states+="${service}=${state:-unknown} "
+      if [[ "$state" != "active" ]]; then all_active=false; fi
+    done
+    if [[ "$all_active" == "true" ]]; then return 0; fi
+    if (( elapsed < timeout_seconds )); then sleep "$interval_seconds"; fi
+    elapsed=$((elapsed + interval_seconds))
+  done
+
+  echo -e "\033[31mERROR: Sidekick services did not all become active within ${timeout_seconds} seconds. Current states: ${states}\033[0m" >&2
+  echo "Inspect with: sudo journalctl -u sidekick-mcp -u sidekick-agent -u sidekick-dashboard" >&2
+  return 1
+}
+
 sync_service_units() {
   echo -e "  \033[33minstalling updated Sidekick systemd units...\033[0m"
   local command="sudo install -o root -g root -m 0644 $REMOTE_DIR/systemd/sidekick-mcp.service /etc/systemd/system/sidekick-mcp.service && sudo install -o root -g root -m 0644 $REMOTE_DIR/systemd/sidekick-agent.service /etc/systemd/system/sidekick-agent.service && sudo install -o root -g root -m 0644 $REMOTE_DIR/systemd/sidekick-dashboard.service /etc/systemd/system/sidekick-dashboard.service && sudo systemctl daemon-reload"
@@ -537,6 +559,9 @@ else
   restart_service "sidekick-agent"
   restart_service "sidekick-dashboard"
 fi
+
+echo -e "  \033[33mwaiting for MCP, Agent, and Dashboard readiness...\033[0m"
+wait_sidekick_services || exit 1
 
 echo ""
 echo -e "\033[36m=== Deploy complete ===\033[0m"
