@@ -92,7 +92,7 @@ async function sidekick_web_fetch({ url: targetUrl, method, headers, body, netwo
   if (destination.refusal) {
     const code = destination.code || "outbound_target_denied";
     const guidance = code === "network_scope_required"
-      ? "Private destinations require an existing operator-created named network scope; user consent or a tool approval does not create that scope."
+      ? "Private or non-global destinations require an existing operator-created named network scope; user consent or a tool approval does not create that scope."
       : code === "network_scope_unavailable"
         ? "Verify the configured scope name and immutable revision with the operator; scope changes must use the authorized scope-management path."
         : code === "network_scope_denied"
@@ -175,7 +175,7 @@ const descriptors = Object.freeze([
       network_scope: z.string().max(80).optional().describe("Exact operator-created named outbound network scope"),
       network_scope_revision: z.number().int().positive().optional().describe("Immutable named scope revision"),
     }),
-    args: { url: "string", method: "string (optional)", headers: "string (optional)", body: "string (optional)", network_scope: "string (optional; required for private destinations)", network_scope_revision: "number (optional; immutable revision)" },
+    args: { url: "string", method: "string (optional)", headers: "string (optional)", body: "string (optional)", network_scope: "string (optional; required for private or non-global destinations)", network_scope_revision: "number (optional; immutable revision)" },
     risk: "medium",
     category: "Core",
     source: "builtin",

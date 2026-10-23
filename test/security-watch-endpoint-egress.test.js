@@ -81,11 +81,11 @@ test("host-form diagnostics pin DNS answers and require action-specific current 
     target: "public.example.test",
     probes,
   }, {
-    lookup: async () => [{ address: "198.51.100.8", family: 4 }],
+    lookup: async () => [{ address: "93.184.216.34", family: 4 }],
   });
   assert.equal(publicTarget.ok, true);
-  assert.equal(publicTarget.address, "198.51.100.8");
-  assert.deepEqual(publicTarget.addresses, ["198.51.100.8"]);
+  assert.equal(publicTarget.address, "93.184.216.34");
+  assert.deepEqual(publicTarget.addresses, ["93.184.216.34"]);
 
   const privateWithoutScope = await authorizeNetDiagTarget({
     target: "127.0.0.1",
@@ -93,6 +93,15 @@ test("host-form diagnostics pin DNS answers and require action-specific current 
   });
   assert.equal(privateWithoutScope.ok, false);
   assert.equal(privateWithoutScope.code, "network_scope_required");
+
+  const specialPurposeWithoutScope = await authorizeNetDiagTarget({
+    target: "documentation.example.test",
+    probes,
+  }, {
+    lookup: async () => [{ address: "203.0.113.20", family: 4 }],
+  });
+  assert.equal(specialPurposeWithoutScope.ok, false);
+  assert.equal(specialPurposeWithoutScope.code, "network_scope_required", "non-global special-purpose DNS answers require an explicit scope too");
 
   let metadataLookups = 0;
   const metadataHost = await authorizeNetDiagTarget({
@@ -113,7 +122,7 @@ test("host-form diagnostics pin DNS answers and require action-specific current 
     probes,
   }, {
     lookup: async () => [
-      { address: "198.51.100.8", family: 4 },
+      { address: "93.184.216.34", family: 4 },
       { address: "10.1.2.3", family: 4 },
     ],
   });

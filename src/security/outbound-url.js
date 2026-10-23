@@ -14,8 +14,9 @@
 //   * credentials embedded in the URL are refused;
 //   * cloud metadata hosts and link-local addresses are ALWAYS refused — there
 //     is no legitimate agent fetch of an instance-credential endpoint;
-//   * loopback and private/CGNAT/unique-local addresses are refused by default,
-//     because reaching them is the SSRF case rather than a normal fetch.
+//   * loopback, private/CGNAT/unique-local, and IANA special-purpose addresses
+//     that are not globally reachable are refused by default. Private-network
+//     and special-purpose access requires an operator-created named scope.
 //
 // Private destinations require an operator-created named network scope. The
 // historical environment flag is retained as a parsed compatibility setting,
@@ -28,7 +29,7 @@
 
 const net = require("node:net");
 const dns = require("dns").promises;
-const { stripBrackets, isLinkLocal, isMetadataAddress, isNonUnicastAddress, isPrivateAddress, isIPv4MappedAddress } = require("./ip-address-policy");
+const { stripBrackets, isLinkLocal, isMetadataAddress, isNonUnicastAddress, isPrivateAddress, isIPv4MappedAddress, isNonGloballyReachableAddress } = require("./ip-address-policy");
 
 /**
  * Returns an error message describing why the target is refused, or null when
@@ -66,9 +67,9 @@ function validateOutboundUrl(value, label = "url", options = {}) {
     return `Refused ${label} host "${host}": IPv4-mapped IPv6 addresses are not valid network destinations`;
   }
    const allowPrivate = options.allowPrivate === true;
-  if (isPrivateAddress(host) && !allowPrivate) {
-    return `Refused ${label} host "${host}": private and loopback addresses are not fetchable. ` +
-      "Bind the request to an operator-created named network scope.";
+  if (isNonGloballyReachableAddress(host) && !allowPrivate) {
+    return `Refused ${label} host "${host}": address is not globally reachable without an ` +
+      "operator-created named network scope.";
   }
   return null;
 }
@@ -117,8 +118,8 @@ async function resolveOutboundUrl(value, label = "url", options = {}) {
       return { refusal: `Refused ${label}: hostname resolves to a non-unicast address`, code: "outbound_target_denied" };
     }
     const allowPrivate = options.allowPrivate === true;
-    if (isPrivateAddress(address) && !allowPrivate) {
-      return { refusal: `Refused ${label}: hostname resolves to a private or loopback address`, code: "network_scope_required" };
+    if (isNonGloballyReachableAddress(address) && !allowPrivate) {
+      return { refusal: `Refused ${label}: hostname resolves to a private, loopback, or otherwise non-global address`, code: "network_scope_required" };
     }
   }
 

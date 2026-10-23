@@ -3,7 +3,7 @@
 const dns = require("node:dns").promises;
 const net = require("node:net");
 const networkPolicy = require("./network-scope");
-const { isLinkLocal, isMetadataAddress, isPrivateAddress } = require("./ip-address-policy");
+const { isLinkLocal, isMetadataAddress, isNonGloballyReachableAddress } = require("./ip-address-policy");
 
 function normalizeTarget(target) {
   const value = String(target || "").trim();
@@ -77,8 +77,8 @@ async function authorizeNetDiagTarget({ target, probes, networkScope, networkSco
     if (isMetadataAddress(record.address) || isLinkLocal(record.address) || networkPolicy.permanentDenial(record.address)) {
       return { ok: false, code: "outbound_target_denied", reason: "target resolves to a permanently denied address" };
     }
-    if ((networkPolicy.isPrivate(record.address) || isPrivateAddress(record.address)) && !scope) {
-      return { ok: false, code: "network_scope_required", reason: "private or local network diagnostics require a named network scope" };
+    if (isNonGloballyReachableAddress(record.address) && !scope) {
+      return { ok: false, code: "network_scope_required", reason: "private, local, or non-global network diagnostics require a named network scope" };
     }
     for (const probe of probes || []) {
       if (!probe || !["tcp", "udp", "icmp"].includes(probe.protocol) || (probe.port != null && (!Number.isInteger(probe.port) || probe.port < 1 || probe.port > 65535))) {

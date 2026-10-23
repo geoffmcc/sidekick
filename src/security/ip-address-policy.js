@@ -50,6 +50,61 @@ function isIPv4MappedAddress(host) {
   return Boolean(bytes && bytes.slice(0, 10).every(byte => byte === 0) && bytes[10] === 0xff && bytes[11] === 0xff);
 }
 
+function ipv6PrefixMatches(bytes, prefix, prefixLength) {
+  const prefixBytes = ipv6Bytes(prefix);
+  if (!bytes || !prefixBytes) return false;
+  let value = 0n;
+  let prefixValue = 0n;
+  for (let index = 0; index < 16; index++) {
+    value = (value << 8n) | BigInt(bytes[index]);
+    prefixValue = (prefixValue << 8n) | BigInt(prefixBytes[index]);
+  }
+  const shift = BigInt(128 - prefixLength);
+  return (value >> shift) === (prefixValue >> shift);
+}
+
+/**
+ * Returns true for addresses that should only be contacted with an explicit
+ * operator network scope. Besides private and link-local ranges, this covers
+ * the IANA special-purpose ranges that are not globally reachable. Globally
+ * reachable exceptions within the 192.0.0.0/24 and 2001::/23 registries are
+ * kept explicit so a broad special-purpose prefix does not block them.
+ */
+function isNonGloballyReachableAddress(host) {
+  const normalized = stripBrackets(String(host || "")).toLowerCase();
+  if (isPrivateAddress(normalized) || isLinkLocal(normalized) || isIPv4MappedAddress(normalized)) return true;
+  const version = net.isIP(normalized);
+  if (version === 4) {
+    const octets = normalized.split(".").map(Number);
+    if (octets[0] === 192 && octets[1] === 0 && octets[2] === 0) {
+      return octets[3] !== 9 && octets[3] !== 10;
+    }
+    return (octets[0] === 192 && octets[1] === 0 && octets[2] === 2) ||
+      (octets[0] === 192 && octets[1] === 88 && octets[2] === 99) ||
+      (octets[0] === 198 && (octets[1] === 18 || octets[1] === 19)) ||
+      (octets[0] === 198 && octets[1] === 51 && octets[2] === 100) ||
+      (octets[0] === 203 && octets[1] === 0 && octets[2] === 113);
+  }
+  if (version === 6) {
+    const bytes = ipv6Bytes(normalized);
+    const embedded = embeddedIPv4Address(normalized);
+    const wellKnownNat64 = [0x00, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0];
+    if (embedded && wellKnownNat64.every((byte, index) => bytes[index] === byte)) {
+      return isNonGloballyReachableAddress(embedded);
+    }
+    if (!ipv6PrefixMatches(bytes, "2000::", 3)) return true;
+    if (ipv6PrefixMatches(bytes, "2001::", 23)) {
+      const globallyReachableExceptions = [
+        ["2001:1::1", 128], ["2001:1::2", 128], ["2001:1::3", 128],
+        ["2001:3::", 32], ["2001:4:112::", 48], ["2001:20::", 28], ["2001:30::", 28],
+      ];
+      if (!globallyReachableExceptions.some(([prefix, length]) => ipv6PrefixMatches(bytes, prefix, length))) return true;
+    }
+    return ipv6PrefixMatches(bytes, "2001:db8::", 32) || ipv6PrefixMatches(bytes, "3fff::", 20);
+  }
+  return false;
+}
+
 function embeddedIPv4Address(host) {
   const bytes = ipv6Bytes(host);
   if (!bytes) return null;
@@ -140,4 +195,4 @@ function isPrivateAddress(host) {
   return normalized === "localhost" || normalized === "localhost.localdomain" || normalized.endsWith(".localhost");
 }
 
-module.exports = { METADATA_HOSTS, stripBrackets, ipv6Bytes, isIPv4MappedAddress, embeddedIPv4Address, isLinkLocal, isMetadataAddress, isNonUnicastAddress, isPrivateAddress };
+module.exports = { METADATA_HOSTS, stripBrackets, ipv6Bytes, isIPv4MappedAddress, embeddedIPv4Address, isLinkLocal, isMetadataAddress, isNonUnicastAddress, isPrivateAddress, isNonGloballyReachableAddress };

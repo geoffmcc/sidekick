@@ -69,6 +69,20 @@ const CLOSED = egress.buildSessionPolicy({ allowPrivateNetwork: false }, { allow
     assert.strictEqual(egress.evaluateBrowserUrl("http://127.0.0.1:8080/", OPEN), null, "loopback allowed with opt-in");
   });
 
+  await test("IANA special-purpose addresses require explicit browser network scope", async () => {
+    assert.ok(egress.evaluateBrowserUrl("http://192.0.2.1/", CLOSED));
+    assert.ok(egress.evaluateBrowserUrl("http://[2001:db8::1]/", CLOSED));
+    assert.strictEqual(egress.evaluateBrowserUrl("http://192.0.2.1/", OPEN), null, "an explicitly enabled private-network policy may support local test environments");
+    const previousLookup = dns.promises.lookup;
+    try {
+      dns.promises.lookup = async () => [{ address: "192.0.2.1", family: 4 }];
+      const result = await egress.resolveAndValidate("special-purpose-fixture.invalid", CLOSED);
+      assert.ok(result.refusal, "DNS-resolved special-purpose destinations must be refused without scope");
+    } finally {
+      dns.promises.lookup = previousLookup;
+    }
+  });
+
   await test("localhost hostname is treated as loopback", () => {
     assert.ok(egress.evaluateBrowserUrl("http://localhost:3000/", CLOSED));
     assert.ok(egress.evaluateBrowserUrl("http://foo.localhost/", CLOSED));

@@ -36,7 +36,7 @@ const http = require("http");
 const dns = require("dns");
 const { METADATA_HOSTS } = require("../compute/endpoint-guard");
 const { isPrivateAddress, isLinkLocal } = require("../security/outbound-url");
-const { isNonUnicastAddress, isIPv4MappedAddress } = require("../security/ip-address-policy");
+const { isNonUnicastAddress, isIPv4MappedAddress, isNonGloballyReachableAddress } = require("../security/ip-address-policy");
 const networkScope = require("../security/network-scope");
 
 const DNS_CACHE_TTL_MS = 30 * 1000;
@@ -123,8 +123,8 @@ function evaluateHost(host, policy) {
     return null;
   }
   if (!hostAllowedByList(h, policy)) return `host "${h}" is not in this session's allowed_hosts`;
-  if ((isPrivateAddress(h) || isLocalhostName(h)) && !policy.allowPrivate) {
-    return `host "${h}" is private/loopback; this session does not permit private-network targets`;
+  if ((isNonGloballyReachableAddress(h) || isLocalhostName(h)) && !policy.allowPrivate) {
+    return `host "${h}" is non-global/private; this session requires an operator-created network scope for this target`;
   }
   return null;
 }
@@ -197,8 +197,8 @@ async function resolveAndValidate(host, policy, { protocol = "https", port = 443
     if (isLinkLocal(record.address)) return { refusal: `"${h}" resolves to link-local address ${record.address}` };
     if (isNonUnicastAddress(record.address)) return { refusal: `"${h}" resolves to non-unicast address ${record.address}` };
     if (isIPv4MappedAddress(record.address)) return { refusal: `"${h}" resolves to invalid IPv4-mapped IPv6 destination ${record.address}` };
-    if (isPrivateAddress(record.address) && !policy.allowPrivate) {
-      return { refusal: `"${h}" resolves to private address ${record.address}; this session does not permit private-network targets` };
+    if (isNonGloballyReachableAddress(record.address) && !policy.allowPrivate) {
+      return { refusal: `"${h}" resolves to non-global address ${record.address}; this session requires an operator-created network scope for this target` };
     }
   }
   return { address: records[0].address, family: records[0].family };

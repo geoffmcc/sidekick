@@ -2,7 +2,7 @@
 
 const assert = require("node:assert/strict");
 const { test } = require("node:test");
-const { embeddedIPv4Address, isIPv4MappedAddress, isLinkLocal, isMetadataAddress, isNonUnicastAddress, isPrivateAddress } = require("../src/security/ip-address-policy");
+const { embeddedIPv4Address, isIPv4MappedAddress, isLinkLocal, isMetadataAddress, isNonUnicastAddress, isNonGloballyReachableAddress, isPrivateAddress } = require("../src/security/ip-address-policy");
 const { validateOutboundUrl } = require("../src/security/outbound-url");
 const { validateEndpoint } = require("../src/compute/endpoint-guard");
 
@@ -37,6 +37,17 @@ test("IPv4-mapped IPv6 destinations are permanently refused even when the embedd
   const address = "::ffff:8.8.8.8";
   assert.equal(isIPv4MappedAddress(address), true);
   assert.match(validateOutboundUrl(`http://[${address}]/`, "url", { allowPrivate: true }), /IPv4-mapped IPv6/i);
+});
+
+test("IANA special-purpose non-global ranges require explicit network scope", () => {
+  for (const address of ["192.0.2.1", "198.18.0.1", "198.51.100.1", "203.0.113.1", "2001:db8::1", "3fff::1", "100::1", "5f00::1"]) {
+    assert.equal(isNonGloballyReachableAddress(address), true, `${address} must require explicit network scope`);
+    const host = address.includes(":") ? `[${address}]` : address;
+    assert.match(validateOutboundUrl(`http://${host}/`), /network scope/i);
+  }
+  for (const address of ["192.0.0.9", "192.0.0.10", "8.8.8.8", "2001:1::1", "2001:3::1", "2001:4:112::1", "2001:20::1", "2001:30::1", "64:ff9b::5db8:d822"]) {
+    assert.equal(isNonGloballyReachableAddress(address), false, `${address} is registered as globally reachable`);
+  }
 });
 
 test("local-use NAT64 translation requires scope and preserves embedded destination checks", () => {
