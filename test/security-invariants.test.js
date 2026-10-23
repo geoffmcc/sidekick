@@ -92,6 +92,14 @@ test("all Core systemd services explicitly locate file-backed runtime secrets", 
   }
 });
 
+test("deployment secret preflight covers every canonical file-backed secret", () => {
+  const { FILE_SECRET_NAMES } = require("../src/core/runtime-secrets");
+  const preflight = fs.readFileSync(path.join(root, "scripts/ensure-secret-config.sh"), "utf8");
+  for (const name of FILE_SECRET_NAMES) {
+    assert.ok(preflight.includes(name), `deployment preflight must reject ${name} in .env`);
+  }
+});
+
 test("selected privileged handler boundaries retain exact canonical dispatch guards", () => {
   const guardedHandlers = [
     ["src/tools/families/shell.js", "sidekick_bash", "bash"],
