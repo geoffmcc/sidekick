@@ -30,6 +30,7 @@ const { normalizeResult } = require("../../src/tools/result");
 const { descriptors: filesystemDescriptors, buildSearchArgs } = require("../../src/tools/families/filesystem");
 const { descriptors: monitoringDescriptors, resolveSnapshotPath } = require("../../src/tools/families/monitoring");
 const { readTextBounded } = require("../../src/core/bounded-file-read");
+const { tunnelStopPattern, createTunnelLog } = require("../../src/tools/families/networking");
 
 let owner;
 
@@ -170,6 +171,31 @@ test("filesystem search patterns cannot become ripgrep or grep options", () => {
     const separator = args.indexOf("--");
     assert.ok(separator >= 0, `${executable} arguments must terminate options`);
     assert.deepEqual(args.slice(separator), ["--", hostilePattern, "/workspace"]);
+  }
+});
+
+test("tunnel logs are exclusively created and stop patterns treat names literally", () => {
+  const directory = fs.mkdtempSync(path.join(dataDir, "tunnel-logs-"));
+  let first;
+  let second;
+  try {
+    first = createTunnelLog(directory);
+    second = createTunnelLog(directory);
+    assert.notEqual(first.logPath, second.logPath);
+    assert.equal(fs.existsSync(first.logPath), true);
+    assert.equal(fs.existsSync(second.logPath), true);
+    if (process.platform !== "win32") {
+      assert.equal(fs.statSync(first.logPath).mode & 0o777, 0o600);
+    }
+    assert.equal(tunnelStopPattern("edge.v1"), "cloudflared tunnel.*--name edge\\.v1");
+    assert.throws(() => tunnelStopPattern("edge.*"));
+  } finally {
+    for (const item of [first, second]) {
+      if (!item) continue;
+      try { fs.closeSync(item.fd); } catch {}
+      try { fs.unlinkSync(item.logPath); } catch {}
+    }
+    fs.rmdirSync(directory);
   }
 });
 

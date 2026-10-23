@@ -11,6 +11,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const os = require("os");
 const crypto = require("crypto");
 const { execFileSync, spawn } = require("child_process");
 const { z } = require("zod");
@@ -23,6 +24,22 @@ const toolContext = require("../context");
 const authorization = require("../../core/authorization");
 const { loadSecrets, saveSecrets } = require("../../core/secrets-store");
 const { encryptSecret } = require("../../core/secret-cipher");
+const { readTextBounded } = require("../../core/bounded-file-read");
+
+const MAX_TUNNEL_LOG_READ_BYTES = 1024 * 1024;
+
+function tunnelStopPattern(name) {
+  const tunnelName = validIdentifier(name, "tunnel name");
+  // validIdentifier permits only ASCII letters, digits, dot, underscore, and
+  // hyphen; dot is the only permitted character with special ERE meaning.
+  return `cloudflared tunnel.*--name ${tunnelName.replace(/\./g, "\\.")}`;
+}
+
+function createTunnelLog(directory = os.tmpdir()) {
+  const logPath = path.join(directory, `sidekick-tunnel-${crypto.randomUUID()}.log`);
+  const fd = fs.openSync(logPath, "wx", 0o600);
+  return { logPath, fd };
+}
 
 function wireGuardSecretPermission() {
   const authIdentity = toolContext.getExecutionContext().authIdentity || null;
@@ -64,20 +81,26 @@ async function sidekick_tunnel({ action, url, port, name }) {
       }
       const tunnelName = name ? validIdentifier(name, "tunnel name") : `tunnel-${Date.now()}`;
       const localPort = validPort(port);
-      const logPath = path.join("/tmp", `${tunnelName}.log`);
-      const logFd = fs.openSync(logPath, "a");
-      const child = spawn("cloudflared", ["tunnel", "--url", `http://localhost:${localPort}`, "--name", tunnelName], {
-        detached: true,
-        stdio: ["ignore", logFd, logFd],
-        env: childProcessEnv()
-      });
+      const { logPath, fd: logFd } = createTunnelLog();
+      let child;
+      try {
+        child = spawn("cloudflared", ["tunnel", "--url", `http://localhost:${localPort}`, "--name", tunnelName], {
+          detached: true,
+          stdio: ["ignore", logFd, logFd],
+          env: childProcessEnv()
+        });
+      } catch (error) {
+        try { fs.closeSync(logFd); } catch {}
+        try { fs.unlinkSync(logPath); } catch {}
+        throw error;
+      }
       child.unref();
       fs.closeSync(logFd);
       // Wait a moment for tunnel to establish
       await new Promise(resolve => setTimeout(resolve, 3000));
       // Try to get the tunnel URL from logs
       try {
-        const logContent = fs.readFileSync(logPath, 'utf8');
+        const logContent = readTextBounded(logPath, { maxBytes: MAX_TUNNEL_LOG_READ_BYTES }).content;
         const urlMatch = logContent.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
         const tunnelUrl = urlMatch ? urlMatch[0] : null;
         return { content: [{ type: "text", text: JSON.stringify({
@@ -103,7 +126,7 @@ async function sidekick_tunnel({ action, url, port, name }) {
       }
       const tunnelName = validIdentifier(name, "tunnel name");
       try {
-        safeExecFileSync("pkill", ["-f", `cloudflared tunnel.*--name ${tunnelName}`], { timeout: 5000 });
+        safeExecFileSync("pkill", ["-f", tunnelStopPattern(tunnelName)], { timeout: 5000 });
         return { content: [{ type: "text", text: `Stopped tunnel: ${tunnelName}` }] };
       } catch (e) {
         return { content: [{ type: "text", text: `Tunnel not found or already stopped: ${tunnelName}` }] };
@@ -352,4 +375,4 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_tunnel, sidekick_wireguard, sidekick_nginx, storeWireGuardPrivateKey };
+module.exports = { descriptors, sidekick_tunnel, sidekick_wireguard, sidekick_nginx, storeWireGuardPrivateKey, tunnelStopPattern, createTunnelLog, MAX_TUNNEL_LOG_READ_BYTES };
