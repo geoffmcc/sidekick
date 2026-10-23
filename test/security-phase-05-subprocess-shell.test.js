@@ -19,6 +19,24 @@ for (const key of [
 }
 assert.strictEqual(filtered.SAFE_OVERRIDE, "ok");
 
+const credentialEnvKeys = [
+  "AWS_ACCESS_KEY_ID", "DOCKER_AUTH_CONFIG", "SSH_AUTH_SOCK", "KUBECONFIG",
+  "NPM_CONFIG_USERCONFIG", "PIP_CONFIG_FILE", "AWS_CONFIG_FILE", "AZURE_CONFIG_DIR",
+];
+const previousCredentialEnv = new Map(credentialEnvKeys.map(key => [key, process.env[key]]));
+for (const key of credentialEnvKeys) process.env[key] = "attacker-controlled-credential-reference";
+const credentialOverrides = Object.fromEntries(credentialEnvKeys.map(key => [key, "override"]));
+credentialOverrides.GIT_AUTHOR_NAME = "Sidekick Test";
+const filteredCredentials = childProcessEnv(credentialOverrides);
+for (const key of credentialEnvKeys) {
+  assert.strictEqual(filteredCredentials[key], undefined, `${key} must not cross a child-process boundary`);
+}
+assert.strictEqual(filteredCredentials.GIT_AUTHOR_NAME, "Sidekick Test", "credential filtering must preserve ordinary Git author settings");
+for (const [key, value] of previousCredentialEnv) {
+  if (value === undefined) delete process.env[key];
+  else process.env[key] = value;
+}
+
 for (const args of [
   "-c core.sshCommand=sh -c evil",
   "--config-env=core.sshCommand=EVIL",
