@@ -6,6 +6,7 @@
 const fs = require("fs");
 const path = require("path");
 const { CONTINUATION_LIMITS, validateTaskId, normalizeTranscript, resolveFinalAnswer } = require("./agent-continuation");
+const { readTextBounded } = require("./core/bounded-file-read");
 
 const HISTORY_LIMITS = Object.freeze({ DEFAULT_PAGE_SIZE: 20, MAX_PAGE_SIZE: 50, MAX_SCAN_FILES: 5000, MAX_SESSION_TURNS: 32 });
 
@@ -42,7 +43,10 @@ function safeWorkProjection(raw) {
 function loadEntries(convDir, deps = {}) {
   const readDir = deps.readdirSync || fs.readdirSync;
   const readFile = deps.readFileSync || fs.readFileSync;
-  const statFile = deps.statSync || fs.statSync;
+  const lstatFile = deps.lstatSync || fs.lstatSync;
+  const boundedReader = deps.readTextBounded || readTextBounded;
+  const injectedReader = typeof deps.readTextBounded === "function" ||
+    (typeof deps.readFileSync === "function" && deps.readFileSync !== fs.readFileSync);
   let names;
   try { names = readDir(convDir); } catch { return { entries: [], malformed: 0 }; }
   const entries = [];
@@ -53,10 +57,20 @@ function loadEntries(convDir, deps = {}) {
     if (!validateTaskId(id)) continue;
     const file = path.join(convDir, name);
     try {
-      const stat = statFile(file);
-      if (!stat.isFile || !stat.isFile()) continue;
+      const stat = lstatFile(file);
+      if (!stat.isFile || !stat.isFile() || stat.isSymbolicLink?.()) continue;
       if (Number.isFinite(stat.size) && stat.size > CONTINUATION_LIMITS.MAX_TRANSCRIPT_BYTES) { malformed++; continue; }
-      const raw = JSON.parse(readFile(file, "utf8"));
+      let content;
+      if (injectedReader && typeof deps.readTextBounded !== "function") {
+        content = readFile(file, "utf8");
+      } else {
+        content = boundedReader(file, {
+          maxBytes: CONTINUATION_LIMITS.MAX_TRANSCRIPT_BYTES,
+          requireComplete: true,
+          noFollow: true,
+        }).content;
+      }
+      const raw = JSON.parse(content);
       if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("record");
       const norm = normalizeTranscript(raw, id);
       const time = canonicalTime(norm, stat);
