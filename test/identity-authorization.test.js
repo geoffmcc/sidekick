@@ -42,6 +42,12 @@ try {
     assert.equal(db.getDb().prepare("SELECT 1 FROM identity_role_permissions WHERE role_name = 'auditor' AND permission LIKE 'sync.%'").get(), undefined, "auditors cannot export or mutate synchronized state");
   });
 
+  const adoptedLegacy = identity.createHumanUser({
+    username: "adopted_legacy",
+    password: "synthetic adopted account password",
+    metadata: { adopted_legacy_dashboard: true },
+  });
+  assert.equal(identity.canCompleteFirstOwnerSetup(adoptedLegacy.principal_id), true, "adopted account is eligible before bootstrap");
   const owner = identity.bootstrapOwner({ username: "owner", password: "correct horse battery staple", displayName: "Owner" });
   const operator = identity.createHumanUser({ username: "operator", password: "another correct password", displayName: "Operator" });
   identity.assignRole(operator.principal_id, "operator", owner.principal_id);
@@ -109,6 +115,12 @@ try {
     identity.assignRole(agent.principal_id, "owner", owner.principal_id);
     identity.setPrincipalEnabled(owner.principal_id, false, agent.principal_id);
     assert.throws(() => identity.removeRole(agent.principal_id, "owner", agent.principal_id), /final usable Owner/);
+  });
+
+  test("adopted legacy Dashboard account cannot self-promote after Owner bootstrap", () => {
+    assert.equal(identity.canCompleteFirstOwnerSetup(adoptedLegacy.principal_id), false);
+    assert.throws(() => identity.assignRole(adoptedLegacy.principal_id, "owner", adoptedLegacy.principal_id), /authorized actor/);
+    assert.deepEqual(identity.getPrincipal(adoptedLegacy.principal_id).roles, []);
   });
 
   console.log(`Identity authorization: ${passed} passed`);

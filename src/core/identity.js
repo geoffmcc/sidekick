@@ -160,13 +160,16 @@ function assignRole(principalIdValue, role, actorPrincipalId = null) {
   validateRole(role);
   const principal = getPrincipal(principalIdValue);
   if (!principal) throw new Error("principal not found");
+  let firstOwnerException = false;
   if (role === "owner") {
     // The legacy dashboard bridge is adopted in place as a human account.
     // Its administrator role intentionally lacks roles.manage, so allow that
-    // one account to promote itself and complete first-owner setup. All other
-    // owner promotions still require an existing roles.manage authority.
+    // one account to promote itself only while first-owner setup is still
+    // incomplete. Once an Owner exists, all promotions require roles.manage.
     const adoptedSelfPromotion = actorPrincipalId === principal.principal_id &&
-      principal.principal_type === "human" && principal.metadata?.adopted_legacy_dashboard === true;
+      principal.principal_type === "human" && principal.metadata?.adopted_legacy_dashboard === true &&
+      canCompleteFirstOwnerSetup(principal.principal_id);
+    firstOwnerException = adoptedSelfPromotion;
     if (!actorPrincipalId && !adoptedSelfPromotion) throw new Error("Owner promotion requires an authorized actor");
     if (!adoptedSelfPromotion) {
       const authorization = require("./authorization");
@@ -175,10 +178,23 @@ function assignRole(principalIdValue, role, actorPrincipalId = null) {
   }
   const db = dbStore.getDb();
   db.transaction(() => {
+    // Recheck inside the write transaction so first-owner completion cannot
+    // be replayed after another account has completed bootstrap.
+    if (firstOwnerException && !canCompleteFirstOwnerSetup(principal.principal_id)) {
+      throw new Error("Owner promotion requires an authorized actor");
+    }
     db.prepare("INSERT INTO principal_roles (principal_id, role_name, assigned_by_principal_id, assigned_at) VALUES (?, ?, ?, ?)").run(principal.principal_id, role, actorPrincipalId, now());
     audit("role.assigned", principal.principal_id, actorPrincipalId, { role });
   })();
   return getPrincipal(principal.principal_id);
+}
+
+function canCompleteFirstOwnerSetup(principalIdValue) {
+  const principal = getPrincipal(principalIdValue);
+  if (!principal || principal.principal_type !== "human" || principal.metadata?.adopted_legacy_dashboard !== true) return false;
+  const db = dbStore.getDb();
+  if (db.prepare("SELECT 1 FROM identity_bootstrap WHERE singleton_id = 1").get()) return false;
+  return !db.prepare("SELECT 1 FROM principal_roles WHERE role_name = 'owner' LIMIT 1").get();
 }
 
 function grantPrincipalPermission(principalIdValue, permission, actorIdentity) {
@@ -306,4 +322,4 @@ function verifyUserPassword(username, password) {
   return getPrincipal(row.principal_id);
 }
 
-module.exports = Object.freeze({ PRINCIPAL_TYPES, ROLE_NAMES, PASSWORD_SCHEME, MIN_PASSWORD_LENGTH, passwordHash, verifyPassword, getPrincipal, getHumanUser, listPrincipals, createPrincipal, createHumanUser, updatePrincipal, updateUsername, assignRole, removeRole, grantPrincipalPermission, revokePrincipalPermission, getPrincipalPermissions, bootstrapOwner, setPrincipalEnabled, changePassword, verifyUserPassword, recordAuditEvent });
+module.exports = Object.freeze({ PRINCIPAL_TYPES, ROLE_NAMES, PASSWORD_SCHEME, MIN_PASSWORD_LENGTH, passwordHash, verifyPassword, getPrincipal, getHumanUser, listPrincipals, createPrincipal, createHumanUser, updatePrincipal, updateUsername, assignRole, canCompleteFirstOwnerSetup, removeRole, grantPrincipalPermission, revokePrincipalPermission, getPrincipalPermissions, bootstrapOwner, setPrincipalEnabled, changePassword, verifyUserPassword, recordAuditEvent });

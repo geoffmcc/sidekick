@@ -123,3 +123,39 @@ test("user creation cannot assign a role without roles.manage", () => {
   assert.equal(createdUsers, 0, "authorization is checked before account creation");
   assert.equal(assignedRoles, 0, "unauthorized role assignment never executes");
 });
+
+test("adopted Dashboard owner promotion bypass applies only before first Owner setup", () => {
+  const handlers = new Map();
+  let assignedRoles = 0;
+  const app = Object.fromEntries(["get", "post", "put", "patch", "delete"].map(method => [method, (route, handler) => handlers.set(`${method.toUpperCase()} ${route}`, handler)]));
+  app.use = () => {};
+  registerAuthRoutes({
+    app,
+    dbStore: {},
+    identity: {
+      canCompleteFirstOwnerSetup: () => false,
+      assignRole() { assignedRoles++; return {}; },
+    },
+    authentication: { isSessionActive: () => true },
+    authorization: { authorize: () => ({ ok: false, code: "forbidden" }) },
+    timingSafeCompare: () => false,
+    dashboardUser: "", dashboardPass: "", bootstrapCompleted: () => true,
+    authAttemptKeys: () => [], rejectIfAuthThrottled: () => false,
+    recordAuthFailure() {}, clearAuthFailures() {}, legacyDashboardPrincipal: () => null,
+    setIdentityCookie() {}, clearIdentityCookie() {}, requestCookie: () => null,
+    bootstrapToken: null,
+    errorResponse: (_req, res, _error, options) => res.status(options.status).json({ code: options.code }),
+  });
+
+  const res = response();
+  handlers.get("POST /api/auth/principals/:id/roles")({
+    authPrincipal: {
+      principal_id: "adopted-user", principal_type: "human",
+      metadata: { adopted_legacy_dashboard: true },
+    },
+    params: { id: "adopted-user" },
+    body: { role: "owner" },
+  }, res);
+  assert.equal(res.statusCode, 403, "legacy metadata cannot bypass roles.manage after Owner setup");
+  assert.equal(assignedRoles, 0, "denied self-promotion must not reach the identity mutation");
+});

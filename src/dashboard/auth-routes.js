@@ -232,7 +232,9 @@ function registerAuthRoutes({
   app.post("/api/auth/principals/:id/disable", (req, res) => { req.params.state = 'disable'; setPrincipalStateRoute(req, res); });
 
   app.post("/api/auth/principals/:id/roles", (req, res) => {
-    const adoptedSelfPromotion = req.body?.role === "owner" && req.params.id === req.authPrincipal?.principal_id && req.authPrincipal?.principal_type === "human" && req.authPrincipal?.metadata?.adopted_legacy_dashboard === true;
+    const adoptedSelfPromotion = req.body?.role === "owner" && req.params.id === req.authPrincipal?.principal_id &&
+      req.authPrincipal?.principal_type === "human" && req.authPrincipal?.metadata?.adopted_legacy_dashboard === true &&
+      identity.canCompleteFirstOwnerSetup?.(req.params.id) === true;
     if (!adoptedSelfPromotion && !requireIdentityPermission(req, res, "roles.manage")) return;
     try {
       res.status(201).json({ principal: identity.assignRole(req.params.id, req.body?.role, req.authPrincipal.principal_id) });
