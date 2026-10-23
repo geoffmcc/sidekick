@@ -16,9 +16,12 @@ for (const entry of [
   "/etc/passwd",
   "C:/Windows/System32/config/SAM",
   "C:Windows/System32/config/SAM",
-  "nested\\..\\outside.txt"
+  "nested\\..\\outside.txt",
+  "safe.txt\n../outside.txt",
+  "safe.txt\tmetadata",
+  "safe.txt\u001b[2K"
 ]) {
-  assert.throws(() => validateArchiveEntryNames([entry]), /archive contains/, `archive traversal accepted: ${entry}`);
+  assert.throws(() => validateArchiveEntryNames([entry]), /archive contains/, `unsafe archive entry accepted: ${entry}`);
 }
 
 assert.strictEqual(validateArchiveEntryNames(["./safe.txt", "nested/file.txt", "nested/"]), true);

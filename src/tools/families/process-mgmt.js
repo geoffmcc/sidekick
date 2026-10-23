@@ -83,7 +83,10 @@ function validateArchiveEntryNames(entries) {
   }
   for (const entry of names) {
     const raw = String(entry || "").replace(/\r$/, "");
-    if (!raw || raw.includes("\0")) throw new Error("archive contains an invalid entry name");
+    // Listing-based preflight treats each line as one archive member. Control
+    // characters can split or rewrite those records and make type/destination
+    // checks inspect a different set of names than the extractor consumes.
+    if (!raw || /[\u0000-\u001f\u007f]/.test(raw)) throw new Error("archive contains an invalid entry name");
     const normalized = raw.replace(/\\/g, "/");
     if (normalized.startsWith("/") || /^[A-Za-z]:/.test(normalized)) {
       throw new Error("archive contains an absolute entry path");
