@@ -2,12 +2,11 @@
 "use strict";
 
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 
 const root = path.resolve(__dirname, "..");
-const reportsDir = path.join(root, "artifacts", "coverage");
-const c8 = path.join(root, "node_modules", ".bin", process.platform === "win32" ? "c8.cmd" : "c8");
 const policyPath = path.join(root, "docs", "coverage-policy.json");
 const requestedDomain = process.env.SIDEKICK_COVERAGE_DOMAIN;
 const metrics = ["lines", "statements", "functions", "branches"];
@@ -88,24 +87,40 @@ function evaluatePolicy(summary, policy, baseline = null) {
   return { coverage, critical, critical_missing: criticalMissing, critical_failures: criticalFailures, security, policy: { version: policy.version, minimums: policy.minimums, security_domains: policy.security_domains }, security_failures: Object.values(security).flatMap(value => value.failures), missing_required_files: requiredFiles, missing_required_fragments: requiredFragments, baseline_failures: baselineFailures, missing_policy: false };
 }
 
+function coverageInvocation(args) {
+  return { command: process.execPath, args: [require.resolve("c8/bin/c8.js"), ...args] };
+}
+
+function coveragePaths(baseDir, { runId = process.env.GITHUB_RUN_ID || "local", attempt = process.env.GITHUB_RUN_ATTEMPT || "1", pid = process.pid, timestamp = Date.now() } = {}) {
+  const segment = (value, maxLength) => String(value).replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, maxLength) || "unknown";
+  const runKey = `${segment(runId, 24)}-${segment(attempt, 5)}-${segment(pid, 8)}-${segment(timestamp, 14)}`;
+  const runDir = path.join(baseDir, "artifacts", "coverage-runs", runKey);
+  return { runDir, summaryPath: path.join(runDir, "coverage-summary.json"), tempPrefix: `sidekick-c8-${runKey}-` };
+}
+
 function main() {
   const policy = loadPolicy();
+  const paths = coveragePaths(root);
+  const { summaryPath } = paths;
+  const reportsDir = fs.mkdtempSync(path.join(os.tmpdir(), paths.tempPrefix));
   const args = ["--all", "--include=src/**/*.js", "--include=packs/**/*.js", "--exclude=dist/**", "--exclude=test/**", "--exclude=artifacts/**", "--reporter=text", "--reporter=json-summary", "--reports-dir", reportsDir, "--check-coverage", "--lines", String(policy.minimums.lines), "--statements", String(policy.minimums.statements), "--functions", String(policy.minimums.functions), "--branches", String(policy.minimums.branches), "node", "test/run-all.js"];
   if (requestedDomain) args.push(`--domain=${requestedDomain}`);
-  fs.rmSync(reportsDir, { recursive: true, force: true });
   fs.mkdirSync(reportsDir, { recursive: true });
   // Keep the suite runner's heartbeat and per-suite progress visible while
   // coverage is running. Capturing c8 with spawnSync makes a multi-minute run
   // look idle and hides all progress until the process exits.
-  const result = spawnSync(c8, args, { cwd: root, stdio: "inherit", timeout: 45 * 60 * 1000, env: { ...process.env, NODE_ENV: "test" } });
+  const invocation = coverageInvocation(args);
+  const result = spawnSync(invocation.command, invocation.args, { cwd: root, stdio: "inherit", timeout: 45 * 60 * 1000, env: { ...process.env, NODE_ENV: "test" } });
   let summary = null;
   try { summary = JSON.parse(fs.readFileSync(path.join(reportsDir, "coverage-summary.json"), "utf8")); } catch {}
+  try { fs.rmSync(reportsDir, { recursive: true, force: true }); } catch (error) { console.error(`Could not remove this run's temporary coverage directory: ${error.message}`); }
   let baseline = null;
   try { baseline = loadBaseline(policy); } catch (error) { console.error(`Coverage baseline unavailable: ${error.message}`); }
   const evaluated = evaluatePolicy(summary, policy, baseline);
   const report = { version: 6, mode: "c8-subprocess-merged", scope: requestedDomain || "standard", ...evaluated, passed: result.status === 0 && Boolean(summary) && evaluated.critical_missing.length === 0 && evaluated.critical_failures.length === 0 && evaluated.security_failures.length === 0 && evaluated.missing_required_files.length === 0 && evaluated.missing_required_fragments.length === 0 && evaluated.baseline_failures.length === 0, exit_code: result.status, signal: result.signal };
-  fs.mkdirSync(path.join(root, "artifacts"), { recursive: true });
-  fs.writeFileSync(path.join(root, "artifacts", "coverage-summary.json"), `${JSON.stringify(report, null, 2)}\n`);
+  fs.mkdirSync(paths.runDir, { recursive: true });
+  fs.writeFileSync(summaryPath, `${JSON.stringify(report, null, 2)}\n`);
+  console.log(`Coverage result: ${path.relative(root, summaryPath).replaceAll(path.sep, "/")}`);
   if (evaluated.coverage) console.log(`Coverage policy v${policy.version}: lines ${evaluated.coverage.lines}%, branches ${evaluated.coverage.branches}%, functions ${evaluated.coverage.functions}%`);
   else console.error("Coverage report was unavailable");
   if (result.error) console.error(`Coverage runner could not start: ${result.error.message}`);
@@ -114,4 +129,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { aggregateDomain, evaluatePolicy, loadBaseline, loadPolicy };
+module.exports = { aggregateDomain, coverageInvocation, coveragePaths, evaluatePolicy, loadBaseline, loadPolicy };

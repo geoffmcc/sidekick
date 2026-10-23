@@ -141,7 +141,16 @@ jobs:
       - name: Install OS sandbox backend for security tests
         run: bash scripts/ci/setup-bubblewrap.sh
       - run: npm ci
-      - run: npm run test:security
+      - name: Run security tier with bounded result report
+        run: node scripts/run-tests.js --tier=security
+      - name: Upload bounded security result summary
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1, Node 24
+        with:
+          name: security-test-results-${{ matrix.node-version }}
+          path: artifacts/test-runs/*/test-results.json
+          if-no-files-found: error
+          retention-days: 7
 
   domain-shards:
     name: ${{ matrix.domain }} / Node ${{ matrix.node-version }}
@@ -176,7 +185,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1, Node 24
         with:
           name: test-results-${{ matrix.domain }}-${{ matrix.node-version }}
-          path: artifacts/test-results.json
+          path: artifacts/test-runs/*/test-results.json
           if-no-files-found: error
           retention-days: 7
 
@@ -311,7 +320,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1, Node 24
         with:
           name: coverage-summary
-          path: artifacts/coverage-summary.json
+          path: artifacts/coverage-runs/*/coverage-summary.json
           if-no-files-found: error
           retention-days: 7
 
@@ -344,7 +353,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1, Node 24
         with:
           name: e2e-results
-          path: artifacts/test-results.json
+          path: artifacts/test-runs/*/test-results.json
           if-no-files-found: error
           retention-days: 7
 

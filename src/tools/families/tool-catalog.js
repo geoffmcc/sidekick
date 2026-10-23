@@ -259,6 +259,7 @@ const descriptors = Object.freeze([
     category: "Core",
     source: "builtin",
     family: "tool-catalog",
+    authorizationPermission: "tools.catalog.read",
     handler: sidekick_tools,
   }),
 ]);
