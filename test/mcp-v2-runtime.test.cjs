@@ -155,6 +155,48 @@ function modernRequest(port, id, method, params, headers = {}) {
     assert.ok(!call.error, JSON.stringify(call));
     assert.ok(Array.isArray(call.result.content));
 
+    const packClient = identity.createPrincipal({
+      type: "service",
+      displayName: "Synthetic MCP pack reader",
+      createdByPrincipalId: owner.principal_id,
+      actorIdentity: owner,
+    });
+    identity.grantPrincipalPermission(packClient.principal_id, "packs.read", owner);
+    const packCredential = authentication.createCredential({
+      principalId: packClient.principal_id,
+      displayName: "Synthetic MCP pack reader",
+      scopes: ["packs.read"],
+      createdByPrincipalId: owner.principal_id,
+      actorContext: owner,
+    });
+    const coreAuthorization = require("../src/core/authorization");
+    const packCredentialIdentity = authentication.authenticateCredential(packCredential.token);
+    assert.equal(coreAuthorization.authorize({
+      principalId: packCredentialIdentity.principal_id,
+      permission: "packs.read",
+      credentialScopes: packCredentialIdentity.scopes,
+    }).ok, true);
+    assert.equal(coreAuthorization.authorize({
+      principalId: packCredentialIdentity.principal_id,
+      permission: "packs.manage",
+      credentialScopes: packCredentialIdentity.scopes,
+    }).ok, false);
+    const packListResponse = await modernRequest(port, "scoped-pack-list", "tools/call", {
+      name: "capability", arguments: { action: "list" },
+    }, { authToken: packCredential.token, name: "capability" });
+    assert.strictEqual(packListResponse.status, 200);
+    const packList = await packListResponse.json();
+    assert.ok(!packList.result?.isError, `a scoped service principal with packs.read can list packs: ${JSON.stringify(packList)}`);
+    assert.match(packList.result?.content?.[0]?.text || "", /"action":\s*"list"/);
+
+    const packUpgradeResponse = await modernRequest(port, "scoped-pack-upgrade-denied", "tools/call", {
+      name: "capability", arguments: { action: "upgrade", name: "__synthetic_missing_pack__", allow_same_version: true },
+    }, { authToken: packCredential.token, name: "capability" });
+    assert.strictEqual(packUpgradeResponse.status, 200);
+    const packUpgrade = await packUpgradeResponse.json();
+    assert.ok(packUpgrade.result?.isError, "packs.read must not authorize lifecycle mutations");
+    assert.match(packUpgrade.result?.content?.[0]?.text || "", /Authorization denied: forbidden/);
+
     console.log("MCP v2 test: oversized tool input rejected before dispatch");
     const oversizedInputResponse = await modernRequest(port, 6, "tools/call", {
       name: "memory",
