@@ -21,11 +21,10 @@ function readJsonFile(filePath, { maxBytes = DEFAULT_JSON_STORE_BYTES } = {}) {
   return JSON.parse(text);
 }
 
-function writeJsonFile(filePath, value, { maxBytes = DEFAULT_JSON_STORE_BYTES, mode = 0o600 } = {}) {
+function writeTextFile(filePath, serialized, { maxBytes = DEFAULT_JSON_STORE_BYTES, mode = 0o600 } = {}) {
   const limit = storeLimit(maxBytes);
-  const serialized = JSON.stringify(value, null, 2);
-  if (typeof serialized !== "string") throw new Error("JSON store value is not serializable");
-  if (Buffer.byteLength(serialized, "utf8") > limit) throw new Error(`JSON store exceeds the ${limit}-byte limit`);
+  if (typeof serialized !== "string") throw new Error("Persistent store content must be text");
+  if (Buffer.byteLength(serialized, "utf8") > limit) throw new Error(`Persistent store exceeds the ${limit}-byte limit`);
 
   const directory = path.dirname(path.resolve(filePath));
   const temporaryPath = path.join(directory, `.sidekick-json-${crypto.randomUUID()}.tmp`);
@@ -45,4 +44,10 @@ function writeJsonFile(filePath, value, { maxBytes = DEFAULT_JSON_STORE_BYTES, m
   }
 }
 
-module.exports = { DEFAULT_JSON_STORE_BYTES, readJsonFile, writeJsonFile };
+function writeJsonFile(filePath, value, { maxBytes = DEFAULT_JSON_STORE_BYTES, mode = 0o600, space = 2 } = {}) {
+  const serialized = JSON.stringify(value, null, space);
+  if (typeof serialized !== "string") throw new Error("JSON store value is not serializable");
+  return writeTextFile(filePath, serialized, { maxBytes, mode });
+}
+
+module.exports = { DEFAULT_JSON_STORE_BYTES, readJsonFile, writeJsonFile, writeTextFile };

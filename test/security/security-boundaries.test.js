@@ -31,7 +31,7 @@ const { descriptors: filesystemDescriptors, buildSearchArgs } = require("../../s
 const { descriptors: monitoringDescriptors, resolveSnapshotPath, readSnapshotFile, writeSnapshotFile, MAX_SNAPSHOT_BYTES } = require("../../src/tools/families/monitoring");
 const { readTextBounded } = require("../../src/core/bounded-file-read");
 const { tunnelStopPattern, createTunnelLog } = require("../../src/tools/families/networking");
-const { readJsonFile, writeJsonFile } = require("../../src/core/json-file-store");
+const { readJsonFile, writeJsonFile, writeTextFile } = require("../../src/core/json-file-store");
 const proceduresStore = require("../../src/core/procedures-store");
 const { createMcpServer, isRegistrableProcedure } = require("../../src/mcp/server");
 
@@ -262,6 +262,13 @@ test("persistent JSON stores use bounded no-follow reads and atomic replacement"
   const originalText = fs.readFileSync(storePath, "utf8");
   assert.throws(() => writeJsonFile(storePath, { text: "x".repeat(4096) }, { maxBytes: 4096 }), /byte limit/);
   assert.equal(fs.readFileSync(storePath, "utf8"), originalText, "oversized state must preserve the last committed value");
+
+  const transcriptPath = path.join(dataDir, "bounded-transcript.json");
+  writeTextFile(transcriptPath, "{\"status\":\"completed\"}", { maxBytes: 4096, mode: 0o600 });
+  const transcriptText = fs.readFileSync(transcriptPath, "utf8");
+  assert.equal(transcriptText, "{\"status\":\"completed\"}");
+  assert.throws(() => writeTextFile(transcriptPath, "x".repeat(4097), { maxBytes: 4096 }), /byte limit/);
+  assert.equal(fs.readFileSync(transcriptPath, "utf8"), transcriptText, "oversized transcript must preserve the last published value");
 
   const realRename = fs.renameSync;
   fs.renameSync = () => { throw new Error("synthetic atomic replacement failure"); };

@@ -17,6 +17,7 @@ const { authorizeRecoveredTask } = require("./agent/recovery-authorization");
 const { authorizeScheduledAgentDelay } = require("./agent/delay-policy");
 const { createEscalationApprovalRef } = require("./agent/escalation-approval");
 const { readSecret } = require("./core/runtime-secrets");
+const { writeTextFile } = require("./core/json-file-store");
 const { verifyAgentProxyRequest, createSqliteNonceConsumer, assertDistinctAgentSchedulerSecret } = require("./security/agent-proxy-auth");
 const { taskBelongsToIdentity, canReviewUnownedTask, isAllowedServiceRoute } = require("./agent/task-access");
 const agentProxySecret = process.env.NODE_ENV === "test"
@@ -1523,13 +1524,11 @@ async function runAgentImpl(goal, taskId, parentContext = null, cancelController
   // transcript as the durable terminal boundary; exposing the destination
   // before the complete JSON is written creates a race where a child can
   // observe a partially-published parent record.
-  const temporaryTranscriptPath = `${transcriptPath}.${process.pid}.${Date.now()}.tmp`;
   // A failed transcript build/write must not cost the caller the answer: the
   // terminal stream event and the execution transition below still run, and
   // the failure is reported instead of silently losing a completed task.
   try {
-    fs.writeFileSync(temporaryTranscriptPath, buildTranscript(), { encoding: "utf-8", mode: 0o600 });
-    fs.renameSync(temporaryTranscriptPath, transcriptPath);
+    writeTextFile(transcriptPath, buildTranscript(), { maxBytes: CONTINUATION_LIMITS.MAX_TRANSCRIPT_BYTES, mode: 0o600 });
     transcriptArtifact = registerAgentTranscript(platformExecution, transcriptPath, taskId, status);
   } catch (e) {
     const message = redactSensitive("Transcript could not be published: " + (e && e.message ? e.message : String(e)));
@@ -1537,7 +1536,6 @@ async function runAgentImpl(goal, taskId, parentContext = null, cancelController
     try {
       appendAgentExecutionEvent(platformExecution, "agent.transcript_write_failed", { task_id: taskId, error: message }, "error");
     } catch {}
-    try { fs.unlinkSync(temporaryTranscriptPath); } catch {}
     emit(taskId, { type: "step", text: message + " (the answer below was still produced)" });
   }
 
