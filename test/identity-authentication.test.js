@@ -94,6 +94,8 @@ try {
     assert.strictEqual(authorization.authorize({ principalId: packService.principal_id, permission: "packs.manage", credentialScopes: authenticated.scopes }).ok, true);
     assert.strictEqual(authorization.authorize({ principalId: packService.principal_id, permission: "tools.execute", credentialScopes: authenticated.scopes }).code, "forbidden");
     assert.throws(() => identity.grantPrincipalPermission(packService.principal_id, "tools.execute", packService.principal_id), /roles.manage/);
+    assert.throws(() => identity.revokePrincipalPermission(packService.principal_id, "packs.read", packService.principal_id), /roles.manage/);
+    assert.deepStrictEqual(identity.getPrincipalPermissions(packService.principal_id), ["packs.manage", "packs.read"], "a service principal cannot rewrite its own grants");
     identity.revokePrincipalPermission(packService.principal_id, "packs.manage", owner.principal_id);
     assert.strictEqual(authorization.authorize({ principalId: packService.principal_id, permission: "packs.manage", credentialScopes: authenticated.scopes }).code, "forbidden", "revoking the principal grant takes effect for existing credentials");
   });

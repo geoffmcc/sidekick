@@ -84,6 +84,19 @@ test("role and delegation changes roll back when their audit record cannot be wr
   }
 });
 
+test("service permission changes roll back when their audit record cannot be written", () => {
+  const service = identity.createPrincipal({ type: "service", displayName: "Atomic service grants", createdByPrincipalId: owner.principal_id, actorPrincipalId: owner.principal_id });
+  rejectAudit("principal.permission_granted", "reject_service_permission_grant_audit", () => {
+    assert.throws(() => identity.grantPrincipalPermission(service.principal_id, "memory.read", owner.principal_id), /synthetic audit failure/);
+    assert.deepEqual(identity.getPrincipalPermissions(service.principal_id), []);
+  });
+  identity.grantPrincipalPermission(service.principal_id, "memory.read", owner.principal_id);
+  rejectAudit("principal.permission_revoked", "reject_service_permission_revoke_audit", () => {
+    assert.throws(() => identity.revokePrincipalPermission(service.principal_id, "memory.read", owner.principal_id), /synthetic audit failure/);
+    assert.deepEqual(identity.getPrincipalPermissions(service.principal_id), ["memory.read"]);
+  });
+});
+
 test("principal and human-user creation roll back completely when audit insertion fails", () => {
   rejectAudit("principal.created", "reject_principal_create_audit", () => {
     assert.throws(() => identity.createPrincipal({ type: "agent", displayName: "Audit rollback principal", actorPrincipalId: owner.principal_id }), /synthetic audit failure/);

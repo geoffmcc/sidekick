@@ -230,8 +230,7 @@ function canAssignLegacyDashboardAdministrator(principalIdValue) {
 }
 
 function grantPrincipalPermission(principalIdValue, permission, actorIdentity) {
-  const principal = getPrincipal(principalIdValue);
-  if (!principal || principal.principal_type !== "service") throw new Error("service principal not found");
+  const targetId = requiredText(principalIdValue, "principal_id");
   const actorPrincipalId = typeof actorIdentity === "string" ? actorIdentity : actorIdentity?.principal_id;
   const authorization = require("./authorization");
   const authority = { principalId: actorPrincipalId, ...(Array.isArray(actorIdentity?.scopes) ? { credentialScopes: actorIdentity.scopes } : {}), delegationId: actorIdentity?.delegation_id || null };
@@ -242,32 +241,38 @@ function grantPrincipalPermission(principalIdValue, permission, actorIdentity) {
   if (!authorization.authorize({ ...authority, permission }).ok) throw new Error(`Actor lacks permission: ${permission}`);
   const db = dbStore.getDb();
   db.transaction(() => {
+    const principal = getPrincipal(targetId);
+    if (!principal || principal.principal_type !== "service") throw new Error("service principal not found");
+    if (!authorization.authorize({ ...authority, permission: "roles.manage" }).ok) throw new Error("Permission grants require roles.manage");
+    if (!authorization.authorize({ ...authority, permission }).ok) throw new Error(`Actor lacks permission: ${permission}`);
     db.prepare(`INSERT OR IGNORE INTO identity_principal_permissions (principal_id, permission, assigned_by_principal_id, assigned_at)
       VALUES (?, ?, ?, ?)`).run(principal.principal_id, permission, actorPrincipalId, now());
     audit("principal.permission_granted", principal.principal_id, actorPrincipalId, { permission });
   })();
-  return getPrincipalPermissions(principal.principal_id);
+  return getPrincipalPermissions(targetId);
 }
 
 function revokePrincipalPermission(principalIdValue, permission, actorIdentity) {
-  const principal = getPrincipal(principalIdValue);
-  if (!principal || principal.principal_type !== "service") throw new Error("service principal not found");
+  const targetId = requiredText(principalIdValue, "principal_id");
   const actorPrincipalId = typeof actorIdentity === "string" ? actorIdentity : actorIdentity?.principal_id;
   const authorization = require("./authorization");
-  if (!actorPrincipalId || !authorization.authorize({
+  const authority = {
     principalId: actorPrincipalId,
-    permission: "roles.manage",
     ...(Array.isArray(actorIdentity?.scopes) ? { credentialScopes: actorIdentity.scopes } : {}),
     delegationId: actorIdentity?.delegation_id || null,
-  }).ok) {
+  };
+  if (!actorPrincipalId || !authorization.authorize({ ...authority, permission: "roles.manage" }).ok) {
     throw new Error("Permission changes require roles.manage");
   }
   const db = dbStore.getDb();
   db.transaction(() => {
+    const principal = getPrincipal(targetId);
+    if (!principal || principal.principal_type !== "service") throw new Error("service principal not found");
+    if (!authorization.authorize({ ...authority, permission: "roles.manage" }).ok) throw new Error("Permission changes require roles.manage");
     db.prepare("DELETE FROM identity_principal_permissions WHERE principal_id = ? AND permission = ?").run(principal.principal_id, permission);
     audit("principal.permission_revoked", principal.principal_id, actorPrincipalId, { permission });
   })();
-  return getPrincipalPermissions(principal.principal_id);
+  return getPrincipalPermissions(targetId);
 }
 
 function getPrincipalPermissions(principalIdValue) {
