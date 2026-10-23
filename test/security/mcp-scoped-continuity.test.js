@@ -168,3 +168,52 @@ test("MCP continuity tools honor narrow memory credentials and preserve project 
   assert.deepEqual(db.loadDocument("resume"), resumeBefore,
     "a denied resume-pointer update has no persistent side effect");
 });
+
+test("MCP tool catalog uses a read-only scope without granting ordinary tool execution", async () => {
+  for (const role of ["owner", "administrator", "operator", "viewer", "auditor"]) {
+    assert.ok(db.getDb().prepare("SELECT 1 FROM identity_role_permissions WHERE role_name = ? AND permission = 'tools.catalog.read'").get(role), `${role} can inspect the read-only tool catalog`);
+  }
+  const catalogPrincipal = identity.createPrincipal({
+    type: "service",
+    displayName: "Synthetic tool catalog reader",
+    createdByPrincipalId: owner.principal_id,
+    actorIdentity: owner,
+  });
+  identity.grantPrincipalPermission(catalogPrincipal.principal_id, "tools.catalog.read", owner);
+  const catalogToken = authentication.createCredential({
+    principalId: catalogPrincipal.principal_id,
+    displayName: "Synthetic tool catalog read credential",
+    scopes: ["tools.catalog.read"],
+    createdByPrincipalId: owner.principal_id,
+    actorContext: owner,
+  }).token;
+  const catalogIdentity = authentication.authenticateBearerIdentity(catalogToken);
+  assert.deepEqual(catalogIdentity.scopes, ["tools.catalog.read"]);
+  assert.equal(catalogIdentity.scopes.includes("tools.execute"), false);
+
+  for (const [action, extra] of [
+    ["overview", {}],
+    ["search", { query: "session" }],
+    ["get", { name: "session" }],
+    ["policy", { name: "session", source: "mcp" }],
+  ]) {
+    const result = await callTool(catalogToken, "tools", { action, ...extra });
+    assert.notEqual(result.isError, true, `${action} is authorized by tools.catalog.read: ${result.content?.[0]?.text}`);
+  }
+
+  const executionDenied = await callTool(catalogToken, "respond", { text: "must not execute" });
+  assert.equal(executionDenied.isError, true);
+  assert.match(executionDenied.content?.[0]?.text || "", /required permission: tools\.execute/);
+
+  identity.grantPrincipalPermission(catalogPrincipal.principal_id, "tools.execute", owner);
+  const genericExecutionToken = authentication.createCredential({
+    principalId: catalogPrincipal.principal_id,
+    displayName: "Synthetic generic execution-only credential",
+    scopes: ["tools.execute"],
+    createdByPrincipalId: owner.principal_id,
+    actorContext: owner,
+  }).token;
+  const catalogDenied = await callTool(genericExecutionToken, "tools", { action: "overview" });
+  assert.equal(catalogDenied.isError, true);
+  assert.match(catalogDenied.content?.[0]?.text || "", /required permission: tools\.catalog\.read/);
+});
