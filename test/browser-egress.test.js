@@ -90,6 +90,14 @@ const CLOSED = egress.buildSessionPolicy({ allowPrivateNetwork: false }, { allow
     assert.ok(egress.evaluateHost("::ffff:10.0.0.1", CLOSED), "mapped RFC1918 must be refused");
   });
 
+  await test("IPv4-mapped IPv6 public addresses are permanently refused", async () => {
+    const address = "::ffff:8.8.8.8";
+    assert.ok(egress.evaluateHost(address, OPEN), "mapped public addresses must not bypass browser egress policy");
+    assert.ok(egress.evaluateBrowserUrl(`http://[${address}]/`, OPEN), "URL navigation must reject mapped destinations");
+    const result = await egress.resolveAndValidate(address, OPEN);
+    assert.ok(result.refusal, "the proxy resolver must reject mapped destinations");
+  });
+
   await test("allowed_hosts narrows policy and never widens it", () => {
     const scoped = egress.buildSessionPolicy({ allowedHosts: ["example.com", "*.trusted.org"], allowPrivateNetwork: true }, { allowPrivateNetwork: true });
     assert.strictEqual(egress.evaluateBrowserUrl("https://example.com/", scoped), null);

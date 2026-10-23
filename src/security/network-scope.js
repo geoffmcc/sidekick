@@ -7,7 +7,7 @@ const crypto = require("crypto");
 const net = require("net");
 const dns = require("dns").promises;
 const { domainToASCII } = require("url");
-const { isLinkLocal, isMetadataAddress, isNonUnicastAddress, isPrivateAddress } = require("./ip-address-policy");
+const { isLinkLocal, isMetadataAddress, isNonUnicastAddress, isPrivateAddress, isIPv4MappedAddress } = require("./ip-address-policy");
 
 const MAX_LIST = 256;
 const MAX_HOST = 253;
@@ -152,6 +152,7 @@ function cidrContains(cidr, address) {
 function patternMatches(value, pattern) { return pattern.startsWith("*.") ? value.endsWith(pattern.slice(1)) && value.length > pattern.length - 1 : value === pattern; }
 function permanentDenial(value) {
   const text = String(value || "").toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
+  if (isIPv4MappedAddress(text)) return PERMANENT_REASON;
   if (text === "localhost" || text.endsWith(".localhost") || isMetadataAddress(text) || isLinkLocal(text) || isNonUnicastAddress(text)) return PERMANENT_REASON;
   let address; try { address = parseAddress(text); } catch { return null; }
   if (address.value === 0n) return PERMANENT_REASON;

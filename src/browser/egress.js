@@ -36,7 +36,7 @@ const http = require("http");
 const dns = require("dns");
 const { METADATA_HOSTS } = require("../compute/endpoint-guard");
 const { isPrivateAddress, isLinkLocal } = require("../security/outbound-url");
-const { isNonUnicastAddress } = require("../security/ip-address-policy");
+const { isNonUnicastAddress, isIPv4MappedAddress } = require("../security/ip-address-policy");
 const networkScope = require("../security/network-scope");
 
 const DNS_CACHE_TTL_MS = 30 * 1000;
@@ -113,6 +113,7 @@ function evaluateHost(host, policy) {
   if (METADATA_HOSTS.has(h)) return `host "${h}" is a cloud metadata endpoint and is never reachable from a browser session`;
   if (isLinkLocal(h)) return `host "${h}" is link-local and is never reachable from a browser session`;
   if (isNonUnicastAddress(h)) return `host "${h}" is a non-unicast address and is never reachable from a browser session`;
+  if (isIPv4MappedAddress(h)) return `host "${h}" is an IPv4-mapped IPv6 address and is never reachable from a browser session`;
   if (policy.scopeError) return policy.scopeError;
   if (policy.scope) {
     const decision = networkScope.decision(policy.scope, { host: h, allowedHosts: policy.allowedHosts });
@@ -195,6 +196,7 @@ async function resolveAndValidate(host, policy, { protocol = "https", port = 443
     }
     if (isLinkLocal(record.address)) return { refusal: `"${h}" resolves to link-local address ${record.address}` };
     if (isNonUnicastAddress(record.address)) return { refusal: `"${h}" resolves to non-unicast address ${record.address}` };
+    if (isIPv4MappedAddress(record.address)) return { refusal: `"${h}" resolves to invalid IPv4-mapped IPv6 destination ${record.address}` };
     if (isPrivateAddress(record.address) && !policy.allowPrivate) {
       return { refusal: `"${h}" resolves to private address ${record.address}; this session does not permit private-network targets` };
     }

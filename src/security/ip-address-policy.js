@@ -45,6 +45,11 @@ function ipv6Bytes(value) {
   return bytes;
 }
 
+function isIPv4MappedAddress(host) {
+  const bytes = ipv6Bytes(host);
+  return Boolean(bytes && bytes.slice(0, 10).every(byte => byte === 0) && bytes[10] === 0xff && bytes[11] === 0xff);
+}
+
 function embeddedIPv4Address(host) {
   const bytes = ipv6Bytes(host);
   if (!bytes) return null;
@@ -135,4 +140,4 @@ function isPrivateAddress(host) {
   return normalized === "localhost" || normalized === "localhost.localdomain" || normalized.endsWith(".localhost");
 }
 
-module.exports = { METADATA_HOSTS, stripBrackets, embeddedIPv4Address, isLinkLocal, isMetadataAddress, isNonUnicastAddress, isPrivateAddress };
+module.exports = { METADATA_HOSTS, stripBrackets, ipv6Bytes, isIPv4MappedAddress, embeddedIPv4Address, isLinkLocal, isMetadataAddress, isNonUnicastAddress, isPrivateAddress };

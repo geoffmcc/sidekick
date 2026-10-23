@@ -39,6 +39,7 @@ test("permanent denials and explicit denials override allows", () => {
   assert.strictEqual(policy.decision(scope, { address: "169.254.169.254", protocol: "http", port: 80 }).reason, "permanent_denial");
   assert.strictEqual(policy.decision(scope, { address: "224.0.0.1", protocol: "http", port: 80 }).reason, "permanent_denial");
   assert.strictEqual(policy.decision(scope, { address: "::ffff:224.0.0.1", protocol: "http", port: 80 }).reason, "permanent_denial");
+  assert.strictEqual(policy.decision(scope, { address: "::ffff:8.8.8.8", protocol: "http", port: 80 }).reason, "permanent_denial", "IPv4-mapped IPv6 is never a valid packet destination, even for a globally reachable embedded IPv4");
   assert.strictEqual(policy.decision(scope, { address: "::ffff:10.47.20.5", protocol: "http", port: 80 }).ok, false);
   assert.strictEqual(policy.decision(scope, { host: "api.example.test", address: "192.0.2.10", protocol: "http", port: 80 }).ok, true);
   assert.strictEqual(policy.decision(scope, { host: "api.example.test", address: "192.0.2.10", protocol: "https", port: 443 }).reason, "protocol_not_allowed");

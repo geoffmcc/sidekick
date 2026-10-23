@@ -28,7 +28,7 @@
 
 const net = require("node:net");
 const dns = require("dns").promises;
-const { stripBrackets, isLinkLocal, isMetadataAddress, isNonUnicastAddress, isPrivateAddress } = require("./ip-address-policy");
+const { stripBrackets, isLinkLocal, isMetadataAddress, isNonUnicastAddress, isPrivateAddress, isIPv4MappedAddress } = require("./ip-address-policy");
 
 /**
  * Returns an error message describing why the target is refused, or null when
@@ -61,6 +61,9 @@ function validateOutboundUrl(value, label = "url", options = {}) {
   }
   if (isNonUnicastAddress(host)) {
     return `Refused ${label} host "${host}": non-unicast addresses are never a valid fetch target`;
+  }
+  if (isIPv4MappedAddress(host)) {
+    return `Refused ${label} host "${host}": IPv4-mapped IPv6 addresses are not valid network destinations`;
   }
    const allowPrivate = options.allowPrivate === true;
   if (isPrivateAddress(host) && !allowPrivate) {

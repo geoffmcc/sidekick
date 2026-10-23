@@ -2,7 +2,7 @@
 
 const assert = require("node:assert/strict");
 const { test } = require("node:test");
-const { embeddedIPv4Address, isLinkLocal, isMetadataAddress, isNonUnicastAddress, isPrivateAddress } = require("../src/security/ip-address-policy");
+const { embeddedIPv4Address, isIPv4MappedAddress, isLinkLocal, isMetadataAddress, isNonUnicastAddress, isPrivateAddress } = require("../src/security/ip-address-policy");
 const { validateOutboundUrl } = require("../src/security/outbound-url");
 const { validateEndpoint } = require("../src/compute/endpoint-guard");
 
@@ -31,6 +31,12 @@ test("public IPv4 translated by the well-known NAT64 prefix remains public", () 
   assert.equal(embeddedIPv4Address("64:ff9b::5db8:d822"), "93.184.216.34");
   assert.equal(isPrivateAddress("64:ff9b::5db8:d822"), false);
   assert.equal(validateOutboundUrl("http://[64:ff9b::5db8:d822]/"), null);
+});
+
+test("IPv4-mapped IPv6 destinations are permanently refused even when the embedded IPv4 is public", () => {
+  const address = "::ffff:8.8.8.8";
+  assert.equal(isIPv4MappedAddress(address), true);
+  assert.match(validateOutboundUrl(`http://[${address}]/`, "url", { allowPrivate: true }), /IPv4-mapped IPv6/i);
 });
 
 test("local-use NAT64 translation requires scope and preserves embedded destination checks", () => {
