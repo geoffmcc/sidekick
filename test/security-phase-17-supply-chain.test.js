@@ -8,6 +8,11 @@ const workflow = fs.readFileSync(path.resolve(__dirname, "..", ".github", "workf
 const deployPs = fs.readFileSync(path.resolve(__dirname, "..", "deploy.ps1"), "utf8");
 const deploySh = fs.readFileSync(path.resolve(__dirname, "..", "deploy.sh"), "utf8");
 
+assert.match(workflow, /name: Audit production and CI dependencies\s+run: npm audit --audit-level=moderate/,
+  "CI must audit production and development dependencies because both are executed by CI jobs");
+assert.doesNotMatch(workflow, /npm audit --omit=dev/,
+  "the CI audit must not omit dependencies used by build and test jobs");
+
 const actionUses = workflow.match(/^\s*(?:-\s*)?uses: actions\/[\w-]+@[^\s]+/gm) || [];
 assert.ok(actionUses.length >= 3, "CI must retain immutable action inventory");
 for (const use of actionUses) {

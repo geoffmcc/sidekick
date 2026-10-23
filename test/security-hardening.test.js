@@ -64,6 +64,6 @@ for (const name of [
 }
 
 const ci = fs.readFileSync(path.join(__dirname, "..", ".github", "workflows", "ci.yml"), "utf8");
-assert.match(ci, /npm audit --omit=dev --audit-level=moderate/);
+assert.match(ci, /npm audit --audit-level=moderate/);
 
 console.log("Focused security-hardening tests passed.");
