@@ -133,6 +133,19 @@ try {
     assert.equal(identity.getPrincipal(target.principal_id).enabled, true);
   });
 
+  test("profile, username, and cross-user password changes require users.manage", () => {
+    const activeOwner = identity.getPrincipal(agent.principal_id);
+    const subject = identity.createHumanUser({ username: "profile_subject", password: "synthetic subject password", actorPrincipalId: activeOwner.principal_id });
+    const viewer = identity.createHumanUser({ username: "profile_viewer", password: "synthetic viewer password", actorPrincipalId: activeOwner.principal_id });
+    identity.assignRole(viewer.principal_id, "viewer", activeOwner.principal_id);
+    assert.throws(() => identity.updatePrincipal(subject.principal_id, { displayName: "Tampered" }, viewer.principal_id), /users.manage/);
+    assert.throws(() => identity.updateUsername(subject.principal_id, "tampered_name", viewer.principal_id), /users.manage/);
+    assert.throws(() => identity.changePassword(subject.principal_id, "synthetic unauthorized reset", viewer.principal_id), /users.manage/);
+    assert.equal(identity.getPrincipal(subject.principal_id).display_name, "profile_subject");
+    assert.equal(identity.getHumanUser(subject.principal_id).username, "profile_subject");
+    assert.ok(identity.verifyUserPassword("profile_subject", "synthetic subject password"));
+  });
+
   test("adopted legacy Dashboard account cannot self-promote after Owner bootstrap", () => {
     assert.equal(identity.canCompleteFirstOwnerSetup(adoptedLegacy.principal_id), false);
     assert.throws(() => identity.assignRole(adoptedLegacy.principal_id, "owner", adoptedLegacy.principal_id), /authorized actor/);

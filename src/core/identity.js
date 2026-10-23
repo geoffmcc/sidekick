@@ -132,27 +132,45 @@ function createHumanUser({ username, password, displayName, actorPrincipalId = n
 function updatePrincipal(id, { displayName, metadata } = {}, actorPrincipalId = null) {
   const principal = getPrincipal(id);
   if (!principal) throw new Error("principal not found");
+  const authorization = require("./authorization");
+  if (!actorPrincipalId || !authorization.authorize({ principalId: actorPrincipalId, permission: "users.manage" }).ok) {
+    throw new Error("Principal profile changes require users.manage");
+  }
   const nextName = displayName === undefined ? principal.display_name : requiredText(displayName, "displayName");
   const nextMetadata = metadata === undefined ? principal.metadata : metadata;
   if (!nextMetadata || typeof nextMetadata !== "object" || Array.isArray(nextMetadata)) throw new Error("metadata must be an object");
   const db = dbStore.getDb();
   return db.transaction(() => {
-    db.prepare("UPDATE principals SET display_name = ?, metadata_json = ?, updated_at = ? WHERE principal_id = ?").run(nextName, JSON.stringify(nextMetadata), now(), principal.principal_id);
-    audit("principal.updated", principal.principal_id, actorPrincipalId, { display_name_changed: nextName !== principal.display_name });
-    return getPrincipal(principal.principal_id);
+    if (!authorization.authorize({ principalId: actorPrincipalId, permission: "users.manage" }).ok) {
+      throw new Error("Principal profile changes require users.manage");
+    }
+    const currentPrincipal = getPrincipal(id);
+    if (!currentPrincipal) throw new Error("principal not found");
+    db.prepare("UPDATE principals SET display_name = ?, metadata_json = ?, updated_at = ? WHERE principal_id = ?").run(nextName, JSON.stringify(nextMetadata), now(), currentPrincipal.principal_id);
+    audit("principal.updated", currentPrincipal.principal_id, actorPrincipalId, { display_name_changed: nextName !== currentPrincipal.display_name });
+    return getPrincipal(currentPrincipal.principal_id);
   })();
 }
 
 function updateUsername(id, username, actorPrincipalId = null) {
   const principal = getPrincipal(id);
   if (!principal || principal.principal_type !== "human") throw new Error("human principal not found");
+  const authorization = require("./authorization");
+  if (!actorPrincipalId || !authorization.authorize({ principalId: actorPrincipalId, permission: "users.manage" }).ok) {
+    throw new Error("Username changes require users.manage");
+  }
   const name = requiredText(username, "username", 80);
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{2,79}$/.test(name)) throw new Error("username must be 3-80 characters and use letters, numbers, ., _, or -");
   const db = dbStore.getDb();
   return db.transaction(() => {
-    db.prepare("UPDATE human_users SET username = ? WHERE principal_id = ?").run(name, principal.principal_id);
-    audit("user.username_changed", principal.principal_id, actorPrincipalId, {});
-    return getPrincipal(principal.principal_id);
+    if (!authorization.authorize({ principalId: actorPrincipalId, permission: "users.manage" }).ok) {
+      throw new Error("Username changes require users.manage");
+    }
+    const currentPrincipal = getPrincipal(id);
+    if (!currentPrincipal || currentPrincipal.principal_type !== "human") throw new Error("human principal not found");
+    db.prepare("UPDATE human_users SET username = ? WHERE principal_id = ?").run(name, currentPrincipal.principal_id);
+    audit("user.username_changed", currentPrincipal.principal_id, actorPrincipalId, {});
+    return getPrincipal(currentPrincipal.principal_id);
   })();
 }
 
@@ -326,15 +344,28 @@ function setPrincipalEnabled(id, enabled, actorPrincipalId = null) {
 
 function changePassword(id, password, actorPrincipalId = null) {
   const principal = getPrincipal(id);
-  if (!principal) throw new Error("principal not found");
+  if (!principal || principal.principal_type !== "human") throw new Error("human principal not found");
+  const authorization = require("./authorization");
+  const actor = actorPrincipalId ? getPrincipal(actorPrincipalId) : null;
+  const isEnabledSelfChange = actor?.principal_id === principal.principal_id && actor.enabled;
+  if (!isEnabledSelfChange && (!actorPrincipalId || !authorization.authorize({ principalId: actorPrincipalId, permission: "users.manage" }).ok)) {
+    throw new Error("Password changes require the current user or users.manage");
+  }
   const digest = passwordHash(password);
   const timestamp = now();
   const db = dbStore.getDb();
   return db.transaction(() => {
-    db.prepare("UPDATE human_users SET password_hash = ?, password_changed_at = ?, last_login_at = NULL WHERE principal_id = ?").run(digest, timestamp, principal.principal_id);
-    db.prepare("UPDATE identity_sessions SET invalidated_at = ? WHERE principal_id = ? AND invalidated_at IS NULL").run(timestamp, principal.principal_id);
-    audit("user.password_changed", principal.principal_id, actorPrincipalId, {});
-    return getPrincipal(principal.principal_id);
+    const currentActor = actorPrincipalId ? getPrincipal(actorPrincipalId) : null;
+    const currentTarget = getPrincipal(id);
+    if (!currentTarget || currentTarget.principal_type !== "human") throw new Error("human principal not found");
+    const stillSelfChange = currentActor?.principal_id === currentTarget.principal_id && currentActor.enabled;
+    if (!stillSelfChange && (!actorPrincipalId || !authorization.authorize({ principalId: actorPrincipalId, permission: "users.manage" }).ok)) {
+      throw new Error("Password changes require the current user or users.manage");
+    }
+    db.prepare("UPDATE human_users SET password_hash = ?, password_changed_at = ?, last_login_at = NULL WHERE principal_id = ?").run(digest, timestamp, currentTarget.principal_id);
+    db.prepare("UPDATE identity_sessions SET invalidated_at = ? WHERE principal_id = ? AND invalidated_at IS NULL").run(timestamp, currentTarget.principal_id);
+    audit("user.password_changed", currentTarget.principal_id, actorPrincipalId, {});
+    return getPrincipal(currentTarget.principal_id);
   })();
 }
 

@@ -44,10 +44,10 @@ try {
   });
   test("human lifecycle preserves stable identity through rename-independent disable/enable", () => {
     const user = identity.createHumanUser({ username: "alice", password: "another correct password", displayName: "Alice" });
-    const renamed = identity.updatePrincipal(user.principal_id, { displayName: "Alice Renamed" }, user.principal_id);
+    const renamed = identity.updatePrincipal(user.principal_id, { displayName: "Alice Renamed" }, bootstrapOwner.principal_id);
     assert.strictEqual(renamed.principal_id, user.principal_id);
     assert.strictEqual(renamed.display_name, "Alice Renamed");
-    assert.strictEqual(identity.updateUsername(user.principal_id, "alice-renamed", user.principal_id).principal_id, user.principal_id);
+    assert.strictEqual(identity.updateUsername(user.principal_id, "alice-renamed", bootstrapOwner.principal_id).principal_id, user.principal_id);
     const disabled = identity.setPrincipalEnabled(user.principal_id, false, bootstrapOwner.principal_id);
     assert.strictEqual(disabled.principal_id, user.principal_id);
     assert.strictEqual(disabled.enabled, false);
