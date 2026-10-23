@@ -16,6 +16,7 @@ const { writeTextFile } = require("../../core/json-file-store");
 const MAX_FILE_CONTENT_BYTES = 50 * 1024 * 1024;
 const MAX_READ_OUTPUT_BYTES = 1024 * 1024;
 const MAX_DIRECTORY_LIST_ENTRIES = 500;
+const MAX_SEARCH_SCAN_ENTRIES = 10000;
 const MAX_FIND_RESULTS = 500;
 const MAX_FIND_SCAN_ENTRIES = 10000;
 const MAX_FILTER_RESULTS = 500;
@@ -105,7 +106,7 @@ async function sidekick_list({ path: dirPath }) {
   return { content: [{ type: "text", text: redactSensitive((lines.join("\n") || "(empty directory)") + notice) }] };
 }
 
-function nodeSearch(pattern, targetPath, include) {
+async function nodeSearch(pattern, targetPath, include) {
   let matcher;
   try {
     matcher = new BoundedRegex(pattern);
@@ -119,9 +120,13 @@ function nodeSearch(pattern, targetPath, include) {
   const results = [];
   const maxResults = 100;
   let truncatedFiles = 0;
+  let scannedEntries = 0;
+  let scanLimited = false;
+  let resultLimited = false;
 
-  function visit(current, depth) {
+  async function visit(current, depth) {
     if (results.length >= maxResults || depth > 20) return;
+    if (scannedEntries >= MAX_SEARCH_SCAN_ENTRIES) { scanLimited = true; return; }
     let stat;
     try { stat = fs.lstatSync(current); } catch { return; }
     if (stat.isSymbolicLink()) return;
@@ -129,31 +134,38 @@ function nodeSearch(pattern, targetPath, include) {
       if (includeMatcher && !includeMatcher.test(path.basename(current))) return;
       let content;
       try {
-        const read = readTextBounded(current, { maxBytes: MAX_READ_OUTPUT_BYTES });
+        const read = readTextBounded(current, { maxBytes: MAX_READ_OUTPUT_BYTES, noFollow: true });
         content = read.content;
         if (read.truncated) truncatedFiles++;
       } catch { return; }
-      for (const [index, line] of content.split(/\r?\n/).entries()) {
-        if (matcher.test(line)) {
-          results.push(`${current}:${index + 1}:${line}`);
-          if (results.length >= maxResults) return;
+      for (const line of iterateTextLines(content)) {
+        const text = line.text.endsWith("\r") ? line.text.slice(0, -1) : line.text;
+        if (matcher.test(text)) {
+          results.push(`${current}:${line.number}:${text.slice(0, 200)}`);
+          if (results.length >= maxResults) { resultLimited = true; return; }
         }
       }
       return;
     }
     if (!stat.isDirectory()) return;
-    let entries;
-    try { entries = fs.readdirSync(current, { withFileTypes: true }); } catch { return; }
-    for (const entry of entries) {
+    let directory;
+    try { directory = await fs.promises.opendir(current); } catch { return; }
+    for await (const entry of directory) {
       if (results.length >= maxResults) return;
-      visit(path.join(current, entry.name), depth + 1);
+      if (scannedEntries >= MAX_SEARCH_SCAN_ENTRIES) { scanLimited = true; return; }
+      scannedEntries++;
+      await visit(path.join(current, entry.name), depth + 1);
     }
   }
 
-  visit(targetPath, 0);
+  try { await visit(targetPath, 0); }
+  catch (error) { return { content: [{ type: "text", text: "Search error: " + error.message }], isError: true }; }
   const text = results.join("\n") || "(no matches)";
-  const notice = truncatedFiles ? `\n[partial search: scanned the first ${MAX_READ_OUTPUT_BYTES} bytes of ${truncatedFiles} oversized file(s)]` : "";
-  return { content: [{ type: "text", text: redactSensitive(text + notice) }] };
+  const notices = [];
+  if (resultLimited) notices.push(`[partial search: result limit of ${maxResults} reached]`);
+  if (truncatedFiles) notices.push(`[partial search: scanned the first ${MAX_READ_OUTPUT_BYTES} bytes of ${truncatedFiles} oversized file(s)]`);
+  if (scanLimited) notices.push(`[partial search: stopped after ${MAX_SEARCH_SCAN_ENTRIES} entries]`);
+  return { content: [{ type: "text", text: redactSensitive([text, ...notices].join("\n")) }] };
 }
 
 function buildSearchArgs(searchCommand, pattern, targetPath, include) {
@@ -625,4 +637,4 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_read, sidekick_list, sidekick_search, sidekick_summarize, sidekick_filter, sidekick_write, sidekick_diff_files, sidekick_find, buildSearchArgs, boundedResultLimit, MAX_DIRECTORY_LIST_ENTRIES, MAX_FIND_RESULTS, MAX_FIND_SCAN_ENTRIES, MAX_FILTER_RESULTS, MAX_FILTER_SCAN_ENTRIES, MAX_SUMMARY_LINES };
+module.exports = { descriptors, sidekick_read, sidekick_list, sidekick_search, sidekick_summarize, sidekick_filter, sidekick_write, sidekick_diff_files, sidekick_find, buildSearchArgs, boundedResultLimit, MAX_DIRECTORY_LIST_ENTRIES, MAX_SEARCH_SCAN_ENTRIES, MAX_FIND_RESULTS, MAX_FIND_SCAN_ENTRIES, MAX_FILTER_RESULTS, MAX_FILTER_SCAN_ENTRIES, MAX_SUMMARY_LINES };

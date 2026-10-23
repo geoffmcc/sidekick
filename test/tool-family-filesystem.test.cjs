@@ -74,6 +74,15 @@ console.log('Running Filesystem Family Tests...');
     result = await family.sidekick_search({ pattern: 'marker', path: ROOT, include: '*.js' });
     assert.ok(text(result).includes('two.js'));
     assert.strictEqual(text(await family.sidekick_search({ pattern: 'missing', path: ROOT })), 'No matches found');
+    const originalPath = process.env.PATH;
+    process.env.PATH = TEST_DATA_DIR;
+    try {
+      result = await family.sidekick_search({ pattern: 'marker', path: ROOT, include: '*.js' });
+      assert.ok(text(result).includes('two.js'), 'bounded Node fallback remains functional when rg and grep are unavailable');
+    } finally {
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+    }
 
     const summaryPath = path.join(ROOT, 'summary.txt');
     result = await family.sidekick_summarize({ path: summaryPath, max_lines: 2 });

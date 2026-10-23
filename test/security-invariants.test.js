@@ -21,7 +21,7 @@ const { getStaticToolRisk } = require("../src/tools/metadata");
 const { collectSnapshotRows } = require("../src/db/snapshot-bounds");
 const { createEscalationApprovalRef, validateEscalationApprovalRef } = require("../src/agent/escalation-approval");
 const { verifyRequiredRuntimeSecrets } = require("../scripts/verify-runtime-secrets");
-const { boundedResultLimit, MAX_DIRECTORY_LIST_ENTRIES, MAX_FIND_RESULTS, MAX_FIND_SCAN_ENTRIES, MAX_FILTER_RESULTS, MAX_FILTER_SCAN_ENTRIES, MAX_SUMMARY_LINES } = require("../src/tools/families/filesystem");
+const { boundedResultLimit, MAX_DIRECTORY_LIST_ENTRIES, MAX_SEARCH_SCAN_ENTRIES, MAX_FIND_RESULTS, MAX_FIND_SCAN_ENTRIES, MAX_FILTER_RESULTS, MAX_FILTER_SCAN_ENTRIES, MAX_SUMMARY_LINES } = require("../src/tools/families/filesystem");
 
 const root = path.resolve(__dirname, "..");
 
@@ -282,6 +282,7 @@ test("prediction and history pagination offsets stay within returned-data bounds
 
 test("filesystem directory listing and search have fixed result and scan ceilings", () => {
   assert.equal(MAX_DIRECTORY_LIST_ENTRIES, 500);
+  assert.equal(MAX_SEARCH_SCAN_ENTRIES, 10000);
   assert.equal(MAX_FIND_RESULTS, 500);
   assert.equal(MAX_FIND_SCAN_ENTRIES, 10000);
   assert.equal(MAX_FILTER_RESULTS, 500);
