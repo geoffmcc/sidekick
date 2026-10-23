@@ -84,6 +84,57 @@ function redactUrlCredentials(text) {
   return copyFrom === 0 ? text : output + text.slice(copyFrom);
 }
 
+function redactJwtTokens(text) {
+  let output = "";
+  let copyFrom = 0;
+  let searchFrom = 0;
+  while (true) {
+    const start = text.indexOf("eyJ", searchFrom);
+    if (start < 0) break;
+
+    let cursor = start + 3;
+    while (cursor < text.length && /[A-Za-z0-9_-]/.test(text[cursor])) cursor++;
+    if (cursor === start + 3) {
+      searchFrom = cursor + 1;
+      continue;
+    }
+    if (cursor >= text.length) break;
+    if (text[cursor] !== ".") {
+      searchFrom = cursor + 1;
+      continue;
+    }
+
+    const payloadStart = cursor + 1;
+    if (!text.startsWith("eyJ", payloadStart)) {
+      searchFrom = cursor + 1;
+      continue;
+    }
+    cursor = payloadStart + 3;
+    while (cursor < text.length && /[A-Za-z0-9_-]/.test(text[cursor])) cursor++;
+    if (cursor === payloadStart + 3) {
+      searchFrom = cursor + 1;
+      continue;
+    }
+    if (cursor >= text.length) break;
+    if (text[cursor] !== ".") {
+      searchFrom = cursor + 1;
+      continue;
+    }
+
+    const signatureStart = cursor + 1;
+    cursor = signatureStart;
+    while (cursor < text.length && /[A-Za-z0-9_-]/.test(text[cursor])) cursor++;
+    if (cursor === signatureStart) {
+      searchFrom = signatureStart + 1;
+      continue;
+    }
+    output += text.slice(copyFrom, start) + "[REDACTED JWT]";
+    copyFrom = cursor;
+    searchFrom = cursor;
+  }
+  return copyFrom === 0 ? text : output + text.slice(copyFrom);
+}
+
 function redactSensitive(text) {
   if (typeof text !== 'string') return text;
   
@@ -114,7 +165,7 @@ function redactSensitive(text) {
     .replace(/Bearer\s+[A-Za-z0-9\-._~+/]+=*/gi, 'Bearer [REDACTED]')
 
     ;
-  return redactUrlCredentials(redacted)
+  const withUrlCredentialsRedacted = redactUrlCredentials(redacted)
     // Database connection strings
     .replace(/(postgres|mysql|mongodb(?:\+srv)?):\/\/([^:]+):([^@]+)@/gi, '$1://$2:[REDACTED]@')
     .replace(/(postgres|mysql|mongodb(?:\+srv)?):\/\/[^\s]+/gi, '[REDACTED DATABASE URL]')
@@ -124,8 +175,8 @@ function redactSensitive(text) {
     .replace(new RegExp('rk_' + 'live_[A-Za-z0-9]{24,}', 'g'), '[REDACTED STRIPE RESTRICTED KEY]')
     .replace(new RegExp('pk_' + 'live_[A-Za-z0-9]{24,}', 'g'), '[REDACTED STRIPE PUBLISHABLE KEY]')
 
-    // JWT tokens
-    .replace(/eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '[REDACTED JWT]');
+    ;
+  return redactJwtTokens(withUrlCredentialsRedacted);
 }
 
 module.exports = { redactSensitive, isSensitiveKey, redactSensitiveKeysDeep };

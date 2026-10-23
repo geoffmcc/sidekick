@@ -173,10 +173,10 @@ test("redaction covers nested credentials, encoded tokens, and structured result
 
 test("redaction stays bounded on long untrusted strings that resemble URL schemes", () => {
   const redactModule = path.resolve(__dirname, "../../src/redact.js");
-  const script = `const { redactSensitive } = require(${JSON.stringify(redactModule)}); const plain = "x".repeat(500000); const urls = "x://a/".repeat(100000); if (redactSensitive(plain) !== plain || redactSensitive(urls) !== urls) process.exit(2);`;
+  const script = `const { redactSensitive } = require(${JSON.stringify(redactModule)}); const plain = "x".repeat(500000); const urls = "x://a/".repeat(100000); const jwtPrefixes = "eyJ".repeat(100000); if (redactSensitive(plain) !== plain || redactSensitive(urls) !== urls || redactSensitive(jwtPrefixes) !== jwtPrefixes) process.exit(2);`;
   const result = spawnSync(process.execPath, ["-e", script], {
     encoding: "utf8",
-    timeout: 3000,
+    timeout: 5000,
     maxBuffer: 1024 * 1024,
   });
   assert.ifError(result.error);
