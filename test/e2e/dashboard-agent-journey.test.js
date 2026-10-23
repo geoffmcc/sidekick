@@ -93,3 +93,39 @@ test("tool-backed Agent task shows dispatch completion and durable history after
     assert.ok(fixture.ollama, "the external inference boundary fixture should be running");
   });
 });
+
+test("authorized Dashboard reviewer can inspect and approve an open Agent escalation", async () => {
+  await withDiagnostics(page, fixture, "agent-escalation-review", async () => {
+    const started = await fixture.request("POST", "/api/agent/run", { goal: "Review dashboard escalation controls", project: "e2e_escalation_review" });
+    assert.equal(started.status, 200, JSON.stringify(started.body));
+    const taskId = started.body.taskId;
+    assert.ok(taskId, "task creation returns its durable task id");
+    const escalationResponse = await fixture.request("POST", `/api/agent/tasks/${encodeURIComponent(taskId)}/escalations`, {
+      requested_operation: "Restart the isolated test service",
+      reason: "The task requires an operator decision",
+      target_ref: "resource:e2e-test-service",
+      risk_class: "medium",
+      effect_class: "reversible",
+    });
+    assert.equal(escalationResponse.status, 201, JSON.stringify(escalationResponse.body));
+    const escalationId = escalationResponse.body.escalation.escalation_id;
+
+    await page.goto(`${fixture.baseUrl}/#agent`, { waitUntil: "domcontentloaded" });
+    await page.locator("#page-agent.active").waitFor({ state: "attached" });
+    await page.locator("#agentHistoryToggle").click();
+    const historyItem = page.locator("#agentHistory .history-item").filter({ hasText: "Review dashboard escalation controls" });
+    await historyItem.waitFor({ state: "visible", timeout: 30000 });
+    await historyItem.click();
+    const review = page.locator("#agentDurableEscalation");
+    await review.getByRole("button", { name: "Approve this request" }).waitFor({ state: "visible", timeout: 30000 });
+    assert.match(await review.innerText(), /Restart the isolated test service/);
+    assert.match(await review.innerText(), /resource:e2e-test-service/);
+
+    page.once("dialog", dialog => dialog.accept());
+    await review.getByRole("button", { name: "Approve this request" }).click();
+    await review.getByText(/State: approved/).waitFor({ state: "visible", timeout: 30000 });
+    const decided = await fixture.request("GET", `/api/agent/tasks/${encodeURIComponent(taskId)}`);
+    assert.equal(decided.status, 200);
+    assert.equal(decided.body.escalations.find(item => item.escalation_id === escalationId)?.state, "approved");
+  });
+});

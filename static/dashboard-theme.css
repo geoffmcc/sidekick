@@ -140,6 +140,8 @@ html, body { overflow-x: hidden; }
 .research-results-card { margin-top: 12px; }
 .research-results { white-space: pre-wrap; max-height: 520px; overflow: auto; }
 .agent-actions { margin-top: 8px; }
+.agent-escalation-review { margin-top: 10px; padding: 10px 12px; border-left: 3px solid #f0883e; background: #161b22; }
+.agent-escalation-review .control-row { margin-top: 8px; }
 .agent-new-task-area { margin-top: 12px; }
 .agent-guidance-label { display: block; margin-top: 10px; }
 .agent-history-section { margin-top: 16px; }
