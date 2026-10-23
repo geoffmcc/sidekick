@@ -36,9 +36,17 @@ const INI = require("ini");
 const { detectFormat } = require("../../core/format");
 const { DATA_DIR } = require("../../db");
 const platformKernel = require("../../platform/kernel");
+const { readTextBounded } = require("../../core/bounded-file-read");
 
 const TRANSCRIPTION_JOB_ROOT = path.join(DATA_DIR, "transcription-jobs");
+const MAX_TRANSCRIPTION_OUTPUT_BYTES = 2 * 1024 * 1024;
 const transcriptionJobs = new Map();
+
+function readTranscriptionText(filePath, maxBytes = MAX_TRANSCRIPTION_OUTPUT_BYTES) {
+  const result = readTextBounded(filePath, { maxBytes });
+  const text = result.content.trim();
+  return result.truncated ? `${text}\n[transcript truncated at ${maxBytes} bytes]` : text;
+}
 
 function transcriptionJobPath(jobId) {
   return path.join(TRANSCRIPTION_JOB_ROOT, `${jobId}.json`);
@@ -187,8 +195,13 @@ function startTranscriptionJob({ audioPath, model, language, backend, device: re
     const txtPath = selected.name === "whisper.cpp"
       ? path.join(outputDir, "transcript.txt")
       : path.join(outputDir, `${path.basename(audioPath).replace(/\.[^.]+$/, "")}.txt`);
-    if (code === 0 && fs.existsSync(txtPath)) finishTranscriptionJob(job, { status: "completed", output: fs.readFileSync(txtPath, "utf8").slice(0, 2 * 1024 * 1024).trim() || "(no speech detected)" });
-    else finishTranscriptionJob(job, { status: "failed", error: stderr || `transcription exited with code ${code}` });
+    if (code === 0 && fs.existsSync(txtPath)) {
+      try {
+        finishTranscriptionJob(job, { status: "completed", output: readTranscriptionText(txtPath) || "(no speech detected)" });
+      } catch (error) {
+        finishTranscriptionJob(job, { status: "failed", error: `Unable to read transcript output: ${error.message}` });
+      }
+    } else finishTranscriptionJob(job, { status: "failed", error: stderr || `transcription exited with code ${code}` });
   });
   return job;
 }
@@ -366,8 +379,9 @@ async function sidekick_transcribe({ path: audioPath, model, language, async: ru
       ? "/tmp/transcript.txt"
       : `/tmp/${path.basename(audioPath).replace(/\.[^.]+$/, ".txt")}`;
     if (fs.existsSync(tmpTxtPath)) {
-      const text = fs.readFileSync(tmpTxtPath, "utf-8").trim();
-      fs.unlinkSync(tmpTxtPath);
+      let text;
+      try { text = readTranscriptionText(tmpTxtPath); }
+      finally { fs.unlinkSync(tmpTxtPath); }
       return { content: [{ type: "text", text: text || "(no speech detected)" }] };
     }
 
@@ -952,4 +966,4 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_ocr, sidekick_media, sidekick_transcribe, sidekick_analytics, sidekick_insight_report, sidekick_download, localCudaAvailable, localVulkanAvailable };
+module.exports = { descriptors, sidekick_ocr, sidekick_media, sidekick_transcribe, sidekick_analytics, sidekick_insight_report, sidekick_download, localCudaAvailable, localVulkanAvailable, readTranscriptionText, MAX_TRANSCRIPTION_OUTPUT_BYTES };
