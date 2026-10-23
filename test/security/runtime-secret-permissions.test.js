@@ -5,6 +5,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { test } = require("node:test");
 const { readSecret } = require("../../src/core/runtime-secrets");
+const { readSecret: readWorkerSecret } = require("../../src/compute/worker-secrets");
 const { verifyRequiredRuntimeSecrets } = require("../../scripts/verify-runtime-secrets");
 
 const fixtureRoot = process.env.SIDEKICK_TEST_FILESYSTEM_ROOT;
@@ -43,15 +44,22 @@ test("runtime secret reader and deploy preflight reject world-readable credentia
 
   assert.equal(readSecret("SIDEKICK_API_KEY"), "synthetic-api-key");
   assert.equal(verifyRequiredRuntimeSecrets(secretDirectory), true);
+  assert.equal(readWorkerSecret("SIDEKICK_ENROLL_TOKEN"), "");
 
   // A dedicated service group may read a secret, but unrelated users may not.
   fs.chmodSync(apiKeyPath, 0o640);
   assert.equal(readSecret("SIDEKICK_API_KEY"), "synthetic-api-key");
   assert.equal(verifyRequiredRuntimeSecrets(secretDirectory), true);
+  const enrollmentPath = path.join(secretDirectory, "sidekick_enroll_token");
+  fs.writeFileSync(enrollmentPath, "synthetic-enrollment-token\n", { mode: 0o640 });
+  fs.chmodSync(enrollmentPath, 0o640);
+  assert.equal(readWorkerSecret("SIDEKICK_ENROLL_TOKEN"), "synthetic-enrollment-token");
 
   fs.chmodSync(apiKeyPath, 0o644);
   assert.throws(() => readSecret("SIDEKICK_API_KEY"), /secret file is readable by other users/);
   assert.throws(() => verifyRequiredRuntimeSecrets(secretDirectory), /SIDEKICK_API_KEY secret file is readable by other users/);
+  fs.chmodSync(enrollmentPath, 0o644);
+  assert.equal(readWorkerSecret("SIDEKICK_ENROLL_TOKEN"), "");
 
   const unsafeParent = path.join(fixtureRoot, "unsafe-secret-parent");
   const unsafeDirectory = path.join(unsafeParent, "secrets");
@@ -68,4 +76,5 @@ test("runtime secret reader and deploy preflight reject world-readable credentia
   process.env.SIDEKICK_SECRET_DIR = unsafeDirectory;
   assert.throws(() => readSecret("SIDEKICK_API_KEY"), /secret directory is writable by group or other users/);
   assert.throws(() => verifyRequiredRuntimeSecrets(unsafeDirectory), /SIDEKICK_SECRET_DIR secret directory is writable by group or other users/);
+  assert.equal(readWorkerSecret("SIDEKICK_ENROLL_TOKEN"), "");
 });
