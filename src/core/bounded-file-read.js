@@ -11,7 +11,7 @@ function fileReadError(message, code) {
   return error;
 }
 
-function readTextBounded(filePath, { maxBytes = DEFAULT_FILE_READ_BYTES, offset = 0, requireComplete = false } = {}) {
+function readTextBounded(filePath, { maxBytes = DEFAULT_FILE_READ_BYTES, offset = 0, requireComplete = false, noFollow = false } = {}) {
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > MAX_BOUNDED_FILE_READ_BYTES) {
     throw fileReadError("File read limit is invalid", "FILE_READ_LIMIT_INVALID");
   }
@@ -20,7 +20,8 @@ function readTextBounded(filePath, { maxBytes = DEFAULT_FILE_READ_BYTES, offset 
   }
 
   const nonBlocking = fs.constants.O_NONBLOCK || 0;
-  const fd = fs.openSync(filePath, fs.constants.O_RDONLY | nonBlocking);
+  const followFlag = noFollow && typeof fs.constants.O_NOFOLLOW === "number" ? fs.constants.O_NOFOLLOW : 0;
+  const fd = fs.openSync(filePath, fs.constants.O_RDONLY | nonBlocking | followFlag);
   try {
     const stat = fs.fstatSync(fd);
     if (!stat.isFile()) throw fileReadError("Path does not refer to a regular file", "FILE_READ_NOT_REGULAR");

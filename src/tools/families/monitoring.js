@@ -1,6 +1,7 @@
 "use strict";
 
 const fs = require("fs");
+const crypto = require("crypto");
 const { execFileSync } = require("child_process");
 const { runBoundedShell } = require("../../security/command-execution");
 const { z } = require("zod");
@@ -13,6 +14,8 @@ const { BoundedRegex } = require("../../core/bounded-regex");
 const { readTextBounded } = require("../../core/bounded-file-read");
 
 const MAX_MONITORING_FILE_BYTES = 10 * 1024 * 1024;
+const MAX_SNAPSHOT_BYTES = 5 * 1024 * 1024;
+const MAX_SNAPSHOT_COUNT = 500;
 
 function safeExecFileSync(program, args, options = {}) {
   return execFileSync(program, args, { ...options, env: childProcessEnv(options.env) });
@@ -89,6 +92,68 @@ function resolveSnapshotPath(name) {
   const relative = path.relative(root, resolved);
   if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return null;
   return resolved;
+}
+
+function assertSnapshotDirectory() {
+  const stat = fs.lstatSync(SNAPSHOTS_DIR);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("snapshot storage directory must be a real directory");
+}
+
+function validateSnapshotShape(snapshot) {
+  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot) ||
+      typeof snapshot.name !== "string" || typeof snapshot.date !== "string" ||
+      !Array.isArray(snapshot.types) || !snapshot.data || typeof snapshot.data !== "object" || Array.isArray(snapshot.data)) {
+    throw new Error("snapshot data has an invalid structure");
+  }
+  for (const key of ["processes", "services", "disk", "packages"]) {
+    if (snapshot.data[key] !== undefined && !Array.isArray(snapshot.data[key])) throw new Error(`snapshot ${key} data has an invalid structure`);
+  }
+  if (snapshot.data.processes && snapshot.data.processes.some(item => !item || typeof item !== "object" || !Number.isFinite(item.pid) || typeof item.command !== "string")) {
+    throw new Error("snapshot process data has an invalid structure");
+  }
+  if (snapshot.data.services && snapshot.data.services.some(item => !item || typeof item !== "object" || typeof item.unit !== "string")) {
+    throw new Error("snapshot service data has an invalid structure");
+  }
+  for (const key of ["network", "files"]) {
+    if (snapshot.data[key] !== undefined && (!snapshot.data[key] || typeof snapshot.data[key] !== "object" || Array.isArray(snapshot.data[key]))) {
+      throw new Error(`snapshot ${key} data has an invalid structure`);
+    }
+  }
+  if (snapshot.data.files && Object.values(snapshot.data.files).some(value => !value || typeof value !== "object" || Array.isArray(value))) {
+    throw new Error("snapshot file data has an invalid structure");
+  }
+  return snapshot;
+}
+
+function readSnapshotFile(filePath) {
+  assertSnapshotDirectory();
+  const stat = fs.lstatSync(filePath);
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("snapshot must be a regular file");
+  const text = readTextBounded(filePath, { maxBytes: MAX_SNAPSHOT_BYTES, requireComplete: true, noFollow: true }).content;
+  return validateSnapshotShape(JSON.parse(text));
+}
+
+function writeSnapshotFile(name, snapshot) {
+  const snapshotPath = resolveSnapshotPath(name);
+  if (!snapshotPath) throw new Error("invalid snapshot name");
+  assertSnapshotDirectory();
+  const contents = JSON.stringify(validateSnapshotShape(snapshot), null, 2);
+  if (Buffer.byteLength(contents, "utf8") > MAX_SNAPSHOT_BYTES) throw new Error(`snapshot exceeds the ${MAX_SNAPSHOT_BYTES}-byte storage limit`);
+
+  const temporaryPath = path.join(SNAPSHOTS_DIR, `.snapshot-${crypto.randomUUID()}.tmp`);
+  let fd = null;
+  try {
+    fd = fs.openSync(temporaryPath, "wx", 0o600);
+    fs.writeFileSync(fd, contents, "utf8");
+    fs.closeSync(fd);
+    fd = null;
+    fs.renameSync(temporaryPath, snapshotPath);
+  } finally {
+    if (fd !== null) {
+      try { fs.closeSync(fd); } catch {}
+    }
+    try { fs.unlinkSync(temporaryPath); } catch (error) { if (error.code !== "ENOENT") throw error; }
+  }
 }
 
 function captureProcesses() {
@@ -233,7 +298,11 @@ async function sidekick_snapshot({ action, name, capture, compare }) {
       }
     }
 
-    fs.writeFileSync(snapshotPath, JSON.stringify(snapshot, null, 2));
+    try {
+      writeSnapshotFile(name, snapshot);
+    } catch (error) {
+      return { content: [{ type: "text", text: `Unable to save snapshot: ${error.message}` }], isError: true };
+    }
 
     return { content: [{ type: "text", text: `Captured snapshot: ${name}\nTypes: ${types.join(", ")}\nDate: ${now}` }] };
   }
@@ -249,15 +318,14 @@ async function sidekick_snapshot({ action, name, capture, compare }) {
       return { content: [{ type: "text", text: "Invalid snapshot name" }], isError: true };
     }
 
-    if (!fs.existsSync(snapshotPath)) {
-      return { content: [{ type: "text", text: `Snapshot not found: ${name}` }], isError: true };
+    let current;
+    let baseline;
+    try {
+      current = readSnapshotFile(snapshotPath);
+      baseline = readSnapshotFile(comparePath);
+    } catch (error) {
+      return { content: [{ type: "text", text: `Unable to read snapshots: ${error.message}` }], isError: true };
     }
-    if (!fs.existsSync(comparePath)) {
-      return { content: [{ type: "text", text: `Snapshot not found: ${compare}` }], isError: true };
-    }
-
-    const current = JSON.parse(fs.readFileSync(snapshotPath, "utf-8"));
-    const baseline = JSON.parse(fs.readFileSync(comparePath, "utf-8"));
 
     let output = `# Snapshot Comparison\n\n`;
     output += `**Current: ${name}** (${current.date})\n`;
@@ -341,11 +409,18 @@ async function sidekick_snapshot({ action, name, capture, compare }) {
   }
 
   if (action === "list") {
-    const files = fs.readdirSync(SNAPSHOTS_DIR).filter(f => f.endsWith(".json"));
-    const snapshots = files.map(f => {
-      const data = JSON.parse(fs.readFileSync(path.join(SNAPSHOTS_DIR, f), "utf-8"));
-      return { name: data.name, date: data.date, types: data.types.join(", ") };
-    });
+    let snapshots;
+    try {
+      assertSnapshotDirectory();
+      const files = fs.readdirSync(SNAPSHOTS_DIR).filter(f => f.endsWith(".json"));
+      if (files.length > MAX_SNAPSHOT_COUNT) throw new Error(`snapshot count exceeds the ${MAX_SNAPSHOT_COUNT}-file listing limit`);
+      snapshots = files.map(file => {
+        const data = readSnapshotFile(path.join(SNAPSHOTS_DIR, file));
+        return { name: data.name, date: data.date, types: data.types.join(", ") };
+      });
+    } catch (error) {
+      return { content: [{ type: "text", text: `Unable to list snapshots: ${error.message}` }], isError: true };
+    }
 
     let output = `# Snapshots (${snapshots.length})\n\n`;
     for (const s of snapshots) {
@@ -368,7 +443,12 @@ async function sidekick_snapshot({ action, name, capture, compare }) {
       return { content: [{ type: "text", text: `Snapshot not found: ${name}` }], isError: true };
     }
 
-    fs.unlinkSync(snapshotPath);
+    try {
+      assertSnapshotDirectory();
+      fs.unlinkSync(snapshotPath);
+    } catch (error) {
+      return { content: [{ type: "text", text: `Unable to delete snapshot: ${error.message}` }], isError: true };
+    }
     return { content: [{ type: "text", text: `Deleted snapshot: ${name}` }] };
   }
 
@@ -850,4 +930,4 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_tail, sidekick_snapshot, sidekick_timeline, sidekick_baseline, resolveSnapshotPath, SNAPSHOT_NAME_PATTERN };
+module.exports = { descriptors, sidekick_tail, sidekick_snapshot, sidekick_timeline, sidekick_baseline, resolveSnapshotPath, SNAPSHOT_NAME_PATTERN, readSnapshotFile, writeSnapshotFile, MAX_SNAPSHOT_BYTES, MAX_SNAPSHOT_COUNT };

@@ -28,7 +28,7 @@ const packLifecycle = require("../../src/packs/lifecycle");
 const { redactSensitive, redactSensitiveKeysDeep } = require("../../src/redact");
 const { normalizeResult } = require("../../src/tools/result");
 const { descriptors: filesystemDescriptors, buildSearchArgs } = require("../../src/tools/families/filesystem");
-const { descriptors: monitoringDescriptors, resolveSnapshotPath } = require("../../src/tools/families/monitoring");
+const { descriptors: monitoringDescriptors, resolveSnapshotPath, readSnapshotFile, writeSnapshotFile, MAX_SNAPSHOT_BYTES } = require("../../src/tools/families/monitoring");
 const { readTextBounded } = require("../../src/core/bounded-file-read");
 const { tunnelStopPattern, createTunnelLog } = require("../../src/tools/families/networking");
 
@@ -209,6 +209,45 @@ test("snapshot names cannot escape the snapshot storage directory", () => {
   const safePath = resolveSnapshotPath("release baseline.v1");
   assert.ok(safePath);
   assert.equal(path.dirname(safePath), path.resolve(process.env.SIDEKICK_DATA_DIR, "snapshots"));
+});
+
+test("snapshot storage reads bounded regular files and atomically replaces symlinks", async t => {
+  const snapshot = { name: "safe-snapshot", date: new Date().toISOString(), types: ["processes"], data: { processes: [] } };
+  writeSnapshotFile(snapshot.name, snapshot);
+  assert.deepEqual(readSnapshotFile(resolveSnapshotPath(snapshot.name)), snapshot);
+
+  const outside = path.join(dataDir, "snapshot-outside.json");
+  const linkPath = resolveSnapshotPath("snapshot-link");
+  fs.writeFileSync(outside, "outside data");
+  try {
+    fs.symlinkSync(outside, linkPath);
+  } catch (error) {
+    if (process.platform === "win32" && ["EPERM", "EACCES", "ENOTSUP"].includes(error.code)) {
+      t.skip("symlink creation is unavailable on this Windows host");
+      return;
+    }
+    throw error;
+  }
+
+  assert.throws(() => readSnapshotFile(linkPath));
+  const replacement = { ...snapshot, name: "snapshot-link" };
+  writeSnapshotFile(replacement.name, replacement);
+  assert.equal(fs.readFileSync(outside, "utf8"), "outside data");
+  assert.deepEqual(readSnapshotFile(linkPath), replacement);
+});
+
+test("snapshot storage rejects oversized and malformed persisted data", () => {
+  const oversizedPath = resolveSnapshotPath("oversized-snapshot");
+  fs.writeFileSync(oversizedPath, Buffer.alloc(MAX_SNAPSHOT_BYTES + 1));
+  assert.throws(() => readSnapshotFile(oversizedPath), error => error.code === "FILE_READ_TOO_LARGE");
+
+  const malformedPath = resolveSnapshotPath("malformed-snapshot");
+  fs.writeFileSync(malformedPath, JSON.stringify({ name: "bad", date: "today", types: [], data: [] }));
+  assert.throws(() => readSnapshotFile(malformedPath), /invalid structure/);
+
+  assert.throws(() => writeSnapshotFile("too-large-snapshot", {
+    name: "too-large-snapshot", date: "today", types: [], data: { note: "x".repeat(MAX_SNAPSHOT_BYTES) },
+  }), /storage limit/);
 });
 
 test("filesystem text reads enforce byte limits and support bounded continuation", () => {
