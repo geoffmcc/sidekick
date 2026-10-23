@@ -6,7 +6,7 @@ const { mkdtempSync, mkdirSync, writeFileSync } = require("node:fs");
 const { tmpdir } = require("node:os");
 const path = require("node:path");
 const { applyMutation, buildReport, getSpecs, loadPolicy, shouldFail } = require("../scripts/test-mutation");
-const { coverageInvocation, evaluatePolicy, loadPolicy: loadCoveragePolicy } = require("../scripts/test-coverage");
+const { coverageInvocation, coveragePaths, evaluatePolicy, loadPolicy: loadCoveragePolicy } = require("../scripts/test-coverage");
 const { classifyPath, importSpecifiers, runChangedTests, selectChangedTests } = require("../scripts/test-changed");
 const {
   buildFlakeReport,
@@ -71,6 +71,17 @@ test("coverage gate launches the pinned c8 JavaScript entry point through Node",
   assert.equal(invocation.command, process.execPath);
   assert.match(invocation.args[0], /node_modules[\\/]c8[\\/]bin[\\/]c8\.js$/);
   assert.deepStrictEqual(invocation.args.slice(1), ["--version"]);
+});
+
+test("coverage runs use unique paths and do not reuse prior artifacts", () => {
+  const first = coveragePaths("C:/repo", { runId: "local", attempt: 1, pid: 10, timestamp: 100 });
+  const second = coveragePaths("C:/repo", { runId: "local", attempt: 1, pid: 10, timestamp: 101 });
+  assert.notEqual(first.runDir, second.runDir);
+  assert.notEqual(first.summaryPath, second.summaryPath);
+  assert.notEqual(first.tempPrefix, second.tempPrefix);
+  assert.match(first.summaryPath, /artifacts[\\/]coverage-runs[\\/]/);
+  assert.equal(path.dirname(first.runDir), path.join("C:/repo", "artifacts", "coverage-runs"));
+  assert.doesNotMatch(first.tempPrefix, /[\\/]/);
 });
 
 test("coverage policy evaluates domains and files independently", () => {
