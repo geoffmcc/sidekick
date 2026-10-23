@@ -151,6 +151,14 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now sidekick-mcp sidekick-dashboard sidekick-agent
 ```
 
+The bundled Core systemd units set `SIDEKICK_SECRET_DIR=/etc/sidekick/secrets`,
+matching the directory provisioned by `scripts/bootstrap.sh`. Keep runtime
+credentials in that protected directory; do not add credentials to the app's
+`.env` file. The shared `sidekick` service account currently means the Core
+services can read one another's secret files; separate per-service credential
+isolation is a documented hardening limitation and is not provided by this
+directory setting.
+
 The installer creates `/etc/sudoers.d/sidekick-deploy` for the SSH deployment
 scripts, limited to start, stop, restart, and status for the three Sidekick
 services. Calls made by the running Core service use the narrower Polkit

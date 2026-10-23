@@ -15,6 +15,7 @@ NoNewPrivileges=true
 User=sidekick
 Group=sidekick
 Environment=NODE_ENV=production
+Environment=SIDEKICK_SECRET_DIR=/etc/sidekick/secrets
 EnvironmentFile=-/etc/sidekick/sidekick.env
 
 [Install]

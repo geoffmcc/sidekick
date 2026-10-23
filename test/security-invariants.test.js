@@ -80,6 +80,18 @@ test("all Sidekick processes migrate shared state before restoring module entrie
     "PowerShell deploy restarts core before dependent services");
 });
 
+test("all Core systemd services explicitly locate file-backed runtime secrets", () => {
+  for (const file of [
+    "systemd/sidekick-mcp.service",
+    "systemd/sidekick-agent.service",
+    "systemd/sidekick-dashboard.service",
+  ]) {
+    const unit = fs.readFileSync(path.join(root, file), "utf8");
+    assert.match(unit, /^Environment=SIDEKICK_SECRET_DIR=\/etc\/sidekick\/secrets$/m,
+      `${file} must point at the directory provisioned by bootstrap`);
+  }
+});
+
 test("selected privileged handler boundaries retain exact canonical dispatch guards", () => {
   const guardedHandlers = [
     ["src/tools/families/shell.js", "sidekick_bash", "bash"],
