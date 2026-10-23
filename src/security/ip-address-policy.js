@@ -85,6 +85,25 @@ function isMetadataAddress(host) {
   return embedded ? METADATA_HOSTS.has(embedded) : false;
 }
 
+// Destinations that are not valid unicast targets for Sidekick's outbound
+// HTTP/browser clients. Keep these denied even when an operator explicitly
+// permits private-network access; an opt-in to LAN access is not an opt-in to
+// non-unicast traffic.
+function isNonUnicastAddress(host) {
+  const normalized = stripBrackets(String(host)).toLowerCase();
+  const version = net.isIP(normalized);
+  if (version === 4) {
+    const octets = normalized.split(".").map(Number);
+    return octets[0] >= 224;
+  }
+  if (version === 6) {
+    if (/^ff/i.test(normalized)) return true;
+    const embedded = embeddedIPv4Address(normalized);
+    return embedded ? isNonUnicastAddress(embedded) : false;
+  }
+  return false;
+}
+
 function isPrivateAddress(host) {
   const normalized = stripBrackets(String(host)).toLowerCase();
   const version = net.isIP(normalized);
@@ -106,4 +125,4 @@ function isPrivateAddress(host) {
   return normalized === "localhost" || normalized === "localhost.localdomain" || normalized.endsWith(".localhost");
 }
 
-module.exports = { METADATA_HOSTS, stripBrackets, embeddedIPv4Address, isLinkLocal, isMetadataAddress, isPrivateAddress };
+module.exports = { METADATA_HOSTS, stripBrackets, embeddedIPv4Address, isLinkLocal, isMetadataAddress, isNonUnicastAddress, isPrivateAddress };

@@ -28,7 +28,7 @@
 
 const net = require("node:net");
 const dns = require("dns").promises;
-const { stripBrackets, isLinkLocal, isMetadataAddress, isPrivateAddress } = require("./ip-address-policy");
+const { stripBrackets, isLinkLocal, isMetadataAddress, isNonUnicastAddress, isPrivateAddress } = require("./ip-address-policy");
 
 /**
  * Returns an error message describing why the target is refused, or null when
@@ -58,6 +58,9 @@ function validateOutboundUrl(value, label = "url", options = {}) {
   }
   if (isLinkLocal(host)) {
     return `Refused ${label} host "${host}": link-local addresses are never a valid fetch target`;
+  }
+  if (isNonUnicastAddress(host)) {
+    return `Refused ${label} host "${host}": non-unicast addresses are never a valid fetch target`;
   }
    const allowPrivate = options.allowPrivate === true;
   if (isPrivateAddress(host) && !allowPrivate) {
@@ -106,6 +109,9 @@ async function resolveOutboundUrl(value, label = "url", options = {}) {
     const address = stripBrackets(String(record.address || "").toLowerCase());
     if (isMetadataAddress(address) || isLinkLocal(address)) {
       return { refusal: `Refused ${label}: resolved address is a protected link-local or metadata endpoint`, code: "outbound_target_denied" };
+    }
+    if (isNonUnicastAddress(address)) {
+      return { refusal: `Refused ${label}: hostname resolves to a non-unicast address`, code: "outbound_target_denied" };
     }
     const allowPrivate = options.allowPrivate === true;
     if (isPrivateAddress(address) && !allowPrivate) {

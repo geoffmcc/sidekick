@@ -14,6 +14,7 @@ const os = require("os");
 const path = require("path");
 const http = require("http");
 const net = require("net");
+const dns = require("dns");
 
 const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "sk-browser-egress-"));
 process.env.SIDEKICK_DATA_DIR = DATA_DIR;
@@ -44,6 +45,22 @@ const CLOSED = egress.buildSessionPolicy({ allowPrivateNetwork: false }, { allow
   await test("metadata endpoint is always refused, even with private allowed", () => {
     assert.ok(egress.evaluateBrowserUrl("http://169.254.169.254/latest/meta-data/", OPEN));
     assert.ok(egress.evaluateHost("169.254.169.254", OPEN), "link-local must be refused under an open policy too");
+  });
+
+  await test("multicast and reserved destinations are always refused", async () => {
+    for (const address of ["224.0.0.1", "255.255.255.255", "ff02::1", "::ffff:224.0.0.1"]) {
+      assert.ok(egress.evaluateHost(address, OPEN), `${address} must be refused under an open private-network policy`);
+      const result = await egress.resolveAndValidate(address, OPEN);
+      assert.ok(result.refusal, `${address} must be refused by the proxy resolver`);
+    }
+    const previousLookup = dns.promises.lookup;
+    try {
+      dns.promises.lookup = async () => [{ address: "224.0.0.1", family: 4 }];
+      const resolved = await egress.resolveAndValidate("multicast-fixture.invalid", OPEN);
+      assert.ok(resolved.refusal, "DNS-resolved multicast must be refused by the proxy");
+    } finally {
+      dns.promises.lookup = previousLookup;
+    }
   });
 
   await test("private/loopback refused without opt-in, allowed with it", () => {

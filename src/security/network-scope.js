@@ -8,6 +8,7 @@ const net = require("net");
 const dns = require("dns").promises;
 const { domainToASCII } = require("url");
 const { METADATA_HOSTS } = require("../compute/endpoint-guard");
+const { isNonUnicastAddress } = require("./ip-address-policy");
 
 const MAX_LIST = 256;
 const MAX_HOST = 253;
@@ -150,6 +151,7 @@ function patternMatches(value, pattern) { return pattern.startsWith("*.") ? valu
 function permanentDenial(value) {
   const text = String(value || "").toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
   if (METADATA_HOSTS.has(text) || text === "localhost" || text.endsWith(".localhost")) return PERMANENT_REASON;
+  if (isNonUnicastAddress(text)) return PERMANENT_REASON;
   let address; try { address = parseAddress(text); } catch { return null; }
   if (address.value === 0n || (address.bits === 32 && ((address.value >> 24n) & 255n) === 255n)) return PERMANENT_REASON;
   if (address.bits === 32 && ((address.value >> 24n) & 255n) === 169n && ((address.value >> 16n) & 255n) === 254n) return PERMANENT_REASON;
