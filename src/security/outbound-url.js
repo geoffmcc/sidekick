@@ -183,6 +183,13 @@ const FORBIDDEN_REQUEST_HEADERS = new Set([
   "proxy-authorization",
   "cookie",
   "content-length",
+  "connection",
+  "keep-alive",
+  "proxy-connection",
+  "transfer-encoding",
+  "upgrade",
+  "trailer",
+  "te",
 ]);
 
 /**
@@ -191,7 +198,7 @@ const FORBIDDEN_REQUEST_HEADERS = new Set([
  * rather than silently ignoring the request.
  */
 function filterRequestHeaders(headers) {
-  const accepted = {};
+  const accepted = Object.create(null);
   const rejected = [];
   for (const [key, value] of Object.entries(headers || {})) {
     if (FORBIDDEN_REQUEST_HEADERS.has(String(key).toLowerCase())) rejected.push(key);
