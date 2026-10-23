@@ -90,6 +90,7 @@ function registerAuthRoutes({
         const principal = identity.getPrincipal(identitySession.principal_id);
         if (!principal || !principal.enabled) return res.status(401).json({ error: "Authentication required", code: "principal-disabled" });
         req.authPrincipal = { ...identitySession, ...principal };
+        req.dashboardSessionToken = identityToken;
         req.authPrincipalId = identitySession.principal_id;
         req.authUser = identitySession.display_name;
         return next();
@@ -118,6 +119,7 @@ function registerAuthRoutes({
         setIdentityCookie(res, session.token, undefined, req);
         req.authUser = user;
         req.authPrincipal = { ...principal, ...authentication.getSession(session.token) };
+        req.dashboardSessionToken = session.token;
         req.authPrincipalId = principal.principal_id;
         clearAuthFailures(attemptKeys);
         return next();

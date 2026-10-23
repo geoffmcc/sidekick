@@ -385,9 +385,9 @@ async function sidekick_delay({ action, id, when, name, tool, args }) {
     try {
       agentProxyKey = readSecret("SIDEKICK_AGENT_PROXY_KEY", { required: true });
       agentSchedulerKey = readSecret("SIDEKICK_AGENT_SCHEDULER_KEY", { required: true });
-      assertDistinctAgentSchedulerSecret(readSecret("SIDEKICK_API_KEY"), agentProxyKey, agentSchedulerKey);
+      assertDistinctAgentSchedulerSecret(agentProxyKey, agentSchedulerKey);
     } catch {
-      return { content: [{ type: "text", text: "Cannot activate delay scheduling: distinct SIDEKICK_API_KEY, SIDEKICK_AGENT_PROXY_KEY, and SIDEKICK_AGENT_SCHEDULER_KEY credentials are required" }], isError: true, code: "agent_service_credential_unavailable" };
+      return { content: [{ type: "text", text: "Cannot activate delay scheduling: distinct SIDEKICK_AGENT_PROXY_KEY and SIDEKICK_AGENT_SCHEDULER_KEY credentials are required" }], isError: true, code: "agent_service_credential_unavailable" };
     }
     createScheduledPlatformExecution("delay", delay, {
       operationType: "delay_task",
@@ -761,9 +761,9 @@ async function sidekick_watch({ action, id, name, source, target, condition, val
     try {
       agentProxyKey = readSecret("SIDEKICK_AGENT_PROXY_KEY", { required: true });
       agentSchedulerKey = readSecret("SIDEKICK_AGENT_SCHEDULER_KEY", { required: true });
-      assertDistinctAgentSchedulerSecret(readSecret("SIDEKICK_API_KEY"), agentProxyKey, agentSchedulerKey);
+      assertDistinctAgentSchedulerSecret(agentProxyKey, agentSchedulerKey);
     } catch {
-      return { content: [{ type: "text", text: "Cannot activate watch scheduling: distinct SIDEKICK_API_KEY, SIDEKICK_AGENT_PROXY_KEY, and SIDEKICK_AGENT_SCHEDULER_KEY credentials are required" }], isError: true, code: "agent_service_credential_unavailable" };
+      return { content: [{ type: "text", text: "Cannot activate watch scheduling: distinct SIDEKICK_AGENT_PROXY_KEY and SIDEKICK_AGENT_SCHEDULER_KEY credentials are required" }], isError: true, code: "agent_service_credential_unavailable" };
     }
 
     const watch = {

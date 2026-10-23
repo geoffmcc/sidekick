@@ -474,15 +474,22 @@ test("sensitive Dashboard permission checks do not depend on an attached princip
   }
 });
 
-test("Agent proxy credential is separate from the MCP client credential in production", () => {
+test("MCP centrally separates service credentials and Dashboard diagnostics use identity sessions", () => {
   const agent = fs.readFileSync(path.join(root, "src/agent.js"), "utf8");
   const dashboard = fs.readFileSync(path.join(root, "src/dashboard.js"), "utf8");
+  const index = fs.readFileSync(path.join(root, "src/index.js"), "utf8");
+  const authRoutes = fs.readFileSync(path.join(root, "src/dashboard/auth-routes.js"), "utf8");
   const secrets = fs.readFileSync(path.join(root, "src/core/runtime-secrets.js"), "utf8");
   const scheduling = fs.readFileSync(path.join(root, "src/tools/families/scheduling.js"), "utf8");
   assert.match(agent, /readSecret\("SIDEKICK_AGENT_PROXY_KEY", \{ required: true \}\)/);
-  assert.match(agent, /assertDistinctProxySecret\(mcpApiKey, agentProxySecret\)/);
+  assert.doesNotMatch(agent, /SIDEKICK_API_KEY|assertDistinctProxySecret|assertDistinctAgentSchedulerSecret/);
+  assert.doesNotMatch(dashboard, /SIDEKICK_API_KEY|MCP_API_KEY|assertDistinctProxySecret/);
+  assert.match(dashboard, /"Authorization": "Bearer " \+ \(req\.dashboardSessionToken \|\| ""\)/);
   assert.match(dashboard, /readSecret\("SIDEKICK_AGENT_PROXY_KEY", \{ required: true \}\)/);
-  assert.match(dashboard, /assertDistinctProxySecret\(MCP_API_KEY, AGENT_PROXY_KEY\)/);
+  assert.match(authRoutes, /req\.dashboardSessionToken = identityToken/);
+  assert.match(authRoutes, /req\.dashboardSessionToken = session\.token/);
+  assert.match(index, /assertDistinctProxySecret\(API_KEY, agentProxyKey\)/);
+  assert.match(index, /assertDistinctAgentSchedulerSecret\(agentProxyKey, agentSchedulerKey\)/);
   assert.match(secrets, /SIDEKICK_AGENT_PROXY_KEY:\s*"sidekick_agent_proxy_key"/);
   assert.match(secrets, /"SIDEKICK_AGENT_PROXY_KEY"/);
   assert.match(agent, /offeredService === "scheduler" \? agentSchedulerSecret : agentProxySecret/);
@@ -491,8 +498,8 @@ test("Agent proxy credential is separate from the MCP client credential in produ
   assert.equal(assertDistinctProxySecret("synthetic-mcp-key", "synthetic-proxy-key"), true);
   assert.throws(() => assertDistinctProxySecret("same-synthetic-key", "same-synthetic-key"), /must differ/);
   assert.throws(() => assertDistinctProxySecret("", "synthetic-proxy-key"), /both be configured/);
-  assert.equal(assertDistinctAgentSchedulerSecret("synthetic-mcp-key", "synthetic-proxy-key", "synthetic-scheduler-key"), true);
-  assert.throws(() => assertDistinctAgentSchedulerSecret("synthetic-mcp-key", "synthetic-proxy-key", "synthetic-proxy-key"), /must be distinct/);
+  assert.equal(assertDistinctAgentSchedulerSecret("synthetic-proxy-key", "synthetic-scheduler-key"), true);
+  assert.throws(() => assertDistinctAgentSchedulerSecret("synthetic-proxy-key", "synthetic-proxy-key"), /must differ/);
 });
 
 test("deployment secret preflight fails closed before restart when required credentials are unsafe", (t) => {

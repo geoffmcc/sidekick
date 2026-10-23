@@ -43,9 +43,9 @@ test("authorized health diagnostics retain only the supplied session detail snap
 test("both public Core probes use the redacted projection and gate details on operator authority", () => {
   const indexSource = fs.readFileSync(require.resolve("../src/index.js"), "utf8");
   const projections = indexSource.match(/failures:\s*projectStartupFailures\(startupFailures, includeDetails\)/g) || [];
-  const diagnosticGrants = indexSource.match(/permission:\s*"system\.configure"/g) || [];
+  const diagnosticGrants = indexSource.match(/permission:\s*"(?:system\.configure|dashboard\.operations\.read)"/g) || [];
   assert.equal(projections.length, 2, "health and readiness routes must both redact raw failure messages");
-  assert.equal(diagnosticGrants.length, 2, "each route must authorize detailed diagnostics independently");
+  assert.equal(diagnosticGrants.length, 3, "health grants dashboard diagnostics and both routes independently gate detailed diagnostics");
   assert.match(indexSource, /projectMcpSessionHealth\(sessionSnapshot, includeDetails\)/,
     "health must project the public snapshot and gate MCP session identifiers on operator authority");
 });

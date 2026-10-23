@@ -5,7 +5,6 @@ const path = require("path");
 const os = require("os");
 const { timingSafeCompare } = require("./crypto-utils");
 const { readSecret, hasSecret } = require("./core/runtime-secrets");
-const { assertDistinctProxySecret } = require("./security/agent-proxy-auth");
 const { requiresBootstrapToken } = require("./security/dashboard-bootstrap");
 const { formatKb, parseMemInfo, parseDiskRoot, runCommand, systemSnapshot, systemctlStatus } = require("./dashboard/system-snapshot");
 const { callDashboardTool, getToolDefsForSource, getToolCategoriesWithTools, buildPolicyInspection, summarizePolicyInspection, enforceToolPolicy, listApprovals, resolveApproval, renderContinuationApprovalPreview, loadWatches, syncToolRegistry } = require("./tools");
@@ -76,15 +75,9 @@ const BOOTSTRAP_TOKEN = readSecret("SIDEKICK_BOOTSTRAP_TOKEN");
 const REMOTE_BOOTSTRAP_REQUIRED = requiresBootstrapToken(BIND_HOST, TRUST_PROXY);
 const MCP_PORT = parseInt(process.env.SIDEKICK_PORT || "4097", 10);
 const GRAFANA_PORT = parseInt(process.env.SIDEKICK_GRAFANA_PORT || "3000", 10);
-const MCP_API_KEY = readSecret("SIDEKICK_API_KEY", { required: true });
 const AGENT_PROXY_KEY = process.env.NODE_ENV === "test"
-  ? (readSecret("SIDEKICK_AGENT_PROXY_KEY") || MCP_API_KEY)
+  ? (readSecret("SIDEKICK_AGENT_PROXY_KEY") || "test-agent-proxy-key")
   : readSecret("SIDEKICK_AGENT_PROXY_KEY", { required: true });
-if (process.env.NODE_ENV !== "test") assertDistinctProxySecret(MCP_API_KEY, AGENT_PROXY_KEY);
-if (!MCP_API_KEY || MCP_API_KEY === "sk-sidekick-local-dev" || MCP_API_KEY === "sk-your-key-here") {
-  throw new Error("SIDEKICK_API_KEY must be set to a non-placeholder value");
-}
-
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
 // The dashboard is a separate process in production. Converge migrations here
@@ -919,7 +912,7 @@ async function dashboardSummaryHandler(req, res) {
     let mcpSessionDetails = [];
     try {
       const mcpHealth = await getJsonFromLocalService(MCP_PORT, "/health", {
-        "Authorization": "Bearer " + MCP_API_KEY
+        "Authorization": "Bearer " + (req.dashboardSessionToken || "")
       });
       mcpClients = Number(mcpHealth.sessions) || 0;
       mcpSessionDetails = Array.isArray(mcpHealth.sessionDetails) ? mcpHealth.sessionDetails : [];

@@ -14,6 +14,7 @@ const authentication = require("./core/authentication");
 const identity = require("./core/identity");
 const authorization = require("./core/authorization");
 const { projectMcpSessionHealth, projectStartupFailures } = require("./security/health-disclosure");
+const { assertDistinctProxySecret, assertDistinctAgentSchedulerSecret } = require("./security/agent-proxy-auth");
 const packageJson = require("../package.json");
 const { createMcpServer } = require("./mcp/server");
 const { createSessionManager } = require("./mcp/session-manager");
@@ -35,6 +36,12 @@ const IS_LOCAL = process.env.SIDEKICK_LOCAL === "1";
 const API_KEY = IS_LOCAL ? "" : readSecret("SIDEKICK_API_KEY", { required: true });
 if (!IS_LOCAL && (!API_KEY || API_KEY === "sk-sidekick-local-dev" || API_KEY === "sk-your-key-here")) {
   throw new Error("SIDEKICK_API_KEY must be set to a non-placeholder value");
+}
+if (!IS_LOCAL) {
+  const agentProxyKey = readSecret("SIDEKICK_AGENT_PROXY_KEY", { required: true });
+  assertDistinctProxySecret(API_KEY, agentProxyKey);
+  const agentSchedulerKey = readSecret("SIDEKICK_AGENT_SCHEDULER_KEY");
+  if (agentSchedulerKey) assertDistinctAgentSchedulerSecret(agentProxyKey, agentSchedulerKey);
 }
 const PORT = parseInt(process.env.SIDEKICK_PORT || "4097", 10);
 const BIND_HOST = process.env.SIDEKICK_BIND_HOST || "127.0.0.1";
@@ -111,12 +118,19 @@ app.get("/health", (req, res) => {
   const token = getBearerToken(req);
   const authIdentity = authentication.authenticateBearerIdentity(token);
   const sessionSnapshot = sessionManager.getHealthSnapshot();
-  const includeDetails = timingSafeCompare(token, API_KEY) || Boolean(authIdentity && authorization.authorize({
-    principalId: authIdentity.principal_id,
-    permission: "system.configure",
-    credentialScopes: authIdentity.scopes,
-    delegationId: authIdentity.delegation_id || null,
-  }).ok);
+  const includeDetails = timingSafeCompare(token, API_KEY) || Boolean(authIdentity && (
+    authorization.authorize({
+      principalId: authIdentity.principal_id,
+      permission: "system.configure",
+      credentialScopes: authIdentity.scopes,
+      delegationId: authIdentity.delegation_id || null,
+    }).ok || authorization.authorize({
+      principalId: authIdentity.principal_id,
+      permission: "dashboard.operations.read",
+      credentialScopes: authIdentity.scopes,
+      delegationId: authIdentity.delegation_id || null,
+    }).ok
+  ));
 
   const payload = {
     // Keep this endpoint live even when a critical startup dependency failed;

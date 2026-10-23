@@ -5,6 +5,7 @@ const path = require("path");
 
 process.env.NODE_ENV = "test";
 process.env.SIDEKICK_API_KEY = "mcp-v2-runtime-test-key";
+process.env.SIDEKICK_AGENT_PROXY_KEY = "mcp-v2-runtime-agent-proxy-test-key";
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-mcp-v2-"));
 process.env.SIDEKICK_DATA_DIR = dataDir;
 
@@ -79,6 +80,28 @@ function modernRequest(port, id, method, params, headers = {}) {
       "a live authorized browser principal can access protected health details");
     assert.ok(authenticatedHealthBody.sessionDetails.some(entry => entry.id === browserSessionId),
       "the authorized detail response includes the authenticated MCP session created above");
+
+    const admin = require("./helpers/authorized-identity").createHumanUser(identity, {
+      username: "mcp_v2_health_admin", password: "synthetic admin health test password", displayName: "Health Administrator",
+    }, owner);
+    identity.assignRole(admin.principal_id, "administrator", owner);
+    const adminSession = authentication.createSession(admin.principal_id);
+    const adminHealth = await fetch(`http://127.0.0.1:${port}/health`, {
+      headers: { authorization: `Bearer ${adminSession.token}` },
+    });
+    assert.ok(Array.isArray((await adminHealth.json()).sessionDetails),
+      "an Administrator with dashboard.operations.read can access Dashboard health diagnostics");
+
+    const viewer = require("./helpers/authorized-identity").createHumanUser(identity, {
+      username: "mcp_v2_health_viewer", password: "synthetic viewer health test password", displayName: "Health Viewer",
+    }, owner);
+    identity.assignRole(viewer.principal_id, "viewer", owner);
+    const viewerSession = authentication.createSession(viewer.principal_id);
+    const viewerHealth = await fetch(`http://127.0.0.1:${port}/health`, {
+      headers: { authorization: `Bearer ${viewerSession.token}` },
+    });
+    assert.strictEqual(Object.hasOwn(await viewerHealth.json(), "sessionDetails"), false,
+      "a Viewer cannot access Dashboard health diagnostics");
 
     assert.strictEqual(authentication.invalidateSession(browserSession.token, owner.principal_id), true);
     const revokedHealth = await fetch(`http://127.0.0.1:${port}/health`, {
