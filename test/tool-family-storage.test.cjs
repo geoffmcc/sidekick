@@ -31,7 +31,7 @@ console.log('Running Storage Family Tests...');
     dbStore.runPendingMigrations();
     const identity = require('../src/core/identity');
     const fixtureOwner = identity.bootstrapOwner({ username: 'storage_fixture_owner', password: 'synthetic storage fixture owner password' });
-    const testPrincipal = identity.createPrincipal({ type: 'service', displayName: 'Storage test principal' });
+    const testPrincipal = require('./helpers/authorized-identity').createPrincipal(identity, { type: 'service', displayName: 'Storage test principal' });
     identity.assignRole(testPrincipal.principal_id, 'administrator', fixtureOwner.principal_id);
     require('../src/platform/kernel').registerProject({ project_id: 'testproj', owner_actor_id: testPrincipal.principal_id, source: 'test' });
     const authenticatedContext = { source: 'mcp', authIdentity: { principal_id: testPrincipal.principal_id, principal_type: 'service', scopes: null } };

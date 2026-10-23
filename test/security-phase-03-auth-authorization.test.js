@@ -23,7 +23,7 @@ try {
     password: "correct horse battery staple",
     displayName: "Phase 3 Owner"
   });
-  const operator = identity.createPrincipal({
+  const operator = require('./helpers/authorized-identity').createPrincipal(identity, {
     type: "service",
     displayName: "Phase 3 Operator",
     createdByPrincipalId: owner.principal_id,

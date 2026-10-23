@@ -272,7 +272,7 @@ function makeAsyncChatJob(extraPayload = {}, extra = {}) {
   });
 
   await test("revoked delegation blocks recovered direct inference before provider dispatch", async () => {
-    const delegate = identity.createPrincipal({ type: "agent", displayName: "Synthetic inference delegate", actorPrincipalId: directRunnerOwner.principal_id });
+    const delegate = require('./helpers/authorized-identity').createPrincipal(identity, { type: "agent", displayName: "Synthetic inference delegate", actorPrincipalId: directRunnerOwner.principal_id });
     const delegation = authorization.createDelegation({
       delegatorPrincipalId: directRunnerOwner.principal_id,
       delegatePrincipalId: delegate.principal_id,

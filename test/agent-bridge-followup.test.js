@@ -554,7 +554,7 @@ let server;
   await ok("19b) SSE closes when project membership is revoked", async () => {
     const identity = require("../src/core/identity");
     const projectAccess = require("../src/core/project-access");
-    const principal = identity.createHumanUser({ username: "sse_revocation_reader", password: "a sufficiently long sse reader password" });
+    const principal = require('./helpers/authorized-identity').createHumanUser(identity, { username: "sse_revocation_reader", password: "a sufficiently long sse reader password" });
     identity.assignRole(principal.principal_id, "operator", authenticatedTestPrincipal.authIdentity.principal_id);
     projectAccess.grantProjectAccess({ actorPrincipalId: authenticatedTestPrincipal.authIdentity.principal_id, principalId: principal.principal_id, project: "agent_test_project", accessLevel: "read" });
     const headers = { "X-Sidekick-Principal-ID": principal.principal_id, "X-Sidekick-Principal-Scopes": JSON.stringify(["agent.tasks.read"]) };
@@ -641,7 +641,7 @@ let server;
     const authentication = require("../src/core/authentication");
     const taskStore = require("../src/agent/task-store");
     const { createTask } = require("../src/agent/task-model");
-    const principal = identity.createPrincipal({ type: "service", displayName: "Synthetic recovered-task principal" });
+    const principal = require('./helpers/authorized-identity').createPrincipal(identity, { type: "service", displayName: "Synthetic recovered-task principal" });
     const owner = identity.listPrincipals({ type: "human" }).find(item => item.roles.includes("owner"));
     const issued = authentication.createCredential({
       principalId: principal.principal_id,

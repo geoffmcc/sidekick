@@ -25,7 +25,7 @@ function rejectAudit(eventType, triggerName, callback) {
 }
 
 test("role and delegation changes roll back when their audit record cannot be written", () => {
-  const roleTarget = identity.createHumanUser({ username: "atomic_role_target", password: "synthetic sufficiently long role password" });
+  const roleTarget = require('./helpers/authorized-identity').createHumanUser(identity, { username: "atomic_role_target", password: "synthetic sufficiently long role password" });
   db.exec(`CREATE TRIGGER reject_role_audit BEFORE INSERT ON identity_audit_events
     WHEN NEW.event_type IN ('role.assigned', 'role.removed') AND NEW.principal_id = '${roleTarget.principal_id}'
     BEGIN SELECT RAISE(ABORT, 'synthetic audit failure'); END`);
@@ -49,7 +49,7 @@ test("role and delegation changes roll back when their audit record cannot be wr
     db.exec("DROP TRIGGER reject_role_audit");
   }
 
-  const delegate = identity.createPrincipal({ type: "agent", displayName: "Synthetic delegate", actorPrincipalId: owner.principal_id });
+  const delegate = require('./helpers/authorized-identity').createPrincipal(identity, { type: "agent", displayName: "Synthetic delegate", actorPrincipalId: owner.principal_id });
   db.exec(`CREATE TRIGGER reject_delegation_audit BEFORE INSERT ON identity_audit_events
     WHEN NEW.event_type IN ('delegation.created', 'delegation.revoked') AND NEW.principal_id = '${delegate.principal_id}'
     BEGIN SELECT RAISE(ABORT, 'synthetic audit failure'); END`);
@@ -85,7 +85,7 @@ test("role and delegation changes roll back when their audit record cannot be wr
 });
 
 test("service permission changes roll back when their audit record cannot be written", () => {
-  const service = identity.createPrincipal({ type: "service", displayName: "Atomic service grants", createdByPrincipalId: owner.principal_id, actorPrincipalId: owner.principal_id });
+  const service = require('./helpers/authorized-identity').createPrincipal(identity, { type: "service", displayName: "Atomic service grants", createdByPrincipalId: owner.principal_id, actorPrincipalId: owner.principal_id });
   rejectAudit("principal.permission_granted", "reject_service_permission_grant_audit", () => {
     assert.throws(() => identity.grantPrincipalPermission(service.principal_id, "memory.read", owner.principal_id), /synthetic audit failure/);
     assert.deepEqual(identity.getPrincipalPermissions(service.principal_id), []);
@@ -99,18 +99,18 @@ test("service permission changes roll back when their audit record cannot be wri
 
 test("principal and human-user creation roll back completely when audit insertion fails", () => {
   rejectAudit("principal.created", "reject_principal_create_audit", () => {
-    assert.throws(() => identity.createPrincipal({ type: "agent", displayName: "Audit rollback principal", actorPrincipalId: owner.principal_id }), /synthetic audit failure/);
+    assert.throws(() => require('./helpers/authorized-identity').createPrincipal(identity, { type: "agent", displayName: "Audit rollback principal", actorPrincipalId: owner.principal_id }), /synthetic audit failure/);
     assert.equal(db.prepare("SELECT COUNT(*) AS count FROM principals WHERE display_name = ?").get("Audit rollback principal").count, 0);
   });
   rejectAudit("user.created", "reject_user_create_audit", () => {
-    assert.throws(() => identity.createHumanUser({ username: "atomic_create_failure", password: "synthetic sufficiently long password", actorPrincipalId: owner.principal_id }), /synthetic audit failure/);
+    assert.throws(() => require('./helpers/authorized-identity').createHumanUser(identity, { username: "atomic_create_failure", password: "synthetic sufficiently long password", actorPrincipalId: owner.principal_id }), /synthetic audit failure/);
     assert.equal(db.prepare("SELECT COUNT(*) AS count FROM human_users WHERE username = ?").get("atomic_create_failure").count, 0);
     assert.equal(db.prepare("SELECT COUNT(*) AS count FROM principals WHERE display_name = ?").get("atomic_create_failure").count, 0);
   });
 });
 
 test("profile, username, enabled-state, and password mutations roll back when audit insertion fails", () => {
-  const user = identity.createHumanUser({ username: "atomic_profile_user", password: "synthetic sufficiently long original password", actorPrincipalId: owner.principal_id });
+  const user = require('./helpers/authorized-identity').createHumanUser(identity, { username: "atomic_profile_user", password: "synthetic sufficiently long original password", actorPrincipalId: owner.principal_id });
   rejectAudit("principal.updated", "reject_principal_update_audit", () => {
     assert.throws(() => identity.updatePrincipal(user.principal_id, { displayName: "Changed name" }, owner.principal_id), /synthetic audit failure/);
     assert.equal(identity.getPrincipal(user.principal_id).display_name, "atomic_profile_user");
@@ -152,7 +152,7 @@ test("session, credential, and recovery-token issuance/revocation roll back with
     assert.equal(db.prepare("SELECT COUNT(*) AS count FROM identity_sessions").get().count, beforeSessions);
   });
 
-  const service = identity.createPrincipal({ type: "service", displayName: "Atomic audit service", actorPrincipalId: owner.principal_id });
+  const service = require('./helpers/authorized-identity').createPrincipal(identity, { type: "service", displayName: "Atomic audit service", actorPrincipalId: owner.principal_id });
   const beforeCredentials = db.prepare("SELECT COUNT(*) AS count FROM identity_credentials WHERE principal_id = ?").get(service.principal_id).count;
   rejectAudit("credential.created", "reject_credential_create_audit", () => {
     assert.throws(() => authentication.createCredential({ principalId: service.principal_id, displayName: "synthetic", scopes: ["memory.read"], createdByPrincipalId: owner.principal_id, actorContext: owner }), /synthetic audit failure/);

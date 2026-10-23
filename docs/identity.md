@@ -78,6 +78,12 @@ delegator cannot grant authority it does not currently possess. Delegates do
 not inherit the delegator's entire role set. Owner promotion/demotion requires
 `roles.manage`, and the final usable Owner cannot be disabled or removed.
 
+Core principal creation requires an authenticated identity context with
+`principals.manage`; human account creation requires `users.manage`. Both
+permissions are revalidated inside the write transaction, including credential
+scopes and delegation. The initial Owner is created only through the separate
+one-time `bootstrapOwner` path.
+
 Database schema and statistics reads use the dedicated medium-risk
 `database.inspect` permission rather than generic `tools.execute`. Migration
 098 grants it to Owner, Administrator, and Operator roles to preserve existing

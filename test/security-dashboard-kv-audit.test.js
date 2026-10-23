@@ -13,7 +13,7 @@ const dbStore = require("../src/db");
 dbStore.runPendingMigrations();
 const identity = require("../src/core/identity");
 const { registerKvRoutes } = require("../src/dashboard/kv-routes");
-const actor = identity.createPrincipal({ type: "human", displayName: "KV audit test owner" });
+const actor = require('./helpers/authorized-identity').createPrincipal(identity, { type: "human", displayName: "KV audit test owner" });
 
 const handlers = new Map();
 const app = Object.fromEntries(["get", "put", "delete"].map(method => [method, (route, handler) => handlers.set(`${method.toUpperCase()} ${route}`, handler)]));

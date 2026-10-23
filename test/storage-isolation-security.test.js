@@ -16,8 +16,8 @@ const tools = require("../src/tools");
 
 db.runPendingMigrations();
 const owner = identity.bootstrapOwner({ username: "storage_isolation_owner", password: "a sufficiently long storage password" });
-const principalA = identity.createHumanUser({ username: "storage_isolation_a", password: "a sufficiently long principal password" });
-const principalB = identity.createHumanUser({ username: "storage_isolation_b", password: "another sufficiently long password" });
+const principalA = require('./helpers/authorized-identity').createHumanUser(identity, { username: "storage_isolation_a", password: "a sufficiently long principal password" });
+const principalB = require('./helpers/authorized-identity').createHumanUser(identity, { username: "storage_isolation_b", password: "another sufficiently long password" });
 identity.assignRole(principalA.principal_id, "operator", owner.principal_id);
 identity.assignRole(principalB.principal_id, "operator", owner.principal_id);
 platformKernel.registerProject({ project_id: "alpha", owner_actor_id: principalA.principal_id, source: "test" });

@@ -51,7 +51,7 @@ console.log('Running Metrics Surface Tests...');
     assert.strictEqual((await rawObservability.sidekick_metrics({ action: 'list_measurements' })).code, 'unauthenticated');
     const ownerContext = createOwnerContext();
     const identity = require('../src/core/identity');
-    const metricsPrincipal = identity.createPrincipal({ type: 'service', displayName: 'Synthetic metrics-only principal' });
+    const metricsPrincipal = require('./helpers/authorized-identity').createPrincipal(identity, { type: 'service', displayName: 'Synthetic metrics-only principal' });
     identity.grantPrincipalPermission(metricsPrincipal.principal_id, 'tools.execute', ownerContext.authIdentity.principal_id);
     identity.grantPrincipalPermission(metricsPrincipal.principal_id, 'tools.execute_high', ownerContext.authIdentity.principal_id);
     const limitedContext = { source: 'test', authIdentity: { principal_id: metricsPrincipal.principal_id } };

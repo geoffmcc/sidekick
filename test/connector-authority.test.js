@@ -159,7 +159,7 @@ test("GitHub credential resolution requires current secrets.use authorization", 
   resetConnectors();
   storeGithubSecret("ghp_authorization_8");
   assert.throws(() => github.resolveGithubToken(), error => error.code === "unauthenticated");
-  const limited = identity.createPrincipal({ type: "service", displayName: "Synthetic limited GitHub caller" });
+  const limited = require('./helpers/authorized-identity').createPrincipal(identity, { type: "service", displayName: "Synthetic limited GitHub caller" });
   identity.assignRole(limited.principal_id, "operator", connectorTestOwner.principal_id);
   assert.throws(
     () => runWithContext({ source: "test", authIdentity: { principal_id: limited.principal_id, scopes: ["workflows.execute"] } }, () => github.resolveGithubToken()),

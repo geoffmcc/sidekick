@@ -34,7 +34,7 @@ bundled.installBundledPack("security-research", { enable: true, config: { worksp
 const packHealth = packLifecycle.health("security-research");
 if (packHealth.status !== "healthy") throw new Error(`security-research test pack did not activate: ${JSON.stringify(packHealth)}`);
 
-const outsider = identity.createPrincipal({ type: "service", displayName: "Source test restricted principal" });
+const outsider = require('./helpers/authorized-identity').createPrincipal(identity, { type: "service", displayName: "Source test restricted principal" });
 identity.assignRole(outsider.principal_id, "administrator", owner.principal_id);
 const limitedContext = {
   source: "internal",

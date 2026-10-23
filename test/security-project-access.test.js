@@ -30,9 +30,9 @@ const { registerHandoffReadRoutes } = require("../src/dashboard/handoff-read-rou
 const predictEngine = require("../src/predict");
 
 const owner = identity.bootstrapOwner({ username: "access_owner", password: "a sufficiently long owner password" });
-const operator = identity.createHumanUser({ username: "access_operator", password: "a sufficiently long operator password" });
+const operator = require('./helpers/authorized-identity').createHumanUser(identity, { username: "access_operator", password: "a sufficiently long operator password" });
 identity.assignRole(operator.principal_id, "operator", owner.principal_id);
-const denied = identity.createHumanUser({ username: "access_denied", password: "a sufficiently long denied password" });
+const denied = require('./helpers/authorized-identity').createHumanUser(identity, { username: "access_denied", password: "a sufficiently long denied password" });
 platformKernel.registerProject({ project_id: "memory_a", owner_actor_id: owner.principal_id });
 platformKernel.registerProject({ project_id: "memory_b", owner_actor_id: owner.principal_id });
 projectAccess.grantProjectAccess({ actorPrincipalId: owner.principal_id, principalId: operator.principal_id, project: "memory_a", accessLevel: "read" });
@@ -40,7 +40,7 @@ const memoryA = db.upsertMemory({ type: "fact", project: "memory_a", content: "P
 const secretB = db.upsertMemory({ type: "fact", project: "memory_b", content: "Project B private fact", summary: "Project B private fact", confidence: 0.9, source: "test" });
 
 test("Agent cross-principal learning review requires project membership in addition to approvals.grant", () => {
-  const reviewer = identity.createHumanUser({ username: "scoped_learning_reviewer", password: "a sufficiently long reviewer password" });
+  const reviewer = require('./helpers/authorized-identity').createHumanUser(identity, { username: "scoped_learning_reviewer", password: "a sufficiently long reviewer password" });
   identity.assignRole(reviewer.principal_id, "administrator", owner.principal_id);
   const task = { task_id: "agt_cross_project_review", project_id: "memory_b", actor_principal_id: denied.principal_id };
   const scopedReviewer = { principal_id: reviewer.principal_id, scopes: ["approvals.grant"] };
@@ -69,7 +69,7 @@ test("project grants attenuate access and revoke immediately", () => {
 });
 
 test("project access changes roll back when their authoritative audit event cannot be written", () => {
-  const target = identity.createHumanUser({ username: "audit_atomic_target", password: "a sufficiently long target password" });
+  const target = require('./helpers/authorized-identity').createHumanUser(identity, { username: "audit_atomic_target", password: "a sufficiently long target password" });
   platformKernel.registerProject({ project_id: "audit_atomic_project", owner_actor_id: owner.principal_id });
   const connection = db.getDb();
 
@@ -104,7 +104,7 @@ test("project access changes roll back when their authoritative audit event cann
 });
 
 test("role and delegation authority changes roll back when their audit event fails", () => {
-  const roleTarget = identity.createHumanUser({ username: "audit_role_target", password: "a sufficiently long role password" });
+  const roleTarget = require('./helpers/authorized-identity').createHumanUser(identity, { username: "audit_role_target", password: "a sufficiently long role password" });
   const connection = db.getDb();
   connection.exec(`CREATE TRIGGER reject_role_grant_audit BEFORE INSERT ON identity_audit_events
     WHEN NEW.event_type = 'role.assigned' AND NEW.principal_id = '${roleTarget.principal_id}'
@@ -128,7 +128,7 @@ test("role and delegation authority changes roll back when their audit event fai
     connection.exec("DROP TRIGGER reject_role_revoke_audit");
   }
 
-  const delegate = identity.createPrincipal({ type: "agent", displayName: "Audit delegation target", actorPrincipalId: owner.principal_id });
+  const delegate = require('./helpers/authorized-identity').createPrincipal(identity, { type: "agent", displayName: "Audit delegation target", actorPrincipalId: owner.principal_id });
   connection.exec(`CREATE TRIGGER reject_delegation_grant_audit BEFORE INSERT ON identity_audit_events
     WHEN NEW.event_type = 'delegation.created' AND NEW.principal_id = '${delegate.principal_id}'
     BEGIN SELECT RAISE(ABORT, 'synthetic delegation audit failure'); END`);
@@ -928,7 +928,7 @@ test("canonical Predict dispatcher enforces identity, project filtering, and res
 });
 
 test("Predict revalidates delegated permission and project membership on each call", async () => {
-  const delegate = identity.createPrincipal({ type: "agent", displayName: "prediction reader agent", actorPrincipalId: owner.principal_id });
+  const delegate = require('./helpers/authorized-identity').createPrincipal(identity, { type: "agent", displayName: "prediction reader agent", actorPrincipalId: owner.principal_id });
   projectAccess.grantProjectAccess({ actorPrincipalId: owner.principal_id, principalId: delegate.principal_id, project: "memory_a", accessLevel: "read" });
   const delegation = require("../src/core/authorization").createDelegation({
     delegatorPrincipalId: operator.principal_id,

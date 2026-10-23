@@ -119,30 +119,65 @@ function listPrincipals({ type, enabled, limit = 100 } = {}) {
   return dbStore.getDb().prepare(`SELECT * FROM principals ${where} ORDER BY created_at, principal_id LIMIT ?`).all(...params, boundedLimit).map(row => toPrincipal(row, getRoles(row.principal_id)));
 }
 
-function createPrincipal({ type, displayName, createdByPrincipalId = null, metadata = {}, actorPrincipalId = null } = {}) {
+function requireCreationActor(actorIdentity, permission) {
+  if (!actorIdentity || typeof actorIdentity !== "object" || Array.isArray(actorIdentity)) {
+    throw new Error(`Principal creation requires an authenticated identity context with ${permission}`);
+  }
+  const { actorPrincipalId, authorizationContext } = identityAuthority(actorIdentity);
+  if (!actorPrincipalId || !require("./authorization").authorize({ ...authorizationContext, permission }).ok) {
+    throw new Error(`Principal creation requires ${permission}`);
+  }
+  return { actorPrincipalId, authorizationContext };
+}
+
+function createPrincipalRecord({ type, displayName, createdByPrincipalId = null, metadata = {}, actorPrincipalId = null } = {}) {
   validateType(type);
   const name = requiredText(displayName, "displayName");
   if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) throw new Error("metadata must be an object");
   const id = principalId();
   const timestamp = now();
   const db = dbStore.getDb();
+  db.prepare(`INSERT INTO principals (principal_id, principal_type, display_name, created_by_principal_id, metadata_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(id, type, name, createdByPrincipalId, JSON.stringify(metadata), timestamp, timestamp);
+  audit("principal.created", id, actorPrincipalId || createdByPrincipalId, { principal_type: type });
+  return getPrincipal(id);
+}
+
+function createPrincipal({ type, displayName, createdByPrincipalId = null, metadata = {}, actorIdentity = null } = {}) {
+  validateType(type);
+  const { actorPrincipalId, authorizationContext } = requireCreationActor(actorIdentity, "principals.manage");
+  const db = dbStore.getDb();
   return db.transaction(() => {
-    db.prepare(`INSERT INTO principals (principal_id, principal_type, display_name, created_by_principal_id, metadata_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(id, type, name, createdByPrincipalId, JSON.stringify(metadata), timestamp, timestamp);
-    audit("principal.created", id, actorPrincipalId || createdByPrincipalId, { principal_type: type });
-    return getPrincipal(id);
+    if (!require("./authorization").authorize({ ...authorizationContext, permission: "principals.manage" }).ok) {
+      throw new Error("Principal creation requires principals.manage");
+    }
+    return createPrincipalRecord({
+      type, displayName, metadata,
+      createdByPrincipalId: createdByPrincipalId || actorPrincipalId,
+      actorPrincipalId,
+    });
   })();
 }
 
-function createHumanUser({ username, password, displayName, actorPrincipalId = null, metadata = {} } = {}) {
+function createHumanUserRecord({ username, password, passwordDigest = null, displayName, actorPrincipalId = null, metadata = {} } = {}) {
   const name = requiredText(username, "username", 80);
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{2,79}$/.test(name)) throw new Error("username must be 3-80 characters and use letters, numbers, ., _, or -");
+  const digest = passwordDigest || passwordHash(password);
+  const db = dbStore.getDb();
+  const user = createPrincipalRecord({ type: "human", displayName: displayName || name, metadata, createdByPrincipalId: actorPrincipalId, actorPrincipalId });
+  db.prepare("INSERT INTO human_users (principal_id, username, password_hash, password_scheme, password_changed_at) VALUES (?, ?, ?, ?, ?)").run(user.principal_id, name, digest, PASSWORD_SCHEME, now());
+  audit("user.created", user.principal_id, actorPrincipalId, { username: name });
+  return getPrincipal(user.principal_id);
+}
+
+function createHumanUser({ username, password, displayName, actorIdentity = null, metadata = {} } = {}) {
+  const { actorPrincipalId, authorizationContext } = requireCreationActor(actorIdentity, "users.manage");
   const passwordDigest = passwordHash(password);
   const db = dbStore.getDb();
   return db.transaction(() => {
-    const user = createPrincipal({ type: "human", displayName: displayName || name, metadata, actorPrincipalId });
-    db.prepare("INSERT INTO human_users (principal_id, username, password_hash, password_scheme, password_changed_at) VALUES (?, ?, ?, ?, ?)").run(user.principal_id, name, passwordDigest, PASSWORD_SCHEME, now());
-    audit("user.created", user.principal_id, actorPrincipalId, { username: name });
-    return getPrincipal(user.principal_id);
+    if (!require("./authorization").authorize({ ...authorizationContext, permission: "users.manage" }).ok) {
+      throw new Error("Human user creation requires users.manage");
+    }
+    return createHumanUserRecord({ username, passwordDigest, displayName, actorPrincipalId, metadata });
   })();
 }
 
@@ -325,7 +360,7 @@ function bootstrapOwner({ username, password, displayName, metadata = {} } = {})
   try {
     if (db.prepare("SELECT 1 FROM identity_bootstrap WHERE singleton_id = 1").get()) throw new Error("Owner bootstrap has already been completed");
     if (db.prepare("SELECT 1 FROM principal_roles WHERE role_name = 'owner' LIMIT 1").get()) throw new Error("Owner already exists");
-    const user = createHumanUser({ username, password, displayName, metadata });
+    const user = createHumanUserRecord({ username, password, displayName, metadata });
     db.prepare("INSERT INTO principal_roles (principal_id, role_name, assigned_at) VALUES (?, 'owner', ?)").run(user.principal_id, now());
     db.prepare("INSERT INTO identity_bootstrap (singleton_id, owner_principal_id, completed_at) VALUES (1, ?, ?)").run(user.principal_id, now());
     audit("bootstrap.owner_completed", user.principal_id, user.principal_id, { username });

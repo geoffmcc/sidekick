@@ -28,7 +28,7 @@ const ownerCredential = authentication.createCredential({
   createdByPrincipalId: owner.principal_id,
   actorContext: ownerContext,
 });
-const operator = identity.createPrincipal({ type: "service", displayName: "execution-node admin test operator", createdByPrincipalId: owner.principal_id, actorPrincipalId: owner.principal_id });
+const operator = require('./helpers/authorized-identity').createPrincipal(identity, { type: "service", displayName: "execution-node admin test operator", createdByPrincipalId: owner.principal_id, actorPrincipalId: owner.principal_id });
 identity.assignRole(operator.principal_id, "operator", owner.principal_id);
 const operatorCredential = authentication.createCredential({
   principalId: operator.principal_id,

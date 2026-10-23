@@ -23,7 +23,7 @@ const secretsStore = require("../src/core/secrets-store");
 const { decryptSecret } = require("../src/core/secret-cipher");
 
 const owner = identity.bootstrapOwner({ username: "wireguard_key_owner", password: "synthetic sufficiently long password" });
-const wireguardOnly = identity.createPrincipal({ type: "service", displayName: "WireGuard-only test service", actorPrincipalId: owner.principal_id });
+const wireguardOnly = require('./helpers/authorized-identity').createPrincipal(identity, { type: "service", displayName: "WireGuard-only test service", actorPrincipalId: owner.principal_id });
 db.getDb().prepare(`INSERT INTO identity_principal_permissions (principal_id, permission, assigned_by_principal_id, assigned_at) VALUES (?, 'tools.execute_high', ?, datetime('now'))`).run(wireguardOnly.principal_id, owner.principal_id);
 const privateKey = "SYNTHETIC_PRIVATE_KEY_MUST_NOT_LEAK";
 const publicKey = "SYNTHETIC_PUBLIC_KEY";

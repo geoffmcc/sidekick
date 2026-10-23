@@ -106,7 +106,7 @@ test("service credential provisioning rejects scopes outside the approved grants
 });
 
 test("generic credential routes cannot create, rotate, or revoke another principal's credential", () => {
-  const administrator = identity.createHumanUser({
+  const administrator = require('./helpers/authorized-identity').createHumanUser(identity, {
     username: "credential_route_admin",
     password: "synthetic credential administrator password",
     actorPrincipalId: owner.principal_id,

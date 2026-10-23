@@ -43,7 +43,7 @@ try {
     assert.throws(() => identity.createPrincipal({ type: "root", displayName: "bad" }), /Unsupported principal type/);
   });
   test("human lifecycle preserves stable identity through rename-independent disable/enable", () => {
-    const user = identity.createHumanUser({ username: "alice", password: "another correct password", displayName: "Alice" });
+    const user = require("./helpers/authorized-identity").createHumanUser(identity, { username: "alice", password: "another correct password", displayName: "Alice" });
     const renamed = identity.updatePrincipal(user.principal_id, { displayName: "Alice Renamed" }, bootstrapOwner.principal_id);
     assert.strictEqual(renamed.principal_id, user.principal_id);
     assert.strictEqual(renamed.display_name, "Alice Renamed");
@@ -57,7 +57,7 @@ try {
     assert.ok(identity.verifyUserPassword("alice-renamed", "another correct password"));
   });
   test("non-human principals are typed and roles are explicit", () => {
-    const agent = identity.createPrincipal({ type: "agent", displayName: "Claude Code" });
+    const agent = require("./helpers/authorized-identity").createPrincipal(identity, { type: "agent", displayName: "Claude Code" });
     assert.strictEqual(agent.principal_type, "agent");
     assert.throws(() => identity.assignRole(agent.principal_id, "operator", agent.principal_id), /roles.manage/);
     assert.throws(() => identity.assignRole(agent.principal_id, "root"), /Unsupported role/);

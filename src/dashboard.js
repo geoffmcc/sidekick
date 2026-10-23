@@ -227,7 +227,7 @@ function legacyDashboardPrincipal(username, password = null) {
       username,
       password: crypto.randomBytes(32).toString("base64url"),
       displayName: username,
-      actorPrincipalId: owner.principal_id,
+      actorIdentity: owner,
       metadata: { legacy_dashboard_username: username, adopted_legacy_dashboard: true },
     });
     return identity.assignRole(principal.principal_id, "administrator", owner);

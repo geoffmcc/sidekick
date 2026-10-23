@@ -23,7 +23,7 @@ function createCertificationIdentity() {
     type: "service",
     displayName: "Ephemeral certification runner",
     createdByPrincipalId: owner.principal_id,
-    actorPrincipalId: owner.principal_id,
+    actorIdentity: owner,
     metadata: { service: "certification", ephemeral: true },
   });
   let accessGranted = false;

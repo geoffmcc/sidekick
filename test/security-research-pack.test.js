@@ -114,7 +114,7 @@ function makeGitRepo() {
     const report = JSON.parse(createdReport.content[0].text).report;
     const mismatchedContextRead = await callInternalTool("research_project", { action: "get", campaign_id: campaign.campaign_id }, { ...serviceContext, project: PROJECT });
     assert.equal(mismatchedContextRead.isError, true, "a task project context cannot be redirected to another campaign project");
-    const outsider = identity.createPrincipal({ type: "service", displayName: "Research source limited administrator" });
+    const outsider = require('./helpers/authorized-identity').createPrincipal(identity, { type: "service", displayName: "Research source limited administrator" });
     identity.assignRole(outsider.principal_id, "administrator", serviceContext.authIdentity.principal_id);
     const limitedContext = { source: "internal", authIdentity: { principal_id: outsider.principal_id, principal_type: "service", scopes: ["tools.execute", "tools.execute_high"] } };
     const staging = path.join(WORKSPACE, "projects", campaign.campaign_id, "repositories", "fixture_repo", ".source_snap_authorization.staging");

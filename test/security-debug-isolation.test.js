@@ -20,8 +20,8 @@ const invokeDebug = (actionArgs, principalId) => dispatchTool({ name: "debug_too
 
 db.runPendingMigrations();
 const owner = identity.bootstrapOwner({ username: "debug_isolation_owner", password: "debug isolation owner password" });
-const principalA = identity.createPrincipal({ type: "service", displayName: "Debug A" });
-const principalB = identity.createPrincipal({ type: "service", displayName: "Debug B" });
+const principalA = require('./helpers/authorized-identity').createPrincipal(identity, { type: "service", displayName: "Debug A" });
+const principalB = require('./helpers/authorized-identity').createPrincipal(identity, { type: "service", displayName: "Debug B" });
 identity.assignRole(principalA.principal_id, "operator", owner.principal_id);
 identity.assignRole(principalB.principal_id, "operator", owner.principal_id);
 platformKernel.registerProject({ project_id: "debug_alpha", owner_actor_id: principalA.principal_id, source: "test" });

@@ -668,7 +668,7 @@ test("concurrent resume updates for different projects do not overwrite each oth
 });
 
 test("handoff list stays within trusted project scope across MCP dispatch", async () => {
-  const principal = identity.createPrincipal({ type: "service", displayName: "Handoff scope fixture" });
+  const principal = require('./helpers/authorized-identity').createPrincipal(identity, { type: "service", displayName: "Handoff scope fixture" });
   identity.assignRole(principal.principal_id, "operator", resumeOwner.principal_id);
   for (const project of ["continuity", "other_project"]) {
     store.saveHandoff({
@@ -695,7 +695,7 @@ test("handoff list stays within trusted project scope across MCP dispatch", asyn
 });
 
 test("resume list inherits trusted project scope across MCP dispatch", async () => {
-  const principal = identity.createPrincipal({ type: "service", displayName: "Resume scope fixture" });
+  const principal = require('./helpers/authorized-identity').createPrincipal(identity, { type: "service", displayName: "Resume scope fixture" });
   identity.assignRole(principal.principal_id, "operator", resumeOwner.principal_id);
   grantResumeRead(principal.principal_id, "continuity");
   store.setDocument("resume", { items: {
@@ -713,7 +713,7 @@ test("resume list inherits trusted project scope across MCP dispatch", async () 
 });
 
 test("resume mutations cannot override a trusted project scope", async () => {
-  const principal = identity.createPrincipal({ type: "service", displayName: "Resume mutation scope fixture" });
+  const principal = require('./helpers/authorized-identity').createPrincipal(identity, { type: "service", displayName: "Resume mutation scope fixture" });
   identity.assignRole(principal.principal_id, "operator", resumeOwner.principal_id);
   store.setDocument("resume", { items: {
     continuity: { project: "continuity", status: "active", summary: "Scoped item", next_step: "Continue" },
@@ -728,7 +728,7 @@ test("resume mutations cannot override a trusted project scope", async () => {
 });
 
 test("scoped resume reads do not synchronize foreign project pointers", async () => {
-  const principal = identity.createPrincipal({ type: "service", displayName: "Resume sync scope fixture" });
+  const principal = require('./helpers/authorized-identity').createPrincipal(identity, { type: "service", displayName: "Resume sync scope fixture" });
   identity.assignRole(principal.principal_id, "operator", resumeOwner.principal_id);
   grantResumeRead(principal.principal_id, "continuity");
   const foreignHandoff = create(undefined, { project: "other_project" });

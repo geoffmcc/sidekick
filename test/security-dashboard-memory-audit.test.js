@@ -13,7 +13,7 @@ const dbStore = require("../src/db");
 dbStore.runPendingMigrations();
 const identity = require("../src/core/identity");
 const { registerMemoryMutationRoutes } = require("../src/dashboard/memory-mutation-routes");
-const actor = identity.createPrincipal({ type: "human", displayName: "Memory audit owner" });
+const actor = require('./helpers/authorized-identity').createPrincipal(identity, { type: "human", displayName: "Memory audit owner" });
 test.after(() => {
   dbStore.closeDatabase();
   fs.rmSync(dataDir, { recursive: true, force: true });

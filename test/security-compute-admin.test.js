@@ -27,7 +27,7 @@ const ownerCredential = authentication.createCredential({
   createdByPrincipalId: owner.principal_id,
   actorContext: ownerContext,
 });
-const administrator = identity.createPrincipal({ type: "service", displayName: "compute admin test administrator", createdByPrincipalId: owner.principal_id, actorPrincipalId: owner.principal_id });
+const administrator = require('./helpers/authorized-identity').createPrincipal(identity, { type: "service", displayName: "compute admin test administrator", createdByPrincipalId: owner.principal_id, actorPrincipalId: owner.principal_id });
 identity.assignRole(administrator.principal_id, "administrator", owner.principal_id);
 const adminCredential = authentication.createCredential({
   principalId: administrator.principal_id,
@@ -36,7 +36,7 @@ const adminCredential = authentication.createCredential({
   createdByPrincipalId: owner.principal_id,
   actorContext: ownerContext,
 });
-const member = identity.createPrincipal({ type: "service", displayName: "compute project member", createdByPrincipalId: owner.principal_id, actorPrincipalId: owner.principal_id });
+const member = require('./helpers/authorized-identity').createPrincipal(identity, { type: "service", displayName: "compute project member", createdByPrincipalId: owner.principal_id, actorPrincipalId: owner.principal_id });
 identity.assignRole(member.principal_id, "administrator", owner.principal_id);
 const memberCredential = authentication.createCredential({
   principalId: member.principal_id,
@@ -45,7 +45,7 @@ const memberCredential = authentication.createCredential({
   createdByPrincipalId: owner.principal_id,
   actorContext: ownerContext,
 });
-const operator = identity.createPrincipal({ type: "service", displayName: "compute admin test operator", createdByPrincipalId: owner.principal_id, actorPrincipalId: owner.principal_id });
+const operator = require('./helpers/authorized-identity').createPrincipal(identity, { type: "service", displayName: "compute admin test operator", createdByPrincipalId: owner.principal_id, actorPrincipalId: owner.principal_id });
 identity.assignRole(operator.principal_id, "operator", owner.principal_id);
 const operatorCredential = authentication.createCredential({
   principalId: operator.principal_id,

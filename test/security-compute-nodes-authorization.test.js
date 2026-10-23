@@ -20,7 +20,7 @@ const compute = require("../src/compute");
 const { getCanonicalRegistry } = require("../src/tools/canonical-registry");
 
 const owner = identity.bootstrapOwner({ username: "compute_nodes_security_owner", password: "synthetic sufficiently long password" });
-const operator = identity.createHumanUser({ username: "compute_nodes_security_operator", password: "synthetic sufficiently long password" });
+const operator = require('./helpers/authorized-identity').createHumanUser(identity, { username: "compute_nodes_security_operator", password: "synthetic sufficiently long password" });
 identity.assignRole(operator.principal_id, "operator", owner.principal_id);
 const descriptor = getCanonicalRegistry().get("compute_nodes");
 compute.initialize();

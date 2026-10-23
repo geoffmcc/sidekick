@@ -20,9 +20,9 @@ const dispatcher = require("../src/tools/dispatcher");
 const { getCanonicalRegistry } = require("../src/tools/canonical-registry");
 
 const owner = identity.bootstrapOwner({ username: "blackbox_auth_owner", password: "synthetic sufficiently long password" });
-const operator = identity.createHumanUser({ username: "blackbox_auth_operator", password: "synthetic sufficiently long password" });
+const operator = require('./helpers/authorized-identity').createHumanUser(identity, { username: "blackbox_auth_operator", password: "synthetic sufficiently long password" });
 identity.assignRole(operator.principal_id, "operator", owner.principal_id);
-const auditor = identity.createHumanUser({ username: "blackbox_auth_auditor", password: "synthetic sufficiently long password" });
+const auditor = require('./helpers/authorized-identity').createHumanUser(identity, { username: "blackbox_auth_auditor", password: "synthetic sufficiently long password" });
 identity.assignRole(auditor.principal_id, "auditor", owner.principal_id);
 const descriptor = getCanonicalRegistry().get("black_box");
 

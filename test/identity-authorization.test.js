@@ -42,16 +42,20 @@ try {
     assert.equal(db.getDb().prepare("SELECT 1 FROM identity_role_permissions WHERE role_name = 'auditor' AND permission LIKE 'sync.%'").get(), undefined, "auditors cannot export or mutate synchronized state");
   });
 
-  const adoptedLegacy = identity.createHumanUser({
-    username: "adopted_legacy",
-    password: "synthetic adopted account password",
-    metadata: { adopted_legacy_dashboard: true },
-  });
+  const legacyPrincipalId = "prn_adopted_legacy_fixture";
+  const legacyPassword = identity.passwordHash("synthetic adopted account password");
+  const legacyNow = new Date().toISOString();
+  db.getDb().prepare(`INSERT INTO principals (principal_id, principal_type, display_name, metadata_json, created_at, updated_at)
+    VALUES (?, 'human', ?, ?, ?, ?)`).run(legacyPrincipalId, "Adopted legacy account", JSON.stringify({ adopted_legacy_dashboard: true }), legacyNow, legacyNow);
+  db.getDb().prepare(`INSERT INTO human_users (principal_id, username, password_hash, password_scheme, password_changed_at)
+    VALUES (?, 'adopted_legacy', ?, ?, ?)`).run(legacyPrincipalId, legacyPassword, identity.PASSWORD_SCHEME, legacyNow);
+  const adoptedLegacy = identity.getPrincipal(legacyPrincipalId);
   assert.equal(identity.canCompleteFirstOwnerSetup(adoptedLegacy.principal_id), true, "adopted account is eligible before bootstrap");
   const owner = identity.bootstrapOwner({ username: "owner", password: "correct horse battery staple", displayName: "Owner" });
-  const operator = identity.createHumanUser({ username: "operator", password: "another correct password", displayName: "Operator" });
+  const authorizedIdentityFixtures = require("./helpers/authorized-identity");
+  const operator = authorizedIdentityFixtures.createHumanUser(identity, { username: "operator", password: "another correct password", displayName: "Operator" }, owner);
   identity.assignRole(operator.principal_id, "operator", owner.principal_id);
-  const agent = identity.createPrincipal({ type: "agent", displayName: "Build Agent", actorPrincipalId: owner.principal_id });
+  const agent = authorizedIdentityFixtures.createPrincipal(identity, { type: "agent", displayName: "Build Agent" }, owner);
 
   test("authorization evaluates permissions rather than role names", () => {
     assert.ok(db.getDb().prepare("SELECT 1 FROM identity_permissions WHERE permission = 'blackbox.read'").get());
@@ -62,7 +66,7 @@ try {
     assert.strictEqual(authorization.authorize({ principalId: operator.principal_id, permission: "connectors.read" }).code, "forbidden");
     assert.strictEqual(authorization.authorize({ principalId: operator.principal_id, permission: "connectors.manage" }).code, "forbidden");
     assert.strictEqual(authorization.authorize({ principalId: operator.principal_id, permission: "database.inspect" }).ok, true, "operator DB inspection workflow retains an explicit grant");
-    const viewer = identity.createHumanUser({ username: "viewer_no_db", password: "another sufficiently long password" });
+    const viewer = authorizedIdentityFixtures.createHumanUser(identity, { username: "viewer_no_db", password: "another sufficiently long password" }, owner);
     identity.assignRole(viewer.principal_id, "viewer", owner.principal_id);
     assert.strictEqual(authorization.authorize({ principalId: viewer.principal_id, permission: "database.inspect" }).code, "forbidden", "viewer role does not receive database inspection");
     assert.strictEqual(authorization.authorize({ principalId: operator.principal_id, permission: "dashboard.operations.read" }).code, "forbidden");
@@ -125,7 +129,7 @@ try {
   });
 
   test("ordinary role grants and removals require roles.manage at the identity boundary", () => {
-    const target = identity.createPrincipal({ type: "service", displayName: "Unauthorized role target" });
+    const target = authorizedIdentityFixtures.createPrincipal(identity, { type: "service", displayName: "Unauthorized role target" }, agent);
     assert.throws(() => identity.assignRole(target.principal_id, "administrator", operator.principal_id), /roles.manage/);
     assert.deepEqual(identity.getPrincipal(target.principal_id).roles, []);
     assert.throws(() => identity.removeRole(operator.principal_id, "operator", operator.principal_id), /roles.manage/);
@@ -133,7 +137,7 @@ try {
   });
 
   test("principal enable and disable require principals.manage at the identity boundary", () => {
-    const target = identity.createPrincipal({ type: "service", displayName: "Unauthorized state target" });
+    const target = authorizedIdentityFixtures.createPrincipal(identity, { type: "service", displayName: "Unauthorized state target" }, agent);
     assert.throws(() => identity.setPrincipalEnabled(target.principal_id, false, target.principal_id), /principals.manage/);
     assert.equal(identity.getPrincipal(target.principal_id).enabled, true);
     assert.throws(() => identity.setPrincipalEnabled(target.principal_id, true, target.principal_id), /principals.manage/);
@@ -142,8 +146,8 @@ try {
 
   test("profile, username, and cross-user password changes require users.manage", () => {
     const activeOwner = identity.getPrincipal(agent.principal_id);
-    const subject = identity.createHumanUser({ username: "profile_subject", password: "synthetic subject password", actorPrincipalId: activeOwner.principal_id });
-    const viewer = identity.createHumanUser({ username: "profile_viewer", password: "synthetic viewer password", actorPrincipalId: activeOwner.principal_id });
+    const subject = authorizedIdentityFixtures.createHumanUser(identity, { username: "profile_subject", password: "synthetic subject password" }, activeOwner);
+    const viewer = authorizedIdentityFixtures.createHumanUser(identity, { username: "profile_viewer", password: "synthetic viewer password" }, activeOwner);
     identity.assignRole(viewer.principal_id, "viewer", activeOwner.principal_id);
     assert.throws(() => identity.updatePrincipal(subject.principal_id, { displayName: "Tampered" }, viewer.principal_id), /users.manage/);
     assert.throws(() => identity.updateUsername(subject.principal_id, "tampered_name", viewer.principal_id), /users.manage/);

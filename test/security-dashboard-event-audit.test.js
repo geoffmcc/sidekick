@@ -15,7 +15,7 @@ const kernel = require("../src/platform/kernel");
 kernel.ensurePlatformKernelSchema();
 const identity = require("../src/core/identity");
 const { registerEventRoutes } = require("../src/dashboard/event-routes");
-const actor = identity.createPrincipal({ type: "human", displayName: "Event audit owner" });
+const actor = require('./helpers/authorized-identity').createPrincipal(identity, { type: "human", displayName: "Event audit owner" });
 test.after(() => {
   dbStore.closeDatabase();
   fs.rmSync(dataDir, { recursive: true, force: true });

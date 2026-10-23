@@ -17,7 +17,7 @@ test.after(() => {
   dbStore.closeDatabase();
   fs.rmSync(dataDir, { recursive: true, force: true });
 });
-const actor = identity.createPrincipal({ type: "human", displayName: "Sync audit owner" });
+const actor = require('./helpers/authorized-identity').createPrincipal(identity, { type: "human", displayName: "Sync audit owner" });
 
 const handlers = new Map();
 const app = {

@@ -25,7 +25,7 @@ db.runPendingMigrations();
 
 test("durable task recovery uses the live credential record after database restore", () => {
   const owner = identity.bootstrapOwner({ username: "durable_recovery_owner", password: "synthetic durable recovery owner password" });
-  const principal = identity.createPrincipal({ type: "service", displayName: "Synthetic recovery principal", createdByPrincipalId: owner.principal_id, actorPrincipalId: owner.principal_id });
+  const principal = require('./helpers/authorized-identity').createPrincipal(identity, { type: "service", displayName: "Synthetic recovery principal", createdByPrincipalId: owner.principal_id, actorPrincipalId: owner.principal_id });
   identity.assignRole(principal.principal_id, "operator", owner.principal_id);
   const created = authentication.createCredential({
     principalId: principal.principal_id,
@@ -71,7 +71,7 @@ test("durable task recovery uses the live credential record after database resto
 });
 
 test("recovery requires current project access and preserves only the Certification read-only service", () => {
-  const principal = identity.createPrincipal({ type: "human", displayName: "Synthetic recovery project principal" });
+  const principal = require('./helpers/authorized-identity').createPrincipal(identity, { type: "human", displayName: "Synthetic recovery project principal" });
   const projectTask = createTask({
     task_id: "agt_security_recovery_project01",
     objective: "synthetic scoped recovery",

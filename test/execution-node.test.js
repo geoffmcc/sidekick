@@ -59,7 +59,7 @@ db.prepare("INSERT INTO compute_workers (worker_id, node_id, display_name, platf
 const identity = require("../src/core/identity");
 const authentication = require("../src/core/authentication");
 const fixtureOwner = identity.bootstrapOwner({ username: "execution_node_owner", password: "synthetic execution node owner password" });
-const initiator = identity.createPrincipal({ type: "service", displayName: "execution-node test initiator" });
+const initiator = require('./helpers/authorized-identity').createPrincipal(identity, { type: "service", displayName: "execution-node test initiator" });
 identity.assignRole(initiator.principal_id, "operator", fixtureOwner.principal_id);
 const initiatorCredential = authentication.createCredential({ principalId: initiator.principal_id, displayName: "synthetic test credential", scopes: ["tools.execute"], createdByPrincipalId: fixtureOwner.principal_id, actorContext: fixtureOwner });
 manager.register("wk_test_node", { descriptorSetHash: "hash", capabilities: { workspaces: [{ name: "security-research", root, permissions: { read: true, write: true } }] } });
@@ -122,7 +122,7 @@ assert.strictEqual(manager.getJob(revokedWorkspaceJob.jobId).errorCode, "executi
 db.prepare("UPDATE execution_node_workspaces SET permissions_json = ? WHERE workspace_id = ?").run(JSON.stringify({ read: true }), "ws_test");
 
 identity.assignRole(initiator.principal_id, "operator", fixtureOwner.principal_id);
-const projectOwner = identity.createPrincipal({ type: "service", displayName: "execution-node project owner" });
+const projectOwner = require('./helpers/authorized-identity').createPrincipal(identity, { type: "service", displayName: "execution-node project owner" });
 identity.assignRole(projectOwner.principal_id, "administrator", fixtureOwner.principal_id);
 const projectAccess = require("../src/core/project-access");
 const platformKernel = require("../src/platform/kernel");

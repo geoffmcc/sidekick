@@ -27,7 +27,7 @@ test("configured notification credentials require secrets.use in addition to too
   const descriptor = descriptors.find(item => item.name === "notify");
   const ownerContext = createOwnerContext();
   const identity = require("../src/core/identity");
-  const limited = identity.createPrincipal({ type: "service", displayName: "Synthetic notify-only principal" });
+  const limited = require('./helpers/authorized-identity').createPrincipal(identity, { type: "service", displayName: "Synthetic notify-only principal" });
   identity.grantPrincipalPermission(limited.principal_id, "tools.execute", ownerContext.authIdentity.principal_id);
   identity.grantPrincipalPermission(limited.principal_id, "tools.execute_high", ownerContext.authIdentity.principal_id);
   const context = { source: "test", authIdentity: { principal_id: limited.principal_id } };

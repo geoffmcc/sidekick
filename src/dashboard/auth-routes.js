@@ -190,7 +190,7 @@ function registerAuthRoutes({
     // critical roles.manage operation through this convenience endpoint.
     if (req.body?.role && !requireIdentityPermission(req, res, "roles.manage")) return;
     try {
-      const principal = identity.createHumanUser({ username: req.body?.username, password: req.body?.password, displayName: req.body?.display_name, actorPrincipalId: req.authPrincipal.principal_id });
+      const principal = identity.createHumanUser({ username: req.body?.username, password: req.body?.password, displayName: req.body?.display_name, actorIdentity: req.authPrincipal });
       if (req.body?.role) identity.assignRole(principal.principal_id, req.body.role, req.authPrincipal);
       res.status(201).json({ principal: identity.getPrincipal(principal.principal_id) });
     } catch (error) {
@@ -392,7 +392,7 @@ function registerAuthRoutes({
             type: "service",
             displayName: req.body?.display_name,
             createdByPrincipalId: actorId,
-            actorPrincipalId: actorId,
+            actorIdentity: actor,
             metadata: { managed_for: "scoped_machine_credential" },
           });
           for (const permission of uniquePermissions) identity.grantPrincipalPermission(principal.principal_id, permission, actor);

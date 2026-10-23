@@ -110,8 +110,8 @@ test("production dispatch rejects caller descriptors and the continuation seam r
 });
 
 test("authorization narrows credentials and delegation to current authority", () => {
-  const delegate = identity.createPrincipal({ type: "agent", displayName: "Boundary Agent" });
-  const secondOwner = identity.createPrincipal({ type: "human", displayName: "Second Owner" });
+  const delegate = require('../helpers/authorized-identity').createPrincipal(identity, { type: "agent", displayName: "Boundary Agent" });
+  const secondOwner = require('../helpers/authorized-identity').createPrincipal(identity, { type: "human", displayName: "Second Owner" });
   identity.assignRole(secondOwner.principal_id, "owner", owner.principal_id);
   const delegation = authorization.createDelegation({
     delegatorPrincipalId: owner.principal_id,
@@ -130,7 +130,7 @@ test("authorization narrows credentials and delegation to current authority", ()
 });
 
 test("security audit records server-derived provenance without password material", () => {
-  const actor = identity.createPrincipal({ type: "service", displayName: "Boundary Service" });
+  const actor = require('../helpers/authorized-identity').createPrincipal(identity, { type: "service", displayName: "Boundary Service" });
   securityAudit.recordSecurityEvent("boundary.checked", {
     context: context.createMcpExecutionContext({ authIdentity: { principal_id: actor.principal_id }, requestId: "boundary-request" }),
     principalId: actor.principal_id,

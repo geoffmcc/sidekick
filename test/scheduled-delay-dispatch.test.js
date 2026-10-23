@@ -95,7 +95,7 @@ test("the real dispatcher denies a scheduled effect after its credential scope i
 });
 
 test("the real dispatcher denies a scheduled effect after its delegation is revoked", async () => {
-  const delegate = identity.createPrincipal({ type: "service", displayName: "Scheduled delegate" });
+  const delegate = require('./helpers/authorized-identity').createPrincipal(identity, { type: "service", displayName: "Scheduled delegate" });
   const delegation = authorization.createDelegation({
     delegatorPrincipalId: owner.principal_id,
     delegatePrincipalId: delegate.principal_id,

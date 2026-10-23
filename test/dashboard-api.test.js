@@ -309,7 +309,7 @@ setTimeout(async () => {
       assert.ok(owner?.principal_id, 'Dashboard test identity should exist');
       const identity = require('../src/core/identity');
       const authentication = require('../src/core/authentication');
-      const viewer = identity.createHumanUser({ username: 'grafana-viewer', password: 'synthetic-viewer-password', displayName: 'Grafana Viewer', actorPrincipalId: owner.principal_id });
+      const viewer = require('./helpers/authorized-identity').createHumanUser(identity, { username: 'grafana-viewer', password: 'synthetic-viewer-password', displayName: 'Grafana Viewer', actorPrincipalId: owner.principal_id });
       identity.assignRole(viewer.principal_id, 'viewer', owner.principal_id);
       const session = authentication.createSession(viewer.principal_id, { userAgent: 'security-test', ipAddress: '127.0.0.1' });
       const response = await makeRequest('GET', '/grafana/api/health', null, {

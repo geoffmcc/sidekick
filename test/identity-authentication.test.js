@@ -17,16 +17,30 @@ function test(name, fn) { fn(); passed++; console.log(`  ✓ ${name}`); }
 
 try {
   const owner = identity.bootstrapOwner({ username: "owner", password: "correct horse battery staple", displayName: "Owner" });
-  const agent = identity.createPrincipal({ type: "agent", displayName: "Build Agent", createdByPrincipalId: owner.principal_id });
+  const agent = require('./helpers/authorized-identity').createPrincipal(identity, { type: "agent", displayName: "Build Agent", createdByPrincipalId: owner.principal_id });
   identity.assignRole(agent.principal_id, "operator", owner.principal_id);
   const ownerContext = { principal_id: owner.principal_id };
-  const packService = identity.createPrincipal({ type: "service", displayName: "MCP Pack Manager", createdByPrincipalId: owner.principal_id, actorPrincipalId: owner.principal_id });
+  const packService = require('./helpers/authorized-identity').createPrincipal(identity, { type: "service", displayName: "MCP Pack Manager", createdByPrincipalId: owner.principal_id, actorPrincipalId: owner.principal_id });
   identity.grantPrincipalPermission(packService.principal_id, "packs.read", owner.principal_id);
   identity.grantPrincipalPermission(packService.principal_id, "packs.manage", owner.principal_id);
-  const scopedRoleManager = identity.createPrincipal({ type: "service", displayName: "Scoped role manager", createdByPrincipalId: owner.principal_id, actorPrincipalId: owner.principal_id });
+  const scopedRoleManager = require('./helpers/authorized-identity').createPrincipal(identity, { type: "service", displayName: "Scoped role manager", createdByPrincipalId: owner.principal_id, actorPrincipalId: owner.principal_id });
   identity.grantPrincipalPermission(scopedRoleManager.principal_id, "roles.manage", owner.principal_id);
-  const scopedUserManager = identity.createPrincipal({ type: "service", displayName: "Scoped user manager", createdByPrincipalId: owner.principal_id, actorPrincipalId: owner.principal_id });
+  const scopedUserManager = require('./helpers/authorized-identity').createPrincipal(identity, { type: "service", displayName: "Scoped user manager", createdByPrincipalId: owner.principal_id, actorPrincipalId: owner.principal_id });
   identity.grantPrincipalPermission(scopedUserManager.principal_id, "users.manage", owner.principal_id);
+
+  test("Core principal and human-user creation require scoped service authorization", () => {
+    const principalCount = db.getDb().prepare("SELECT COUNT(*) AS count FROM principals").get().count;
+    assert.throws(() => identity.createPrincipal({ type: "service", displayName: "Missing actor" }), /authenticated identity context/);
+    assert.throws(() => identity.createHumanUser({ username: "missing_actor", password: "synthetic missing actor password" }), /authenticated identity context/);
+    assert.throws(() => identity.createPrincipal({ type: "service", displayName: "Wrong scope", actorIdentity: { principal_id: scopedRoleManager.principal_id, scopes: ["roles.manage"] } }), /principals.manage/);
+    assert.throws(() => identity.createHumanUser({ username: "wrong_scope", password: "synthetic wrong scope password", actorIdentity: { principal_id: scopedRoleManager.principal_id, scopes: ["roles.manage"] } }), /users.manage/);
+    assert.equal(db.getDb().prepare("SELECT COUNT(*) AS count FROM principals").get().count, principalCount, "denied creation must persist no principal");
+
+    const service = identity.createPrincipal({ type: "service", displayName: "Scoped creation", actorIdentity: { principal_id: owner.principal_id, scopes: ["principals.manage"] } });
+    const human = identity.createHumanUser({ username: "scoped_creation", password: "synthetic scoped creation password", actorIdentity: { principal_id: scopedUserManager.principal_id, scopes: ["users.manage"] } });
+    assert.equal(service.created_by_principal_id, owner.principal_id);
+    assert.equal(human.created_by_principal_id, scopedUserManager.principal_id);
+  });
 
   test("server-side browser sessions are opaque, expiring, and invalidatable", () => {
     const created = authentication.createSession(owner.principal_id, { userAgent: "test", ipAddress: "127.0.0.1" });
@@ -58,7 +72,7 @@ try {
   });
 
   test("identity role mutations preserve credential scope attenuation at the service boundary", () => {
-    const target = identity.createPrincipal({ type: "service", displayName: "Scoped role target", createdByPrincipalId: owner.principal_id, actorPrincipalId: owner.principal_id });
+    const target = require('./helpers/authorized-identity').createPrincipal(identity, { type: "service", displayName: "Scoped role target", createdByPrincipalId: owner.principal_id, actorPrincipalId: owner.principal_id });
     assert.throws(() => identity.assignRole(target.principal_id, "operator", { principal_id: scopedRoleManager.principal_id, scopes: [] }), /roles.manage/);
     identity.assignRole(target.principal_id, "operator", { principal_id: scopedRoleManager.principal_id, scopes: ["roles.manage"] });
     assert.ok(identity.getPrincipal(target.principal_id).roles.includes("operator"));
@@ -67,7 +81,7 @@ try {
   });
 
   test("identity profile and password mutations preserve credential scope attenuation", () => {
-    const subject = identity.createHumanUser({ username: "scoped_subject", password: "synthetic scoped subject password", actorPrincipalId: owner.principal_id });
+    const subject = require('./helpers/authorized-identity').createHumanUser(identity, { username: "scoped_subject", password: "synthetic scoped subject password", actorPrincipalId: owner.principal_id });
     const noScopes = { principal_id: scopedUserManager.principal_id, scopes: [] };
     const scoped = { principal_id: scopedUserManager.principal_id, scopes: ["users.manage"] };
     assert.throws(() => identity.updatePrincipal(subject.principal_id, { displayName: "Denied" }, noScopes), /users.manage/);
