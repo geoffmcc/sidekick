@@ -120,6 +120,17 @@ console.log('Running Filesystem Family Tests...');
     assert.ok(text(result).includes('marker'));
     result = await tools.dispatchTool({ name: 'sidekick_list', args: { path: ROOT }, context: authorizedContext });
     assert.ok(text(result).includes('one.txt'));
+    if (process.platform !== 'win32') {
+      const linkTarget = path.join(TEST_DATA_DIR, 'list-metadata-target.txt');
+      const linkPath = path.join(ROOT, 'metadata-link.txt');
+      fs.writeFileSync(linkTarget, 'x'.repeat(4096));
+      fs.symlinkSync(linkTarget, linkPath);
+      result = await tools.dispatchTool({ name: 'sidekick_list', args: { path: ROOT }, context: authorizedContext });
+      const linkLine = text(result).split('\n').find(line => line.endsWith('metadata-link.txt'));
+      assert.ok(linkLine?.startsWith('OTHER'), 'directory listing identifies symlinks without following them');
+      assert.match(linkLine, new RegExp(`\\b${fs.lstatSync(linkPath).size}\\b`), 'listing reports link metadata, not target size');
+      assert.doesNotMatch(linkLine, new RegExp(`\\b${fs.statSync(linkPath).size}\\b`), 'listing does not disclose target file metadata');
+    }
     result = await tools.dispatchTool({ name: 'sidekick_search', args: { pattern: 'marker', path: ROOT }, context: authorizedContext });
     assert.ok(text(result).includes('two.js'));
     result = await tools.dispatchTool({ name: 'sidekick_summarize', args: { path: path.join(ROOT, 'summary.txt'), max_lines: 1 }, context: authorizedContext });
@@ -128,6 +139,17 @@ console.log('Running Filesystem Family Tests...');
     assert.ok(text(result).includes('strategy=head'));
     result = await tools.dispatchTool({ name: 'sidekick_find', args: { path: ROOT, name: '*.js' }, context: authorizedContext });
     assert.strictEqual(JSON.parse(text(result)).length, 1);
+
+    for (let index = 0; index < 505; index++) {
+      fs.writeFileSync(path.join(ROOT, `bounded_${String(index).padStart(3, '0')}.txt`), '');
+    }
+    result = await tools.dispatchTool({ name: 'sidekick_list', args: { path: ROOT }, context: authorizedContext });
+    assert.ok(text(result).includes('[truncated: showing the first 500 entries]'), 'directory listing reports its fixed entry ceiling');
+    result = await tools.dispatchTool({ name: 'sidekick_find', args: { path: ROOT, name: 'bounded_*.txt', max_results: 500 }, context: authorizedContext });
+    assert.strictEqual(JSON.parse(text(result)).length, 500, 'file finder cannot return more than its fixed result ceiling');
+    assert.match(result.content[1]?.text || '', /result limit of 500 reached/, 'the result remains valid JSON and reports a partial search separately');
+    const oversizedFind = await tools.dispatchTool({ name: 'sidekick_find', args: { path: ROOT, max_results: 100000 }, context: authorizedContext });
+    assert.strictEqual(oversizedFind.isError, true, 'schema rejects caller-supplied result ceilings above the platform limit');
 
     process.env.SIDEKICK_ALLOWED_PATHS = ROOT;
     result = await family.sidekick_read({ path: OUTSIDE });

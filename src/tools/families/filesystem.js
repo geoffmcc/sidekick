@@ -15,6 +15,13 @@ const { writeTextFile } = require("../../core/json-file-store");
 
 const MAX_FILE_CONTENT_BYTES = 50 * 1024 * 1024;
 const MAX_READ_OUTPUT_BYTES = 1024 * 1024;
+const MAX_DIRECTORY_LIST_ENTRIES = 500;
+const MAX_FIND_RESULTS = 500;
+const MAX_FIND_SCAN_ENTRIES = 10000;
+
+function boundedFindResultLimit(value) {
+  return Number.isSafeInteger(value) && value > 0 ? Math.min(value, MAX_FIND_RESULTS) : 50;
+}
 
 function globToRegexSource(glob) {
   return Array.from(String(glob), character => {
@@ -54,16 +61,30 @@ async function sidekick_list({ path: dirPath }) {
   if (!fs.existsSync(dirPath)) {
     return { content: [{ type: "text", text: "Path not found: " + dirPath }], isError: true };
   }
-  const items = fs.readdirSync(dirPath, { withFileTypes: true });
+  const items = [];
+  let truncated = false;
+  try {
+    const directory = await fs.promises.opendir(dirPath);
+    for await (const item of directory) {
+      if (items.length >= MAX_DIRECTORY_LIST_ENTRIES) {
+        truncated = true;
+        break;
+      }
+      items.push(item);
+    }
+  } catch (error) {
+    return { content: [{ type: "text", text: `Unable to list directory: ${error.message}` }], isError: true };
+  }
   const lines = items.map(i => {
     const type = i.isDirectory() ? "DIR" : i.isFile() ? "FILE" : "OTHER";
     let stat = null;
-    try { stat = fs.statSync(path.join(dirPath, i.name)); } catch (e) {}
+    try { stat = fs.lstatSync(path.join(dirPath, i.name)); } catch (e) {}
     const size = stat ? stat.size : 0;
     const date = stat ? stat.mtime.toISOString().slice(0, 19).replace("T", " ") : "";
     return type.padEnd(5) + " " + String(size).padStart(10) + " " + date + " " + i.name;
   });
-  return { content: [{ type: "text", text: redactSensitive(lines.join("\n") || "(empty directory)") }] };
+  const notice = truncated ? `\n[truncated: showing the first ${MAX_DIRECTORY_LIST_ENTRIES} entries]` : "";
+  return { content: [{ type: "text", text: redactSensitive((lines.join("\n") || "(empty directory)") + notice) }] };
 }
 
 function nodeSearch(pattern, targetPath, include) {
@@ -357,7 +378,7 @@ async function sidekick_write({ path: filePath, content }) {
 async function sidekick_find({ path: searchPath, name, modified_after, modified_before, size_min, size_max, content, max_results }) {
   const authError = requireToolExecution({ tool: "filesystem.read" }, "tools.execute", "find");
   if (authError) return authError;
-  const maxResults = max_results || 50;
+  const maxResults = boundedFindResultLimit(max_results);
   const policyError = enforcePathPolicy(searchPath, "read");
   if (policyError) return policyError;
   if (!fs.existsSync(searchPath)) return { content: [{ type: "text", text: "Path not found: " + searchPath }], isError: true };
@@ -369,17 +390,25 @@ async function sidekick_find({ path: searchPath, name, modified_after, modified_
   const nameRe = namePattern ? new BoundedRegex(namePattern, "i") : null;
   const contentRe = content ? new BoundedRegex(content, "i") : null;
   const results = [];
-  function walk(dir, depth) {
-    if (depth > 8 || results.length >= maxResults) return;
-    let entries;
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
-    for (const entry of entries) {
-      if (results.length >= maxResults) break;
+  let scannedEntries = 0;
+  let resultLimited = false;
+  let scanLimited = false;
+  async function walk(dir, depth) {
+    if (depth > 8) return;
+    if (results.length >= maxResults) { resultLimited = true; return; }
+    if (scannedEntries >= MAX_FIND_SCAN_ENTRIES) { scanLimited = true; return; }
+    let directory;
+    try { directory = await fs.promises.opendir(dir); } catch { return; }
+    for await (const entry of directory) {
+      if (results.length >= maxResults) { resultLimited = true; break; }
+      if (scannedEntries >= MAX_FIND_SCAN_ENTRIES) { scanLimited = true; break; }
+      scannedEntries++;
       if (entry.name.startsWith(".") || entry.name === "node_modules" || entry.name === "__pycache__") continue;
       const fullPath = path.join(dir, entry.name);
       try {
-        const s = fs.statSync(fullPath);
-        if (entry.isDirectory()) walk(fullPath, depth + 1);
+        const s = fs.lstatSync(fullPath);
+        if (s.isSymbolicLink()) continue;
+        if (entry.isDirectory()) await walk(fullPath, depth + 1);
         else if (entry.isFile()) {
           if (nameRe && !nameRe.test(entry.name)) continue;
           if (s.mtimeMs < afterMs || s.mtimeMs > beforeMs) continue;
@@ -395,8 +424,11 @@ async function sidekick_find({ path: searchPath, name, modified_after, modified_
       } catch (e) {}
     }
   }
-  walk(searchPath, 0);
-  return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
+  await walk(searchPath, 0);
+  const response = [{ type: "text", text: JSON.stringify(results, null, 2) }];
+  if (resultLimited) response.push({ type: "text", text: `[partial search: result limit of ${maxResults} reached]` });
+  if (scanLimited) response.push({ type: "text", text: `[partial search: stopped after ${MAX_FIND_SCAN_ENTRIES} entries]` });
+  return { content: response };
 }
 
 function parseSize(str) {
@@ -520,7 +552,7 @@ const descriptors = Object.freeze([
       size_min: z.string().optional().describe("Minimum file size (e.g. '1KB', '1MB')"),
       size_max: z.string().optional().describe("Maximum file size (e.g. '10MB')"),
       content: z.string().max(512).optional().describe("Regex pattern to match file contents (maximum 512 characters)"),
-      max_results: z.number().optional().describe("Maximum results (default: 50)"),
+      max_results: z.number().int().min(1).max(MAX_FIND_RESULTS).optional().describe(`Maximum results (default: 50, maximum: ${MAX_FIND_RESULTS})`),
     }),
     args: { path: "string (directory to search)", name: "string (optional, glob pattern e.g. '*.js')", modified_after: "string (optional, ISO date)", modified_before: "string (optional, ISO date)", size_min: "string (optional, e.g. '1KB', '1MB')", size_max: "string (optional, e.g. '10MB')", content: "string (optional, regex pattern to match file contents)", max_results: "number (optional, default 50)" },
     risk: "medium",
@@ -531,4 +563,4 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_read, sidekick_list, sidekick_search, sidekick_summarize, sidekick_filter, sidekick_write, sidekick_diff_files, sidekick_find, buildSearchArgs };
+module.exports = { descriptors, sidekick_read, sidekick_list, sidekick_search, sidekick_summarize, sidekick_filter, sidekick_write, sidekick_diff_files, sidekick_find, buildSearchArgs, boundedFindResultLimit, MAX_DIRECTORY_LIST_ENTRIES, MAX_FIND_RESULTS, MAX_FIND_SCAN_ENTRIES };
