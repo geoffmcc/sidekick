@@ -26,66 +26,9 @@
 // direct callers; any future redirect support must resolve and validate every
 // hop before opening its socket.
 
-const net = require("net");
+const net = require("node:net");
 const dns = require("dns").promises;
-const { METADATA_HOSTS } = require("../compute/endpoint-guard");
-
-function stripBrackets(hostname) {
-  return hostname.startsWith("[") && hostname.endsWith("]")
-    ? hostname.slice(1, -1)
-    : hostname;
-}
-
-function isLinkLocal(host) {
-  const version = net.isIP(host);
-  if (version === 4) return /^169\.254\./.test(host);
-  if (version === 6) return /^fe[89ab]/.test(host.toLowerCase());
-  return false;
-}
-
-// Loopback, RFC1918, CGNAT (100.64/10), IPv6 unique-local (fc00::/7), and the
-// unspecified addresses that resolve to loopback on most stacks.
-function isPrivateAddress(host) {
-  const version = net.isIP(host);
-  if (version === 4) {
-    const octets = host.split(".").map(Number);
-    if (octets[0] === 127 || octets[0] === 0) return true;
-    if (octets[0] === 10) return true;
-    if (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) return true;
-    if (octets[0] === 192 && octets[1] === 168) return true;
-    if (octets[0] === 100 && octets[1] >= 64 && octets[1] <= 127) return true;
-    return false;
-  }
-  if (version === 6) {
-    const normalized = host.toLowerCase();
-    if (normalized === "::1" || normalized === "::") return true;
-    if (/^f[cd]/.test(normalized)) return true;
-    // IPv4-mapped addresses must not launder a private v4 address. WHATWG URL
-    // parsing rewrites ::ffff:127.0.0.1 into its hex form (::ffff:7f00:1), so
-    // both spellings have to be unmapped before the v4 rules are applied.
-    const dotted = normalized.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/);
-    if (dotted) return isPrivateAddress(dotted[1]);
-    const hex = normalized.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
-    if (hex) {
-      const high = parseInt(hex[1], 16);
-      const low = parseInt(hex[2], 16);
-      return isPrivateAddress(`${high >> 8}.${high & 0xff}.${low >> 8}.${low & 0xff}`);
-    }
-    return false;
-  }
-  // Not a literal IP. Hostnames that unambiguously name the local host are
-  // treated as loopback; anything else can only be resolved at connect time.
-  return isLocalhostName(host);
-}
-
-function isLocalhostName(host) {
-  const h = host.toLowerCase();
-  return h === "localhost" || h === "localhost.localdomain" || h.endsWith(".localhost");
-}
-
-function privateFetchAllowed() {
-  return false;
-}
+const { stripBrackets, isLinkLocal, isMetadataAddress, isPrivateAddress } = require("./ip-address-policy");
 
 /**
  * Returns an error message describing why the target is refused, or null when
@@ -110,7 +53,7 @@ function validateOutboundUrl(value, label = "url", options = {}) {
   const host = stripBrackets(url.hostname).toLowerCase();
   if (!host) return `Invalid ${label}: no host`;
 
-  if (METADATA_HOSTS.has(host)) {
+  if (isMetadataAddress(host)) {
     return `Refused ${label} host "${host}": cloud metadata endpoints are never a valid fetch target`;
   }
   if (isLinkLocal(host)) {
@@ -161,7 +104,7 @@ async function resolveOutboundUrl(value, label = "url", options = {}) {
 
   for (const record of records) {
     const address = stripBrackets(String(record.address || "").toLowerCase());
-    if (METADATA_HOSTS.has(address) || isLinkLocal(address)) {
+    if (isMetadataAddress(address) || isLinkLocal(address)) {
       return { refusal: `Refused ${label}: resolved address is a protected link-local or metadata endpoint`, code: "outbound_target_denied" };
     }
     const allowPrivate = options.allowPrivate === true;
