@@ -143,6 +143,8 @@ test('credential ACL grants LocalSystem read so the service can start', () => {
   assert.ok(/Unable to secure the worker credential file/.test(body), 'must fail closed when the credential ACL cannot be secured');
   assert.ok(/verifyWindowsAcl\(credPath\)/.test(body) && /lstatSync\(credPath\)/.test(body),
     'must reject reparse points and verify Windows ACLs before loading a credential');
+  assert.ok(/MAX_CREDENTIAL_BYTES = 16 \* 1024/.test(body) && /fstatSync\(fd\)/.test(body) && /bytesRead > MAX_CREDENTIAL_BYTES/.test(body),
+    'credential loading must use a bounded read and verify the opened file identity');
   assert.ok(/applyWindowsDirectoryAcl\(dir\)/.test(body) && /lstatSync\(directoryPath\)/.test(body),
     'must secure the dedicated credential directory and reject reparse-point directories');
   assert.ok(/applyWindowsAcl\(tempPath\)/.test(body) && body.indexOf('applyWindowsAcl(tempPath)') < body.indexOf('JSON.stringify(payload'),

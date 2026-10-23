@@ -87,6 +87,21 @@ test('load returns null for malformed content', () => {
   assert.strictEqual(cred.load(p), null, 'rejects bad credential shape');
 });
 
+test('load rejects credential files larger than the bounded record size', () => {
+  const p = freshPath();
+  fs.writeFileSync(p, 'x'.repeat(16 * 1024 + 1), { mode: 0o600 });
+  assert.strictEqual(cred.load(p), null, 'oversized local state cannot trigger an unbounded read or parse');
+});
+
+test('load rejects symlinked credential files', () => {
+  if (isWin) { console.log('    (skipped on win32)'); return; }
+  const target = freshPath();
+  cred.save(record, target);
+  const link = path.join(path.dirname(target), 'credential-link.json');
+  fs.symlinkSync(target, link);
+  assert.strictEqual(cred.load(link), null, 'credential loader never follows a symlink');
+});
+
 test('save applies 0600 file / 0700 dir on POSIX', function () {
   if (isWin) { console.log('    (skipped on win32)'); return; }
   const p = freshPath();

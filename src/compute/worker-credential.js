@@ -26,6 +26,7 @@ function windowsSystemEnv(systemRoot = process.env.SystemRoot || process.env.SYS
 
 const WORKER_ID_RE = /^wk_[A-Za-z0-9_-]+$/;
 const CREDENTIAL_RE = /^wksec_[A-Za-z0-9_-]+$/;
+const MAX_CREDENTIAL_BYTES = 16 * 1024;
 
 function defaultCredentialPath() {
   return process.env.SIDEKICK_WORKER_CONFIG || path.join(os.homedir(), ".sidekick", "worker-credential.json");
@@ -184,14 +185,40 @@ function save(record, pathOverride) {
 // place. Returns the record, or null if absent/unreadable/malformed.
 function load(pathOverride) {
   const credPath = pathOverride || defaultCredentialPath();
+  let fd;
   try {
-    const stat = fs.lstatSync(credPath);
-    if (!stat.isFile()) return null;
+    const dirPath = path.dirname(credPath);
+    let dirStat = fs.lstatSync(dirPath);
+    if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) return null;
+    if (process.platform !== "win32" && (dirStat.mode & 0o077)) {
+      fs.chmodSync(dirPath, 0o700);
+      dirStat = fs.lstatSync(dirPath);
+      if (!dirStat.isDirectory() || (dirStat.mode & 0o077)) return null;
+    }
+
+    let stat = fs.lstatSync(credPath);
+    if (!stat.isFile() || stat.isSymbolicLink()) return null;
     if (process.platform === "win32" && !verifyWindowsAcl(credPath)) return null;
     if (process.platform !== "win32" && (stat.mode & 0o077)) {
-      try { fs.chmodSync(credPath, 0o600); } catch {}
+      fs.chmodSync(credPath, 0o600);
+      stat = fs.lstatSync(credPath);
+      if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o077)) return null;
     }
-    const parsed = JSON.parse(fs.readFileSync(credPath, "utf8"));
+    const flags = fs.constants.O_RDONLY |
+      (fs.constants.O_NOFOLLOW || 0) |
+      (fs.constants.O_NONBLOCK || 0);
+    fd = fs.openSync(credPath, flags);
+    const opened = fs.fstatSync(fd);
+    if (!opened.isFile() || stat.dev !== opened.dev || stat.ino !== opened.ino || opened.size > MAX_CREDENTIAL_BYTES) return null;
+    const buffer = Buffer.alloc(MAX_CREDENTIAL_BYTES + 1);
+    let bytesRead = 0;
+    while (bytesRead < buffer.length) {
+      const count = fs.readSync(fd, buffer, bytesRead, buffer.length - bytesRead, null);
+      if (count === 0) break;
+      bytesRead += count;
+    }
+    if (bytesRead > MAX_CREDENTIAL_BYTES) return null;
+    const parsed = JSON.parse(buffer.subarray(0, bytesRead).toString("utf8"));
     if (WORKER_ID_RE.test(parsed.workerId || "") && CREDENTIAL_RE.test(parsed.credential || "")) {
       return {
         workerId: parsed.workerId,
@@ -202,6 +229,7 @@ function load(pathOverride) {
       };
     }
   } catch {}
+  finally { if (fd !== undefined) { try { fs.closeSync(fd); } catch {} } }
   return null;
 }
 
