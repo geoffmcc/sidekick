@@ -8,19 +8,22 @@ const { execFileSync } = require("child_process");
 const { childProcessEnv } = require("../src/security/child-process");
 const { resolveCommandOnPath } = require("../src/security/command-lookup");
 const { createArchiveSnapshot } = require("../src/tools/archive-snapshot");
-const { validateArchiveEntryNames, validateArchiveEntryTypes, validateZipEntryTypes, validateArchiveSourceType, archiveProcessEnv } = require("../src/tools/families/process-mgmt");
+const { validateArchiveEntryNames, validateArchiveEntryDestinations, validateArchiveEntryTypes, validateZipEntryTypes, validateArchiveSourceType, archiveProcessEnv, MAX_ARCHIVE_ENTRIES } = require("../src/tools/families/process-mgmt");
 
 for (const entry of [
   "../outside.txt",
   "nested/../../outside.txt",
   "/etc/passwd",
   "C:/Windows/System32/config/SAM",
+  "C:Windows/System32/config/SAM",
   "nested\\..\\outside.txt"
 ]) {
   assert.throws(() => validateArchiveEntryNames([entry]), /archive contains/, `archive traversal accepted: ${entry}`);
 }
 
 assert.strictEqual(validateArchiveEntryNames(["./safe.txt", "nested/file.txt", "nested/"]), true);
+assert.strictEqual(validateArchiveEntryNames(["one.txt", "two.txt", ""]), true, "a normal listing terminator is ignored");
+assert.throws(() => validateArchiveEntryNames(Array(MAX_ARCHIVE_ENTRIES + 1).fill("entry.txt")), /entry validation limit/);
 
 assert.strictEqual(validateArchiveEntryTypes("-rw-r--r-- 0 0 1 Jan 01 00:00 file.txt\ndrwxr-xr-x 0 0 0 Jan 01 00:00 folder/\n"), true);
 for (const typeListing of [
@@ -115,7 +118,8 @@ try {
 }
 
 const source = fs.readFileSync(path.join(__dirname, "..", "src", "tools", "families", "process-mgmt.js"), "utf8");
-assert.match(source, /validateArchiveEntryNames\(listing\.split\("\\n"\)\)/, "archive extraction must validate the complete listing first");
+assert.equal((source.match(/validateArchiveEntryNames\(entries\);/g) || []).length, 2, "tar and zip extraction must validate every listed entry name");
+assert.match(source, /validateArchiveEntryDestinations\(canonicalExtractTarget, entries\)/, "archive extraction must reject existing destination symlinks before writing");
 assert.match(source, /validateArchiveEntryTypes\(typeListing\)/, "tar extraction must reject link and special-file entries before extraction");
 assert.match(source, /\["-tvzf", archiveSource\]/, "tar member types must be inspected before extraction");
 assert.match(source, /validateZipEntryTypes\(typeListing\)/, "zip extraction must reject link and special-file entries before extraction");
@@ -125,12 +129,28 @@ assert.match(source, /sourceStat = fs\.statSync\(sourceAbsolute\)/, "archive sou
 assert.match(source, /validateArchiveSourceType\(sourceStat, action\)/, "archive operations must reject special source files");
 assert.match(source, /snapshot = await createArchiveSnapshot\(sourceAbsolute, sourcePath\)/, "extract preflight and extraction must share a stable source snapshot");
 assert.match(source, /extractTarget = output \? path\.resolve\(output\) : process\.cwd\(\)/, "archive extraction target must be explicit and canonicalized");
-assert.match(source, /"-C", extractTarget/, "tar extraction must use the governed extraction target");
-assert.match(source, /"-d", extractTarget/, "zip extraction must use the governed extraction target");
+assert.match(source, /"-C", canonicalExtractTarget/, "tar extraction must use the canonical, reauthorized extraction target");
+assert.match(source, /"-d", canonicalExtractTarget/, "zip extraction must use the canonical, reauthorized extraction target");
 
 (async () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-archive-snapshot-test-"));
   try {
+    const extractionRoot = path.join(temp, "extract");
+    const outsideRoot = path.join(temp, "outside");
+    fs.mkdirSync(extractionRoot);
+    fs.mkdirSync(outsideRoot);
+    fs.writeFileSync(path.join(extractionRoot, "ordinary.txt"), "existing regular file");
+    fs.writeFileSync(path.join(extractionRoot, "blocking"), "not a directory");
+    assert.strictEqual(validateArchiveEntryDestinations(extractionRoot, ["ordinary.txt"]), true);
+    assert.throws(() => validateArchiveEntryDestinations(extractionRoot, ["../outside.txt"]), /escapes/);
+    assert.throws(() => validateArchiveEntryDestinations(extractionRoot, ["blocking/child.txt"]), /not a directory/);
+    try {
+      fs.symlinkSync(outsideRoot, path.join(extractionRoot, "redirect"), process.platform === "win32" ? "junction" : "dir");
+      assert.throws(() => validateArchiveEntryDestinations(extractionRoot, ["redirect/payload.txt"]), /symbolic link/);
+    } catch (error) {
+      if (process.platform !== "win32" || !["EPERM", "EACCES", "UNKNOWN"].includes(error.code)) throw error;
+    }
+
     const original = path.join(temp, "bundle.tar.gz");
     fs.writeFileSync(original, "validated archive bytes", { flag: "wx", mode: 0o600 });
     const snapshot = await createArchiveSnapshot(original);

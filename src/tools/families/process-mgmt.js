@@ -21,6 +21,8 @@ const { enforcePathPolicy } = require("../path-policy");
 const { requireToolExecution } = require("../read-authorization");
 const { createArchiveSnapshot } = require("../archive-snapshot");
 
+const MAX_ARCHIVE_ENTRIES = 10000;
+const MAX_ARCHIVE_DESTINATION_COMPONENTS = 100000;
 const ALLOWED_SERVICE_NAMES = Object.freeze([
   "sidekick-mcp", "sidekick-dashboard", "sidekick-agent", "sidekick-postgres",
   "sidekick-redis", "sidekick-qdrant", "sidekick-influxdb", "sidekick-grafana",
@@ -72,15 +74,63 @@ function normalizeManagedService(service) {
 }
 
 function validateArchiveEntryNames(entries) {
-  for (const entry of entries) {
+  if (!Array.isArray(entries)) {
+    throw new Error("archive entry list could not be verified");
+  }
+  const names = entries.length > 0 && entries[entries.length - 1] === "" ? entries.slice(0, -1) : entries;
+  if (names.length > MAX_ARCHIVE_ENTRIES) {
+    throw new Error(`archive exceeds the ${MAX_ARCHIVE_ENTRIES}-entry validation limit`);
+  }
+  for (const entry of names) {
     const raw = String(entry || "").replace(/\r$/, "");
     if (!raw || raw.includes("\0")) throw new Error("archive contains an invalid entry name");
     const normalized = raw.replace(/\\/g, "/");
-    if (normalized.startsWith("/") || /^[A-Za-z]:\//.test(normalized)) {
+    if (normalized.startsWith("/") || /^[A-Za-z]:/.test(normalized)) {
       throw new Error("archive contains an absolute entry path");
     }
     const components = normalized.split("/").filter(Boolean);
     if (components.includes("..")) throw new Error("archive contains a path traversal entry");
+  }
+  return true;
+}
+
+function validateArchiveEntryDestinations(root, entries) {
+  let canonicalRoot;
+  try {
+    canonicalRoot = fs.realpathSync(root);
+  } catch {
+    throw new Error("archive destination could not be resolved");
+  }
+  let inspectedComponents = 0;
+  const names = entries.length > 0 && entries[entries.length - 1] === "" ? entries.slice(0, -1) : entries;
+  for (const entry of names) {
+    const raw = String(entry || "").replace(/\r$/, "");
+    const normalized = raw.replace(/\\/g, "/");
+    const target = path.resolve(canonicalRoot, normalized);
+    const relative = path.relative(canonicalRoot, target);
+    if (relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative)) {
+      throw new Error("archive destination escapes its extraction root");
+    }
+    let current = canonicalRoot;
+    const components = relative.split(path.sep).filter(Boolean);
+    inspectedComponents += components.length;
+    if (inspectedComponents > MAX_ARCHIVE_DESTINATION_COMPONENTS) {
+      throw new Error(`archive exceeds the ${MAX_ARCHIVE_DESTINATION_COMPONENTS}-component destination validation limit`);
+    }
+    for (let index = 0; index < components.length; index++) {
+      current = path.join(current, components[index]);
+      let stat;
+      try {
+        stat = fs.lstatSync(current);
+      } catch (error) {
+        if (error.code === "ENOENT") break;
+        throw new Error("archive destination path could not be inspected");
+      }
+      if (stat.isSymbolicLink()) throw new Error("archive destination contains a symbolic link");
+      if (index < components.length - 1 && !stat.isDirectory()) {
+        throw new Error("archive destination path is not a directory");
+      }
+    }
   }
   return true;
 }
@@ -304,20 +354,31 @@ async function sidekick_archive({ action, path: sourcePath, output, format }) {
       try {
         if (sourcePath.endsWith(".tar.gz") || sourcePath.endsWith(".tgz")) {
           const listing = execFileSync("tar", ["-tzf", archiveSource], { timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024, env: archiveProcessEnv() });
-          validateArchiveEntryNames(listing.split("\n"));
+          const entries = listing.split("\n");
+          validateArchiveEntryNames(entries);
           const typeListing = execFileSync("tar", ["-tvzf", archiveSource], { timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024, env: archiveProcessEnv() });
           validateArchiveEntryTypes(typeListing);
-          cmd = ["tar", ["-xzf", archiveSource, "-C", extractTarget, "--no-same-owner", "--no-overwrite-dir"]];
+          fs.mkdirSync(extractTarget, { recursive: true });
+          const canonicalExtractTarget = fs.realpathSync(extractTarget);
+          const canonicalOutputPolicyError = enforcePathPolicy(canonicalExtractTarget, "write");
+          if (canonicalOutputPolicyError) throw new Error("archive destination is outside the allowed write scope");
+          validateArchiveEntryDestinations(canonicalExtractTarget, entries);
+          cmd = ["tar", ["-xzf", archiveSource, "-C", canonicalExtractTarget, "--no-same-owner", "--no-overwrite-dir"]];
         } else if (sourcePath.endsWith(".zip")) {
           const listing = execFileSync("unzip", ["-Z1", archiveSource], { timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024, env: archiveProcessEnv() });
-          validateArchiveEntryNames(listing.split("\n"));
+          const entries = listing.split("\n");
+          validateArchiveEntryNames(entries);
           const typeListing = execFileSync("unzip", ["-Z", "-v", archiveSource], { timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024, env: archiveProcessEnv() });
           validateZipEntryTypes(typeListing);
-          cmd = ["unzip", [archiveSource, "-d", extractTarget]];
+          fs.mkdirSync(extractTarget, { recursive: true });
+          const canonicalExtractTarget = fs.realpathSync(extractTarget);
+          const canonicalOutputPolicyError = enforcePathPolicy(canonicalExtractTarget, "write");
+          if (canonicalOutputPolicyError) throw new Error("archive destination is outside the allowed write scope");
+          validateArchiveEntryDestinations(canonicalExtractTarget, entries);
+          cmd = ["unzip", [archiveSource, "-d", canonicalExtractTarget]];
         } else {
           return { content: [{ type: "text", text: "Unsupported archive format" }], isError: true };
         }
-        fs.mkdirSync(extractTarget, { recursive: true });
       } catch (e) {
         const diagnostic = String(e.stderr || e.stdout || e.message).replaceAll(archiveSource, sourcePath);
         return { content: [{ type: "text", text: redactSensitive("Archive preflight failed: " + diagnostic) }], isError: true };
@@ -395,4 +456,4 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_process, sidekick_service, sidekick_archive, validateArchiveEntryNames, validateArchiveEntryTypes, validateZipEntryTypes, validateArchiveSourceType, archiveProcessEnv, normalizeManagedService, ALLOWED_SERVICE_NAMES, buildProcessKillCommand, ALLOWED_PROCESS_SIGNALS };
+module.exports = { descriptors, sidekick_process, sidekick_service, sidekick_archive, validateArchiveEntryNames, validateArchiveEntryDestinations, validateArchiveEntryTypes, validateZipEntryTypes, validateArchiveSourceType, archiveProcessEnv, MAX_ARCHIVE_ENTRIES, MAX_ARCHIVE_DESTINATION_COMPONENTS, normalizeManagedService, ALLOWED_SERVICE_NAMES, buildProcessKillCommand, ALLOWED_PROCESS_SIGNALS };
