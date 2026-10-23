@@ -103,7 +103,7 @@ for (const name of extractedNames) {
 
 const exportedNames = Object.keys(legacyTools).sort();
 for (const name of [
-  'DATA_DIR', 'GROQ_API_KEY', 'GROQ_MODEL', 'OLLAMA_URL', 'TOOLS', 'TOOL_DEFS',
+  'DATA_DIR', 'GROQ_MODEL', 'OLLAMA_URL', 'TOOLS', 'TOOL_DEFS',
   'appendScheduledPlatformEvent', 'buildCiStatusResult', 'buildPolicyInspection',
   'callTool', 'checkNetwork', 'createScheduledPlatformExecution', 'enforceToolPolicy',
   'formatCiStatusText', 'getApprovalDecision', 'getCiRevisionSelector', 'getGithubArg',
@@ -115,5 +115,6 @@ for (const name of [
 ]) {
   assert.ok(exportedNames.includes(name), `src/tools.js compatibility export should include ${name}`);
 }
+assert.ok(!exportedNames.includes('GROQ_API_KEY'), 'the legacy facade must not retain or export a plaintext provider credential');
 
 console.log('Tool Registry Contract Tests passed');
