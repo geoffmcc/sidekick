@@ -22,6 +22,9 @@ function readRequiredSecret(directory, variableName, fileName) {
   if (process.platform !== "win32" && (stat.mode & 0o022) !== 0) {
     throw new Error(`${variableName} secret file is writable by group or other users`);
   }
+  if (process.platform !== "win32" && (stat.mode & 0o004) !== 0) {
+    throw new Error(`${variableName} secret file is readable by other users`);
+  }
 
   let value;
   try {

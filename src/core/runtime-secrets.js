@@ -98,11 +98,14 @@ function assertSafeFile(filePath, name) {
   if (stat.isSymbolicLink()) throw new Error(`${name} secret file must not be a symlink`);
   if (!stat.isFile()) throw new Error(`${name} secret path is not a regular file`);
 
-  // On POSIX, reject group/world-writable secret files. Readability for the
-  // service account is intentionally allowed because Docker secrets commonly
-  // use a read-only mount with a non-0600 mode.
+  // A group-readable file may be used with a dedicated service group, but
+  // world-readable secret files expose credentials to unrelated local users
+  // even when the file and directory are read-only.
   if (!isWindows() && (stat.mode & 0o022) !== 0) {
     throw new Error(`${name} secret file is writable by group or other users`);
+  }
+  if (!isWindows() && (stat.mode & 0o004) !== 0) {
+    throw new Error(`${name} secret file is readable by other users`);
   }
   return { resolved, stat };
 }
@@ -138,7 +141,7 @@ function readSecret(name, options = {}) {
       const opened = fs.fstatSync(fd);
       if (!opened.isFile() ||
           (safeFile.stat.dev !== opened.dev || safeFile.stat.ino !== opened.ino) ||
-          (!isWindows() && (opened.mode & 0o022) !== 0)) {
+          (!isWindows() && ((opened.mode & 0o022) !== 0 || (opened.mode & 0o004) !== 0))) {
         throw new Error(`${name} secret file changed or became unsafe while opening`);
       }
       if (opened.size > MAX_SECRET_BYTES) throw new Error(`${name} secret file is too large`);
