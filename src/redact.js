@@ -9,6 +9,7 @@
 // Tokens are matched as substrings, so short entries are limited to spellings
 // unlikely to occur inside benign key names (`auth` would match `author`).
 const SENSITIVE_KEY_RE = /(password|passwd|passphrase|pwd|secret|token|bearer|apikey|accesskey|sshkey|authorization|cookie|privatekey|credential|otp)/;
+const PEM_PRIVATE_KEY_BEGIN_LABELS = new Set(["PRIVATE KEY", "RSA PRIVATE KEY", "EC PRIVATE KEY", "DSA PRIVATE KEY", "OPENSSH PRIVATE KEY"]);
 
 /**
  * Returns true when an argument/field name denotes a credential. Pattern
@@ -61,8 +62,8 @@ function redactUrlCredentials(text) {
     let schemeStart = delimiter - 1;
     while (schemeStart >= 0 && /[a-z0-9+.-]/i.test(text[schemeStart])) schemeStart--;
     schemeStart++;
-    if (schemeStart >= delimiter || !/[a-z]/i.test(text[schemeStart])
-      || (schemeStart > 0 && /[a-z0-9+.-]/i.test(text[schemeStart - 1]))) {
+    while (schemeStart < delimiter && !/[a-z]/i.test(text[schemeStart])) schemeStart++;
+    if (schemeStart >= delimiter) {
       searchFrom = delimiter + 3;
       continue;
     }
@@ -135,12 +136,57 @@ function redactJwtTokens(text) {
   return copyFrom === 0 ? text : output + text.slice(copyFrom);
 }
 
+function readPemLabel(text, start) {
+  let end = start;
+  while (end < text.length && /[A-Z ]/.test(text[end])) {
+    end++;
+    if (end - start > 64) return null;
+  }
+  return end > start ? { value: text.slice(start, end), end } : null;
+}
+
+function redactPemPrivateKeys(text) {
+  const beginMarker = "-----BEGIN ";
+  const endMarker = "-----END ";
+  let output = "";
+  let copyFrom = 0;
+  let searchFrom = 0;
+  while (true) {
+    const start = text.indexOf(beginMarker, searchFrom);
+    if (start < 0) break;
+    const labelStart = start + beginMarker.length;
+    const label = readPemLabel(text, labelStart);
+    if (!label || !PEM_PRIVATE_KEY_BEGIN_LABELS.has(label.value) || !text.startsWith("-----", label.end)) {
+      searchFrom = start + 1;
+      continue;
+    }
+
+    let endSearch = label.end + 5;
+    let end = -1;
+    while (true) {
+      const candidate = text.indexOf(endMarker, endSearch);
+      if (candidate < 0) break;
+      const footerLabelStart = candidate + endMarker.length;
+      const footerLabel = readPemLabel(text, footerLabelStart);
+      if (footerLabel && footerLabel.value.endsWith("PRIVATE KEY") && text.startsWith("-----", footerLabel.end)) {
+        end = footerLabel.end + 5;
+        break;
+      }
+      endSearch = footerLabel ? footerLabel.end + 1 : footerLabelStart + 1;
+    }
+    if (end < 0) break;
+
+    output += text.slice(copyFrom, start) + "[REDACTED PRIVATE KEY]";
+    copyFrom = end;
+    searchFrom = end;
+  }
+  return copyFrom === 0 ? text : output + text.slice(copyFrom);
+}
+
 function redactSensitive(text) {
   if (typeof text !== 'string') return text;
   
-  const redacted = text
-    // SSH private keys (RSA, EC, DSA, OPENSSH)
-    .replace(/-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END [A-Z ]+PRIVATE KEY-----/g, '[REDACTED PRIVATE KEY]')
+  const redacted = redactPemPrivateKeys(text)
     
     // GitHub tokens
     .replace(/ghp_[A-Za-z0-9_]{36}/g, '[REDACTED GITHUB TOKEN]')
