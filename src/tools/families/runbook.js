@@ -18,6 +18,7 @@ const evolveCommon = require("../../evolve/common");
 const platformKernel = require("../../platform/kernel");
 const toolContext = require("../context");
 const { requireToolExecution } = require("../read-authorization");
+const { readJsonFile, writeJsonFile } = require("../../core/json-file-store");
 const {
   createScheduledPlatformExecution,
   transitionScheduledPlatformExecution,
@@ -43,7 +44,9 @@ const RUNBOOK_ACTIVE_LEDGER_STATES = new Set(["queued", "running", "waiting"]);
 function loadRunbooks() {
   try {
     if (fs.existsSync(RUNBOOK_FILE)) {
-      return JSON.parse(fs.readFileSync(RUNBOOK_FILE, "utf8"));
+      const value = readJsonFile(RUNBOOK_FILE, { maxBytes: 10 * 1024 * 1024 });
+      if (value && value.definitions && typeof value.definitions === "object" && !Array.isArray(value.definitions) &&
+          value.instances && typeof value.instances === "object" && !Array.isArray(value.instances)) return value;
     }
   } catch {}
   return { definitions: {}, instances: {} };
@@ -154,7 +157,7 @@ function recoverStrandedRunbooks(details = {}) {
 }
 
 function saveRunbooks(data) {
-  fs.writeFileSync(RUNBOOK_FILE, JSON.stringify(data, null, 2));
+  writeJsonFile(RUNBOOK_FILE, data, { maxBytes: 10 * 1024 * 1024 });
 }
 
 function generateRunbookId() {

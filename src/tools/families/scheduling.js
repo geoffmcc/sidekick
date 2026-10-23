@@ -37,6 +37,7 @@ const { reloadAgentScheduler } = require("../../agent/scheduler-reload");
 const { assertDistinctAgentSchedulerSecret } = require("../../security/agent-proxy-auth");
 const { callTool } = require("../dispatch-seam");
 const { requireToolExecution } = require("../read-authorization");
+const { readJsonFile, writeJsonFile } = require("../../core/json-file-store");
 const {
   createScheduledPlatformExecution,
   transitionScheduledPlatformExecution,
@@ -272,14 +273,15 @@ const DELAYS_FILE = path.join(DATA_DIR, "delays.json");
 function loadDelays() {
   if (!fs.existsSync(DELAYS_FILE)) return [];
   try {
-    return JSON.parse(fs.readFileSync(DELAYS_FILE, "utf-8"));
+    const value = readJsonFile(DELAYS_FILE);
+    return Array.isArray(value) ? value : [];
   } catch {
     return [];
   }
 }
 
 function saveDelays(delays) {
-  fs.writeFileSync(DELAYS_FILE, JSON.stringify(delays, null, 2));
+  writeJsonFile(DELAYS_FILE, delays);
 }
 
 // Phase 4/B restart recovery: a delay that was `running` when its runner died
@@ -632,14 +634,15 @@ const WATCHES_FILE = path.join(DATA_DIR, "watches.json");
 function loadWatches() {
   if (!fs.existsSync(WATCHES_FILE)) return [];
   try {
-    return JSON.parse(fs.readFileSync(WATCHES_FILE, "utf-8"));
+    const value = readJsonFile(WATCHES_FILE);
+    return Array.isArray(value) ? value : [];
   } catch {
     return [];
   }
 }
 
 function saveWatches(watches) {
-  fs.writeFileSync(WATCHES_FILE, JSON.stringify(watches, null, 2));
+  writeJsonFile(WATCHES_FILE, watches);
 }
 
 function checkService(serviceName) {

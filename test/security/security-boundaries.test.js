@@ -31,6 +31,7 @@ const { descriptors: filesystemDescriptors, buildSearchArgs } = require("../../s
 const { descriptors: monitoringDescriptors, resolveSnapshotPath, readSnapshotFile, writeSnapshotFile, MAX_SNAPSHOT_BYTES } = require("../../src/tools/families/monitoring");
 const { readTextBounded } = require("../../src/core/bounded-file-read");
 const { tunnelStopPattern, createTunnelLog } = require("../../src/tools/families/networking");
+const { readJsonFile, writeJsonFile } = require("../../src/core/json-file-store");
 
 let owner;
 
@@ -248,6 +249,35 @@ test("snapshot storage rejects oversized and malformed persisted data", () => {
   assert.throws(() => writeSnapshotFile("too-large-snapshot", {
     name: "too-large-snapshot", date: "today", types: [], data: { note: "x".repeat(MAX_SNAPSHOT_BYTES) },
   }), /storage limit/);
+});
+
+test("persistent JSON stores use bounded no-follow reads and atomic replacement", () => {
+  const storePath = path.join(dataDir, "persistent-state.json");
+  const original = { tasks: [{ id: 1, status: "pending" }] };
+  writeJsonFile(storePath, original, { maxBytes: 4096 });
+  assert.deepEqual(readJsonFile(storePath, { maxBytes: 4096 }), original);
+
+  const originalText = fs.readFileSync(storePath, "utf8");
+  assert.throws(() => writeJsonFile(storePath, { text: "x".repeat(4096) }, { maxBytes: 4096 }), /byte limit/);
+  assert.equal(fs.readFileSync(storePath, "utf8"), originalText, "oversized state must preserve the last committed value");
+
+  const realRename = fs.renameSync;
+  fs.renameSync = () => { throw new Error("synthetic atomic replacement failure"); };
+  try {
+    assert.throws(() => writeJsonFile(storePath, { tasks: [] }, { maxBytes: 4096 }), /synthetic atomic replacement failure/);
+  } finally {
+    fs.renameSync = realRename;
+  }
+  assert.equal(fs.readFileSync(storePath, "utf8"), originalText, "failed replacement must preserve existing state");
+  assert.deepEqual(fs.readdirSync(dataDir).filter(name => name.startsWith(".sidekick-json-")), []);
+});
+
+test("persistent JSON reads reject symlinks where the platform supports no-follow opens", { skip: typeof fs.constants.O_NOFOLLOW !== "number" }, () => {
+  const target = path.join(dataDir, "json-outside-target.json");
+  const link = path.join(dataDir, "json-state-link.json");
+  fs.writeFileSync(target, JSON.stringify({ secret: "synthetic" }));
+  fs.symlinkSync(target, link);
+  assert.throws(() => readJsonFile(link));
 });
 
 test("filesystem text reads enforce byte limits and support bounded continuation", () => {
