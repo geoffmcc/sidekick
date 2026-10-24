@@ -421,3 +421,16 @@ all 417 suites passed (0 failed or skipped) in 440.889 seconds. Aggregate
 coverage is 78.84% lines/statements, 70.41% branches, and 81.41% functions.
 Critical-file, security-domain, required-file, and baseline checks have no
 failures; `src/redact.js` is at 100% lines, branches, statements, and functions.
+
+### Supply-chain controls
+
+- `.github/workflows/ci.yml` runs a digest-pinned Gitleaks full-history scan.
+  Its package job installs without lifecycle scripts, checks lockfile
+  stability, runs `npm audit --audit-level=moderate`, generates and validates a
+  CycloneDX SBOM, and uploads the SBOM artifact.
+- A local `npm.cmd sbom --package-lock-only --sbom-format=cyclonedx
+  --sbom-type=application` run generated CycloneDX 1.5 with 203 components and
+  204 dependency relationships. The file was written under the OS temporary
+  directory, not the repository.
+- Current dependency advisory status is **not verified** by this local pass;
+  SBOM generation is not an advisory scan. No dependency upgrade was performed.
