@@ -241,9 +241,9 @@ function recordPackVerification(name, verification) {
     error.code = "invalid_pack_verification";
     throw error;
   }
-  if (verification.evidence_refs.some(reference => reference?.role === "provider_integration") && verification.provider?.verified !== true) {
-    const error = new Error("provider integration evidence requires an explicitly attributed provider verification");
-    error.code = "provider_verification_required";
+  if (verification.evidence_refs.some(reference => reference?.role === "provider_integration")) {
+    const error = new Error("provider integration evidence cannot be self-attested; a server-verifiable provider receipt is not available");
+    error.code = "provider_evidence_unavailable";
     throw error;
   }
   const verified = verifyEvidenceReferences(record, verification.evidence_refs, {

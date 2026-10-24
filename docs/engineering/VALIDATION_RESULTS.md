@@ -1276,3 +1276,13 @@ about current lockfile vulnerability status.
   without `packs.manage`.
 - This verifies one permission/action pair across those dispatcher surfaces.
   Alias, project-ownership, and other privileged-action matrices remain open.
+
+## Provider maturity self-attestation rejection: 2026-10-24 (SK-069)
+
+- `npm.cmd run test:all -- test/pack-proving-evidence.test.js
+  test/pack-maturity.test.js` passed both suites.
+- A synthetic `provider.verified: true` paired with a caller-selected reference
+  is rejected with `provider_evidence_unavailable`; maturity returns
+  `provider_verified: false` and `optional_provider_integration: not_verified`.
+- No server-side provider receipt currently exists, so provider integration
+  certification remains unavailable by design.

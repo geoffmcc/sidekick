@@ -905,3 +905,15 @@ receipt, workflow, and execution records. Existing evidence rows are not
 rewritten. This does not yet prove that an evidence reference's claimed role
 matches the behavior performed; role-specific evidence semantics remain open
 under SK-007.
+
+### Pack provider self-attestation (2026-10-24, SK-069)
+
+Confirmed integrity weakness: `record_verification` accepted a caller-supplied
+`provider.verified: true` value with any completed record labeled
+`provider_integration`, and maturity exposed that value as provider
+verification. No server-side provider receipt existed. The handler now rejects
+provider-integration claims with an actionable `provider_evidence_unavailable`
+code until a trusted receipt producer is implemented. Maturity always reports
+provider integration as unverified, including historical evidence that lacks
+such a receipt. This does not disable local pack operation or other maturity
+levels; live-provider certification remains unavailable and is a known limit.

@@ -243,3 +243,18 @@ test("pack evidence enforces verifier ownership for execution and workflow refer
     /not performed by the attributed verifier/
   );
 });
+
+test("provider integration cannot be self-attested with a caller-supplied boolean", () => {
+  assert.throws(
+    () => lifecycle.recordVerification(installed.pack.name, {
+      actor_ref: "test-principal",
+      project_ref: "pack-proving-evidence",
+      provider: { verified: true, provider_id: "synthetic-provider" },
+      evidence_refs: [{ type: "execution", id: "caller-chosen", role: "provider_integration" }],
+    }),
+    error => error.code === "provider_evidence_unavailable" && /server-verifiable provider receipt is not available/.test(error.message)
+  );
+  const maturity = lifecycle.maturity(installed.pack.name);
+  assert.equal(maturity.provider_verified, false);
+  assert.equal(maturity.optional_provider_integration, "not_verified");
+});

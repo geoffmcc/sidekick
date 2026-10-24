@@ -126,8 +126,10 @@ function evaluate(record, { now = Date.now() } = {}) {
     evidence_freshness: current ? "fresh" : evidence.malformed ? "malformed" : classified.some(item => item.state === "malformed") ? "malformed" : classified.some(item => item.state === "expired") ? "expired" : classified.some(item => item.state === "dirty") ? "dirty" : classified.length ? "stale" : "missing",
     evidence_states: Object.fromEntries(EVIDENCE_STATES.map(state => [state, classified.filter(item => item.state === state).length])),
     reasons,
-    optional_provider_integration: has("provider_integration") && current?.provider?.verified === true ? "verified" : "not_verified",
-    provider_verified: has("provider_integration") && current?.provider?.verified === true,
+    // No server-generated provider receipt exists today. Historical or
+    // caller-supplied `provider.verified` metadata is not proof of integration.
+    optional_provider_integration: "not_verified",
+    provider_verified: false,
     evaluated_at: new Date(now).toISOString(),
   };
 }
