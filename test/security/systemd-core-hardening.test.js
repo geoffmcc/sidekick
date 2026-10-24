@@ -90,3 +90,15 @@ test("execution-node installer grants systemd writes only to an explicitly writa
   assert.equal(disabled.writeEnabled, false);
   assert.equal(fs.existsSync(enabled.dropInPath), false, "removing the local write grant removes its OS write path");
 });
+
+test("execution-node uninstall removes only its generated workspace systemd drop-in", () => {
+  const uninstall = fs.readFileSync(path.join(root, "packaging/execution-node/uninstall-wsl.sh"), "utf8");
+  assert.match(uninstall, /realpath -e -- "\$HOME"/);
+  assert.match(uninstall, /realpath -m -- "\$PREFIX"/);
+  assert.match(uninstall, /\[\[ "\$PREFIX" != "\$REAL_HOME\/"\* \|\| "\$\{PREFIX##\*\/\}" != "sidekick-execution-node" \]\]/);
+  assert.match(uninstall, /\[\[ -L "\$PREFIX" \]\]/);
+  assert.match(uninstall, /DROP_IN_DIR=.*sidekick-execution-node\.service\.d/);
+  assert.match(uninstall, /\[\[ -d "\$DROP_IN_DIR" && ! -L "\$DROP_IN_DIR" \]\]/);
+  assert.match(uninstall, /rm -f -- "\$DROP_IN_DIR\/workspace\.conf"/);
+  assert.match(uninstall, /rmdir -- "\$DROP_IN_DIR"/);
+});

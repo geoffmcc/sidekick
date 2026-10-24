@@ -479,6 +479,10 @@ workspace grant allowed them. The installer now creates a systemd drop-in with
 and only when `permissions.write` is explicitly true. Removing that local grant
 removes the generated write path. The default workspace now resolves under the
 installing user's home directory rather than a fixed username.
+Uninstall removes only the generated workspace drop-in and leaves unrelated
+user-created drop-ins intact. It also canonicalizes the install prefix and
+refuses symlinks, paths outside the user's home, and paths that do not end in
+the dedicated `sidekick-execution-node` directory before recursive removal.
 
 Validation: execution-node administration and systemd hardening suites passed;
 the installer behavior regression verifies narrow path generation, `%` path
