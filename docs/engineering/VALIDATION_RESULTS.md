@@ -440,8 +440,8 @@ failures; `src/redact.js` is at 100% lines, branches, statements, and functions.
 - A refreshed online `npm.cmd audit` on 2026-10-24 could not reach
   `registry.npmjs.org`. `npm.cmd audit --offline --json` returned zero findings
   from local cache, which does not establish current advisory status. No
-  dependency state was changed; current online audit remains pending network
-  availability.
+  dependency state was changed. A later online scan on the same date succeeded;
+  see the current advisory snapshot recorded after the Compute provider review.
 - `npm.cmd ls --all --json` exits 1 with one installed-tree problem:
   `tree-sitter@0.25.1` conflicts with optional peer ranges declared by the
   pinned Java, Perl, Ruby, Rust, and TypeScript grammar packages. The complete
