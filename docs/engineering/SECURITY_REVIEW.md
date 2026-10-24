@@ -868,3 +868,19 @@ scan also reported zero. This is a time-specific registry advisory result; it
 does not prove package provenance, protect against a compromised registry or
 maintainer, cover optional host-installed binaries or Python packages, or
 replace CI rescanning. No dependency versions or lockfiles were changed.
+
+### First-party pack upgrade trust binding (2026-10-24, SK-067)
+
+Confirmed trust-provenance bypass: the canonical high-risk `capability upgrade`
+tool accepted a server-local package path and a caller-supplied hash, while the
+pack repository retained the installed row's `first_party` label. Owned module
+provenance was then refreshed against the modified package hash, allowing its
+code and permissions to satisfy the in-process first-party exception. A
+synthetic modified copy of the bundled Developer pack reproduced the path; the
+candidate entry contained a test-only file-write sentinel. First-party upgrades
+now require a package hash equal to the exact bundled artifact in the running
+release. The actual tool path regression confirms the candidate is refused
+before the sentinel executes and the active installation remains unchanged.
+Third-party upgrades retain their local-path lifecycle but executable modules
+still fail closed. This finding requires an identity authorized to manage packs
+and a server-local candidate path; it is not an unauthenticated route.

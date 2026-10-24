@@ -512,6 +512,14 @@ Third-party module code fails closed before `require` until an external OS
 isolation boundary and capability broker are available. Integrity, provenance
 and lifecycle checks do not themselves provide isolation:
 
+First-party trust remains anchored to the exact package bytes in the bundled
+release. A caller-supplied `expected_package_hash` proves only that a candidate
+did not change after inspection; it cannot promote a different local package
+into first-party trust. Upgrading a first-party pack from a local path is
+accepted only when its package hash matches the bundled release artifact.
+Third-party packs retain the normal local-path upgrade flow and remain blocked
+from executable activation until OS isolation is available.
+
 | Control | Mechanism |
 |---|---|
 | Path traversal | entry points and manifest paths resolved and refused outside the package root |

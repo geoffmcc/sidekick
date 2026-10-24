@@ -1232,3 +1232,19 @@ about current lockfile vulnerability status.
 - This is a dated advisory snapshot. It does not verify package provenance,
   registry integrity, optional host-installed binaries, Python dependencies, or
   future advisory changes. No packages or lockfiles were changed.
+
+## First-party pack upgrade trust binding: 2026-10-24 (SK-067)
+
+- `npm.cmd run test:all -- test/capability-packs.test.js` passed after adding a
+  synthetic modified first-party package with a caller-supplied correct hash;
+  the canonical capability tool rejects it and its entry-side-effect sentinel
+  is never created.
+- `npm.cmd run test:all -- test/modules-installation.test.js
+  test/capability-packs.test.js test/pack-contract.test.js
+  test/modules-third-party-lifecycle.test.js` passed all 4 suites.
+- The pack lifecycle tests previously removed fixed repository test-data paths
+  before execution. They now use runner-owned or unique temporary directories.
+  The pre-existing `test/test-data-capability-packs` directory timestamp was
+  unchanged by the regression run.
+- `npm.cmd run check:docs`, `npm.cmd run check:tests`,
+  `npm.cmd run check:architecture`, and `git diff --check` passed.
