@@ -81,7 +81,7 @@ sudo systemctl restart sidekick-mcp sidekick-dashboard sidekick-agent
 
 ### Dashboard loads but API calls fail
 
-Check whether dashboard Basic Auth is enabled, whether the browser request is hitting the right host/port, and whether origin checks are rejecting mutating requests. Check `dashboard-errors.log` and `audit.jsonl` in the data directory.
+Check whether dashboard Basic Auth is enabled, whether the browser request is hitting the right host/port, and whether origin checks are rejecting mutating requests. Check `dashboard-errors.log` (and its one rotated file, `dashboard-errors.log.1`) and `audit.jsonl` in the data directory. Dashboard diagnostic files rotate at 5 MiB and retain at most 10 MiB total.
 
 ### MCP stale or invalid session
 

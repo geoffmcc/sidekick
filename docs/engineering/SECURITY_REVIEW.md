@@ -626,3 +626,16 @@ redaction and that oversized details create no audit row. This does not make
 SQLite audit rows tamper-resistant against a host or database administrator,
 and it cannot identify an arbitrary secret placed under an innocuous key unless
 the common value-pattern redactor recognizes it.
+
+### Dashboard diagnostic file retention boundary (2026-10-24, SK-051)
+
+Dashboard error handling and the frontend telemetry route shared a JSONL file
+that had no retention bound. The writer now limits each serialized diagnostic
+record to 8 KiB and retains at most a 5 MiB active file plus one 5 MiB rotated
+file, removing older history when rotation occurs. Component labels are
+restricted before they can enter the record. The rotation is synchronous and
+is bounded for the single Dashboard process used by the supported service
+deployment. It is not a cross-process quota if operators run multiple
+Dashboard instances against the same data directory. Logging failures remain
+best-effort and are not returned to clients; host administrators can still
+modify or delete these diagnostic files.

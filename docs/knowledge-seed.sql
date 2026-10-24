@@ -416,7 +416,7 @@ Stale POST sessions should receive a structured JSON-RPC error and a replacement
 - Check SIDEKICK_DASHBOARD_USER and SIDEKICK_DASHBOARD_PASS.
 - Check SIDEKICK_DASHBOARD_ALLOWED_IPS.
 - Check browser origin and host. Mutating requests are same-origin checked.
-- Check data/dashboard-errors.log.
+- Check data/dashboard-errors.log and the retained rotation data/dashboard-errors.log.1.
 - Check data/audit.jsonl.
 - Check sudo journalctl -u sidekick-dashboard -n 100 --no-pager.
 

@@ -936,3 +936,18 @@ about current lockfile vulnerability status.
   delegation, credential, session, and user-state changes.
 - `npm.cmd test` passed all 379 unit, contract, integration, and security
   suites with 0 failures and 0 skips after this change.
+
+## Dashboard diagnostic file retention boundary: 2026-10-24 (SK-051)
+
+- `node test/run-all.js test/dashboard-error-boundary.test.js
+  test/dashboard-honesty.test.js test/security-dashboard-bootstrap.test.js
+  --concurrency=1 --overall-timeout-ms=900000 --json` passed all 3 suites,
+  0 failures and 0 skips.
+- The test forces multiple rotations with a small cap, verifies both retained
+  JSONL files remain within the configured bounds and parse as complete lines,
+  verifies oversized entries are dropped, and verifies untrusted component
+  labels cannot expand a record beyond its safe bound.
+- After SK-051, `npm.cmd test` passed all 379 unit, contract, integration, and
+  security suites with 0 failures and 0 skips.
+- `npm.cmd run check:docs`, `check:architecture`, and `check:tests`, plus the
+  focused static-code-quality suite, passed.

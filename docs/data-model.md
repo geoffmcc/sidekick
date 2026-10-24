@@ -8,7 +8,7 @@ Sidekick stores core persistent state in SQLite (`sidekick.db`) under `SIDEKICK_
 |---|---|
 | `sidekick.db` (SQLite) | Primary database: KV store, structured memories, tool logs, named JSON documents, tool registry, tool categories, knowledge base, schema metadata. |
 | `audit.jsonl` | Dashboard audit events for mutating API actions. |
-| `dashboard-errors.log` | Frontend or dashboard error reports. |
+| `dashboard-errors.log` and `dashboard-errors.log.1` | Redacted frontend or Dashboard diagnostics. Each is capped at 5 MiB; only the current file and one rotated file are retained. |
 | `json_documents` table | Stores named documents such as `cron`, `webhooks`, `context`, `resume`, and `watches`. Older constant names remain in code for compatibility, but the active load/save path uses this table. |
 | `procedures.json` | Learned procedures used by `sidekick_teach`. |
 | `conversations/` | Agent task transcripts. Files older than 30 days are removed on Agent Bridge startup. |
