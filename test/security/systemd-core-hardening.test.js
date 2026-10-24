@@ -2,8 +2,10 @@
 
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const { test } = require("node:test");
+const { configureWorkspaceWritePath } = require("../../packaging/execution-node/configure-systemd-workspace");
 
 const root = path.resolve(__dirname, "..", "..");
 const CORE_UNITS = [
@@ -65,4 +67,26 @@ test("metrics collector reads its credential from the protected secret directory
   assert.match(unit, /^EnvironmentFile=-\/etc\/sidekick\/sidekick\.env$/m);
   assert.doesNotMatch(unit, /EnvironmentFile=.*\/sidekick\/\.env$/m,
     "metrics must not load credentials from the repository dotenv file");
+});
+
+test("execution-node installer grants systemd writes only to an explicitly writable workspace", t => {
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-node-systemd-"));
+  t.after(() => fs.rmSync(fixture, { recursive: true, force: true }));
+  const home = path.join(fixture, "home");
+  const workspace = path.join(home, "Projects", "Research 100%");
+  const configDirectory = path.join(home, ".config", "sidekick");
+  const unitDirectory = path.join(home, ".config", "systemd", "user");
+  fs.mkdirSync(workspace, { recursive: true });
+  fs.mkdirSync(configDirectory, { recursive: true });
+  const configPath = path.join(configDirectory, "node.json");
+  fs.writeFileSync(configPath, JSON.stringify({ workspace, permissions: { write: true } }));
+
+  const enabled = configureWorkspaceWritePath({ configPath, home, unitDirectory });
+  assert.equal(enabled.writeEnabled, true);
+  assert.match(fs.readFileSync(enabled.dropInPath, "utf8"), /ReadWritePaths=.*Research 100%%/);
+
+  fs.writeFileSync(configPath, JSON.stringify({ workspace, permissions: { write: false } }));
+  const disabled = configureWorkspaceWritePath({ configPath, home, unitDirectory });
+  assert.equal(disabled.writeEnabled, false);
+  assert.equal(fs.existsSync(enabled.dropInPath), false, "removing the local write grant removes its OS write path");
 });

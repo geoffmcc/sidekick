@@ -469,3 +469,19 @@ test/security-install-scripts.test.js --concurrency=1
 `bash -n` could not run in this Windows environment because Bash launch was
 denied by the host. Linux systemd execution and an installer run remain
 unverified; no production service or timer was changed.
+
+### Execution-node systemd workspace grants
+
+The WSL user unit protects the home tree as read-only. That blocked authorized
+workspace write operations even when both the local node config and Core
+workspace grant allowed them. The installer now creates a systemd drop-in with
+`ReadWritePaths` for only the configured real workspace under `~/Projects`,
+and only when `permissions.write` is explicitly true. Removing that local grant
+removes the generated write path. The default workspace now resolves under the
+installing user's home directory rather than a fixed username.
+
+Validation: execution-node administration and systemd hardening suites passed;
+the installer behavior regression verifies narrow path generation, `%` path
+escaping, and removal after revocation. `npm run check:docs` and `git diff
+--check` passed. The WSL installer and systemd namespace behavior were not run
+on this Windows host.
