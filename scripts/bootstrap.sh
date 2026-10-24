@@ -284,7 +284,7 @@ if [ "$INSTALL_SERVICES" = true ]; then
   for unit in sidekick-mcp.service sidekick-dashboard.service sidekick-agent.service sidekick-metrics.timer; do
     if [ -f "/etc/systemd/system/$unit" ]; then
       if [ "$unit" = "sidekick-metrics.timer" ]; then
-        if node "$SCRIPT_DIR/verify-runtime-secret.js" SIDEKICK_INFLUX_TOKEN /etc/sidekick/secrets >/dev/null 2>&1; then
+        if sudo -u "$USERNAME" node "$SCRIPT_DIR/verify-runtime-secret.js" SIDEKICK_INFLUX_TOKEN /etc/sidekick/secrets >/dev/null 2>&1; then
           systemctl enable --now "$unit"
           log "  Enabled and started $unit"
         else

@@ -60,7 +60,7 @@ test("metrics timer provisioning checks the protected Influx secret file", () =>
   const verifier = read("scripts/verify-runtime-secret.js");
   const deploy = read("deploy.ps1");
   for (const script of [bootstrap, setup]) {
-    assert.match(script, /verify-runtime-secret\.js" SIDEKICK_INFLUX_TOKEN \/etc\/sidekick\/secrets/);
+    assert.match(script, /sudo -u "\$USERNAME" node "\$SCRIPT_DIR\/verify-runtime-secret\.js" SIDEKICK_INFLUX_TOKEN \/etc\/sidekick\/secrets/);
     assert.doesNotMatch(script, /grep -q '\^SIDEKICK_INFLUX_TOKEN=/,
       "installer must not enable metrics based on a raw dotenv credential");
   }

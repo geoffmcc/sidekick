@@ -461,7 +461,8 @@ which could both miss a valid file-backed token and enable the timer for an
 environment-only token that production code rejects. The unit now receives the
 protected secret directory and system configuration file, applies the Core
 service hardening profile, and both installers check the secret through the
-runtime file reader without printing its value.
+runtime file reader as the `sidekick` service identity without printing its
+value.
 
 Validation: `node test/run-all.js test/security/systemd-core-hardening.test.js
 test/security-install-scripts.test.js --concurrency=1
