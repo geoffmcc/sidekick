@@ -220,6 +220,15 @@ function boundedResult(result, maxOutputBytes = effectiveOutputLimit()) {
   if (truncated && bounded && typeof bounded === "object" && !Array.isArray(bounded)) bounded.truncated = true;
   return bounded;
 }
+function createNodeExecutionContext(jobContext = {}, targetWorkspace = workspace, signal = null) {
+  return {
+    ...(jobContext && typeof jobContext === "object" ? jobContext : {}),
+    signal,
+    // Derive this only from the node's locally configured grant. Job payload
+    // fields are control-plane data and cannot make a read-only mount writable.
+    workspaceReadOnly: targetWorkspace?.permissions?.write !== true,
+  };
+}
 async function enroll() {
   const existing = credentialStore.load(CREDENTIAL_PATH);
   if (existing) { workerId = existing.workerId; credential = existing.credential; const check = await request("POST", "/execution-node/node/heartbeat", { capabilities: capabilities(), descriptorSetHash: descriptorSetHash(), protocolVersion: PROTOCOL_VERSION, limits: { maxConcurrent: effectiveConcurrency(), maxOutputBytes: effectiveOutputLimit() } }); if (check.status === 200) return; workerId = null; credential = null; }
@@ -246,7 +255,7 @@ async function execute(job, controller = new AbortController()) {
   }
   const deadlineTimer = deadlineAt ? setTimeout(() => controller.abort(Object.assign(new Error("node execution deadline expired"), { code: "node_execution_timeout" })), Math.max(0, Date.parse(deadlineAt) - Date.now())) : null;
   try {
-    const executionContext = { ...(job.context || {}), signal: controller.signal };
+    const executionContext = createNodeExecutionContext(job.context, workspace, controller.signal);
     const result = boundedResult(await toolContext.runWithContext(executionContext, () => descriptor.handler(args, { signal: controller.signal, context: executionContext, timeoutMs, deadlineAt })));
     if (controller.signal.aborted) throw controller.signal.reason || Object.assign(new Error("node execution cancelled"), { code: "node_execution_cancelled" });
     if (timeoutMs && Date.now() - started > timeoutMs) throw Object.assign(new Error(`node execution exceeded its ${timeoutMs}ms deadline`), { code: "node_execution_timeout" });
@@ -262,4 +271,4 @@ function status() { const record = credentialStore.load(CREDENTIAL_PATH); consol
 async function doctor() { const checks = []; try { prepare(); checks.push({ name: "workspace", ok: true, repositories: discoverRepositories(workspace).length }); } catch (error) { checks.push({ name: "workspace", ok: false, error: error.message }); } const record = credentialStore.load(CREDENTIAL_PATH); checks.push({ name: "credential", ok: Boolean(record), state: record ? "present" : "not_enrolled" }); checks.push({ name: "enrollment_token", ok: Boolean(token()), state: token() ? "configured" : "not_configured" }); checks.push({ name: "descriptor_set", ok: (() => { try { descriptorSetHash(); return true; } catch { return false; } })() }); console.log(JSON.stringify({ ok: checks.every(check => check.ok), checks }, null, 2)); if (checks.some(check => !check.ok)) process.exitCode = 1; }
 async function runCommand(command) { if (command === "version") return console.log(VERSION); if (command === "status") { nodeConfig = loadConfig(); return status(); } if (command === "doctor") return doctor(); if (command === "enroll") { prepare(); await enroll(); return; } return main(); }
 if (require.main === module) runCommand(process.argv[2] || "run").catch(error => { log(error.message); process.exitCode = 1; });
-module.exports = { capabilities, descriptorSetHash, validateLocalArguments, createDeveloperServices, boundedResult, effectiveConcurrency, effectiveOutputLimit, createWorkspace, binaries, commandOnPath, request };
+module.exports = { capabilities, descriptorSetHash, validateLocalArguments, createDeveloperServices, createNodeExecutionContext, boundedResult, effectiveConcurrency, effectiveOutputLimit, createWorkspace, binaries, commandOnPath, request };

@@ -197,7 +197,7 @@ function buildPrlimitArgs(command) {
   ];
 }
 
-function buildBubblewrapArgs({ command, workspace = null, workspaceFd = null, source = "mcp", binaryPath = DEFAULT_BWRAP } = {}) {
+function buildBubblewrapArgs({ command, workspace = null, workspaceFd = null, workspaceReadOnly = false, source = "mcp", binaryPath = DEFAULT_BWRAP } = {}) {
   validateCommand(command);
   const executable = resolveBubblewrap(binaryPath);
   resolvePrlimit();
@@ -205,10 +205,10 @@ function buildBubblewrapArgs({ command, workspace = null, workspaceFd = null, so
   if (canonicalWorkspace && workspaceFd !== 4) {
     throw isolationError("An authorized open workspace descriptor is required; command execution was not started", "workspace_invalid");
   }
-  return composeBubblewrapArgs({ command, canonicalWorkspace, workspaceFd, executable });
+  return composeBubblewrapArgs({ command, canonicalWorkspace, workspaceFd, workspaceReadOnly, executable });
 }
 
-function composeBubblewrapArgs({ command, canonicalWorkspace, workspaceFd, executable }) {
+function composeBubblewrapArgs({ command, canonicalWorkspace, workspaceFd, workspaceReadOnly = false, executable }) {
   const args = [
     "--unshare-all",
     "--die-with-parent",
@@ -226,7 +226,7 @@ function composeBubblewrapArgs({ command, canonicalWorkspace, workspaceFd, execu
     if (fs.existsSync(mount)) args.push("--ro-bind", mount, mount);
   }
   args.push("--proc", "/proc", "--dev", "/dev", "--size", String(MAX_TMPFS_BYTES), "--tmpfs", "/tmp", "--dir", "/tmp/home");
-  if (canonicalWorkspace) args.push("--bind-fd", String(workspaceFd), "/workspace");
+  if (canonicalWorkspace) args.push(workspaceReadOnly ? "--ro-bind-fd" : "--bind-fd", String(workspaceFd), "/workspace");
   else args.push("--dir", "/workspace");
   args.push(
     "--chdir", "/workspace", "--", PRLIMIT,
@@ -235,7 +235,7 @@ function composeBubblewrapArgs({ command, canonicalWorkspace, workspaceFd, execu
   return { executable, args, workspace: canonicalWorkspace };
 }
 
-async function runBubblewrap({ command, workspace = null, source = "mcp", timeoutMs, signal, maxBuffer = DEFAULT_OUTPUT_BUFFER_BYTES } = {}) {
+async function runBubblewrap({ command, workspace = null, workspaceReadOnly = false, source = "mcp", timeoutMs, signal, maxBuffer = DEFAULT_OUTPUT_BUFFER_BYTES } = {}) {
   validateCommand(command);
   const outputBufferLimit = normalizeOutputBufferLimit(maxBuffer);
   const executable = resolveBubblewrap();
@@ -247,6 +247,7 @@ async function runBubblewrap({ command, workspace = null, source = "mcp", timeou
       command,
       canonicalWorkspace: workspaceBinding?.path || null,
       workspaceFd: workspaceBinding ? 4 : null,
+      workspaceReadOnly: workspaceReadOnly === true,
       executable,
     });
   } catch (error) {

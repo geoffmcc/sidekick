@@ -16,11 +16,12 @@ const authentication = require("../src/core/authentication");
 const authorization = require("../src/core/authorization");
 const express = require("express");
 const { registerExecutionNodeAdminRoutes } = require("../src/node/admin-api");
-const { validateLocalArguments, createDeveloperServices, boundedResult, effectiveConcurrency, effectiveOutputLimit } = require("../src/node/agent");
+const { validateLocalArguments, createDeveloperServices, createNodeExecutionContext, boundedResult, effectiveConcurrency, effectiveOutputLimit } = require("../src/node/agent");
 const { createWorkspace } = require("../src/node/workspace");
 const { workspacePermissionForTool } = require("../src/node/workspace-permissions");
 const { getCanonicalRegistry } = require("../src/tools/canonical-registry");
 const { normalizeDescriptor } = require("../src/tools/descriptor");
+const toolContext = require("../src/tools/context");
 const developerEntry = require("../packs/developer/modules/developer-tools/entry");
 
 const owner = identity.bootstrapOwner({ username: "node_admin_test_owner", password: "synthetic test password with sufficient length" });
@@ -210,6 +211,19 @@ test("execution node refuses symlink components in workspace paths", t => {
     /symlinks are not permitted/,
     "workspace validation must inspect the supplied path before realpath follows its symlink"
   );
+});
+
+test("execution-node read-only workspace mode is locally derived and survives nested dispatch", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-node-readonly-context-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const readOnlyWorkspace = createWorkspace({ name: "read-only-shell", root, permissions: { read: true, write: false, execute: true } });
+  const writableWorkspace = createWorkspace({ name: "writable-shell", root, permissions: { read: true, write: true, execute: true } });
+  assert.equal(createNodeExecutionContext({ workspaceReadOnly: false }, readOnlyWorkspace).workspaceReadOnly, true, "untrusted job data cannot request a writable mount");
+  assert.equal(createNodeExecutionContext({ workspaceReadOnly: true }, writableWorkspace).workspaceReadOnly, false, "the local write grant determines the mount mode");
+
+  const parent = toolContext.createExecutionContext({ workspaceReadOnly: true });
+  const inherited = await toolContext.runWithContext(parent, () => toolContext.createExecutionContext({ workspaceReadOnly: false }));
+  assert.equal(inherited.workspaceReadOnly, true, "nested canonical dispatch cannot clear a read-only parent restriction");
 });
 
 test("every node-safe built-in and Developer tool has an explicit workspace permission classification", () => {

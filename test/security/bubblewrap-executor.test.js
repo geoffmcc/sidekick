@@ -180,11 +180,18 @@ test("workspace binding permits scoped writes and hides unrelated host files and
   const args = executor.buildBubblewrapArgs({ command: "true", workspace, workspaceFd: 4, source: "mcp" });
   assert.ok(args.args.includes("--bind-fd"), "workspace must be bound from the authorized open descriptor");
   assert.ok(!args.args.includes(workspace), "sandbox arguments must not reopen the authorized workspace by path");
+  const readOnlyArgs = executor.buildBubblewrapArgs({ command: "true", workspace, workspaceFd: 4, workspaceReadOnly: true, source: "mcp" });
+  assert.ok(readOnlyArgs.args.includes("--ro-bind-fd"), "a workspace without a write grant must use a read-only descriptor mount");
+  assert.ok(!readOnlyArgs.args.includes("--bind-fd"), "read-only workspace execution must not include a writable bind");
 
   const command = `grep -qx authorized-workspace input.txt && printf workspace-write > output.txt && test ! -e ${shellQuote(outside)}`;
   const result = await executor.runBubblewrap({ command, workspace, source: "mcp" });
   assert.equal(result.exitCode, 0, result.stderr);
   assert.equal(fs.readFileSync(path.join(workspace, "output.txt"), "utf8"), "workspace-write");
+
+  const readOnly = await executor.runBubblewrap({ command: "printf denied > read-only-output.txt", workspace, workspaceReadOnly: true, source: "mcp" });
+  assert.notEqual(readOnly.exitCode, 0, "a read-only mount rejects shell writes");
+  assert.equal(fs.existsSync(path.join(workspace, "read-only-output.txt")), false, "failed shell writes leave the host workspace unchanged");
 
   const server = http.createServer((_req, res) => res.end("host-network-visible"));
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));

@@ -58,6 +58,7 @@ async function sidekick_bash({ command, cwd }, runtime = {}) {
     const result = await runBubblewrap({
       command,
       workspace: cwd,
+      workspaceReadOnly: runtime?.context?.workspaceReadOnly === true,
       source: runtime?.context?.source || "mcp",
       timeoutMs: timeout,
       signal: runtime?.signal,
