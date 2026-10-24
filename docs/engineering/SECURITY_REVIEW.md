@@ -948,3 +948,25 @@ through MCP, Dashboard, and Agent dispatch, including public access, scoped
 reads, and denied lifecycle mutations. This closes only the capability action
 slice; equivalent coverage for all tools and direct routes remains open under
 SK-008.
+
+### Handoff-derived memory trust (2026-10-24, SK-072)
+
+Confirmed persistence trust gap: handoff extraction required confirmation only
+for entries classified as facts. The same untrusted handoff could label
+instruction-like content as a decision, procedure, negative, session, or open
+thread; those records were stored as active memories and were eligible for
+automatic recall. Legacy `handoff` and `task_session` memories of those types
+also bypassed the confirmation check when their rows predated the explicit
+confirmation flag.
+
+All agent-generated memories from those two sources now require explicit
+confirmation, regardless of memory type. Existing legacy rows receive the
+same protection during recall without rewriting stored data. Direct review
+remains available, and an authenticated confirmation restores automatic recall.
+This limits memory trust promotion; it does not claim that confirmed content is
+factually correct or eliminate prompt injection from other untrusted sources.
+
+Validation: `test/security-memory-authority.test.js` checks legacy and current
+memory types, and `test/memory-intelligence.test.js` exercises extraction,
+automatic-recall exclusion, and post-confirmation use. The canonical security
+tier passes 168/168 suites. No production database was accessed or changed.

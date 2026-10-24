@@ -49,6 +49,17 @@ test("caller-supplied memory source cannot promote authority", async () => {
   assert.equal(stored.metadata.requested_source, "user_correction");
 });
 
+test("legacy handoff and task-session memories of every type remain untrusted until confirmed", () => {
+  for (const source of ["handoff", "task_session"]) {
+    for (const type of ["fact", "decision", "procedure", "negative", "session", "open_thread", "observation"]) {
+      assert.equal(requiresMemoryConfirmation({ source, type, state: "active", requires_confirmation: false }), true,
+        `${source}/${type} legacy memory must not become trusted by omission`);
+      assert.equal(requiresMemoryConfirmation({ source, type, state: "confirmed", requires_confirmation: false }), false,
+        `${source}/${type} memory may enter trusted context after explicit confirmation`);
+    }
+  }
+});
+
 test("project write access cannot correct or confirm high-authority memory", async () => {
   const original = db.upsertMemory({ type: "fact", project: "memory_authority_project", content: "original synthetic fact", summary: "original synthetic fact", source: "explicit", source_authority: 5, requires_confirmation: true });
   assert.equal(dispatcher.requiredToolPermission(memory, { action: "correct" }), "tools.execute_critical");
