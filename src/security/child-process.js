@@ -57,7 +57,8 @@ function containsCredentialUrl(value) {
     if (parsed.username || parsed.password) return true;
     const hasCredentialParameter = (name, parameterValue) => {
       const key = String(name || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-      return Boolean(parameterValue) && (key === "key" || /(?:password|passwd|passphrase|pwd|token|secret|credential|authorization|auth|apikey|accesskey|privatekey|bearer|jwt)/i.test(key));
+      const signedUrlParameter = key === "sig" || key.endsWith("signature");
+      return Boolean(parameterValue) && (key === "key" || signedUrlParameter || /(?:password|passwd|passphrase|pwd|token|secret|credential|authorization|auth|apikey|accesskey|privatekey|bearer|jwt)/i.test(key));
     };
     // Credentials are also commonly carried in URL query strings, especially
     // by database, cache, and identity-provider connection URLs. These env

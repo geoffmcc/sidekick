@@ -39,6 +39,8 @@ test("child-process environments remove URL query credentials but retain non-sec
     REDIS_URL: "rediss://cache.internal/0?access_token=synthetic-cache-token",
     OIDC_ISSUER_URL: "https://example.invalid/issuer?client_secret=synthetic-client-secret",
     JDBC_URL: "jdbc:sqlserver://db.internal;database=app;password=synthetic-jdbc-password",
+    AZURE_BLOB_URL: "https://example.invalid/blob?sv=2026-01-01&sig=synthetic-sas-signature",
+    GCS_SIGNED_URL: "https://example.invalid/object?X-Goog-Signature=synthetic-object-signature",
     DATABASE_READONLY_URL: "postgres://db.internal/app?sslmode=require",
   });
 
@@ -46,5 +48,7 @@ test("child-process environments remove URL query credentials but retain non-sec
   assert.equal(childEnv.REDIS_URL, undefined, "URL query access tokens must not cross the child-process boundary");
   assert.equal(childEnv.OIDC_ISSUER_URL, undefined, "URL query client secrets must not cross the child-process boundary");
   assert.equal(childEnv.JDBC_URL, undefined, "semicolon-style JDBC passwords must not cross the child-process boundary");
+  assert.equal(childEnv.AZURE_BLOB_URL, undefined, "signed URL sig parameters must not cross the child-process boundary");
+  assert.equal(childEnv.GCS_SIGNED_URL, undefined, "cloud storage URL signatures must not cross the child-process boundary");
   assert.equal(childEnv.DATABASE_READONLY_URL, "postgres://db.internal/app?sslmode=require", "non-secret URL options should remain available");
 });
