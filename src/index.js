@@ -696,11 +696,7 @@ function adminRotateWorkerCredentialHandler(req, res) {
 }
 
 function computeHealthHandler(req, res) {
-  try {
-    res.json({ ok: true, overview: compute.overview() });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  return require("./compute/admin-api").sendComputeHealthResponse(res, compute);
 }
 
 // Canonical Compute routes. Enrollment exchange is public but validates a one-time token;

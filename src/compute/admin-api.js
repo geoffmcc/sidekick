@@ -86,6 +86,14 @@ function createAtomicAuditMiddleware({ dbStore, identity }, eventType = "compute
   };
 }
 
+function sendComputeHealthResponse(res, compute) {
+  try {
+    return res.json({ ok: true, overview: compute.overview() });
+  } catch {
+    return res.status(500).json({ ok: false, error: "Compute health check failed", code: "compute_health_unavailable" });
+  }
+}
+
 function registerComputeAdminRoutes({ app, express, authentication, authorization, identity, dbStore, projectAccess, platformKernel, compute, handlers }) {
   const requirePermission = permission => createPermissionMiddleware(
     { authentication, authorization, resourceType: "compute_admin", denialMessage: "Compute administration denied" },
@@ -133,4 +141,4 @@ function registerComputeAdminRoutes({ app, express, authentication, authorizatio
   app.get("/compute/health", nodesRead, jobsRead, auditRead, handlers.health);
 }
 
-module.exports = Object.freeze({ createProjectJobScopeMiddleware, createAtomicAuditMiddleware, registerComputeAdminRoutes });
+module.exports = Object.freeze({ createProjectJobScopeMiddleware, createAtomicAuditMiddleware, sendComputeHealthResponse, registerComputeAdminRoutes });
