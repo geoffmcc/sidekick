@@ -108,7 +108,7 @@ test("provider credential resolution preserves delegated permission limits", () 
   );
 });
 
-test("provider secret use revalidates a long-lived credential after scope reduction", () => {
+test("provider and connector secret use revalidate a long-lived credential after scope reduction", () => {
   const principal = identity.createPrincipal({
     type: "service",
     displayName: "Synthetic provider secret client",
@@ -127,9 +127,11 @@ test("provider secret use revalidates a long-lived credential after scope reduct
 
   db.getDb().prepare("UPDATE identity_credentials SET scopes_json = ? WHERE credential_id = ?")
     .run(JSON.stringify([]), credential.credential.credential_id);
+  const context = executionContext(capturedIdentity);
+  assert.throws(() => runWithContext(context, () => resolveProviderApiKey(provider)), error => error.code === "forbidden");
   assert.throws(
-    () => runWithContext(executionContext(capturedIdentity), () => resolveProviderApiKey(provider)),
-    error => error.code === "forbidden",
+    () => resolveSecretRef("secret:synthetic_provider_credential", { context }),
+    error => error.code === "credential_invalid" || error.code === "forbidden",
   );
 });
 
