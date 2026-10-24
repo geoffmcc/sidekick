@@ -169,7 +169,8 @@ function countChromeProcesses() {
     const result = parse(await dispatch({ action: "navigate", session: sessionId, url: `${base}/` }));
     assert.strictEqual(result.ok, true, JSON.stringify(result));
     assert.strictEqual(result.status, 200);
-    assert.ok(result.page.url.endsWith("/"));
+    const location = parse(await dispatch({ action: "assert", session: sessionId, assertions: [{ kind: "url_contains", value: "/" }] }));
+    assert.strictEqual(location.passed, true, "browser did not land on the fixture root");
   });
 
   await test("snapshot returns JS-RENDERED text as untrusted content", async () => {
@@ -333,17 +334,18 @@ function countChromeProcesses() {
     await new Promise((r) => setTimeout(r, 300));
     const pages = parse(await dispatch({ action: "pages", session: sessionId }));
     assert.ok(pages.pages.length >= 2, `expected a popup page, saw ${pages.pages.length}`);
-    const popup = pages.pages.find((p) => p.url.endsWith("/popup"));
+    const popup = pages.pages.find((p) => p.title === "Popup");
     assert.ok(popup, "popup page not found");
     const switched = parse(await dispatch({ action: "switch_page", session: sessionId, page: popup.id }));
-    assert.ok(switched.page.url.endsWith("/popup"));
+    assert.strictEqual(switched.page.title, "Popup");
     await dispatch({ action: "close_page", session: sessionId, page: popup.id });
   });
 
   await test("server-side redirect chain is followed to the allowed landing page", async () => {
     const result = parse(await dispatch({ action: "navigate", session: sessionId, url: `${base}/redir-start` }));
     assert.strictEqual(result.status, 200);
-    assert.ok(result.page.url.endsWith("/redir-end"), `landed on ${result.page.url}`);
+    const location = parse(await dispatch({ action: "assert", session: sessionId, assertions: [{ kind: "url_contains", value: "/redir-end" }] }));
+    assert.strictEqual(location.passed, true, "browser did not follow the redirect chain to its final path");
   });
 
   await test("loopback is blocked for a session without private-network opt-in", async () => {
@@ -377,7 +379,7 @@ function countChromeProcesses() {
   });
 
   await test("cross-session isolation: a fresh session shares no auth cookie", async () => {
-    const fresh = parse(await dispatch({ action: "open", network_scope: "browser-fixture", project: "other-project", label: "fresh" }));
+    const fresh = parse(await dispatch({ action: "open", network_scope: "browser-fixture", label: "fresh" }, { project: "other-project" }));
     const freshId = fresh.session.id;
     const dash = parse(await dispatch({ action: "navigate", session: freshId, url: `${base}/dashboard` }));
     const check = parse(await dispatch({ action: "assert", session: freshId, assertions: [{ kind: "text_visible", value: "Not logged in" }] }));
