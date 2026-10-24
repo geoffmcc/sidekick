@@ -446,8 +446,8 @@ and tool auditing. The statistics tool now skips per-table count queries when
 `detailed` is false, avoiding unnecessary scans for the Dashboard summary. The
 focused `node test/run-all.js test/security-dashboard-direct-routes.test.js
 test/security-project-access.test.js test/db-tools.test.js
-test/tool-family-database-inspection.test.cjs --concurrency=1
---overall-timeout-ms=300000` run passed all four suites, including
+test/tool-family-database-inspection.test.cjs test/security-invariants.test.js --concurrency=1
+--overall-timeout-ms=300000` run passed all five suites, including
 denied-before-storage checks, dispatcher use and response compatibility, and
 approval-required backup behavior. The broader Dashboard route authorization
 review remains in progress.

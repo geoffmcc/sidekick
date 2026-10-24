@@ -372,6 +372,18 @@ test("database query, search, log, and diff handlers reject direct calls before 
   }
 });
 
+test("database schema and statistics handlers reject calls without an authorized dispatch context", async () => {
+  const family = require("../src/tools/families/database-inspection");
+  const results = await Promise.all([
+    family.sidekick_db_schema({ verbose: true }),
+    family.sidekick_db_stats({ detailed: false }),
+  ]);
+  for (const result of results) {
+    assert.equal(result.isError, true);
+    assert.equal(result.code, "unauthenticated");
+  }
+});
+
 test("database diff bounds and validates imported snapshot files", async () => {
   const family = require("../src/tools/families/database-inspection");
   const context = require("./helpers/authorized-context").createServiceContext({ role: "operator", source: "mcp" });
