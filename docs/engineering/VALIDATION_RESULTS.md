@@ -466,6 +466,9 @@ runtime file reader without printing its value.
 Validation: `node test/run-all.js test/security/systemd-core-hardening.test.js
 test/security-install-scripts.test.js --concurrency=1
 --overall-timeout-ms=300000` passed both suites; `git diff --check` passed.
+The verifier regression uses synthetic secrets to prove valid file-backed tokens
+are accepted while placeholders and environment-only values are rejected, with
+no secret value printed.
 `bash -n` could not run in this Windows environment because Bash launch was
 denied by the host. Linux systemd execution and an installer run remain
 unverified; no production service or timer was changed.

@@ -3,7 +3,9 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
+const { spawnSync } = require("node:child_process");
 
 const root = path.resolve(__dirname, "..");
 const read = relative => fs.readFileSync(path.join(root, relative), "utf8");
@@ -67,4 +69,33 @@ test("metrics timer provisioning checks the protected Influx secret file", () =>
   assert.doesNotMatch(verifier, /console\.(?:log|error).*value/);
   assert.match(deploy, /scripts\\verify-runtime-secret\.js/,
     "incremental deployment must upload the new installer helper");
+});
+
+test("runtime-secret verifier accepts only the protected file and never prints its value", t => {
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-runtime-secret-verifier-"));
+  t.after(() => fs.rmSync(fixture, { recursive: true, force: true }));
+  const secretDir = path.join(fixture, "secrets");
+  fs.mkdirSync(secretDir);
+  const secretFile = path.join(secretDir, "sidekick_influx_token");
+  const verifier = path.join(root, "scripts/verify-runtime-secret.js");
+  const env = { ...process.env, SIDEKICK_INFLUX_TOKEN: "synthetic-environment-only-token" };
+
+  fs.writeFileSync(secretFile, "synthetic-file-backed-token\n", { mode: 0o600 });
+  fs.chmodSync(secretFile, 0o600);
+  let result = spawnSync(process.execPath, [verifier, "SIDEKICK_INFLUX_TOKEN", secretDir], { encoding: "utf8", env });
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, "");
+
+  fs.writeFileSync(secretFile, "sidekick-influx-token\n", { mode: 0o600 });
+  fs.chmodSync(secretFile, 0o600);
+  result = spawnSync(process.execPath, [verifier, "SIDEKICK_INFLUX_TOKEN", secretDir], { encoding: "utf8", env });
+  assert.equal(result.status, 1, "placeholder file contents cannot enable the timer");
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, "");
+
+  result = spawnSync(process.execPath, [verifier, "SIDEKICK_INFLUX_TOKEN", path.join(fixture, "missing")], { encoding: "utf8", env });
+  assert.equal(result.status, 1, "an environment-only token cannot enable the timer");
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, "");
 });
