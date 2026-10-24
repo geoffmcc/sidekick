@@ -32,6 +32,17 @@ function copyResponseHeaders(res, webRes) {
   });
 }
 
+function reportRouteFailure(logDebug, event, sessionId) {
+  // Exception messages and stacks can contain credentials, request data, or
+  // local paths. Keep the client response and routine logs independent of
+  // exception-controlled text; detailed diagnostics belong in a separately
+  // protected operator channel.
+  const safeSessionId = typeof sessionId === "string" && /^[A-Za-z0-9._:-]{1,128}$/.test(sessionId)
+    ? sessionId
+    : null;
+  try { logDebug(event, { error: "internal_error", sessionId: safeSessionId }); } catch {}
+}
+
 function waitForDrainOrClose(res, isDisconnected) {
   return new Promise((resolve, reject) => {
     const cleanup = () => {
@@ -140,9 +151,8 @@ function registerStreamableHttpRoutes({ app, sessionManager, createMcpServer, lo
       copyResponseHeaders(res, webRes);
       await relayResponseBody(webRes.body, res);
     } catch (e) {
-      console.error("MCP error:", e.message);
-      logDebug("MCP_POST_ERROR", { error: e.message, stack: e.stack, sessionId: req.headers["mcp-session-id"] });
-      if (!res.headersSent) res.status(500).json({ error: e.message });
+      reportRouteFailure(logDebug, "MCP_POST_ERROR", req.headers["mcp-session-id"]);
+      if (!res.headersSent) res.status(500).json({ error: "MCP request failed" });
       else res.destroy(e);
     }
   });
@@ -167,9 +177,8 @@ function registerStreamableHttpRoutes({ app, sessionManager, createMcpServer, lo
       copyResponseHeaders(res, webRes);
       await relayResponseBody(webRes.body, res);
     } catch (e) {
-      console.error("MCP GET error:", e.message);
-      logDebug("MCP_GET_ERROR", { error: e.message, stack: e.stack, sessionId: req.headers["mcp-session-id"] });
-      if (!res.headersSent) res.status(500).json({ error: e.message });
+      reportRouteFailure(logDebug, "MCP_GET_ERROR", req.headers["mcp-session-id"]);
+      if (!res.headersSent) res.status(500).json({ error: "MCP request failed" });
       else res.destroy(e);
     }
   });
@@ -198,9 +207,8 @@ function registerStreamableHttpRoutes({ app, sessionManager, createMcpServer, lo
       copyResponseHeaders(res, webRes);
       await relayResponseBody(webRes.body, res);
     } catch (e) {
-      console.error("MCP DELETE error:", e.message);
-      logDebug("MCP_DELETE_ERROR", { error: e.message, stack: e.stack, sessionId: req.headers["mcp-session-id"] });
-      if (!res.headersSent) res.status(500).json({ error: e.message });
+      reportRouteFailure(logDebug, "MCP_DELETE_ERROR", req.headers["mcp-session-id"]);
+      if (!res.headersSent) res.status(500).json({ error: "MCP request failed" });
       else res.destroy(e);
     }
   });

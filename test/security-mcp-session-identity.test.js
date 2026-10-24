@@ -85,6 +85,37 @@ test("MCP streamable HTTP returns 403 for another principal's session", async t 
   assert.equal(res.body.code, "session_identity_mismatch");
 });
 
+test("MCP transport failures hide exception details from clients and routine logs", async t => {
+  const secretDiagnostic = "synthetic-secret /srv/sidekick/private/config.json";
+  const manager = createSessionManager({ createMcpServer: () => ({}), logDebug() {} });
+  t.after(() => manager.dispose());
+  const transport = { handleRequest: async () => { throw new Error(secretDiagnostic); } };
+  manager.registerSession("failing-session", {}, transport, { authIdentity: { principal_id: "prn_service" } });
+  const app = createApp();
+  const events = [];
+  registerStreamableHttpRoutes({
+    app,
+    sessionManager: manager,
+    createMcpServer: () => ({}),
+    logDebug: (event, details) => events.push({ event, details }),
+  });
+
+  for (const method of ["GET", "DELETE"]) {
+    const res = createResponse();
+    await app.routes.get(`${method} /mcp`)({
+      headers: { "mcp-session-id": "failing-session" },
+      authIdentity: { principal_id: "prn_service" },
+    }, res);
+    assert.equal(res.statusCode, 500);
+    assert.deepEqual(res.body, { error: "MCP request failed" });
+    assert.doesNotMatch(JSON.stringify(res.body), /synthetic-secret|private/);
+  }
+
+  assert.equal(events.length, 2);
+  assert.ok(events.every(({ details }) => details.error === "internal_error"));
+  assert.doesNotMatch(JSON.stringify(events), /synthetic-secret|private|stack/);
+});
+
 test("legacy SSE message posts cannot rebind another principal's session", async t => {
   const manager = createSessionManager({ createMcpServer: () => ({}), logDebug() {} });
   t.after(() => manager.dispose());
