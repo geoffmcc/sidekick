@@ -100,18 +100,27 @@ test("MCP transport failures hide exception details from clients and routine log
     logDebug: (event, details) => events.push({ event, details }),
   });
 
-  for (const method of ["GET", "DELETE"]) {
-    const res = createResponse();
-    await app.routes.get(`${method} /mcp`)({
-      headers: { "mcp-session-id": "failing-session" },
+  for (const method of ["GET", "DELETE", "POST"]) {
+    const request = {
+      headers: { "mcp-session-id": "failing-session", "content-type": "application/json" },
       authIdentity: { principal_id: "prn_service" },
-    }, res);
+    };
+    if (method === "POST") {
+      request.body = {
+        jsonrpc: "2.0",
+        method: "initialize",
+        id: 1,
+        params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "test", version: "1" } },
+      };
+    }
+    const res = createResponse();
+    await app.routes.get(`${method} /mcp`)(request, res);
     assert.equal(res.statusCode, 500);
     assert.deepEqual(res.body, { error: "MCP request failed" });
     assert.doesNotMatch(JSON.stringify(res.body), /synthetic-secret|private/);
   }
 
-  assert.equal(events.length, 2);
+  assert.equal(events.length, 3);
   assert.ok(events.every(({ details }) => details.error === "internal_error"));
   assert.doesNotMatch(JSON.stringify(events), /synthetic-secret|private|stack/);
 });
