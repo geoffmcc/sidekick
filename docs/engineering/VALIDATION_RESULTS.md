@@ -472,9 +472,10 @@ test/security-install-scripts.test.js --concurrency=1
 --overall-timeout-ms=300000` passed both suites; `git diff --check` passed.
 The verifier regression uses synthetic secrets to prove valid file-backed tokens
 are accepted while placeholders and environment-only values are rejected, with
-no secret value printed.
-`bash -n` could not run in this Windows environment because Bash launch was
-denied by the host. Linux systemd execution and an installer run remain
+no secret value printed. An initial PowerShell-hosted Bash syntax attempt was
+denied; after elevation was available, WSL `bash -n` passed for
+`scripts/bootstrap.sh`, `scripts/setup-tools.sh`, and both execution-node WSL
+installer scripts. Linux systemd runtime behavior and an installer run remain
 unverified; no production service or timer was changed.
 
 ### Execution-node systemd workspace grants
