@@ -482,6 +482,61 @@ function baseDefinition(overrides = {}) {
     }
   });
 
+  await test('WD.11k: resume restores recorded project scope and rejects conflicting scope', async () => {
+    const name = 'core/resume-project-scope';
+    const registered = repository.registerWorkflowDefinition({
+      name, version: '1.0.0', title: 'Resume project scope', description: 'Keeps project scope across restart', inputs: {},
+      steps: [{ name: 'read', tool: 'get', args: { key: 'resume-project-scope' }, expect: 'text' }], result: {},
+    }, { ownerKind: 'core' });
+    const principalId = authenticatedWorkflowContext.authIdentity.principal_id;
+    const createPausedRun = (projectId = 'workflow_suite') => {
+      const workflow = platformKernel.createWorkflow({
+        name,
+        description: 'Resume project scope',
+        steps: [{ name: 'read', tool_name: 'get', args: { key: 'resume-project-scope' } }],
+        project_id: projectId,
+        requested_by_principal_id: principalId,
+        actor_principal_id: principalId,
+        executed_by_principal_id: principalId,
+        metadata: { definition_checksum: registered.checksum },
+        checkpoint: { cursor: 'workflow_step', next_step: 0, total_steps: 1, inputs: {}, steps: {} },
+        source: 'test',
+      });
+      platformKernel.startWorkflow(workflow.workflow_id, { source: 'test' });
+      platformKernel.pauseWorkflow(workflow.workflow_id, { source: 'test' });
+      return workflow;
+    };
+
+    const originalDispatch = dispatcher.callInternalTool;
+    const dispatchedProjects = [];
+    dispatcher.callInternalTool = async (_tool, _args, options) => {
+      dispatchedProjects.push(options.project || null);
+      return { content: [{ type: 'text', text: 'scoped read completed' }], status: 'succeeded' };
+    };
+    try {
+      const resumable = createPausedRun();
+      const resumed = await toolContext.runWithContext(authenticatedWorkflowContext, () =>
+        runner.runWorkflowDefinition(name, {}, { resumeWorkflowId: resumable.workflow_id }));
+      assert.strictEqual(resumed.status, 'completed');
+      assert.strictEqual(dispatchedProjects[0], 'workflow_suite', 'omitting project on resume must retain the recorded scope');
+
+      const conflicting = createPausedRun();
+      const denied = await toolContext.runWithContext(authenticatedWorkflowContext, () =>
+        runner.runWorkflowDefinition(name, {}, { resumeWorkflowId: conflicting.workflow_id, project: 'another_project' }));
+      assert.strictEqual(denied.code, 'project_scope_denied');
+      assert.strictEqual(dispatchedProjects.length, 1, 'conflicting project scope must be rejected before a step dispatches');
+
+      const corrupted = createPausedRun();
+      dbStore.getDb().prepare('UPDATE platform_workflows SET project_id = ? WHERE workflow_id = ?').run('!!!', corrupted.workflow_id);
+      const invalid = await toolContext.runWithContext(authenticatedWorkflowContext, () =>
+        runner.runWorkflowDefinition(name, {}, { resumeWorkflowId: corrupted.workflow_id }));
+      assert.strictEqual(invalid.code, 'project_scope_invalid');
+      assert.strictEqual(dispatchedProjects.length, 1, 'invalid persisted project scope must fail before a step dispatches');
+    } finally {
+      dispatcher.callInternalTool = originalDispatch;
+    }
+  });
+
   await test('WD.11d: a thrown step failure appears in workflow steps and evidence', async () => {
     repository.registerWorkflowDefinition({
       name: 'core/thrown-step-failure', version: '1.0.0', title: 'Thrown failure', description: 'Records the failed step', inputs: {},

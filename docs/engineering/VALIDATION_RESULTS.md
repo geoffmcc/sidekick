@@ -891,3 +891,11 @@ about current lockfile vulnerability status.
   persisted `approved_by` value matches the authenticated reviewing principal.
 - The unused `approver` input was removed from the knowledge tool schema and
   reference guidance now describes the enforced approval path.
+
+## Workflow resume project-scope continuity: 2026-10-24 (SK-047)
+
+- `node test/run-all.js test/workflow-definitions.test.js --concurrency=1
+  --overall-timeout-ms=900000 --json` passed (1 suite, 0 failures, 0 skips).
+- Regression `WD.11k` verifies resumed dispatch retains the persisted project
+  when the caller omits it and rejects an explicit conflicting project before
+  any step dispatch; corrupted persisted project data also fails closed.

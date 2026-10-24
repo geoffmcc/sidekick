@@ -571,3 +571,17 @@ the persisted `approved_by` value matches the authenticated reviewing
 principal. No authorization bypass was confirmed. Removed the unused caller
 field from the schema and corrected the tools reference and seeded guidance so
 the documented contract matches implementation.
+
+### Workflow resume project-scope continuity (2026-10-24, SK-047)
+
+Workflow resume compared projects only when the caller supplied a current
+project. A project-bound run resumed without that field proceeded, while its
+nested tool dispatch omitted the recorded project. Current identity and
+per-tool authorization still applied, but the run did not consistently retain
+its original resource scope. Resume now canonicalizes the current project,
+rejects a mismatch, and uses the run's recorded project when the caller omits
+one. That stored value is scope metadata only: current identity is preserved,
+and every resumed step still goes through the canonical dispatcher for fresh
+authorization, policy, and approval checks. Invalid recorded project values
+fail closed. Regression coverage verifies omission retains scope and an
+explicit conflicting project is denied before dispatch.
