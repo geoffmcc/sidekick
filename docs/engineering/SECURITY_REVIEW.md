@@ -879,8 +879,14 @@ code and permissions to satisfy the in-process first-party exception. A
 synthetic modified copy of the bundled Developer pack reproduced the path; the
 candidate entry contained a test-only file-write sentinel. First-party upgrades
 now require a package hash equal to the exact bundled artifact in the running
-release. The actual tool path regression confirms the candidate is refused
-before the sentinel executes and the active installation remains unchanged.
-Third-party upgrades retain their local-path lifecycle but executable modules
-still fail closed. This finding requires an identity authorized to manage packs
-and a server-local candidate path; it is not an unauthenticated route.
+release. A follow-up review found that comparing only with the on-disk bundle
+was insufficient if the bundle itself changed. Each bundled package now also
+has a separate release-committed hash attestation, checked before listing or
+installing it as first-party. Regressions verify the actual upgrade tool path,
+all current bundled hashes, a synthetic wrong hash, and no test-only entry
+execution. Third-party upgrades retain their local-path lifecycle but executable
+modules still fail closed. This finding requires an identity authorized to
+manage packs and a server-local candidate path; it is not an unauthenticated
+route. The attestation protects against package-content drift while its source
+remains trusted; it does not protect against an actor who can alter both Core
+source and the attestation in a new release.

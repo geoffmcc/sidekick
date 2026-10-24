@@ -1219,6 +1219,14 @@ about current lockfile vulnerability status.
   worker integration and provider registry authorization behavior.
 - `npm.cmd run check:docs`, `npm.cmd run check:tests`,
   `npm.cmd run check:architecture`, and `git diff --check` passed.
+- Follow-up attestation test covers all 27 bundled packs against
+  `src/packs/bundled-attestations.js`; a synthetic wrong hash is rejected.
+  `npm.cmd run test:all -- test/pack-contract.test.js
+  test/capability-packs.test.js test/modules-third-party-lifecycle.test.js`
+  passed all 3 suites after adding that runtime integrity gate.
+- The protected test-data cleanup fixes in `capability-packs.test.js`,
+  `pack-contract.test.js`, and `modules-installation.test.js` ensure these suites
+  no longer recursively delete fixed repository paths.
 - Existing remote Ollama rows were not modified or inspected. Upgrade
   operators must review existing `data_classifications`; this is a deployment
   migration residual, not a verified live-state fix.
