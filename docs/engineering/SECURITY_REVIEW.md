@@ -15,7 +15,8 @@ tests all three terminal states plus real second-process mutations. Raw claim
 tokens are not persisted by the fix. The crash fixture sends its synthetic token
 over stdin. Existing dispatcher, project isolation, memory-data security, and
 all 19 template-security tests pass in the final focused run. No dependency or
-policy changes; current dependency advisory status remains unverified.
+policy changes were made in that milestone. The later 2026-10-24 advisory
+review is recorded below.
 
 The bounded unchanged-code broad run also contains failed security suites:
 some report Windows cleanup errors, while security-research-pack reports
@@ -71,3 +72,28 @@ evidence of an external attacker or production exploit.
 ## Fix and validation status
 
 SK-001 through SK-004 are fixed for the demonstrated cases. The final 12-case continuity suite passes; all 19 template security assertions and cleanup pass. Dispatcher behavior and cleanup pass after explicitly closing its owned database. Project context, project identity and memory data-isolation regressions pass. This does not close the untested authorization, injection, supply-chain or live-configuration items above.
+
+### Dashboard memory-evidence project scope (2026-10-24)
+
+Confirmed authorization defect: `GET /api/memories/:id/evidence` used the
+linked handoff's access check instead of also checking the memory's own project.
+A persisted memory in project B that referenced a readable handoff in project A
+could therefore disclose its contents to a principal authorized only for A.
+A synthetic direct-route regression reproduced the leak (HTTP 200) before the
+fix. The route now requires read access to the memory project, requires access
+to any linked handoff, and rejects mismatched memory/handoff project scopes.
+Same-project linked reads remain allowed. The memory and handoff are test
+fixtures; review found no public import path that accepts a caller-supplied
+`source_ref` (imports set it to null and trusted extraction creates same-project
+links), so exploitability depends on malformed or otherwise inconsistent
+persisted state. This is a verified authorization logic flaw under that
+precondition, not evidence of an ordinary-user route to create the state.
+
+Focused validation after the fix: `test/security-project-access.test.js` and
+`test/security-dashboard-direct-routes.test.js` passed (2 suites, 0 failures).
+The broader authorization matrix and live deployment behavior remain open.
+
+Supply-chain advisory status was checked on 2026-10-24: local npm audit found
+zero vulnerabilities in the lockfile, and GitHub Dependabot reported no open
+alerts (19 historical alerts were marked fixed). This does not replace ongoing
+CI checks or cover non-NPM assets.

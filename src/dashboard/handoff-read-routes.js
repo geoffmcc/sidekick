@@ -94,9 +94,13 @@ function registerHandoffReadRoutes({ app, dbStore, errorResponse }) {
       if (!memory) return res.status(404).json({ ok: false, error: "Memory not found" });
       const handoff = memory.source_ref ? dbStore.getHandoff(memory.source_ref) : null;
       const principal = req.authPrincipal;
-      const authorized = principal?.principal_id && (handoff
-        ? canRead(req, handoff)
-        : projectAccess.hasProjectAccess(principal.principal_id, memory.project, "read", principal.scopes, principal.delegation_id || principal.delegationId || null));
+      const delegationId = principal?.delegation_id || principal?.delegationId || null;
+      const memoryProjectAuthorized = principal?.principal_id && (memory.project
+        ? projectAccess.hasProjectAccess(principal.principal_id, memory.project, "read", principal.scopes, delegationId)
+        : projectAccess.hasGlobalMemoryAccess(principal.principal_id, "read", principal.scopes, delegationId));
+      const handoffAuthorized = !handoff || canRead(req, handoff);
+      const handoffScopeMatchesMemory = !handoff || (handoff.project || null) === (memory.project || null);
+      const authorized = Boolean(memoryProjectAuthorized && handoffAuthorized && handoffScopeMatchesMemory);
       if (!authorized) return res.status(404).json({ ok: false, error: "Memory not found" });
       res.json({ ok: true, memory, evidence: dbStore.getMemoryEvidence(req.params.id) });
     } catch (error) { errorResponse(req, res, error, { status: 500, code: "service_unavailable", component: "memories" }); }

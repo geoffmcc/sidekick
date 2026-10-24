@@ -364,6 +364,15 @@ path, traversal target, or unrestricted inherited workspace.
 
 Residual risk, stated plainly: this provides neither exactly-once dispatch nor exclusion of concurrent *effects*. Writes are fenced by a claim epoch so a superseded runner cannot corrupt state, but nothing stops a stalled runner from dispatching a tool after its lease has been reclaimed — that is prevented today only by the single-process deployment, and introducing a second runner process would make it reachable. `SIDEKICK_SECRET_KEY` becomes a resumption dependency: losing or rotating it strands parked tasks, which must then be failed explicitly.
 
+## Memory evidence project scope
+
+The Dashboard endpoint for memory evidence authorizes the memory's own project
+and, when the memory links to a handoff, separately authorizes that handoff.
+The two records must have matching project scopes. A readable handoff does not
+grant access to a memory in another project. Global memories require the
+principal's global memory-read permission. Missing or mismatched access returns
+the same not-found response used for absent memories.
+
 ## Database query safety
 
 The database query tool and dashboard query endpoint default to read-only mode. In that mode they allow single-statement row-returning SQL only (`SELECT`, `WITH`, `EXPLAIN`, and non-mutating `PRAGMA`), reject multi-statement input, and apply bounded row limits. Use `readonly=false` only for deliberate maintenance.

@@ -1420,6 +1420,51 @@ test("Dashboard memory evidence requires memory permission and project scope", (
   assert.equal(scopedRead.body.memory.id, memoryA.id);
 });
 
+test("Dashboard memory evidence requires access to both the memory project and linked handoff project", () => {
+  projectAccess.grantProjectAccess({ actorPrincipalId: owner.principal_id, principalId: operator.principal_id, project: "memory_a", accessLevel: "read" });
+  const linkedHandoff = db.saveHandoff({
+    project: "memory_a", title: "Synthetic linked handoff", source: "test",
+    content: "Synthetic content in the project the operator may read.",
+    owner_principal_id: operator.principal_id,
+    created_by_principal_id: operator.principal_id,
+  });
+  const crossProjectMemory = db.upsertMemory({
+    type: "fact", project: "memory_b", content: "Synthetic private memory linked to another project handoff",
+    summary: "Synthetic private memory", confidence: 0.8, source: "test", source_ref: linkedHandoff.id,
+  });
+  const sameProjectMemory = db.upsertMemory({
+    type: "fact", project: "memory_a", content: "Synthetic memory linked within the same project",
+    summary: "Synthetic same-project memory", confidence: 0.8, source: "test", source_ref: linkedHandoff.id,
+  });
+  assert.ok(linkedHandoff?.id, "synthetic source handoff fixture is persisted");
+  assert.ok(crossProjectMemory?.id, "synthetic cross-project memory fixture is persisted");
+  assert.ok(sameProjectMemory?.id, "synthetic same-project memory fixture is persisted");
+  assert.equal(crossProjectMemory.source_ref, linkedHandoff.id, "memory points at the authorized-project handoff");
+  assert.equal(db.getMemoryById(crossProjectMemory.id, { includeDisabled: true }).project, "memory_b");
+  assert.equal(db.getHandoff(linkedHandoff.id).project, "memory_a");
+  assert.equal(projectAccess.hasProjectAccess(operator.principal_id, "memory_a", "read", ["memory.read"]), true);
+  const handlers = new Map();
+  registerHandoffReadRoutes({ app: { get: (route, handler) => handlers.set(route, handler) }, dbStore: db, errorResponse: () => {} });
+  const invoke = memoryId => {
+    const res = {
+      statusCode: 200,
+      status(code) { this.statusCode = code; return this; },
+      json(body) { this.body = body; return this; },
+    };
+    handlers.get("/api/memories/:id/evidence")({
+      params: { id: memoryId },
+      authPrincipal: { principal_id: operator.principal_id, scopes: ["memory.read"] },
+    }, res);
+    return res;
+  };
+  const sameProject = invoke(sameProjectMemory.id);
+  assert.equal(sameProject.statusCode, 200, "same-project memory and handoff remain readable");
+  assert.equal(sameProject.body.memory.id, sameProjectMemory.id);
+  const res = invoke(crossProjectMemory.id);
+  assert.equal(res.statusCode, 404, "access to a linked handoff must not expose a memory from an unauthorized project");
+  assert.doesNotMatch(JSON.stringify(res.body), /Synthetic private memory/);
+});
+
 test("handoff extraction cannot write memories into an ungranted project", async () => {
   const context = tools.context.createMcpExecutionContext({
     authIdentity: { principal_id: operator.principal_id, principal_type: "human" },

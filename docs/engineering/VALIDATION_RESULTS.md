@@ -497,3 +497,20 @@ the installer behavior regression verifies narrow path generation, `%` path
 escaping, and removal after revocation. `npm run check:docs` and `git diff
 --check` passed. The WSL installer and systemd namespace behavior were not run
 on this Windows host.
+
+### Dashboard memory-evidence project scope
+
+An adversarial synthetic fixture reproduced an authorization leak in
+`GET /api/memories/:id/evidence`: a principal with read access to project A's
+handoff could retrieve a linked memory belonging to project B. The regression
+failed before the fix with HTTP 200 where 404 was required. The route now checks
+the memory's project, the linked handoff's access, and equality of their project
+scopes. A positive same-project linked-memory case verifies legitimate access
+is preserved, while the cross-project case asserts the private memory text is
+not returned.
+
+Validation after the fix: `node test/run-all.js
+test/security-project-access.test.js test/security-dashboard-direct-routes.test.js
+--concurrency=1 --overall-timeout-ms=300000` passed both suites (2 passed, 0
+failed, 0 skipped). The fixture is synthetic. No production database or live
+service was accessed.
