@@ -318,3 +318,16 @@ repository-managed runtime when present), while preserving the separate
 per-suite browser profile and credential scrubbing. Missing runtime now emits
 the runner skip code, which fails this required suite; an explicitly configured
 but unavailable runtime fails directly.
+
+### Agent follow-up authority preservation (2026-10-24, SK-037)
+
+The follow-up route creates a distinct governed child task and carries forward
+the parent's authority envelope while decrementing its child depth and count.
+The current implementation also intersects that inherited envelope with the
+current authenticated principal's effective permissions when the durable child
+is created. Review did not find an authority-expansion path in this route. The
+follow-up API regression now creates a deliberately read-only parent, rejects a
+caller-supplied replacement envelope, and verifies the resulting child remains
+read-only with change, external, and production effects disabled. This verifies
+the persisted child projection and route input boundary; it does not prove every
+Agent dispatch path or recovery path is covered by this single test.

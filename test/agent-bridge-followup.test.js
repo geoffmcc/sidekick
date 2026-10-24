@@ -314,6 +314,49 @@ let server;
     assert.match(JSON.stringify(res.data), /broaden|profile/i);
   });
 
+  await ok("2c) follow-up preserves the parent's narrower effect envelope and rejects envelope injection", async () => {
+    fake = fakeDirect("narrow parent completed");
+    const created = await request("POST", "/api/agent/run", {
+      goal: "Read-only parent task",
+      project: "agent_test_project",
+      authority_envelope: {
+        allowed_effects: ["read_only"],
+        changes_allowed: false,
+        external_effects_allowed: false,
+        production_allowed: false,
+        child_task_depth: 2,
+        child_task_count: 2,
+      },
+    }, authenticatedTestHeaders);
+    assert.strictEqual(created.status, 200, JSON.stringify(created.data));
+    await waitForTranscript(created.data.taskId);
+    const broaden = await request("POST", "/api/agent/run/" + created.data.taskId + "/follow-up", {
+      goal: "Try to broaden the task",
+      authority_envelope: { allowed_effects: ["read_only", "production"], production_allowed: true },
+    }, authenticatedTestHeaders);
+    assert.strictEqual(broaden.status, 400, "follow-up cannot accept a caller-supplied replacement authority envelope");
+
+    fake = fakeDirect("bounded child completed");
+    const followUp = await request("POST", "/api/agent/run/" + created.data.taskId + "/follow-up", { goal: "Summarize the parent task" }, authenticatedTestHeaders);
+    assert.strictEqual(followUp.status, 200, JSON.stringify(followUp.data));
+    await waitForTranscript(followUp.data.taskId);
+    const [parent, child] = await Promise.all([
+      request("GET", "/api/agent/tasks/" + created.data.taskId, null, authenticatedTestHeaders),
+      request("GET", "/api/agent/tasks/" + followUp.data.taskId, null, authenticatedTestHeaders),
+    ]);
+    assert.strictEqual(parent.status, 200);
+    assert.strictEqual(child.status, 200);
+    for (const effect of child.data.task.authority_envelope.allowed_effects) {
+      assert.ok(parent.data.task.authority_envelope.allowed_effects.includes(effect), `child effect ${effect} must be within the parent envelope`);
+    }
+    assert.deepStrictEqual(child.data.task.authority_envelope.allowed_effects, ["read_only"]);
+    assert.strictEqual(child.data.task.authority_envelope.changes_allowed, false);
+    assert.strictEqual(child.data.task.authority_envelope.external_effects_allowed, false);
+    assert.strictEqual(child.data.task.authority_envelope.production_allowed, false);
+    assert.strictEqual(child.data.task.authority_envelope.child_task_depth, 1);
+    assert.strictEqual(child.data.task.authority_envelope.child_task_count, 1);
+  });
+
   // 4) The parent transcript remains byte-for-byte unchanged.
   await ok("4) parent transcript is unchanged by a follow-up", async () => {
     fake = fakeDirect("p");

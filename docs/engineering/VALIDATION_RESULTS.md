@@ -700,3 +700,16 @@ about current lockfile vulnerability status.
   Chromium browser E2E reported 27 passed, 0 failed. `npm.cmd run check:tests`,
   `npm.cmd run check:docs`, and `git diff --check` passed. This records the
   targeted result only; the full test tiers were not run.
+
+## Agent follow-up authority preservation: 2026-10-24
+
+- Added a real Agent Bridge API regression using an authenticated principal and
+  a parent task constrained to `read_only`. The follow-up route rejects a
+  caller-supplied replacement authority envelope and creates a child retaining
+  only `read_only`; change, external, and production effects remain disabled.
+  Child depth and count are reduced.
+- Validation: `node test/run-all.js test/agent-bridge-followup.test.js
+  --concurrency=1 --overall-timeout-ms=300000 --json` passed (1 suite, 32 API
+  and security assertions, 0 failures, 135.7 seconds). This establishes this
+  route's current behavior only; recovery and other child-creation paths retain
+  their separate coverage requirements.
