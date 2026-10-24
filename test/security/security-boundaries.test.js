@@ -26,7 +26,7 @@ const dispatcher = require("../../src/tools/dispatcher");
 const tools = require("../../src/tools");
 const { normalizeDefinition } = require("../../src/workflows/definition");
 const packLifecycle = require("../../src/packs/lifecycle");
-const { redactSensitive, redactSensitiveKeysDeep } = require("../../src/redact");
+const { redactSensitive, redactSensitiveKeysDeep, isSensitiveKey } = require("../../src/redact");
 const { normalizeResult } = require("../../src/tools/result");
 const { descriptors: filesystemDescriptors, buildSearchArgs } = require("../../src/tools/families/filesystem");
 const { descriptors: monitoringDescriptors, resolveSnapshotPath, readSnapshotFile, writeSnapshotFile, MAX_SNAPSHOT_BYTES } = require("../../src/tools/families/monitoring");
@@ -186,6 +186,44 @@ test("redaction stays bounded on long untrusted strings that resemble URL scheme
   });
   assert.ifError(result.error);
   assert.equal(result.status, 0, result.stderr || "redaction child process failed");
+});
+
+test("redaction parsers leave malformed URL, JWT, and PEM fragments intact", () => {
+  assert.equal(isSensitiveKey("credential_id"), false);
+  assert.equal(isSensitiveKey("credential_scopes"), false);
+  assert.equal(isSensitiveKey("secret_names"), false);
+  assert.equal(redactSensitive(42), 42);
+  assert.deepEqual(redactSensitiveKeysDeep(["visible", { token: "synthetic-token-value" }]), ["visible", { token: "[REDACTED]" }]);
+
+  for (const value of [
+    "://user:password@example.test/path",
+    "https://example.test/path",
+    "eyJ..",
+    "eyJheader",
+    "eyJheaderX!",
+    "eyJheader.not-a-payload",
+    "eyJheader.eyJ.",
+    "eyJheader.eyJpayload",
+    "eyJheader.eyJpayloadX",
+    "eyJheader.eyJpayloadX!",
+    "eyJheader.eyJpayload.",
+    "-----BEGIN -----",
+    "-----BEGIN CERTIFICATE-----public-----END CERTIFICATE-----",
+    `-----BEGIN ${"A".repeat(65)}-----body`,
+    "-----BEGIN PRIVATE KEY-----body-----END CERTIFICATE-----",
+    "-----BEGIN PRIVATE KEY-----body-----END ?-----",
+    "-----BEGIN PRIVATE KEY-----body without a footer",
+  ]) {
+    assert.equal(redactSensitive(value), value, `malformed or non-secret input changed: ${value.slice(0, 40)}`);
+  }
+
+  const privateKey = "-----BEGIN PRIVATE KEY-----private material-----END PRIVATE KEY-----";
+  assert.equal(
+    redactSensitive(`prefix ${"-----BEGIN CERTIFICATE-----public-----END CERTIFICATE-----"} ${privateKey} suffix`),
+    "prefix -----BEGIN CERTIFICATE-----public-----END CERTIFICATE----- [REDACTED PRIVATE KEY] suffix",
+  );
+  assert.equal(redactSensitive("https://user:password@example.test/path"), "https://[REDACTED]@example.test/path");
+  assert.equal(redactSensitive("eyJheader.eyJpayload.signature"), "[REDACTED JWT]");
 });
 
 test("filesystem search patterns cannot become ripgrep or grep options", () => {
