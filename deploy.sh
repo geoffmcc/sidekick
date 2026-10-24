@@ -36,6 +36,7 @@ done
 VPS="sidekick@$IP"
 REMOTE_DIR="/home/sidekick/sidekick"
 GIT_DEPLOY_HELPER="/home/sidekick/.sidekick-git-deploy.js"
+GIT_DEPLOY_ENV_HELPER="/home/sidekick/.sidekick-child-process.js"
 EXPECTED_REPO_URL="https://github.com/geoffmcc/sidekick.git"
 SSH_KEY="${SIDEKICK_SSH_KEY:-$HOME/.ssh/sidekick}"
 SSH_PUB_KEY="$SSH_KEY.pub"
@@ -274,8 +275,13 @@ repair_optional_tools() {
 
 verify_git_deploy_source() {
   local helper="$PROJECT_DIR/scripts/git-deploy.js"
+  local env_helper="$PROJECT_DIR/src/security/child-process.js"
   if [ ! -f "$helper" ]; then
     echo -e "\033[31mERROR: Git deployment helper not found at $helper\033[0m"
+    exit 1
+  fi
+  if [ ! -f "$env_helper" ]; then
+    echo -e "\033[31mERROR: Git deployment environment policy not found at $env_helper\033[0m"
     exit 1
   fi
   if ! git -C "$PROJECT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
@@ -504,7 +510,12 @@ else
     echo -e "\033[31mERROR: Failed to upload Git deployment helper\033[0m"
     exit 1
   fi
+  if ! copy_to_vps "$PROJECT_DIR/src/security/child-process.js" "$GIT_DEPLOY_ENV_HELPER" >/dev/null; then
+    echo -e "\033[31mERROR: Failed to upload Git deployment environment policy\033[0m"
+    exit 1
+  fi
   run_remote "chmod 700 $GIT_DEPLOY_HELPER" >/dev/null
+  run_remote "chmod 600 $GIT_DEPLOY_ENV_HELPER" >/dev/null
   remote_has_git=$(run_remote "test -d $REMOTE_DIR/.git && echo YES || echo NO" 2>/dev/null) || true
   git_mode="deploy"
   if [[ "$remote_has_git" != *"YES"* ]]; then

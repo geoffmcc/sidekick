@@ -314,12 +314,16 @@ try {
 
   const deploySh = fs.readFileSync(path.join(root, 'deploy.sh'), 'utf8');
   const deployPs1 = fs.readFileSync(path.join(root, 'deploy.ps1'), 'utf8');
+  const gitDeployHelper = fs.readFileSync(path.join(root, 'scripts', 'git-deploy.js'), 'utf8');
   const opsFamilyJs = fs.readFileSync(path.join(root, 'src', 'tools', 'families', 'operations.js'), 'utf8');
   const schemasJs = fs.readFileSync(path.join(root, 'src', 'tools', 'schemas', 'index.js'), 'utf8');
   assert.match(deploySh, /SCP\/offline mode/, 'deploy.sh should label explicit SCP/offline mode');
   assert.match(deployPs1, /SCP\/offline mode/, 'deploy.ps1 should label explicit SCP/offline mode');
   assert.match(deploySh, /verify_git_deploy_source/, 'deploy.sh should validate local helper provenance before Git deploy');
   assert.match(deployPs1, /Assert-GitDeploySource/, 'deploy.ps1 should validate local helper provenance before Git deploy');
+  assert.match(gitDeployHelper, /\.sidekick-child-process\.js/, 'standalone git deploy helper should resolve the shipped shared child environment policy');
+  assert.match(gitDeployHelper, /refusing deployment/, 'standalone git deploy helper should fail closed when the shared policy is missing');
+  assert.doesNotMatch(gitDeployHelper, /const secretEnvKey =/, 'git deploy helper must not retain a weaker duplicate environment filter');
   assert.doesNotMatch(deploySh, /node \/tmp\/sidekick-git-deploy\.js/, 'deploy.sh should not execute helper from world-writable tmp');
   assert.doesNotMatch(deployPs1, /node \/tmp\/sidekick-git-deploy\.js/, 'deploy.ps1 should not execute helper from world-writable tmp');
   assert.match(deploySh, /Syncing \.env before first Git conversion/, 'deploy.sh should copy first-deploy .env before conversion backup');

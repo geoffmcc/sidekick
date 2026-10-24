@@ -708,6 +708,10 @@ console.log('Test 5.3: deploy.sh has git deploy logic');
     'deploy.sh should run the uploaded Git deployment helper'
   );
   assert.ok(
+    deployShContent.includes('sidekick-child-process.js') && deployShContent.includes('src/security/child-process.js'),
+    'deploy.sh should ship the shared child process policy with the standalone helper'
+  );
+  assert.ok(
     deployShContent.includes('git_mode="convert"'),
     'deploy.sh should explicitly select conversion mode for non-Git deployments'
   );
@@ -728,6 +732,10 @@ console.log('Test 5.4: deploy.ps1 has git deploy logic');
   assert.ok(
     deployPs1Content.includes('sidekick-git-deploy.js'),
     'deploy.ps1 should run the uploaded Git deployment helper'
+  );
+  assert.ok(
+    deployPs1Content.includes('sidekick-child-process.js') && deployPs1Content.includes('src\\security\\child-process.js'),
+    'deploy.ps1 should ship the shared child process policy with the standalone helper'
   );
   assert.ok(
     deployPs1Content.includes('$gitMode = "convert"'),
