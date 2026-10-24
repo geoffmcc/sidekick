@@ -575,7 +575,7 @@ function readMemoryMetadata(row) {
 }
 
 function supersedeMemoryRow(row, replacementId, reason, similarity, ts) {
-  const metadata = readMemoryMetadata(row);
+  const metadata = redactSensitiveKeysDeep(readMemoryMetadata(row));
   metadata.state = "superseded";
   metadata.superseded_by = replacementId;
   metadata.superseded_at = ts;
@@ -590,7 +590,7 @@ function supersedeMemoryRow(row, replacementId, reason, similarity, ts) {
         updated_at = ?,
         last_seen_at = ?
     WHERE id = ?
-  `).run(JSON.stringify(metadata), ts, ts, row.id);
+  `).run(JSON.stringify(redactSensitiveKeysDeep(metadata)), ts, ts, row.id);
 
   return normalizeMemoryRow(db.prepare("SELECT * FROM memories WHERE id = ?").get(row.id));
 }
@@ -739,6 +739,16 @@ function isTelemetryMemoryType(type) {
   return TELEMETRY_MEMORY_TYPES.has(String(type || "").toLowerCase());
 }
 
+function sanitizeMemoryForPersistence(memory) {
+  const safe = { ...(memory || {}) };
+  for (const field of ["content", "summary", "source", "source_ref", "evidence_excerpt"]) {
+    if (safe[field] !== undefined && safe[field] !== null) safe[field] = redactSensitive(String(safe[field]));
+  }
+  if (safe.metadata !== undefined && safe.metadata !== null) safe.metadata = redactSensitiveKeysDeep(safe.metadata);
+  if (safe.tags !== undefined && safe.tags !== null) safe.tags = redactSensitiveKeysDeep(safe.tags);
+  return safe;
+}
+
 /**
  * Normalizes an inbound memory for durable storage, or returns null when it
  * must not be stored. Applies to every write path: direct upsert, import, and
@@ -748,14 +758,15 @@ function admitMemory(memory) {
   const rawType = String(memory && memory.type || "observation").toLowerCase();
   if (isTelemetryMemoryType(rawType)) return null;
   const type = KNOWN_MEMORY_TYPES.has(rawType) ? rawType : "observation";
-  const content = String(memory && (memory.content || memory.summary) || "").trim();
+  const safeMemory = sanitizeMemoryForPersistence(memory);
+  const content = String(safeMemory.content || safeMemory.summary || "").trim();
   if (!content) return null;
   // Confidence is caller-supplied on the import paths; clamp it so an import
   // cannot rank its rows above everything the system learned first-hand.
   const confidence = Number.isFinite(memory.confidence)
     ? Math.min(1, Math.max(0, memory.confidence))
     : 0.5;
-  return { ...memory, type, content, confidence };
+  return { ...safeMemory, type, content, confidence };
 }
 
 function upsertMemory(memory) {
@@ -763,6 +774,8 @@ function upsertMemory(memory) {
   // Reject telemetry before any table work so the exclusion cannot be bypassed
   // by calling upsertMemory directly.
   if (isTelemetryMemoryType(memory && memory.type)) return null;
+
+  memory = sanitizeMemoryForPersistence(memory);
 
   const ts = nowIso();
   const type = memory.type || "observation";
@@ -791,7 +804,7 @@ function upsertMemory(memory) {
     });
     if (rowKey === dedupKey) {
       const rowMetadata = readMemoryMetadata(row);
-      const mergedMetadata = { ...rowMetadata, ...metadata };
+      const mergedMetadata = redactSensitiveKeysDeep({ ...rowMetadata, ...metadata });
       mergedMetadata.state = rowMetadata.state || "active";
       db.prepare(`
         UPDATE memories
@@ -1155,6 +1168,7 @@ function setMemoryRequiresConfirmation(id, requires = true) {
 function softDeleteMemory(id, reason = "user_deleted") {
   if (!hasMemoriesTable()) return false;
   const ts = nowIso();
+  const safeReason = redactSensitive(String(reason || "user_deleted"));
   const result = db.prepare(`
     UPDATE memories
     SET state = 'deleted',
@@ -1163,13 +1177,14 @@ function softDeleteMemory(id, reason = "user_deleted") {
         metadata_json = json_set(COALESCE(metadata_json, '{}'), '$.delete_reason', ?),
         updated_at = ?
     WHERE id = ?
-  `).run(ts, reason, ts, id);
+  `).run(ts, safeReason, ts, id);
   return result.changes > 0;
 }
 
 function expireMemory(id, reason = "manual_expire") {
   if (!hasMemoriesTable()) return false;
   const ts = nowIso();
+  const safeReason = redactSensitive(String(reason || "manual_expire"));
   const result = db.prepare(`
     UPDATE memories
     SET state = 'expired',
@@ -1178,7 +1193,7 @@ function expireMemory(id, reason = "manual_expire") {
         metadata_json = json_set(COALESCE(metadata_json, '{}'), '$.expire_reason', ?),
         updated_at = ?
     WHERE id = ? AND state != 'deleted'
-  `).run(ts, reason, ts, id);
+  `).run(ts, safeReason, ts, id);
   return result.changes > 0;
 }
 

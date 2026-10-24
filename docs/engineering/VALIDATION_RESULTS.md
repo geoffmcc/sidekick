@@ -574,3 +574,17 @@ test/handoff-versioning.test.js test/handoff-reliability.test.js
 test/security-phase-07-secrets-redaction.test.js --concurrency=2
 --overall-timeout-ms=300000` passed all four suites (4 passed, 0 failed, 0
 skipped). The regression used synthetic credentials and disposable SQLite.
+
+### Persistent memory redaction (2026-10-24)
+
+`node test/run-all.js test/security-memory-authority.test.js
+test/memory-sync.test.js test/automatic-memory.test.js
+test/handoff-reliability.test.js --concurrency=1
+--overall-timeout-ms=300000` passed 4/4 suites. A follow-up run of
+`test/security-project-access.test.js` and
+`test/security-phase-07-secrets-redaction.test.js` passed 2/2 suites.
+`npm run check:docs` and `git diff --check` passed. Synthetic fixtures verify
+credential-shaped values are absent from direct memory writes, imports,
+metadata, source references, evidence text, lifecycle reasons, and audit/event
+rows. These tests do not detect secrets supplied as generic values in ordinary
+fields and do not inspect or migrate historical databases.

@@ -387,7 +387,12 @@ the tamper-evident chain verifies the sanitized representation. Previously
 stored journal rows are not retroactively rewritten.
 Memory audit records also recursively redact structured details and
 pattern-redact actor labels before persistence. Existing historical audit rows
-are not retroactively rewritten.
+are not retroactively rewritten. Structured memory admission and direct writes
+pattern-redact content, summary, source, source reference, and evidence text,
+and recursively redact tags and metadata before storage. Memory lifecycle and
+supersession reasons receive the same text redaction. This cannot identify a
+secret represented as a generic value in an ordinary field, and no bulk cleanup
+of historical memory rows is performed.
 
 ## Database query safety
 

@@ -126,6 +126,43 @@ test("memory imports stay untrusted and cannot rewrite trusted duplicate metadat
   assert.equal(after.last_confirmed_at, before.last_confirmed_at);
 });
 
+test("memory writes and imports redact credential-shaped content and metadata before persistence", () => {
+  const marker = "SYNTHETIC_MEMORY_PERSISTENCE_SECRET";
+  const direct = db.upsertMemory({
+    type: "fact",
+    project: "memory_authority_project",
+    content: `Connection uses api_key=${marker}`,
+    summary: `Summary password=${marker}`,
+    source: `credential=${marker}`,
+    source_ref: `https://example.invalid/resource?access_token=${marker}`,
+    evidence_excerpt: `token=${marker}`,
+    metadata: { password: marker, note: `secret=${marker}` },
+  });
+  const directRow = db.getDb().prepare("SELECT content, summary, source, source_ref, evidence_excerpt, metadata_json FROM memories WHERE id = ?").get(direct.id);
+  assert.equal(JSON.stringify(directRow).includes(marker), false, "direct write must not persist synthetic credential values");
+  assert.equal(JSON.stringify(db.getMemoryById(direct.id, { includeDisabled: true })).includes(marker), false);
+
+  const imported = db.importMemories({ memories: [{
+    type: "observation",
+    project: "memory_authority_project",
+    content: `Imported token=${marker}`,
+    summary: `Imported password=${marker}`,
+    source: `api_key=${marker}`,
+    source_ref: `https://example.invalid/import?token=${marker}`,
+    evidence_excerpt: `credential=${marker}`,
+    metadata: { access_key: marker, note: `password=${marker}` },
+  }] });
+  assert.equal(imported.imported, 1);
+  const importedRow = db.getDb().prepare("SELECT content, summary, source_ref, metadata_json FROM memories WHERE source = 'import' AND content LIKE '%Imported%' ORDER BY created_at DESC LIMIT 1").get();
+  assert.ok(importedRow);
+  assert.equal(JSON.stringify(importedRow).includes(marker), false, "imported memory must not persist synthetic credential values");
+
+  const lifecycle = db.upsertMemory({ type: "fact", project: "memory_authority_project", content: "synthetic lifecycle reason fixture", summary: "synthetic lifecycle reason fixture" });
+  db.softDeleteMemory(lifecycle.id, `api_key=${marker}`);
+  const lifecycleRow = db.getDb().prepare("SELECT metadata_json FROM memories WHERE id = ?").get(lifecycle.id);
+  assert.equal(lifecycleRow.metadata_json.includes(marker), false, "lifecycle reason must not persist synthetic credentials");
+});
+
 test("failed replacement persistence rolls back the old-memory deletion", async () => {
   const original = db.upsertMemory({ type: "fact", project: "memory_authority_project", content: "atomic correction original", summary: "atomic correction original", source: "explicit", source_authority: 5 });
   const upsertMemory = db.upsertMemory;

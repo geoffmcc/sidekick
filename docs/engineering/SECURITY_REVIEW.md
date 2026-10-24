@@ -182,3 +182,20 @@ Validation: `test/handoff-reliability.test.js` checks synthetic credentials are
 absent from stored audit rows; its atomic archive, restore, purge, session, and
 handoff tests also exercise audit transaction behavior. Historical audit rows
 were not migrated or inspected.
+
+### Persistent memory field redaction (2026-10-24, SK-031)
+
+Confirmed that direct structured-memory writes and import/sync admission paths
+could persist credential-shaped strings in memory metadata, summaries,
+evidence excerpts, source references, and lifecycle reasons. The shared memory
+write/admission boundary now pattern-redacts textual fields and recursively
+redacts metadata and tags before persistent writes; supersession and delete/
+expire reasons are also sanitized. This is pattern/key-aware protection and
+cannot detect a secret supplied as an ordinary-looking value under an ordinary
+field name. Existing database rows were not inspected or migrated.
+
+Validation: `test/security-memory-authority.test.js` uses synthetic markers to
+verify direct writes and imported records do not retain known credential
+shapes. The authoritative runner also passed automatic-memory, memory-sync,
+handoff reliability, project-access, and phase-7 secret-redaction suites
+(6 suites, 0 failures); no live database or service was used.
