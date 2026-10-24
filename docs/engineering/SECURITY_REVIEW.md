@@ -103,10 +103,11 @@ Focused validation after the fix: `test/security-project-access.test.js` and
 `test/security-dashboard-direct-routes.test.js` passed (2 suites, 0 failures).
 The broader authorization matrix and live deployment behavior remain open.
 
-Supply-chain advisory status was checked on 2026-10-24: local npm audit found
-zero vulnerabilities in the lockfile, and GitHub Dependabot reported no open
-alerts (19 historical alerts were marked fixed). This does not replace ongoing
-CI checks or cover non-NPM assets.
+An earlier supply-chain snapshot on 2026-10-24 reported zero vulnerabilities
+from local npm audit and no open GitHub Dependabot alerts (19 historical alerts
+were marked fixed). A later audit refresh in this session could not reach the
+npm advisory endpoint; treat the earlier result as a point-in-time snapshot,
+not current verification. This does not cover non-NPM assets.
 
 ### Handoff-linked memory scope (2026-10-24, SK-026)
 

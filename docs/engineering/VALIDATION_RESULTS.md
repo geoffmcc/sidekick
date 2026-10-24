@@ -673,3 +673,12 @@ request supplies a different, allowed workspace path.
 --overall-timeout-ms=300000` passed (1 suite, 0 failures). This validates the
 MCP entry path; it does not make the internal database store a standalone
 authorization boundary or cover arbitrary code executing inside Core.
+
+### Dependency advisory refresh unavailable (2026-10-24)
+
+`npm.cmd audit --json` was attempted against the current lockfile, but the
+configured environment could not reach `https://registry.npmjs.org/-/npm/v1/security/advisories/bulk` and npm returned an audit endpoint error. No dependency files
+were changed. The prior same-day audit snapshot remains recorded in the
+security review but is not a fresh result; dependency advisory status needs to
+be refreshed in an environment with registry access. This check makes no claim
+about current lockfile vulnerability status.
