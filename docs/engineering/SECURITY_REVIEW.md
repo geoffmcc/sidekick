@@ -113,6 +113,18 @@ zero vulnerabilities using local cache only; that result is not current
 verification. No package or lockfile changes were made. This does not cover
 non-NPM assets.
 
+### Dependency peer-range inconsistency (2026-10-24, SK-049)
+
+Local `npm ls --all` exits with `ELSPROBLEMS`: root `tree-sitter@0.25.1` is
+deduplicated into the optional peer slots of the pinned Java, Perl, Ruby, Rust,
+and TypeScript grammar packages even though their locked manifests declare
+older peer ranges. The required 379-suite test run passes, and this check did
+not establish an exploitable vulnerability or observed parser failure. It does
+establish that the installed dependency tree is not semver-consistent with
+those declared peer ranges. No versions were changed because a compatible
+resolution requires a controlled parser/runtime compatibility review; the
+current online advisory scan is also unavailable.
+
 ### Handoff-linked memory scope (2026-10-24, SK-026)
 
 Confirmed scope disclosure in the Dashboard handoff detail route: its memory

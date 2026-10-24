@@ -442,6 +442,11 @@ failures; `src/redact.js` is at 100% lines, branches, statements, and functions.
   from local cache, which does not establish current advisory status. No
   dependency state was changed; current online audit remains pending network
   availability.
+- `npm.cmd ls --all --json` exits 1 with one installed-tree problem:
+  `tree-sitter@0.25.1` conflicts with optional peer ranges declared by the
+  pinned Java, Perl, Ruby, Rust, and TypeScript grammar packages. The complete
+  `npm.cmd test` run nevertheless passed 379/379 suites; this does not prove
+  runtime compatibility for every grammar. No dependency versions changed.
 
 ### Dashboard database route authorization
 
