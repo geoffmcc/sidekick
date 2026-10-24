@@ -1,5 +1,6 @@
 const { createMcpHandler, isLegacyRequest } = require("@modelcontextprotocol/server");
 const { MAX_MCP_REQUEST_BODY_BYTES } = require("./limits");
+const { sanitizeMcpLogLabel } = require("./log-label");
 
 function createModernMcpHandler(createMcpServer) {
   return createMcpHandler(
@@ -99,11 +100,8 @@ function registerStreamableHttpRoutes({ app, sessionManager, createMcpServer, lo
   function logSession(method, headers, body) {
     const rawSessionId = headers["mcp-session-id"] || headers["Mcp-Session-Id"] || "none";
     const rawMethod = body && typeof body === "object" ? body.method : "unknown";
-    const safeLabel = value => typeof value === "string"
-      ? value.replace(/[^\x20-\x7E]/g, "?").slice(0, 128)
-      : "invalid";
-    const sessionId = safeLabel(rawSessionId);
-    const methodType = safeLabel(rawMethod);
+    const sessionId = sanitizeMcpLogLabel(rawSessionId, "none");
+    const methodType = sanitizeMcpLogLabel(rawMethod, "unknown");
     console.log(`[MCP ${method}] session=${sessionId} method=${methodType}`);
   }
 

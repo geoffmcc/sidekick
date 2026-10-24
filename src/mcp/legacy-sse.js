@@ -1,4 +1,5 @@
 const { SSEServerTransport } = require("@modelcontextprotocol/server-legacy/sse");
+const { sanitizeMcpLogLabel } = require("./log-label");
 
 function reportSseFailure(event) {
   // Keep exception-controlled text out of client responses and routine logs.
@@ -31,7 +32,7 @@ function registerLegacySseRoutes({ app, sessionManager, createMcpServer }) {
         return res.status(503).json({ error: "MCP server session capacity is full; retry after inactive sessions expire", code: "session_capacity_exceeded" });
       }
       await server.connect(transport);
-      console.log(`[SSE] New session: ${sessionId} from ${metadata.userAgent || "unknown"}`);
+      console.log(`[SSE] New session: ${sanitizeMcpLogLabel(sessionId)} from ${sanitizeMcpLogLabel(metadata.userAgent, "unknown")}`);
     } catch (e) {
       reportSseFailure("SSE");
       if (!res.headersSent) res.status(500).json({ error: "MCP request failed" });

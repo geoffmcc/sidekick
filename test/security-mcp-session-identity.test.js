@@ -5,6 +5,7 @@ const assert = require("node:assert/strict");
 const { createSessionManager } = require("../src/mcp/session-manager");
 const { registerLegacySseRoutes } = require("../src/mcp/legacy-sse");
 const { registerStreamableHttpRoutes } = require("../src/mcp/streamable-http");
+const { sanitizeMcpLogLabel } = require("../src/mcp/log-label");
 const { SSEServerTransport } = require("@modelcontextprotocol/server-legacy/sse");
 
 function createApp() {
@@ -47,6 +48,12 @@ test("MCP request logs bound and sanitize client-controlled labels", async t => 
   assert.equal(lines.length, 1);
   assert.doesNotMatch(lines[0], /[\r\n]/, "untrusted values cannot forge additional log lines");
   assert.ok(lines[0].length < 200, "untrusted log labels have a strict length bound");
+});
+
+test("MCP log label sanitizer removes control characters and bounds client metadata", () => {
+  assert.equal(sanitizeMcpLogLabel("client\r\nforged\u001b[31m"), "client??forged?[31m");
+  assert.equal(sanitizeMcpLogLabel("x".repeat(200)).length, 128);
+  assert.equal(sanitizeMcpLogLabel(undefined, "unknown"), "unknown");
 });
 
 test("MCP session identity rejects a different principal without rebinding the session", async t => {
