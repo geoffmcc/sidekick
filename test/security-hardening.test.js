@@ -46,7 +46,7 @@ assert.throws(() => validateInfluxUrl("file:///tmp/influx"), /must use http or h
 
 const collector = fs.readFileSync(path.join(__dirname, "..", "scripts", "collect-metrics.js"), "utf8");
 assert.doesNotMatch(collector, /execSync\s*\(/, "metrics collection must not execute shell pipelines");
-assert.match(collector, /execFileSync\(\s*['"]df['"]/, "disk collection should use an argument-bounded execFile call");
+assert.match(collector, /runMetricsCommand\(\s*['"]df['"]/, "disk collection should use the filtered argument-bounded child-process launcher");
 
 const compose = fs.readFileSync(path.join(__dirname, "..", "docker", "docker-compose.yml"), "utf8");
 assert.match(compose, /POSTGRES_PASSWORD_FILE: \/run\/secrets\/sidekick_postgres_password/);

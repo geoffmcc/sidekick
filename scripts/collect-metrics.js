@@ -11,6 +11,7 @@ require('../src/env');
 const os = require('os');
 const { execFileSync } = require('child_process');
 const path = require('path');
+const { runMetricsCommand } = require('../src/security/metrics-child-process');
 const Database = require('better-sqlite3');
 const { readSecret } = require('../src/core/runtime-secrets');
 const { validateInfluxUrl } = require('../src/influx-endpoint-policy');
@@ -87,7 +88,7 @@ function collectSystemMetrics() {
     const memTotal = os.totalmem();
     const memUsed = memTotal - os.freemem();
     const memPercent = memTotal > 0 ? (memUsed / memTotal) * 100 : 0;
-    const diskOutput = execFileSync('df', ['-B1', '/'], { encoding: 'utf8', timeout: 5000 });
+    const diskOutput = runMetricsCommand('df', ['-B1', '/'], { encoding: 'utf8', timeout: 5000 });
     const diskInfo = diskOutput.trim().split(/\r?\n/).pop().trim().split(/\s+/);
     const diskTotal = parseInt(diskInfo[1], 10) || 0;
     const diskUsed = parseInt(diskInfo[2], 10) || 0;
@@ -215,13 +216,13 @@ function collectDatabaseMetrics() {
 // Collect Docker container metrics
 function collectDockerMetrics() {
   try {
-    const containers = execFileSync('docker', ['ps', '--format', '{{.Names}}'], { encoding: 'utf8', timeout: 5000 }).trim().split('\n').filter(Boolean);
+    const containers = runMetricsCommand('docker', ['ps', '--format', '{{.Names}}'], { encoding: 'utf8', timeout: 5000 }).trim().split('\n').filter(Boolean);
     const metrics = [];
     
     for (const container of containers) {
       try {
         // Get container stats
-        const stats = execFileSync('docker', ['stats', container, '--no-stream', '--format', '{{.CPUPerc}}|{{.MemUsage}}|{{.NetIO}}|{{.BlockIO}}'], { encoding: 'utf8', timeout: 10000 }).trim();
+        const stats = runMetricsCommand('docker', ['stats', container, '--no-stream', '--format', '{{.CPUPerc}}|{{.MemUsage}}|{{.NetIO}}|{{.BlockIO}}'], { encoding: 'utf8', timeout: 10000 }).trim();
         const [cpuPerc, memUsage, netIO, blockIO] = stats.split('|');
         
         // Parse CPU percentage
@@ -290,7 +291,7 @@ function parseSize(sizeStr) {
 function collectOllamaMetrics() {
   try {
     // Get list of running models
-    const running = execFileSync('curl', ['--silent', '--show-error', '--max-time', '5', 'http://localhost:11434/api/ps'], { encoding: 'utf8', timeout: 10000 });
+    const running = runMetricsCommand('curl', ['--silent', '--show-error', '--max-time', '5', 'http://localhost:11434/api/ps'], { encoding: 'utf8', timeout: 10000 });
     const runningData = JSON.parse(running);
     const models = runningData.models || [];
     
@@ -323,7 +324,7 @@ function collectServiceMetrics() {
     for (const service of services) {
       let status = 'inactive';
       try {
-        status = execFileSync('systemctl', ['is-active', service], { encoding: 'utf8', timeout: 5000 }).trim();
+        status = runMetricsCommand('systemctl', ['is-active', service], { encoding: 'utf8', timeout: 5000 }).trim();
       } catch {}
       metrics[service.replace(/-/g, '_')] = status === 'active' ? 1 : 0;
     }
