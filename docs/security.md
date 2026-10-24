@@ -381,7 +381,10 @@ by this write-time control unless an operator explicitly updates that handoff;
 there is no bulk database migration in this change. New handoff content, titles,
 and source labels are also pattern-redacted before current or historical text
 storage. This does not prove that untouched historical records are free of
-credentials.
+credentials. Handoff journal payloads use recursive key-aware redaction, and
+actor/source labels use pattern redaction, before event hashing and persistence;
+the tamper-evident chain verifies the sanitized representation. Previously
+stored journal rows are not retroactively rewritten.
 
 ## Database query safety
 

@@ -152,3 +152,18 @@ historical deployments requires a separate backup and approved operation.
 Validation: `test/security-project-access.test.js`,
 `test/handoff-versioning.test.js`, `test/handoff-reliability.test.js`, and
 `test/security-phase-07-secrets-redaction.test.js` passed (4 suites, 0 failures).
+
+### Handoff journal field redaction (2026-10-24, SK-029)
+
+Confirmed that checkpoint metadata, lifecycle reasons, actor labels, and source
+labels could be persisted in `memory_handoff_events` without passing through
+the shared redactor. Since handoff events are returned by the events API, this
+was a persistent disclosure path. The common journal writer now recursively
+redacts structured payloads and pattern-redacts actor/source strings before
+computing the event hash and inserting the row. The integrity chain therefore
+covers the exact sanitized representation that is persisted and returned.
+
+Validation: `test/handoff-reliability.test.js` checks synthetic sensitive
+values are absent from both stored rows and API results and that the sanitized
+journal chain verifies. This does not retroactively sanitize existing event
+rows; historical database contents remain an unverified residual risk.

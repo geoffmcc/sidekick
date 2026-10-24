@@ -32,7 +32,19 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
     if (!inTransaction) db.exec("BEGIN IMMEDIATE");
     try {
       const previous = db.prepare("SELECT event_seq, event_hash FROM memory_handoff_events WHERE handoff_id = ? ORDER BY event_seq DESC LIMIT 1").get(handoffId);
-      const event = { handoff_id: handoffId, event_seq: Number(previous?.event_seq || 0) + 1, version: Number(version), event_type: eventType, actor: String(actor || "system"), source: String(source || "handoff"), payload: canonicalize(payload), previous_hash: previous?.event_hash || null };
+      // Journal fields are persisted and returned through the handoff events
+      // API. Sanitize every caller-controlled field before hashing so the
+      // tamper-evident chain authenticates the safe representation only.
+      const event = {
+        handoff_id: handoffId,
+        event_seq: Number(previous?.event_seq || 0) + 1,
+        version: Number(version),
+        event_type: eventType,
+        actor: redactSensitive(String(actor || "system")),
+        source: redactSensitive(String(source || "handoff")),
+        payload: canonicalize(redactSensitiveKeysDeep(payload)),
+        previous_hash: previous?.event_hash || null,
+      };
       const eventHash = continuityHash(event);
       const id = stableId("he", `${handoffId}|${eventHash}`);
       const inserted = db.prepare("INSERT INTO memory_handoff_events (id, handoff_id, event_seq, version, event_type, actor, source, payload_json, previous_hash, event_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(id, handoffId, event.event_seq, Number(version), eventType, event.actor, event.source, JSON.stringify(event.payload), event.previous_hash, eventHash, nowIso());
