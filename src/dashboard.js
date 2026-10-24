@@ -1663,7 +1663,7 @@ function requireDashboardTool(req, res, toolName) {
 
 registerDatabaseRoutes({
   app, dbStore, dataDir: DATA_DIR, path, fs, callDashboardTool,
-  dashboardExecutionMetadata, authenticatedUser, requireDashboardTool, auditLog,
+  dashboardExecutionMetadata, authenticatedUser, requireDashboardTool, requireIdentityPermission, auditLog,
   errorResponse: dashboardErrors.respond,
 });
 

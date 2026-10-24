@@ -841,7 +841,7 @@ test("database backup requires an attributable audit record before export", asyn
     app, dbStore: { getDb: () => ({ backup: async () => { events.push("backup"); backups++; } }) },
     dataDir: "C:/sidekick-test-data", path: require("node:path"), fs: { mkdirSync() {} },
     callDashboardTool: async () => ({}), dashboardExecutionMetadata: () => ({}), authenticatedUser: () => "backup-actor",
-    requireDashboardTool: () => true, auditLog,
+    requireDashboardTool: () => true, requireIdentityPermission: () => true, auditLog,
     errorResponse: (_req, res, error, options) => res.status(options.status).json({ error: error?.message || "audit failed", code: options.code }),
   });
   register((req, action) => { events.push(action); if (action === "db.backup.requested") throw new Error("audit unavailable"); });
@@ -866,4 +866,47 @@ test("database backup requires an attributable audit record before export", asyn
   assert.equal(response.body.audit_status, "degraded");
   assert.deepEqual(events, ["db.backup.requested", "backup", "db.backup.completed"]);
   assert.equal(backups, 2);
+});
+
+test("direct database routes enforce their identity permission before accessing state", async () => {
+  const handlers = new Map();
+  const app = {
+    get: (route, handler) => handlers.set(route, handler),
+    post: (route, handler) => handlers.set(route, handler),
+  };
+  const permissions = [];
+  let stateReads = 0;
+  registerDatabaseRoutes({
+    app,
+    dbStore: { getDb: () => { stateReads++; throw new Error("database must not be touched"); } },
+    dataDir: "C:/sidekick-test-data", path: require("node:path"), fs: { mkdirSync: () => { stateReads++; } },
+    callDashboardTool: async () => { stateReads++; return {}; },
+    dashboardExecutionMetadata: () => ({}), authenticatedUser: () => "low-privilege-user",
+    requireDashboardTool: () => { stateReads++; return true; },
+    requireIdentityPermission: (_req, res, permission) => {
+      permissions.push(permission);
+      res.status(403).json({ error: "Forbidden", code: "forbidden", permission });
+      return false;
+    },
+    auditLog: () => { stateReads++; },
+    errorResponse: (_req, res, _error, options) => res.status(options.status).json({ code: options.code }),
+  });
+
+  const invoke = async route => {
+    const response = {
+      statusCode: 200,
+      status(code) { this.statusCode = code; return this; },
+      json(body) { this.body = body; return this; },
+    };
+    await handlers.get(route)({ body: {}, params: {}, query: {} }, response);
+    assert.equal(response.statusCode, 403, route);
+    assert.equal(response.body.code, "forbidden", route);
+  };
+  await invoke("/api/db/schema");
+  await invoke("/api/db/stats");
+  await invoke("/api/db/backup");
+  await invoke("/api/db/migrations");
+
+  assert.deepEqual(permissions, ["database.inspect", "database.inspect", "tools.execute", "database.inspect"]);
+  assert.equal(stateReads, 0, "denied callers must not reach direct database/filesystem operations or policy checks");
 });

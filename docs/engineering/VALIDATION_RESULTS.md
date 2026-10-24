@@ -434,3 +434,15 @@ failures; `src/redact.js` is at 100% lines, branches, statements, and functions.
   directory, not the repository.
 - Current dependency advisory status is **not verified** by this local pass;
   SBOM generation is not an advisory scan. No dependency upgrade was performed.
+
+### Dashboard database route authorization
+
+The direct Dashboard schema, statistics, migration-list, and backup handlers
+previously checked source policy but accessed SQLite or the filesystem without
+checking the identity permission enforced by the corresponding governed tool
+path. They now require `database.inspect` for schema/statistics/migration reads
+and `tools.execute` for backup before policy checks or resource access. The
+focused `node --test test/security-dashboard-direct-routes.test.js` run passed
+all 31 tests, including a negative check that denied callers cause no database,
+filesystem, policy, or audit access. This test demonstrates the route boundary;
+the broader Dashboard route authorization review remains in progress.

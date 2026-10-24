@@ -1,6 +1,7 @@
 /** Dashboard database administration surface. SQL remains governed by the dispatcher. */
-function registerDatabaseRoutes({ app, dbStore, dataDir, path, fs, callDashboardTool, dashboardExecutionMetadata, authenticatedUser, requireDashboardTool, auditLog, errorResponse }) {
+function registerDatabaseRoutes({ app, dbStore, dataDir, path, fs, callDashboardTool, dashboardExecutionMetadata, authenticatedUser, requireDashboardTool, requireIdentityPermission, auditLog, errorResponse }) {
   app.get("/api/db/schema", (req, res) => {
+    if (!requireIdentityPermission(req, res, "database.inspect")) return;
     if (!requireDashboardTool(req, res, "sidekick_db_schema")) return;
     try {
       const db = dbStore.getDb();
@@ -33,6 +34,7 @@ function registerDatabaseRoutes({ app, dbStore, dataDir, path, fs, callDashboard
   });
 
   app.get("/api/db/stats", (req, res) => {
+    if (!requireIdentityPermission(req, res, "database.inspect")) return;
     if (!requireDashboardTool(req, res, "sidekick_db_stats")) return;
     try {
       const db = dbStore.getDb();
@@ -47,6 +49,7 @@ function registerDatabaseRoutes({ app, dbStore, dataDir, path, fs, callDashboard
   });
 
   app.post("/api/db/backup", async (req, res) => {
+    if (!requireIdentityPermission(req, res, "tools.execute")) return;
     if (!requireDashboardTool(req, res, "sidekick_db_backup")) return;
     try {
       const backupDir = path.join(dataDir, "backups"); fs.mkdirSync(backupDir, { recursive: true });
@@ -78,6 +81,7 @@ function registerDatabaseRoutes({ app, dbStore, dataDir, path, fs, callDashboard
   });
 
   app.get("/api/db/migrations", (req, res) => {
+    if (!requireIdentityPermission(req, res, "database.inspect")) return;
     if (!requireDashboardTool(req, res, "sidekick_db_migrate")) return;
     try {
       const currentVersion = Number.parseInt(dbStore.getDb().prepare("SELECT value FROM meta WHERE key = 'schema_version'").get()?.value || "0", 10);
