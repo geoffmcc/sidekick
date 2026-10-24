@@ -2,6 +2,7 @@
 
 const crypto = require("crypto");
 const { redactSensitiveKeysDeep } = require("../redact");
+const { appendAuditLine } = require("./audit-log");
 
 const PUBLIC_ERRORS = Object.freeze({
   invalid_request: { status: 400, message: "Request could not be processed." },
@@ -69,7 +70,7 @@ function appendBoundedDiagnostic(fs, logFile, serializedEntry, { maxLogBytes, ma
     }
   }
 
-  fs.appendFileSync(logFile, line, { mode: 0o600 });
+  appendAuditLine(logFile, line, fs);
 }
 
 function requestCorrelationId(req) {

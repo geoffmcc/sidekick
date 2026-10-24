@@ -768,3 +768,17 @@ unrecognized `download_ticket` credential and checks both artifact rows,
 tool-log arguments, success output, and failure output. The actual URL remains
 available to the authorized downloader for the duration of the request and is
 not persisted by these paths.
+
+### Dashboard diagnostic log path integrity (2026-10-24, SK-060)
+
+Confirmed local filesystem write-boundary issue: bounded Dashboard diagnostics
+used `stat` followed by `appendFileSync`, which follows a symlink or hard link
+at the log path. A local actor able to plant an entry in the Dashboard data
+directory could redirect diagnostic appends into another file writable by the
+service identity. Diagnostic writes now use the existing no-follow append
+helper, which validates regular-file type, link count, opened-file identity,
+permissions, and durability. Synthetic hard-link regression coverage confirms
+the target remains unchanged; the symlink case is skipped on Windows because
+the test environment does not provide a dependable symlink privilege. This
+does not address concurrent rotation races when multiple Dashboard processes
+share one data directory.

@@ -1077,3 +1077,14 @@ about current lockfile vulnerability status.
 - Added regression assertions for the exact direct versions, artifact hashes
   on every resolved package, and use of the lock files by the installer.
 - Clean-host installation and platform runtime behavior remain unverified.
+
+## Dashboard diagnostic log path integrity: 2026-10-24 (SK-060)
+
+- `node test/run-all.js test/security-dashboard-diagnostic-log.test.js
+  test/dashboard-error-boundary.test.js test/security-dashboard-audit-log.test.js
+  --concurrency=1 --overall-timeout-ms=900000 --json` passed all 3 suites.
+- A synthetic hard-link target was unchanged after diagnostic logging rejected
+  the unsafe log path. The symlink regression is platform-skipped on Windows;
+  it is active on POSIX CI.
+- Concurrent diagnostic rotation across multiple Dashboard processes remains
+  a documented limitation.
