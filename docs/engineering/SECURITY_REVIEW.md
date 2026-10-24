@@ -667,3 +667,22 @@ restart. The canonical dispatcher tool log and post-action status audit remain
 in place. A later failure of the completion audit can still leave the request
 record as evidence that an operation was attempted while its final service
 state must be checked separately.
+
+### Optional host-tool package version drift (2026-10-24, SK-054)
+
+Confirmed supply-chain exposure: a fresh `setup-tools.sh` run installed
+yt-dlp, OpenAI Whisper, DuckDB, and Mermaid CLI from unversioned registry
+specifiers, allowing a registry publication or compromised account to change
+the direct package selected by a later install. The installer now pins direct
+versions to yt-dlp 2026.10.21, OpenAI Whisper 20250625, DuckDB 1.5.6, and
+Mermaid CLI 12.0.0; existing installations continue to be detected and left
+untouched. Regression coverage rejects unversioned direct installs. This is a
+partial control: Python transitive dependencies and the Mermaid npm dependency
+tree are still resolved at install time, package artifact hashes are not
+verified by the installer, and no offline clean-host installation was run.
+Those remain explicit supply-chain risks. Version selection was checked
+against the upstream [PyPI project pages](https://pypi.org/project/yt-dlp/),
+[Whisper](https://pypi.org/project/openai-whisper/), [DuckDB](https://pypi.org/project/duckdb/),
+and [npm package page](https://www.npmjs.com/package/@mermaid-js/mermaid-cli)
+on 2026-10-24; the exact selected versions are recorded in
+`scripts/setup-tools.sh`.

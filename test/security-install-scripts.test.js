@@ -29,10 +29,18 @@ test("setup-tools uses a fingerprint-pinned Docker APT source", () => {
 
 test("setup-tools runs third-party Python and npm package hooks as sidekick", () => {
   const setup = read("scripts/setup-tools.sh");
-  assert.match(setup, /sudo -H -u "\$USERNAME" "\$TOOLS_PYTHON" -m pip install -q yt-dlp/);
-  assert.match(setup, /sudo -H -u "\$USERNAME" "\$TOOLS_PYTHON" -m pip install -q openai-whisper/);
-  assert.match(setup, /sudo -H -u "\$USERNAME" "\$TOOLS_PYTHON" -m pip install -q duckdb/);
-  assert.match(setup, /sudo -H -u "\$USERNAME" env NPM_CONFIG_PREFIX="\$TOOLS_NPM_PREFIX" npm install --global @mermaid-js\/mermaid-cli/);
+  assert.match(setup, /^YT_DLP_VERSION="\d{4}\.\d{2}\.\d+"$/m);
+  assert.match(setup, /^WHISPER_VERSION="\d{8}"$/m);
+  assert.match(setup, /^DUCKDB_VERSION="\d+\.\d+\.\d+"$/m);
+  assert.match(setup, /^MERMAID_CLI_VERSION="\d+\.\d+\.\d+"$/m);
+  assert.match(setup, /sudo -H -u "\$USERNAME" "\$TOOLS_PYTHON" -m pip install -q "yt-dlp==\$YT_DLP_VERSION"/);
+  assert.match(setup, /sudo -H -u "\$USERNAME" "\$TOOLS_PYTHON" -m pip install -q "openai-whisper==\$WHISPER_VERSION"/);
+  assert.match(setup, /sudo -H -u "\$USERNAME" "\$TOOLS_PYTHON" -m pip install -q "duckdb==\$DUCKDB_VERSION"/);
+  assert.match(setup, /sudo -H -u "\$USERNAME" env NPM_CONFIG_PREFIX="\$TOOLS_NPM_PREFIX" npm install --global "@mermaid-js\/mermaid-cli@\$MERMAID_CLI_VERSION"/);
+  assert.doesNotMatch(setup, /pip install -q (?:yt-dlp|openai-whisper|duckdb)(?:\s|$)/m,
+    "optional Python tool installs must not silently float to registry latest");
+  assert.doesNotMatch(setup, /npm install --global @mermaid-js\/mermaid-cli(?:\s|$)/m,
+    "optional Mermaid CLI install must not silently float to registry latest");
   assert.doesNotMatch(setup, /^\s*pip3?\s+install\b/m);
   assert.doesNotMatch(setup, /^\s*npm\s+install\s+-g\b/m);
   assert.match(setup, /find -P "\$TOOLS_VENV" -xdev[\s\S]*-exec chown "\$USERNAME:\$USERNAME"/);

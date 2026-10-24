@@ -979,3 +979,16 @@ about current lockfile vulnerability status.
   security suites with 0 failures and 0 skips.
 - `npm.cmd run check:docs`, `check:architecture`, and `check:tests`, plus
   `git diff --check`, passed.
+
+## Optional host-tool package version drift: 2026-10-24 (SK-054)
+
+- `node test/run-all.js test/security-install-scripts.test.js --concurrency=1
+  --overall-timeout-ms=600000 --json` verifies setup runs third-party package
+  hooks as the `sidekick` user and now requires explicit direct versions for
+  yt-dlp, OpenAI Whisper, DuckDB, and Mermaid CLI. The regression rejects the
+  former unversioned install forms.
+- Selected direct releases were cross-checked against the upstream PyPI and
+  npm project pages on 2026-10-24. Existing installed tools remain untouched
+  by the setup script's existing presence checks.
+- Transitive Python/npm resolution, artifact hash verification, and clean-host
+  installation compatibility are not covered by this change and remain open.

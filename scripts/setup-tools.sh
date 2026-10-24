@@ -14,6 +14,12 @@ NC='\033[0m'
 USERNAME="sidekick"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+# Optional host tools are pinned to reviewed direct releases. Their transitive
+# dependencies are not yet hash-locked; see the security review residual risk.
+YT_DLP_VERSION="2026.10.21"
+WHISPER_VERSION="20250625"
+DUCKDB_VERSION="1.5.6"
+MERMAID_CLI_VERSION="12.0.0"
 source "$SCRIPT_DIR/lib/apt-repository.sh"
 source "$SCRIPT_DIR/lib/install-ollama.sh"
 source "$SCRIPT_DIR/lib/polkit.sh"
@@ -298,7 +304,7 @@ fi
 if sudo -H -u "$USERNAME" "$TOOLS_PYTHON" -m pip show yt-dlp &>/dev/null; then
   skip "yt-dlp $(sudo -H -u "$USERNAME" "$TOOLS_VENV/bin/yt-dlp" --version)"
 else
-  sudo -H -u "$USERNAME" "$TOOLS_PYTHON" -m pip install -q yt-dlp
+  sudo -H -u "$USERNAME" "$TOOLS_PYTHON" -m pip install -q "yt-dlp==$YT_DLP_VERSION"
   pass "yt-dlp installed"
 fi
 
@@ -306,7 +312,7 @@ fi
 if sudo -H -u "$USERNAME" "$TOOLS_PYTHON" -m pip show openai-whisper &>/dev/null; then
   skip "openai-whisper"
 else
-  sudo -H -u "$USERNAME" "$TOOLS_PYTHON" -m pip install -q openai-whisper
+  sudo -H -u "$USERNAME" "$TOOLS_PYTHON" -m pip install -q "openai-whisper==$WHISPER_VERSION"
   pass "Whisper installed"
 fi
 
@@ -314,7 +320,7 @@ fi
 if sudo -H -u "$USERNAME" "$TOOLS_PYTHON" -c 'import duckdb' &>/dev/null; then
   skip "DuckDB $(sudo -H -u "$USERNAME" "$TOOLS_PYTHON" -c 'import duckdb; print(duckdb.__version__)')"
 else
-  sudo -H -u "$USERNAME" "$TOOLS_PYTHON" -m pip install -q duckdb
+  sudo -H -u "$USERNAME" "$TOOLS_PYTHON" -m pip install -q "duckdb==$DUCKDB_VERSION"
   pass "DuckDB installed"
 fi
 
@@ -326,7 +332,7 @@ if [ -x "$TOOLS_MMDC" ]; then
 elif command -v mmdc &>/dev/null; then
   skip "mermaid-cli"
 else
-  sudo -H -u "$USERNAME" env NPM_CONFIG_PREFIX="$TOOLS_NPM_PREFIX" npm install --global @mermaid-js/mermaid-cli
+  sudo -H -u "$USERNAME" env NPM_CONFIG_PREFIX="$TOOLS_NPM_PREFIX" npm install --global "@mermaid-js/mermaid-cli@$MERMAID_CLI_VERSION"
   pass "mermaid-cli installed"
 fi
 
