@@ -412,3 +412,11 @@ Result: 417 passed, 0 failed, 0 skipped, 0 cancelled, 0 timed out, and 0 not
 run in 418.801 seconds. Architecture boundary, test-architecture, and
 documentation checks also pass (519 files, 419 suites, and documentation drift
 checks respectively).
+
+### Coverage gate
+
+`npm.cmd run test:coverage` passed after adding regression coverage for the
+redactor's malformed and oversized JSON fallback paths. Aggregate coverage is
+78.84% lines/statements, 70.41% branches, and 81.41% functions. Critical-file,
+security-domain, required-file, and baseline checks have no failures;
+`src/redact.js` is at 100% lines, branches, statements, and functions.
