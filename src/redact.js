@@ -10,6 +10,7 @@
 // unlikely to occur inside benign key names (`auth` would match `author`).
 const SENSITIVE_KEY_RE = /(password|passwd|passphrase|pwd|secret|token|bearer|apikey|accesskey|sshkey|authorization|cookie|privatekey|credential|otp)/;
 const PEM_PRIVATE_KEY_BEGIN_LABELS = new Set(["PRIVATE KEY", "RSA PRIVATE KEY", "EC PRIVATE KEY", "DSA PRIVATE KEY", "OPENSSH PRIVATE KEY"]);
+const MAX_STRUCTURED_REDACTION_BYTES = 1024 * 1024;
 
 /**
  * Returns true when an argument/field name denotes a credential. Pattern
@@ -49,6 +50,23 @@ function redactSensitiveKeysDeep(value, key = "") {
     ]));
   }
   return typeof value === "string" ? redactSensitive(value) : value;
+}
+
+function redactSensitiveJsonStringFields(text) {
+  // Large JSON diagnostics skip JSON.parse to keep redaction work bounded, but
+  // string-valued fields still need key-aware treatment. Match JSON string
+  // property names and values, decoding the key before applying the common
+  // sensitive-key classifier (including escaped key spellings).
+  return text.replace(/("(?:\\.|[^"\\])*"\s*:\s*")((?:\\.|[^"\\])*)(")/g,
+    (match, prefix, _value, suffix) => {
+      const colon = prefix.lastIndexOf(":");
+      try {
+        const key = JSON.parse(prefix.slice(0, colon).trim());
+        return isSensitiveKey(key) ? `${prefix}[REDACTED]${suffix}` : match;
+      } catch {
+        return match;
+      }
+    });
 }
 
 function redactUrlCredentials(text) {
@@ -196,6 +214,29 @@ function redactPemPrivateKeys(text) {
 
 function redactSensitive(text) {
   if (typeof text !== 'string') return text;
+
+  // Tool output and diagnostics are often already serialized JSON. Redacting
+  // only textual key=value patterns misses values such as {"sig":"..."}.
+  // Parse only bounded object/array JSON, redact using the same key-aware
+  // walker used by persistence, and leave non-JSON text on the existing path.
+  if (Buffer.byteLength(text, "utf8") <= MAX_STRUCTURED_REDACTION_BYTES) {
+    const first = text.trimStart()[0];
+    if (first === "{" || first === "[") {
+      try {
+        const parsed = JSON.parse(text);
+        if (parsed && typeof parsed === "object") {
+          return JSON.stringify(redactSensitiveKeysDeep(parsed));
+        }
+      } catch {
+        // Malformed JSON remains ordinary text and receives pattern redaction.
+      }
+    }
+  }
+
+  return redactSensitiveText(redactSensitiveJsonStringFields(text));
+}
+
+function redactSensitiveText(text) {
   
   const redacted = redactUrlSensitiveParameters(redactPemPrivateKeys(text))
     

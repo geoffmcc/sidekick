@@ -371,9 +371,11 @@ The supplied sudoers file allows the `sidekick` user to run specific systemctl a
 `src/redact.js` redacts sensitive output patterns before data is returned or
 logged, including credential parameters and signed-URL signatures in query
 strings or fragments, semicolon-style connection strings, and structured
-`sig`/`signature` fields. The tests cover private keys, GitHub tokens, and other
-secret-like values. Redaction reduces accidental leakage but cannot guarantee
-every secret in every format is removed.
+`sig`/`signature` fields. JSON object and array text up to 1 MiB is parsed and
+redacted by key; larger JSON text uses a bounded key/value scan for string
+fields. The tests cover private keys, GitHub tokens, and other secret-like
+values. Redaction reduces accidental leakage but cannot guarantee every secret
+in every format is removed.
 
 ## Secret storage
 

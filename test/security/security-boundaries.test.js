@@ -166,6 +166,23 @@ test("redaction covers nested credentials, encoded tokens, and structured result
   assert.equal(nested.safe, "visible");
   assert.doesNotMatch(redactSensitive(`token=${encodeURIComponent(secret)}`), new RegExp(secret));
 
+  const serialized = redactSensitive(JSON.stringify({
+    nested: { sig: secret, xGoogSignature: secret, password: secret },
+    signal: "visible",
+    safe: "visible",
+  }));
+  const parsedSerialized = JSON.parse(serialized);
+  assert.deepEqual(parsedSerialized.nested, {
+    sig: "[REDACTED]",
+    xGoogSignature: "[REDACTED]",
+    password: "[REDACTED]",
+  });
+  assert.equal(parsedSerialized.signal, "visible", "JSON signature matching must not redact signal");
+  assert.equal(parsedSerialized.safe, "visible");
+  const oversizedJson = JSON.stringify({ filler: "x".repeat(1024 * 1024), signed: { sig: secret } });
+  assert.doesNotMatch(redactSensitive(oversizedJson), new RegExp(secret),
+    "large JSON text must retain key-aware redaction without parsing the whole document");
+
   const remoteInput = ["https:", "//", "deploy-user:ordinary-password@git.example.test/team/repository.git"].join("");
   const remote = redactSensitive(remoteInput);
   assert.doesNotMatch(remote, /deploy-user|ordinary-password/);
