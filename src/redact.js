@@ -86,7 +86,7 @@ function redactUrlCredentials(text) {
 }
 
 function redactUrlSensitiveParameters(text) {
-  return text.replace(/([?&;])([^=?&#\s;]+)=([^&#\s;]*)/g, (match, separator, rawName, value) => {
+  return text.replace(/([?&#;])([^=?&#\s;]+)=([^&#\s;]*)/g, (match, separator, rawName, value) => {
     if (!value) return match;
     let name = rawName;
     try { name = decodeURIComponent(name.replace(/\+/g, " ")); } catch {}

@@ -111,10 +111,10 @@ The dashboard includes:
 Host utility subprocesses launched through Sidekick's filtered environment omit
 credential-named variables, known credential-file locators, runtime loader and
 injection hooks, and URL values with credentials in userinfo, query parameters,
-signed-URL signature parameters, or semicolon-style connection parameters. This
-applies to both inherited environment values and explicit overrides. It is a
-defense-in-depth filter, not general secret discovery: arbitrary values may
-still contain sensitive data, so credentials should be retrieved through the
+fragments, signed-URL signatures, or semicolon-style connection parameters.
+This applies to both inherited environment values and explicit overrides. It
+is a defense-in-depth filter, not general secret discovery: arbitrary values
+may still contain sensitive data, so credentials should be retrieved through the
 governed secret store only for the operation that needs them.
 
 `bash` blocks commands matching known dangerous patterns, including examples such as recursive root deletion, common flag-order and case variants, block-device writes, filesystem creation, fork-bomb pattern, curl/wget piped to shell, and recursive `chmod 777 /`.
@@ -370,10 +370,10 @@ The supplied sudoers file allows the `sidekick` user to run specific systemctl a
 
 `src/redact.js` redacts sensitive output patterns before data is returned or
 logged, including credential parameters and signed-URL signatures in query
-strings, semicolon-style connection strings, and structured `sig`/`signature`
-fields. The tests cover private keys, GitHub tokens, and other secret-like
-values. Redaction reduces accidental leakage but cannot guarantee every secret
-in every format is removed.
+strings or fragments, semicolon-style connection strings, and structured
+`sig`/`signature` fields. The tests cover private keys, GitHub tokens, and other
+secret-like values. Redaction reduces accidental leakage but cannot guarantee
+every secret in every format is removed.
 
 ## Secret storage
 

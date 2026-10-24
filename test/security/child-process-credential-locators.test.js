@@ -41,6 +41,8 @@ test("child-process environments remove URL query credentials but retain non-sec
     JDBC_URL: "jdbc:sqlserver://db.internal;database=app;password=synthetic-jdbc-password",
     AZURE_BLOB_URL: "https://example.invalid/blob?sv=2026-01-01&sig=synthetic-sas-signature",
     GCS_SIGNED_URL: "https://example.invalid/object?X-Goog-Signature=synthetic-object-signature",
+    OAUTH_CALLBACK_URL: "https://example.invalid/callback#access_token=synthetic-fragment-token&state=fixture",
+    FRAGMENT_SIGNATURE_URL: "https://example.invalid/callback#sig=synthetic-fragment-signature&state=fixture",
     DATABASE_READONLY_URL: "postgres://db.internal/app?sslmode=require",
   });
 
@@ -50,5 +52,7 @@ test("child-process environments remove URL query credentials but retain non-sec
   assert.equal(childEnv.JDBC_URL, undefined, "semicolon-style JDBC passwords must not cross the child-process boundary");
   assert.equal(childEnv.AZURE_BLOB_URL, undefined, "signed URL sig parameters must not cross the child-process boundary");
   assert.equal(childEnv.GCS_SIGNED_URL, undefined, "cloud storage URL signatures must not cross the child-process boundary");
+  assert.equal(childEnv.OAUTH_CALLBACK_URL, undefined, "OAuth fragment tokens must not cross the child-process boundary");
+  assert.equal(childEnv.FRAGMENT_SIGNATURE_URL, undefined, "URL fragment signatures must not cross the child-process boundary");
   assert.equal(childEnv.DATABASE_READONLY_URL, "postgres://db.internal/app?sslmode=require", "non-secret URL options should remain available");
 });

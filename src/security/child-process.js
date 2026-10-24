@@ -67,6 +67,17 @@ function containsCredentialUrl(value) {
     for (const [name, parameterValue] of parsed.searchParams) {
       if (hasCredentialParameter(name, parameterValue)) return true;
     }
+    // OAuth implicit-flow and callback URLs may carry bearer material in the
+    // fragment. Fragments are not sent in HTTP requests, but they are still
+    // copied into child environments and must not cross that boundary.
+    const fragment = parsed.hash.slice(1);
+    for (const match of fragment.matchAll(/(?:^|[&;])([^=&#;]+)=([^&#;]*)/g)) {
+      let name = match[1];
+      let parameterValue = match[2];
+      try { name = decodeURIComponent(name.replace(/\+/g, " ")); } catch {}
+      try { parameterValue = decodeURIComponent(parameterValue.replace(/\+/g, " ")); } catch {}
+      if (hasCredentialParameter(name, parameterValue)) return true;
+    }
     // JDBC and other semicolon-style connection strings keep credentials in
     // the URL path instead of searchParams (for example, `jdbc:sqlserver://host;password=...`).
     const withoutFragment = value.split("#", 1)[0];
