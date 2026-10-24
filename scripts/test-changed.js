@@ -4,6 +4,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
+const { childProcessEnv } = require("../src/security/child-process");
 const { discoverSuites, runSuites } = require("../test/suite-runner");
 
 const root = path.resolve(__dirname, "..");
@@ -264,7 +265,7 @@ function selectChangedTests(changed, suites, repositoryRoot = root, options = {}
 }
 
 function readChanges(base, repositoryRoot = root) {
-  const output = execFileSync("git", ["diff", "--name-status", "-z", base, "--"], { cwd: repositoryRoot, encoding: "utf8" });
+  const output = execFileSync("git", ["diff", "--name-status", "-z", base, "--"], { cwd: repositoryRoot, encoding: "utf8", env: childProcessEnv() });
   const tokens = output.split("\0").filter(Boolean);
   const changes = [];
   for (let index = 0; index < tokens.length;) {
@@ -298,7 +299,7 @@ async function runChangedTests({ changes, base, cwd = root, suites = discoverSui
 if (require.main === module) {
   let base;
   try {
-    base = process.env.SIDEKICK_TEST_BASE || execFileSync("git", ["merge-base", "HEAD", "origin/main"], { cwd: root, encoding: "utf8" }).trim();
+    base = process.env.SIDEKICK_TEST_BASE || execFileSync("git", ["merge-base", "HEAD", "origin/main"], { cwd: root, encoding: "utf8", env: childProcessEnv() }).trim();
     const suites = discoverSuites(root);
     const changes = readChanges(base, root);
     runChangedTests({ base, cwd: root, suites, changes }).then(report => {

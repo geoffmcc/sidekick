@@ -6,6 +6,7 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const { execFileSync } = require("child_process");
+const { childProcessEnv } = require("../src/security/child-process");
 
 const root = path.resolve(__dirname, "..");
 const packsRoot = path.join(root, "packs");
@@ -236,8 +237,8 @@ for (const pack of packs) {
 let source_commit = "working-tree";
 let source_commit_date = null;
 try {
-  source_commit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
-  source_commit_date = execFileSync("git", ["show", "-s", "--format=%cI", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+  source_commit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8", env: childProcessEnv() }).trim();
+  source_commit_date = execFileSync("git", ["show", "-s", "--format=%cI", "HEAD"], { cwd: root, encoding: "utf8", env: childProcessEnv() }).trim();
 } catch {}
 const report = { schema: "sidekick.compatibility-pack-inventory.v1", source: "bundled pack manifests and repository files", source_commit, source_commit_date, source_fingerprint: sourceFingerprint(), pack_count: packs.length, packs };
 fs.writeFileSync(output, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });

@@ -12,11 +12,14 @@ test("test launchers filter ambient credentials and loader hooks before starting
     ["scripts/test-flake.js", "SIDEKICK_PROPERTY_SEED"],
     ["scripts/test-coverage.js", "NODE_ENV"],
     ["scripts/test-mutation.js", "SIDEKICK_TEST_MUTATION_NODE_PATH"],
+    ["scripts/generate-pack-inventory.js", null],
+    ["scripts/generate-test-baseline.js", null],
+    ["scripts/test-changed.js", null],
   ]) {
     const source = fs.readFileSync(path.join(root, file), "utf8");
     assert.match(source, /require\(["']\.\.\/src\/security\/child-process["']\)/, `${file} must use the shared child environment policy`);
     assert.match(source, /env:\s*childProcessEnv\(/, `${file} must pass a filtered environment to the child`);
-    assert.match(source, new RegExp(expectedOverride), `${file} must preserve its required explicit setting`);
+    if (expectedOverride) assert.match(source, new RegExp(expectedOverride), `${file} must preserve its required explicit setting`);
     assert.doesNotMatch(source, /env:\s*\{\s*\.\.\.process\.env/, `${file} must not forward the ambient environment directly`);
   }
 });
