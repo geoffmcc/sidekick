@@ -703,6 +703,42 @@ test("direct media and analytics handlers require canonical dispatch", async () 
   }
 });
 
+test("DuckDB analytics disables external access before caller SQL and bounds file input", async () => {
+  const media = require("../src/tools/families/media");
+  const attackerQuery = "SELECT 1; SET enable_external_access=true";
+  const script = media.buildAnalyticsScript({ file: "private-input.csv", format: "csv", query: attackerQuery });
+  const loadIndex = script.indexOf("CREATE TABLE data");
+  const externalAccessIndex = script.indexOf('SET enable_external_access=false');
+  const lockIndex = script.indexOf('SET lock_configuration=true');
+  const callerQueryIndex = script.indexOf("cursor = con.execute(params[\"query\"])");
+  assert.ok(loadIndex >= 0 && loadIndex < externalAccessIndex, "only the explicitly selected file is loaded before external access is disabled");
+  assert.ok(externalAccessIndex < lockIndex && lockIndex < callerQueryIndex, "the external-access denial is locked before caller SQL runs");
+  assert.equal(script.includes(attackerQuery), false, "untrusted SQL is carried as base64 data, not embedded as Python source");
+
+  const descriptor = media.descriptors.find(item => item.name === "analytics");
+  assert.equal(descriptor.schema.safeParse({ query: "x".repeat(media.MAX_ANALYTICS_QUERY_CHARS + 1) }).success, false);
+  assert.equal(descriptor.schema.safeParse({ query: "SELECT 1", format: "remote" }).success, false);
+
+  const sourcePath = path.join(dataDir, "analytics-source.csv");
+  const copiedPath = path.join(dataDir, "analytics-copy.csv");
+  fs.writeFileSync(sourcePath, "value\n1\n");
+  const priorAllowedPaths = process.env.SIDEKICK_MCP_ALLOWED_PATHS;
+  process.env.SIDEKICK_MCP_ALLOWED_PATHS = dataDir;
+  try {
+    toolContext.runWithContext({ source: "mcp" }, () => media.copyAnalyticsInput(sourcePath, copiedPath));
+    assert.equal(fs.readFileSync(copiedPath, "utf8"), "value\n1\n");
+
+    const oversizedPath = path.join(dataDir, "analytics-oversized.csv");
+    fs.closeSync(fs.openSync(oversizedPath, "w"));
+    fs.truncateSync(oversizedPath, media.MAX_ANALYTICS_FILE_BYTES + 1);
+    const oversizedCopyPath = path.join(dataDir, "analytics-oversized-copy.csv");
+    assert.throws(() => toolContext.runWithContext({ source: "mcp" }, () => media.copyAnalyticsInput(oversizedPath, oversizedCopyPath)), /exceeds/);
+  } finally {
+    if (priorAllowedPaths === undefined) delete process.env.SIDEKICK_MCP_ALLOWED_PATHS;
+    else process.env.SIDEKICK_MCP_ALLOWED_PATHS = priorAllowedPaths;
+  }
+});
+
 test("transcription job IDs cannot traverse paths and job records are principal-scoped", async () => {
   const media = require("../src/tools/families/media");
   const jobId = "tr_00000000-0000-4000-8000-000000000001";

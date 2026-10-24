@@ -446,70 +446,104 @@ async function sidekick_transcribe({ path: audioPath, model, language, async: ru
   }
 }
 
+const MAX_ANALYTICS_FILE_BYTES = 64 * 1024 * 1024;
+const MAX_ANALYTICS_QUERY_CHARS = 16 * 1024;
+const MAX_ANALYTICS_RESULT_ROWS = 1000;
+const MAX_ANALYTICS_RESULT_BYTES = 2 * 1024 * 1024;
+
+function copyAnalyticsInput(sourcePath, destinationPath) {
+  const canonicalPath = fs.realpathSync(sourcePath);
+  const decision = enforcePathPolicy(canonicalPath, "read");
+  if (decision) throw new Error("Analytics input is outside the configured read scope");
+
+  let sourceFd;
+  let destinationFd;
+  try {
+    const noFollow = fs.constants.O_NOFOLLOW || 0;
+    sourceFd = fs.openSync(canonicalPath, fs.constants.O_RDONLY | noFollow);
+    const stat = fs.fstatSync(sourceFd);
+    if (!stat.isFile()) throw new Error("Analytics input must be a regular file");
+    if (stat.size > MAX_ANALYTICS_FILE_BYTES) throw new Error(`Analytics input exceeds ${MAX_ANALYTICS_FILE_BYTES} bytes`);
+
+    destinationFd = fs.openSync(destinationPath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL, 0o600);
+    const buffer = Buffer.alloc(64 * 1024);
+    let total = 0;
+    for (;;) {
+      const bytesRead = fs.readSync(sourceFd, buffer, 0, buffer.length, null);
+      if (bytesRead === 0) break;
+      total += bytesRead;
+      if (total > MAX_ANALYTICS_FILE_BYTES) throw new Error(`Analytics input exceeds ${MAX_ANALYTICS_FILE_BYTES} bytes`);
+      let offset = 0;
+      while (offset < bytesRead) offset += fs.writeSync(destinationFd, buffer, offset, bytesRead - offset);
+    }
+  } finally {
+    if (Number.isInteger(sourceFd)) fs.closeSync(sourceFd);
+    if (Number.isInteger(destinationFd)) fs.closeSync(destinationFd);
+  }
+}
+
+function buildAnalyticsScript({ file = null, format = null, query }) {
+  const encoded = Buffer.from(JSON.stringify({ file, format, query }), "utf8").toString("base64");
+  return `import base64, duckdb, json, pandas
+params = json.loads(base64.b64decode("${encoded}"))
+con = duckdb.connect(":memory:")
+con.execute("SET memory_limit='512MB'")
+con.execute("SET threads=2")
+if params["file"]:
+    reader = {"csv": "read_csv_auto(?)", "json": "read_json_auto(?)", "parquet": "read_parquet(?)"}[params["format"]]
+    con.execute(f"CREATE TABLE data AS SELECT * FROM {reader}", [params["file"]])
+con.execute("SET enable_external_access=false")
+con.execute("SET lock_configuration=true")
+cursor = con.execute(params["query"])
+if cursor.description:
+    columns = [column[0] for column in cursor.description]
+    rows = cursor.fetchmany(${MAX_ANALYTICS_RESULT_ROWS})
+    print(pandas.DataFrame(rows, columns=columns).to_string(index=False))
+    if cursor.fetchone() is not None:
+        print("\\n[analytics result truncated after ${MAX_ANALYTICS_RESULT_ROWS} rows]")
+`;
+}
+
 async function sidekick_analytics({ query, file, format }) {
   const denied = requireCanonicalInvocation("analytics");
   if (denied) return denied;
+  let tempDir = null;
   try {
     const venvPath = "/home/sidekick/.sidekick-tools/bin/python3";
     const pythonCmd = fs.existsSync(venvPath) ? venvPath : "python3";
-
-    // Helper: run Python script via temp file to avoid shell escaping issues
-    const runPyScript = (pyScript) => {
-      const tmpFile = path.join(os.tmpdir(), "sidekick_analytics_" + Date.now() + ".py");
-      try {
-        fs.writeFileSync(tmpFile, pyScript);
-        return execFileSync(pythonCmd, [tmpFile], { timeout: 60000, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"], env: childProcessEnv() });
-      } finally {
-        try { fs.unlinkSync(tmpFile); } catch (e) {}
-      }
-    };
-
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-analytics-"));
+    const scriptPath = path.join(tempDir, "query.py");
+    const inputFormat = format || "csv";
+    let safeInputPath = null;
     if (file) {
       const policyError = enforcePathPolicy(file, "read");
       if (policyError) return policyError;
       if (!fs.existsSync(file)) {
         return { content: [{ type: "text", text: "Error: File not found: " + file }], isError: true };
       }
-
-      const sql = query || "SELECT * FROM data LIMIT 100";
-      const fmt = format || "csv";
-      // Pass all parameters via JSON to avoid escaping issues
-      const params = JSON.stringify({ file, sql, fmt });
-      const pyScript = `import duckdb, json, sys
-params = json.loads(${JSON.stringify(params)})
-con = duckdb.connect()
-f = params["file"]
-if params["fmt"] == "csv":
-    con.execute(f"CREATE TABLE data AS SELECT * FROM read_csv_auto('{f}')")
-elif params["fmt"] == "json":
-    con.execute(f"CREATE TABLE data AS SELECT * FROM read_json_auto('{f}')")
-elif params["fmt"] == "parquet":
-    con.execute(f"CREATE TABLE data AS SELECT * FROM read_parquet('{f}')")
-result = con.execute(params["sql"]).fetchdf()
-print(result.to_string(index=False))
-`;
-      const result = runPyScript(pyScript);
-      return { content: [{ type: "text", text: result }] };
+      safeInputPath = path.join(tempDir, `input.${inputFormat}`);
+      copyAnalyticsInput(file, safeInputPath);
     }
-
-    if (query) {
-      const params = JSON.stringify({ query });
-      const pyScript = `import duckdb, json, sys
-params = json.loads(${JSON.stringify(params)})
-con = duckdb.connect()
-result = con.execute(params["query"]).fetchdf()
-print(result.to_string(index=False))
-`;
-      const result = runPyScript(pyScript);
-      return { content: [{ type: "text", text: result }] };
-    }
-
-    return { content: [{ type: "text", text: "Error: query or file is required" }], isError: true };
+    if (!query && !file) return { content: [{ type: "text", text: "Error: query or file is required" }], isError: true };
+    const sql = query || "SELECT * FROM data LIMIT 100";
+    fs.writeFileSync(scriptPath, buildAnalyticsScript({ file: safeInputPath, format: safeInputPath ? inputFormat : null, query: sql }), { mode: 0o600, flag: "wx" });
+    const result = execFileSync(pythonCmd, [scriptPath], {
+      timeout: 60000,
+      encoding: "utf-8",
+      maxBuffer: MAX_ANALYTICS_RESULT_BYTES,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: childProcessEnv(),
+    });
+    return { content: [{ type: "text", text: result }] };
   } catch (e) {
     if (e.message.includes("not found") || e.message.includes("ModuleNotFoundError")) {
       return { content: [{ type: "text", text: "Error: DuckDB not installed. Run: pip3 install duckdb" }], isError: true };
     }
-    return { content: [{ type: "text", text: "Error: " + e.message }], isError: true };
+    return { content: [{ type: "text", text: "Error: " + String(e.message || e).slice(0, 2000) }], isError: true };
+  } finally {
+    if (tempDir) {
+      try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch {}
+    }
   }
 }
 
@@ -933,9 +967,9 @@ const SCHEMAS = {
     device: z.enum(["auto", "cpu", "cuda", "metal", "vulkan"]).optional().default("auto").describe("Local inference device; Vulkan supports compatible AMD/Intel/NVIDIA backends")
   }),
   analytics: z.object({
-    query: z.string().optional().describe("SQL query"),
-    file: z.string().optional().describe("Data file path (CSV, JSON, or Parquet)"),
-    format: z.string().optional().describe("File format (csv|json|parquet)")
+    query: z.string().max(MAX_ANALYTICS_QUERY_CHARS).optional().describe("Read-only SQL query (maximum 16384 characters)"),
+    file: z.string().max(4096).optional().describe("Data file (CSV, JSON, or Parquet; maximum 64 MiB)"),
+    format: z.enum(["csv", "json", "parquet"]).optional().default("csv").describe("File format")
   }),
   insight_report: z.object({
     paths: z.union([z.string(), z.array(z.string())]).describe("Text, data, or image file path(s) to analyze"),
@@ -987,7 +1021,7 @@ const descriptors = Object.freeze([
     name: "analytics",
     description: "Fast analytical queries on CSV/JSON/Parquet files using DuckDB",
     schema: SCHEMAS.analytics,
-    args: { query: "string (SQL query)", file: "string (optional, data file path - CSV, JSON, or Parquet)", format: "string (optional, file format: csv|json|parquet - auto-detected)" },
+    args: { query: `string (optional, SQL query; maximum ${MAX_ANALYTICS_QUERY_CHARS} characters)`, file: `string (optional, data file path; maximum ${MAX_ANALYTICS_FILE_BYTES} bytes)`, format: "string (optional, csv|json|parquet; defaults to csv)" },
     risk: "medium",
     category: "Database",
     source: "builtin",
@@ -1018,4 +1052,4 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_ocr, sidekick_media, sidekick_transcribe, sidekick_analytics, sidekick_insight_report, sidekick_download, localCudaAvailable, localVulkanAvailable, readTranscriptionText, transcriptionOutputPath, transcriptionJobPath, transcriptionJobBelongsToPrincipal, countActiveTranscriptionJobs, assertTranscriptionCapacity, removeTranscriptionOutput, saveTranscriptionJob, MAX_TRANSCRIPTION_OUTPUT_BYTES, MAX_ACTIVE_TRANSCRIPTION_JOBS };
+module.exports = { descriptors, sidekick_ocr, sidekick_media, sidekick_transcribe, sidekick_analytics, sidekick_insight_report, sidekick_download, localCudaAvailable, localVulkanAvailable, readTranscriptionText, transcriptionOutputPath, transcriptionJobPath, transcriptionJobBelongsToPrincipal, countActiveTranscriptionJobs, assertTranscriptionCapacity, removeTranscriptionOutput, copyAnalyticsInput, buildAnalyticsScript, saveTranscriptionJob, MAX_TRANSCRIPTION_OUTPUT_BYTES, MAX_ACTIVE_TRANSCRIPTION_JOBS, MAX_ANALYTICS_FILE_BYTES, MAX_ANALYTICS_QUERY_CHARS, MAX_ANALYTICS_RESULT_ROWS };
