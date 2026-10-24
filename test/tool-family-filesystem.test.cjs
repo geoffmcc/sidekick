@@ -71,6 +71,24 @@ console.log('Running Filesystem Family Tests...');
     assert.ok(text(result).includes('one.txt'));
     assert.ok(text(result).includes('two.js'));
 
+    const deniedDirectory = path.join(ROOT, 'private');
+    fs.mkdirSync(deniedDirectory);
+    fs.writeFileSync(path.join(deniedDirectory, 'private.txt'), 'nested-denied-marker', 'utf8');
+    process.env.SIDEKICK_DENIED_PATHS = deniedDirectory;
+    try {
+      result = await family.sidekick_list({ path: ROOT });
+      assert.ok(!text(result).includes('private'), 'directory listing omits a denied child and its metadata');
+      result = await family.sidekick_search({ pattern: 'nested-denied-marker', path: ROOT });
+      assert.ok(!text(result).includes('nested-denied-marker'), 'search does not read denied descendants');
+      result = await family.sidekick_find({ path: ROOT, name: 'private.txt' });
+      assert.deepStrictEqual(JSON.parse(text(result)), [], 'find does not return entries under denied descendants');
+      result = await family.sidekick_filter({ path: ROOT, pattern: 'private' });
+      assert.ok(!text(result).includes('private.txt'), 'filter does not return denied descendant metadata');
+    } finally {
+      delete process.env.SIDEKICK_DENIED_PATHS;
+      fs.rmSync(deniedDirectory, { recursive: true, force: true });
+    }
+
     result = await family.sidekick_search({ pattern: 'marker', path: ROOT, include: '*.js' });
     assert.ok(text(result).includes('two.js'));
     assert.strictEqual(text(await family.sidekick_search({ pattern: 'missing', path: ROOT })), 'No matches found');

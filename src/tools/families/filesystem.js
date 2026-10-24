@@ -7,7 +7,8 @@ const { childProcessEnv } = require("../../security/child-process");
 const { resolveCommandOnPath } = require("../../security/command-lookup");
 const { z } = require("zod");
 const { redactSensitive } = require("../../redact");
-const { enforcePathPolicy } = require("../path-policy");
+const pathPolicy = require("../path-policy");
+const { enforcePathPolicy } = pathPolicy;
 const { requireToolExecution } = require("../read-authorization");
 const { BoundedRegex } = require("../../core/bounded-regex");
 const { readTextBounded, DEFAULT_FILE_READ_BYTES } = require("../../core/bounded-file-read");
@@ -82,9 +83,13 @@ async function sidekick_list({ path: dirPath }) {
   }
   const items = [];
   let truncated = false;
+  const checkDescendantPolicy = pathPolicy.hasConfiguredDeniedPaths();
   try {
     const directory = await fs.promises.opendir(dirPath);
     for await (const item of directory) {
+      // A permitted parent does not grant access to a denied descendant.
+      // Filter denied names before any metadata lookup or response formatting.
+      if (checkDescendantPolicy && enforcePathPolicy(path.join(dirPath, item.name), "read")) continue;
       if (items.length >= MAX_DIRECTORY_LIST_ENTRIES) {
         truncated = true;
         break;
@@ -106,7 +111,7 @@ async function sidekick_list({ path: dirPath }) {
   return { content: [{ type: "text", text: redactSensitive((lines.join("\n") || "(empty directory)") + notice) }] };
 }
 
-async function nodeSearch(pattern, targetPath, include) {
+async function nodeSearch(pattern, targetPath, include, checkDescendantPolicy = false) {
   let matcher;
   try {
     matcher = new BoundedRegex(pattern);
@@ -127,6 +132,7 @@ async function nodeSearch(pattern, targetPath, include) {
   async function visit(current, depth) {
     if (results.length >= maxResults || depth > 20) return;
     if (scannedEntries >= MAX_SEARCH_SCAN_ENTRIES) { scanLimited = true; return; }
+    if (checkDescendantPolicy && enforcePathPolicy(current, "read")) return;
     let stat;
     try { stat = fs.lstatSync(current); } catch { return; }
     if (stat.isSymbolicLink()) return;
@@ -195,7 +201,11 @@ async function sidekick_search({ pattern, path: searchPath, include }) {
   }
 
   const searchCommand = resolveCommandOnPath("rg") || resolveCommandOnPath("grep");
-  if (!searchCommand) return nodeSearch(pattern, targetPath, include);
+  const checkDescendantPolicy = pathPolicy.hasConfiguredDeniedPaths();
+  // rg/grep cannot apply Sidekick's canonical path policy to every visited
+  // descendant. Use the bounded in-process walker whenever denies are
+  // configured so nested denied roots are checked before reading each file.
+  if (!searchCommand || checkDescendantPolicy) return nodeSearch(pattern, targetPath, include, checkDescendantPolicy);
 
   try {
     let stdout;
@@ -328,10 +338,12 @@ async function sidekick_filter({ path: targetPath, pattern, after, before, max_r
     let scannedEntries = 0;
     let resultLimited = false;
     let scanLimited = false;
+    const checkDescendantPolicy = pathPolicy.hasConfiguredDeniedPaths();
     async function walkDir(dir, depth) {
       if (depth > 5) return;
       if (results.length >= maxResults) { resultLimited = true; return; }
       if (scannedEntries >= MAX_FILTER_SCAN_ENTRIES) { scanLimited = true; return; }
+      if (checkDescendantPolicy && enforcePathPolicy(dir, "read")) return;
       let directory;
       try { directory = await fs.promises.opendir(dir); } catch { return; }
       for await (const entry of directory) {
@@ -339,6 +351,7 @@ async function sidekick_filter({ path: targetPath, pattern, after, before, max_r
         if (scannedEntries >= MAX_FILTER_SCAN_ENTRIES) { scanLimited = true; break; }
         scannedEntries++;
         const fullPath = path.join(dir, entry.name);
+        if (checkDescendantPolicy && enforcePathPolicy(fullPath, "read")) continue;
         try {
           const s = fs.lstatSync(fullPath);
           if (s.isSymbolicLink()) continue;
@@ -467,10 +480,12 @@ async function sidekick_find({ path: searchPath, name, modified_after, modified_
   let scannedEntries = 0;
   let resultLimited = false;
   let scanLimited = false;
+  const checkDescendantPolicy = pathPolicy.hasConfiguredDeniedPaths();
   async function walk(dir, depth) {
     if (depth > 8) return;
     if (results.length >= maxResults) { resultLimited = true; return; }
     if (scannedEntries >= MAX_FIND_SCAN_ENTRIES) { scanLimited = true; return; }
+    if (checkDescendantPolicy && enforcePathPolicy(dir, "read")) return;
     let directory;
     try { directory = await fs.promises.opendir(dir); } catch { return; }
     for await (const entry of directory) {
@@ -479,6 +494,7 @@ async function sidekick_find({ path: searchPath, name, modified_after, modified_
       scannedEntries++;
       if (entry.name.startsWith(".") || entry.name === "node_modules" || entry.name === "__pycache__") continue;
       const fullPath = path.join(dir, entry.name);
+      if (checkDescendantPolicy && enforcePathPolicy(fullPath, "read")) continue;
       try {
         const s = fs.lstatSync(fullPath);
         if (s.isSymbolicLink()) continue;

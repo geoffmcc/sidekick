@@ -196,6 +196,10 @@ function pathPolicyEntries(source, suffix) {
   ];
 }
 
+function hasConfiguredDeniedPaths(source = toolContext.getExecutionSource() || "unknown") {
+  return pathPolicyEntries(source, "DENIED_PATHS").length > 0;
+}
+
 // Containment test for a single entry. This is not an authorization check on
 // its own: it knows nothing about deny-list precedence. Call
 // getPathPolicyDecision or enforcePathPolicy to make a policy decision.
@@ -341,6 +345,7 @@ function enforcePathPolicy(filePath, operation = "access") {
 module.exports = {
   normalizePolicyPath,
   pathMatchesPolicyEntry,
+  hasConfiguredDeniedPaths,
   getPathPolicyDecision,
   enforcePathPolicy,
 };
