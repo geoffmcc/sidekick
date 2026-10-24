@@ -218,6 +218,51 @@ try {
       await snapshot.cleanup();
     }
     assert.equal(fs.existsSync(snapshot.path), false, "snapshot cleanup removes its private staging directory");
+
+    // Exercise the real archive dispatcher with an authenticated owner context:
+    // a denied nested directory must block directory archive creation before
+    // tar/zip can read and export it.
+    const scopedEnvKeys = [
+      "SIDEKICK_DATA_DIR", "SIDEKICK_DB_FILE", "SIDEKICK_TOOL_POLICY", "SIDEKICK_MCP_TOOL_POLICY",
+      "SIDEKICK_APPROVAL_MODE", "SIDEKICK_MCP_APPROVAL_MODE", "SIDEKICK_ALLOWED_PATHS", "SIDEKICK_DENIED_PATHS",
+    ];
+    const previousScopedEnv = new Map(scopedEnvKeys.map(key => [key, process.env[key]]));
+    const scopedDataDir = process.env.SIDEKICK_TEST_DATA_DIR || path.join(temp, "dispatch-data");
+    process.env.SIDEKICK_DATA_DIR = scopedDataDir;
+    process.env.SIDEKICK_DB_FILE = process.env.SIDEKICK_TEST_DB_FILE || path.join(scopedDataDir, "sidekick.db");
+    process.env.SIDEKICK_TOOL_POLICY = "open";
+    process.env.SIDEKICK_MCP_TOOL_POLICY = "open";
+    process.env.SIDEKICK_APPROVAL_MODE = "off";
+    process.env.SIDEKICK_MCP_APPROVAL_MODE = "off";
+    const archiveCaseRoot = path.join(temp, "archive-dispatch");
+    const archiveSource = path.join(archiveCaseRoot, "source");
+    const archiveDenied = path.join(archiveSource, "private");
+    const archiveOutput = path.join(archiveCaseRoot, "result.tar.gz");
+    fs.mkdirSync(archiveDenied, { recursive: true });
+    fs.writeFileSync(path.join(archiveSource, "visible.txt"), "visible", "utf8");
+    fs.writeFileSync(path.join(archiveDenied, "secret.txt"), "synthetic denied content", "utf8");
+    process.env.SIDEKICK_ALLOWED_PATHS = archiveCaseRoot;
+    process.env.SIDEKICK_DENIED_PATHS = archiveDenied;
+    let dispatchDb;
+    try {
+      const tools = require("../src/tools");
+      const context = require("./helpers/authorized-context").createOwnerContext({ source: "mcp" });
+      dispatchDb = require("../src/db");
+      const result = await tools.dispatchTool({
+        name: "archive",
+        args: { action: "create", path: archiveSource, output: archiveOutput, format: "tar.gz" },
+        context,
+      });
+      assert.equal(result.code, "path_denied", "canonical archive dispatch must deny a source containing a denied subtree");
+      assert.match(result.content[0].text, /overlaps a denied filesystem path/);
+      assert.equal(fs.existsSync(archiveOutput), false, "archive creation must not start or publish output for the denied tree");
+    } finally {
+      try { dispatchDb?.closeDatabase(); } catch {}
+      for (const [key, value] of previousScopedEnv) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });
   }
