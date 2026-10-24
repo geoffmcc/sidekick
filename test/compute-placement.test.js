@@ -54,7 +54,7 @@ function enrollTestWorker({ allowedDataClassifications, maxConcurrentJobs = 2, t
   const token = workerManager.createEnrollmentToken({
     displayName: "placement-test-worker",
     trustLevel,
-    ...(allowedDataClassifications ? { allowedDataClassifications } : {}),
+    allowedDataClassifications: allowedDataClassifications ?? ["public", "internal", "private"],
     maxConcurrentJobs,
   });
   const enrolled = workerManager.enrollWorker({

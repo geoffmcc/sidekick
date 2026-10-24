@@ -198,6 +198,18 @@ ok("worker enrollment trust choices match the placement taxonomy", () => {
     "legacy labels must not mint workers that placement silently treats as untrusted");
 });
 
+ok("worker enrollment defaults to public data and submits only selected classifications", () => {
+  assert.match(dashHtml, /name="computeEnrollDataClass" value="public" checked/);
+  for (const classification of ["internal", "private", "sensitive", "restricted"]) {
+    assert.match(dashHtml, new RegExp(`name="computeEnrollDataClass" value="${classification}"`));
+    assert.doesNotMatch(dashHtml, new RegExp(`name="computeEnrollDataClass" value="${classification}" checked`),
+      `${classification} must require an explicit grant`);
+  }
+  const body = fnBody(clientJs, "createComputeEnrollment");
+  assert.match(body, /allowedDataClassifications:\s*Array\.from\(document\.querySelectorAll\('input\[name="computeEnrollDataClass"\]:checked'/,
+    "the dashboard request must carry exactly the operator-selected data classes");
+});
+
 ok("enrollment guards against double submission and offers a copy button", () => {
   const body = fnBody(clientJs, "createComputeEnrollment");
   assert.match(body, /if\s*\(computeEnrollmentPending\)\s*return/,

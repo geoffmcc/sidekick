@@ -578,7 +578,8 @@ test('consumeEnrollmentToken rejects already-used token', () => {
 });
 
 test('consumeEnrollmentToken rejects expired token', () => {
-  const result = workerManager.createEnrollmentToken({ displayName: 'expired', expiresInMs: -1000 });
+  const result = workerManager.createEnrollmentToken({ displayName: 'expired', expiresInMs: 60000 });
+  dbStore.getDb().prepare('UPDATE compute_enrollment_tokens SET expires_at = ? WHERE token_id = ?').run(new Date(Date.now() - 1000).toISOString(), result.tokenId);
   assert.throws(() => workerManager.consumeEnrollmentToken(result.token, 'node-x'), /expired/, 'rejects expired');
 });
 

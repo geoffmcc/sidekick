@@ -1230,9 +1230,9 @@ app.post("/api/compute/enrollment-tokens", (req, res) => {
     action: "create_token",
     display_name: body.displayName || body.display_name,
     trust_level: body.trustLevel || body.trust_level || "trusted",
-    allowed_data_classifications: body.allowedDataClassifications || body.allowed_data_classifications || ["public", "internal", "private"],
-    max_concurrent_jobs: Math.min(16, Math.max(1, Number(body.maxConcurrentJobs || body.max_concurrent_jobs || 2))),
-    expires_in_ms: Math.min(7 * 24 * 60 * 60 * 1000, Math.max(60 * 1000, Number(body.expiresInMs || body.expires_in_ms || 3600000))),
+    allowed_data_classifications: body.allowedDataClassifications ?? body.allowed_data_classifications ?? ["public"],
+    max_concurrent_jobs: body.maxConcurrentJobs ?? body.max_concurrent_jobs ?? 2,
+    expires_in_ms: body.expiresInMs ?? body.expires_in_ms ?? 3600000,
     ...(body.reEnrollmentOf || body.re_enrollment_of ? { re_enrollment_of: body.reEnrollmentOf || body.re_enrollment_of } : {}),
   }, "compute.enrollment_token.created");
 });

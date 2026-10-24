@@ -422,9 +422,9 @@ function createEnrollmentTokenHandler(req, res) {
     const token = compute.workerManager.createEnrollmentToken({
       displayName: body.displayName || body.display_name,
       trustLevel: body.trustLevel || body.trust_level || "trusted",
-      allowedDataClassifications: body.allowedDataClassifications || body.allowed_data_classifications || ["public", "internal", "private"],
-      maxConcurrentJobs: body.maxConcurrentJobs || body.max_concurrent_jobs || 2,
-      expiresInMs: body.expiresInMs || body.expires_in_ms || 3600000,
+      allowedDataClassifications: body.allowedDataClassifications ?? body.allowed_data_classifications ?? ["public"],
+      maxConcurrentJobs: body.maxConcurrentJobs ?? body.max_concurrent_jobs ?? 2,
+      expiresInMs: body.expiresInMs ?? body.expires_in_ms ?? 3600000,
       createdBy: req.authIdentity.principal_id,
       reEnrollmentOf: body.reEnrollmentOf || body.re_enrollment_of || null,
     });

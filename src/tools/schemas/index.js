@@ -1,5 +1,5 @@
 const { z } = require("zod");
-const { TRUST_LEVELS } = require("../../compute/errors");
+const { TRUST_LEVELS, DATA_CLASSIFICATIONS } = require("../../compute/errors");
 
 const TOOL_SCHEMAS = {
   compute: z.object({
@@ -21,9 +21,9 @@ const TOOL_SCHEMAS = {
     worker_version: z.string().optional().describe("Worker agent version"),
     public_key: z.string().optional().describe("Worker public key"),
     trust_level: z.enum(TRUST_LEVELS).optional().describe("Worker placement trust level (untrusted|limited|trusted|privileged)"),
-    allowed_data_classifications: z.array(z.string()).optional().describe("Allowed data classifications for token"),
-    max_concurrent_jobs: z.number().optional().describe("Maximum concurrent jobs for enrolled worker"),
-    expires_in_ms: z.number().optional().describe("Enrollment token lifetime in milliseconds"),
+    allowed_data_classifications: z.array(z.enum(DATA_CLASSIFICATIONS)).max(DATA_CLASSIFICATIONS.length).optional().describe("Data classifications allowed on the enrolled worker; defaults to public only"),
+    max_concurrent_jobs: z.number().int().min(1).max(16).optional().describe("Maximum concurrent jobs for enrolled worker (1-16)"),
+    expires_in_ms: z.number().int().min(60000).max(604800000).optional().describe("Enrollment token lifetime in milliseconds (1 minute to 7 days)"),
     re_enrollment_of: z.string().optional().describe("Node ID being re-enrolled"),
     reason: z.string().optional().describe("Revoke reason"),
     enable: z.boolean().optional().describe("Worker service state for maintenance action: true returns the worker to enabled service; false places it into maintenance"),

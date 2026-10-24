@@ -86,6 +86,44 @@ test("worker enrollment accepts only the canonical trust taxonomy at schema and 
   }
 });
 
+test("worker enrollment scopes, concurrency, and token lifetime are validated before persistence", () => {
+  const before = db.getDb().prepare("SELECT COUNT(*) AS count FROM compute_enrollment_tokens").get().count;
+  const invalidPolicies = [
+    { allowedDataClassifications: ["secret"] },
+    { allowedDataClassifications: "private" },
+    { maxConcurrentJobs: 0 },
+    { maxConcurrentJobs: 17 },
+    { expiresInMs: 59_999 },
+    { expiresInMs: 604_800_001 },
+  ];
+  const invalidToolArgs = [
+    { allowed_data_classifications: ["secret"] },
+    { max_concurrent_jobs: 0 },
+    { max_concurrent_jobs: 17 },
+    { expires_in_ms: 59_999 },
+    { expires_in_ms: 604_800_001 },
+  ];
+  for (const args of invalidToolArgs) {
+    assert.equal(descriptor.schema.safeParse({ action: "create_token", ...args }).success, false,
+      `invalid enrollment parameters must fail dispatcher schema validation: ${JSON.stringify(args)}`);
+  }
+  for (const policy of invalidPolicies) {
+    assert.throws(() => compute.workerManager.createEnrollmentToken({ displayName: "invalid-enrollment-policy", ...policy }), /Invalid worker data-classification scope|maxConcurrentJobs must|expiresInMs must/);
+  }
+  assert.equal(db.getDb().prepare("SELECT COUNT(*) AS count FROM compute_enrollment_tokens").get().count, before,
+    "invalid worker policy must not create an enrollment token");
+
+  const token = compute.workerManager.createEnrollmentToken({
+    displayName: "least-privilege-enrollment",
+    allowedDataClassifications: ["public", "public"],
+  });
+  const row = db.getDb().prepare("SELECT allowed_data_classifications_json FROM compute_enrollment_tokens WHERE token_id = ?").get(token.tokenId);
+  assert.deepEqual(JSON.parse(row.allowed_data_classifications_json), ["public"], "duplicate grants are normalized");
+  const defaultToken = compute.workerManager.createEnrollmentToken({ displayName: "default-scope-enrollment" });
+  const defaultRow = db.getDb().prepare("SELECT allowed_data_classifications_json FROM compute_enrollment_tokens WHERE token_id = ?").get(defaultToken.tokenId);
+  assert.deepEqual(JSON.parse(defaultRow.allowed_data_classifications_json), ["public"], "new workers receive public data scope by default");
+});
+
 test("worker enrollment credential is shown only through the authenticated one-time result", async () => {
   const token = compute.workerManager.createEnrollmentToken({ displayName: "synthetic enrolled worker", createdBy: owner.principal_id });
   const result = await dispatcher.dispatchTestTool({

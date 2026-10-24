@@ -807,7 +807,16 @@
         <label>Expires in<select id="computeEnrollTtl"><option value="3600000">1 hour</option><option value="21600000">6 hours</option><option value="86400000">24 hours</option></select></label>
         <label>Re-enroll node (optional)<input id="computeEnrollReEnroll" type="text" placeholder="node_… to recover a lost credential"></label>
       </div>
+      <fieldset class="compute-enrollment-classifications">
+        <legend>Data this worker may process</legend>
+        <label><input type="checkbox" name="computeEnrollDataClass" value="public" checked> Public</label>
+        <label><input type="checkbox" name="computeEnrollDataClass" value="internal"> Internal</label>
+        <label><input type="checkbox" name="computeEnrollDataClass" value="private"> Private</label>
+        <label><input type="checkbox" name="computeEnrollDataClass" value="sensitive"> Sensitive</label>
+        <label><input type="checkbox" name="computeEnrollDataClass" value="restricted"> Restricted</label>
+      </fieldset>
       <div class="sub">Trust levels are enforced by placement. Use one of the defined levels; unrecognized labels are rejected.</div>
+      <div class="sub">Only selected data classes may be routed to this worker. New workers default to public data; expand this only for a worker you trust with those data classes.</div>
       <div id="computeEnrollmentResult" class="compute-token-box"><div class="empty">Create a token to see installer commands.</div></div>
     </div>
     <div class="card compute-panel">

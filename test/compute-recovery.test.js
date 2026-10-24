@@ -47,6 +47,7 @@ function enrollWorker({ maxConcurrentJobs = 1 } = {}) {
     displayName: "recovery-test-worker",
     trustLevel: "trusted",
     maxConcurrentJobs,
+    allowedDataClassifications: ["public", "internal", "private"],
   });
   const enrolled = workerManager.enrollWorker({
     nodeId: "recovery-node-" + Math.random().toString(36).slice(2, 8),

@@ -200,9 +200,9 @@ async function sidekick_compute_nodes({ action, node_id, worker_id, ...args }, r
         const result = compute.workerManager.createEnrollmentToken({
           displayName: args.display_name,
           trustLevel: args.trust_level || "trusted",
-          allowedDataClassifications: args.allowed_data_classifications || ["public", "internal", "private"],
-          maxConcurrentJobs: args.max_concurrent_jobs || 2,
-          expiresInMs: args.expires_in_ms || 3600000,
+          allowedDataClassifications: args.allowed_data_classifications ?? ["public"],
+          maxConcurrentJobs: args.max_concurrent_jobs ?? 2,
+          expiresInMs: args.expires_in_ms ?? 3600000,
           createdBy: toolContext.getExecutionContext().authIdentity?.principal_id || null,
           reEnrollmentOf: args.re_enrollment_of || null,
         });

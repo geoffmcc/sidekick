@@ -3251,6 +3251,7 @@ function createComputeEnrollment(){
   const body = {
     displayName: fieldValue('computeEnrollName', 'sidekick-worker'),
     trustLevel: fieldValue('computeEnrollTrust', 'trusted'),
+    allowedDataClassifications: Array.from(document.querySelectorAll('input[name="computeEnrollDataClass"]:checked'), input => input.value),
     maxConcurrentJobs: Number(fieldValue('computeEnrollJobs', 2)),
     expiresInMs: Number(fieldValue('computeEnrollTtl', 3600000))
   };

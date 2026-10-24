@@ -1,7 +1,11 @@
 const crypto = require("crypto");
 const dbStore = require("../db");
-const { WORKER_STATES, TRUST_LEVELS, EnrollmentError, WorkerRevokedError } = require("./errors");
+const { WORKER_STATES, TRUST_LEVELS, DATA_CLASSIFICATIONS, EnrollmentError, WorkerRevokedError } = require("./errors");
 const { projectWorkerTelemetry, sanitizeTelemetry } = require("./telemetry");
+
+const MIN_ENROLLMENT_TTL_MS = 60_000;
+const MAX_ENROLLMENT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const MAX_WORKER_CONCURRENCY = 16;
 
 function nowIso() { return new Date().toISOString(); }
 function generateId(prefix) { return `${prefix}_${Date.now().toString(36)}_${crypto.randomBytes(6).toString("hex")}`; }
@@ -189,11 +193,22 @@ function rowToWorker(row) {
   };
 }
 
-function createEnrollmentToken({ displayName, trustLevel = "trusted", allowedDataClassifications = ["public", "internal", "private"], maxConcurrentJobs = 2, expiresInMs = 3600000, createdBy = "admin", reEnrollmentOf = null }) {
+function createEnrollmentToken({ displayName, trustLevel = "trusted", allowedDataClassifications = ["public"], maxConcurrentJobs = 2, expiresInMs = 3600000, createdBy = "admin", reEnrollmentOf = null }) {
   ensureSchema();
   if (!TRUST_LEVELS.includes(trustLevel)) {
     throw new EnrollmentError(`Invalid worker trust level "${trustLevel}". Valid values: ${TRUST_LEVELS.join(", ")}`);
   }
+  if (!Array.isArray(allowedDataClassifications) || allowedDataClassifications.length > DATA_CLASSIFICATIONS.length ||
+      allowedDataClassifications.some(value => !DATA_CLASSIFICATIONS.includes(value))) {
+    throw new EnrollmentError(`Invalid worker data-classification scope. Valid values: ${DATA_CLASSIFICATIONS.join(", ")}`);
+  }
+  if (!Number.isInteger(maxConcurrentJobs) || maxConcurrentJobs < 1 || maxConcurrentJobs > MAX_WORKER_CONCURRENCY) {
+    throw new EnrollmentError(`maxConcurrentJobs must be an integer from 1 to ${MAX_WORKER_CONCURRENCY}`);
+  }
+  if (!Number.isSafeInteger(expiresInMs) || expiresInMs < MIN_ENROLLMENT_TTL_MS || expiresInMs > MAX_ENROLLMENT_TTL_MS) {
+    throw new EnrollmentError(`expiresInMs must be between ${MIN_ENROLLMENT_TTL_MS} and ${MAX_ENROLLMENT_TTL_MS}`);
+  }
+  const dataClassificationScope = [...new Set(allowedDataClassifications)];
   const token = generateId("enroll") + crypto.randomBytes(16).toString("hex");
   const tokenHash = hashToken(token);
   const tokenId = generateId("etok");
@@ -202,7 +217,7 @@ function createEnrollmentToken({ displayName, trustLevel = "trusted", allowedDat
   db.prepare(`
     INSERT INTO compute_enrollment_tokens (token_id, token_hash, display_name, trust_level, allowed_data_classifications_json, max_concurrent_jobs, expires_at, created_by, re_enrollment_of)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(tokenId, tokenHash, displayName || null, trustLevel, json(allowedDataClassifications), maxConcurrentJobs, expiresAt, createdBy, reEnrollmentOf || null);
+  `).run(tokenId, tokenHash, displayName || null, trustLevel, json(dataClassificationScope), maxConcurrentJobs, expiresAt, createdBy, reEnrollmentOf || null);
   return { tokenId, token, expiresAt, reEnrollmentOf: reEnrollmentOf || null };
 }
 
