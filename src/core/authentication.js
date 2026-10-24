@@ -1,10 +1,14 @@
 "use strict";
 
 const crypto = require("crypto");
+const net = require("node:net");
 const dbStore = require("../db");
 const identity = require("./identity");
 
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+const MAX_ACTIVE_SESSIONS_PER_PRINCIPAL = 64;
+const SESSION_CLEANUP_BATCH_SIZE = 500;
+const SESSION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const CREDENTIAL_BYTES = 32;
 const SESSION_BYTES = 32;
 const RECOVERY_BYTES = 32;
@@ -82,11 +86,32 @@ function createSession(principalId, { userAgent = null, ipAddress = null, ttlMs 
   const timestamp = Date.now();
   const createdAt = new Date(timestamp).toISOString();
   const expiresAt = new Date(timestamp + Math.max(60_000, Number(ttlMs) || SESSION_TTL_MS)).toISOString();
+  const retainedSince = new Date(timestamp - SESSION_RETENTION_MS).toISOString();
+  const safeUserAgent = typeof userAgent === "string" ? userAgent.replace(/[^\x20-\x7E]/g, "?").slice(0, 256) : null;
+  const safeIpAddress = typeof ipAddress === "string" && net.isIP(ipAddress) ? ipAddress : null;
   const db = dbStore.getDb();
   db.transaction(() => {
+    db.prepare(`DELETE FROM identity_sessions WHERE session_id_hash IN (
+      SELECT session_id_hash FROM identity_sessions
+      WHERE expires_at <= ? OR (invalidated_at IS NOT NULL AND invalidated_at <= ?)
+      ORDER BY expires_at ASC LIMIT ?
+    )`).run(createdAt, retainedSince, SESSION_CLEANUP_BATCH_SIZE);
+    const evicted = db.prepare(`UPDATE identity_sessions SET invalidated_at = ?
+      WHERE session_id_hash IN (
+        SELECT session_id_hash FROM identity_sessions
+        WHERE principal_id = ? AND invalidated_at IS NULL AND expires_at > ?
+        ORDER BY created_at DESC LIMIT -1 OFFSET ?
+      )`).run(createdAt, principalId, createdAt, MAX_ACTIVE_SESSIONS_PER_PRINCIPAL - 1);
+    if (evicted.changes > 0) {
+      identity.recordAuditEvent("session.evicted", principalId, principalId, {
+        reason: "active_session_limit",
+        count: evicted.changes,
+        limit: MAX_ACTIVE_SESSIONS_PER_PRINCIPAL,
+      });
+    }
     db.prepare(`INSERT INTO identity_sessions
       (session_id_hash, principal_id, created_at, expires_at, last_seen_at, user_agent, ip_address)
-      VALUES (?, ?, ?, ?, ?, ?, ?)`).run(hash(raw), principalId, createdAt, expiresAt, createdAt, userAgent, ipAddress);
+      VALUES (?, ?, ?, ?, ?, ?, ?)`).run(hash(raw), principalId, createdAt, expiresAt, createdAt, safeUserAgent, safeIpAddress);
     identity.recordAuditEvent("session.created", principalId, principalId, { expires_at: expiresAt });
   })();
   return { token: raw, expires_at: expiresAt };
@@ -312,4 +337,4 @@ function rotateCredential(credentialId, actorContext = null) {
   })();
 }
 
-module.exports = Object.freeze({ SESSION_TTL_MS, RECOVERY_TTL_MS, createSession, getSession, isSessionActive, invalidateSession, invalidatePrincipalSessions, createCredential, getCredential, refreshCredentialIdentity, listCredentials, authenticateCredential, authenticateBearerIdentity, revokeCredential, rotateCredential, createOwnerRecoveryToken, recoverOwnerPassword });
+module.exports = Object.freeze({ MAX_ACTIVE_SESSIONS_PER_PRINCIPAL, SESSION_TTL_MS, RECOVERY_TTL_MS, createSession, getSession, isSessionActive, invalidateSession, invalidatePrincipalSessions, createCredential, getCredential, refreshCredentialIdentity, listCredentials, authenticateCredential, authenticateBearerIdentity, revokeCredential, rotateCredential, createOwnerRecoveryToken, recoverOwnerPassword });

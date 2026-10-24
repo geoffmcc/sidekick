@@ -64,6 +64,32 @@ try {
     assert.strictEqual(authentication.isSessionActive(expiringSession.session_id), false, "expired sessions cannot retain long-lived stream access");
   });
 
+  test("session creation bounds active rows and sanitizes untrusted request metadata", () => {
+    const created = [];
+    for (let index = 0; index < authentication.MAX_ACTIVE_SESSIONS_PER_PRINCIPAL + 2; index++) {
+      created.push(authentication.createSession(owner.principal_id, {
+        userAgent: `\r\n${"u".repeat(300)}`,
+        ipAddress: "not-an-ip",
+      }));
+    }
+    const activeCount = db.getDb().prepare("SELECT COUNT(*) AS count FROM identity_sessions WHERE principal_id = ? AND invalidated_at IS NULL AND expires_at > ?")
+      .get(owner.principal_id, new Date().toISOString()).count;
+    assert.equal(activeCount, authentication.MAX_ACTIVE_SESSIONS_PER_PRINCIPAL);
+    assert.equal(authentication.getSession(created[0].token), null, "the oldest session is revoked when the per-principal limit is exceeded");
+    const newest = authentication.getSession(created.at(-1).token);
+    assert.ok(newest);
+    const newestRow = db.getDb().prepare("SELECT user_agent, ip_address FROM identity_sessions WHERE session_id_hash = ?").get(newest.session_id);
+    assert.equal(newestRow.user_agent, `??${"u".repeat(254)}`);
+    assert.equal(newestRow.ip_address, null);
+
+    const expired = authentication.createSession(owner.principal_id);
+    const expiredSession = authentication.getSession(expired.token);
+    db.getDb().prepare("UPDATE identity_sessions SET expires_at = ? WHERE session_id_hash = ?").run("2000-01-01T00:00:00.000Z", expiredSession.session_id);
+    authentication.createSession(owner.principal_id);
+    assert.equal(db.getDb().prepare("SELECT COUNT(*) AS count FROM identity_sessions WHERE session_id_hash = ?").get(expiredSession.session_id).count, 0,
+      "expired session rows are removed in bounded batches during session creation");
+  });
+
   test("Core credential mutations require an authorized actor context", () => {
     const before = db.getDb().prepare("SELECT COUNT(*) AS count FROM identity_credentials").get().count;
     assert.throws(() => authentication.createCredential({ principalId: owner.principal_id, displayName: "Missing actor", scopes: [] }), /authenticated identity context/);
