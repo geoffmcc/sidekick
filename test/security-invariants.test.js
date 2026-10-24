@@ -309,6 +309,18 @@ test("database content and execution-log reads require authenticated medium-risk
   }
 });
 
+test("embedding input is bounded at the tool boundary before Compute dispatch", async () => {
+  const result = await dispatchTool({
+    name: "embed",
+    args: { text: "x".repeat(8 * 1024 + 1) },
+    context: { source: "mcp", requestId: "oversized-embedding-input" },
+  });
+
+  assert.equal(result.isError, true);
+  assert.equal(result.code, "validation_failed");
+  assert.match(result.content[0].text, /<=8192 characters/i);
+});
+
 test("legacy installation API key denial explains scoped principal setup without granting authority", async () => {
   const result = await dispatchTool({
     name: "db_search",
