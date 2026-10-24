@@ -7,10 +7,11 @@ function registerProjectRoutes({ app, platformKernel, projectAccess, errorRespon
       const principalId = req.authPrincipal?.principal_id;
       if (!principalId) return res.status(401).json({ ok: false, error: "authenticated principal required", code: "unauthenticated" });
       const credentialScopes = req.authPrincipal?.scopes;
+      const delegationId = req.authPrincipal?.delegation_id || req.authPrincipal?.delegationId || null;
       const limit = Math.max(1, Math.min(Number(req.query.limit) || 50, 200));
-      const projects = projectAccess.hasGlobalProjectAccess(principalId, credentialScopes)
+      const projects = projectAccess.hasGlobalMemoryAccess(principalId, "read", credentialScopes, delegationId)
         ? platformKernel.listProjects({ state: "active", limit })
-        : projectAccess.listAccessibleProjects(principalId, credentialScopes, req.authPrincipal?.delegation_id || req.authPrincipal?.delegationId || null).slice(0, limit);
+        : projectAccess.listAccessibleProjects(principalId, credentialScopes, delegationId).slice(0, limit);
       const rows = projects.map(project => ({
         project,
         workspace: platformKernel.getWorkspaceByProject(project.project_id) || null,
