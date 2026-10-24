@@ -432,8 +432,11 @@ failures; `src/redact.js` is at 100% lines, branches, statements, and functions.
   --sbom-type=application` run generated CycloneDX 1.5 with 203 components and
   204 dependency relationships. The file was written under the OS temporary
   directory, not the repository.
-- Current dependency advisory status is **not verified** by this local pass;
-  SBOM generation is not an advisory scan. No dependency upgrade was performed.
+- On 2026-10-24, `npm.cmd audit --package-lock-only
+  --audit-level=moderate` completed successfully and reported 0 vulnerabilities
+  for the current lockfile. The read-only GitHub Dependabot alerts query through
+  WSL reported no open alerts; 19 previously reported alerts are marked fixed.
+  No dependencies or lockfiles were changed by these checks.
 
 ### Dashboard database route authorization
 
