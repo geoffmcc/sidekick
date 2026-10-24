@@ -94,6 +94,35 @@ test("execution-node admin HTTP mutations require scoped permissions and record 
   assert.equal(revokeAudit.actor_principal_id, owner.principal_id);
 });
 
+test("execution-node admin failures hide exception details and use server-error status", async () => {
+  const originalAuthorizeWorkspace = executionNode.authorizeWorkspace;
+  const originalRevokeWorker = compute.workerManager.revokeWorker;
+  const originalRequestCancel = executionNode.requestCancel;
+  const secretDiagnostic = "synthetic-secret /srv/sidekick/private/db.sqlite";
+  try {
+    executionNode.authorizeWorkspace = () => { throw new Error(secretDiagnostic); };
+    compute.workerManager.revokeWorker = () => { throw new Error(secretDiagnostic); };
+    executionNode.requestCancel = () => { throw new Error(secretDiagnostic); };
+
+    const cases = [
+      ["/nodes/wk_admin_test/workspaces", { name: "dev", rootIdentity: "root-hash" }, "Execution-node workspace authorization failed"],
+      ["/nodes/wk_admin_test/revoke", { reason: "test" }, "Execution-node node revocation failed"],
+      ["/jobs/job_admin_test/cancel", {}, "Execution-node job cancellation failed"],
+    ];
+    for (const [route, body, message] of cases) {
+      const response = await request(route, { token: ownerCredential.token, method: "POST", body });
+      assert.equal(response.status, 500);
+      const result = await response.json();
+      assert.deepEqual(result, { ok: false, error: message, code: "execution_node_admin_failed" });
+      assert.doesNotMatch(JSON.stringify(result), /synthetic-secret|private|db\.sqlite/);
+    }
+  } finally {
+    executionNode.authorizeWorkspace = originalAuthorizeWorkspace;
+    compute.workerManager.revokeWorker = originalRevokeWorker;
+    executionNode.requestCancel = originalRequestCancel;
+  }
+});
+
 test("execution node refuses network Git actions even when a scope name is configured", () => {
   const previousScope = process.env.SIDEKICK_NODE_NETWORK_SCOPE;
   process.env.SIDEKICK_NODE_NETWORK_SCOPE = "synthetic-git-scope";

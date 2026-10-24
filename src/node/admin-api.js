@@ -35,6 +35,14 @@ function createPermissionMiddleware({ authentication, authorization, resourceTyp
   };
 }
 
+function adminOperationFailed(res, operation) {
+  return res.status(500).json({
+    ok: false,
+    error: `Execution-node ${operation} failed`,
+    code: "execution_node_admin_failed",
+  });
+}
+
 function registerExecutionNodeAdminRoutes({ app, express, authentication, authorization, identity, dbStore, executionNode, compute }) {
   const router = express.Router();
   const requirePermission = permission => createPermissionMiddleware({ authentication, authorization }, permission);
@@ -65,7 +73,7 @@ function registerExecutionNodeAdminRoutes({ app, express, authentication, author
         return value;
       }).immediate();
       res.json({ ok: true, workspace });
-    } catch (error) { res.status(400).json({ ok: false, error: String(error?.message || "workspace authorization failed") }); }
+    } catch { return adminOperationFailed(res, "workspace authorization"); }
   });
 
   router.post("/nodes/:workerId/revoke", requirePermission("compute.nodes.manage"), express.json({ limit: "8kb" }), (req, res) => {
@@ -81,7 +89,7 @@ function registerExecutionNodeAdminRoutes({ app, express, authentication, author
       }).immediate();
       if (!worker) return res.status(404).json({ ok: false, error: "node not found" });
       res.json({ ok: true, worker });
-    } catch (error) { res.status(409).json({ ok: false, error: String(error?.message || "node revocation failed") }); }
+    } catch { return adminOperationFailed(res, "node revocation"); }
   });
 
   router.post("/jobs/:jobId/cancel", requirePermission("compute.jobs.cancel"), express.json({ limit: "8kb" }), (req, res) => {
@@ -98,7 +106,7 @@ function registerExecutionNodeAdminRoutes({ app, express, authentication, author
       }).immediate();
       if (!job) return res.status(404).json({ ok: false, error: "job not found" });
       res.json({ ok: true, job });
-    } catch (error) { res.status(409).json({ ok: false, error: String(error?.message || "job cancellation failed") }); }
+    } catch { return adminOperationFailed(res, "job cancellation"); }
   });
 
   app.use("/execution-node/admin", router);
