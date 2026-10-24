@@ -951,3 +951,18 @@ about current lockfile vulnerability status.
   security suites with 0 failures and 0 skips.
 - `npm.cmd run check:docs`, `check:architecture`, and `check:tests`, plus the
   focused static-code-quality suite, passed.
+
+## Dashboard audit detail redaction and size boundary: 2026-10-24 (SK-052)
+
+- `node test/run-all.js test/security-dashboard-audit-identity.test.js
+  test/security-dashboard-audit-log.test.js
+  test/security-dashboard-event-audit.test.js --concurrency=1
+  --overall-timeout-ms=900000 --json` passed all 3 suites, 0 failures and
+  0 skips.
+- Nested synthetic API-key and authorization values are redacted before
+  serialization. Oversized audit lines fail before the file is opened and
+  leave existing audit history unchanged. Existing symlink, hardlink,
+  permission, fsync, and event-atomicity regressions continue to pass.
+- After SK-052, `npm.cmd test` passed all 379 unit, contract, integration, and
+  security suites with 0 failures and 0 skips.
+- `npm.cmd run check:docs`, `check:architecture`, and `check:tests` passed.

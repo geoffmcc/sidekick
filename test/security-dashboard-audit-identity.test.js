@@ -48,3 +48,14 @@ test("legacy authenticated username is retained when principal middleware is una
   assert.equal(dashboardActor(req), "legacy-user");
   assert.equal(createDashboardAuditEntry(req, "read", {}).user, "legacy-user");
 });
+
+test("dashboard audit entry redacts nested sensitive details before serialization", () => {
+  const credential = "synthetic-dashboard-audit-credential-value";
+  const entry = createDashboardAuditEntry({ params: {} }, "security.audit.test", {
+    nested: { api_key: credential, label: "safe" },
+    items: [{ authorization: `Bearer ${credential}` }],
+  });
+  const serialized = JSON.stringify(entry);
+  assert.equal(serialized.includes(credential), false);
+  assert.match(serialized, /\[REDACTED\]/);
+});

@@ -1,8 +1,12 @@
 "use strict";
 
 const fs = require("fs");
+const MAX_DASHBOARD_AUDIT_LINE_BYTES = 32 * 1024;
 
 function appendAuditLine(filePath, line, io = fs) {
+  if (typeof line !== "string" || Buffer.byteLength(line, "utf8") > MAX_DASHBOARD_AUDIT_LINE_BYTES) {
+    throw new Error("dashboard audit event exceeds the safe size limit");
+  }
   const noFollow = io.constants.O_NOFOLLOW || 0;
   let before = null;
   try {
@@ -28,4 +32,4 @@ function appendAuditLine(filePath, line, io = fs) {
   }
 }
 
-module.exports = { appendAuditLine };
+module.exports = { appendAuditLine, MAX_DASHBOARD_AUDIT_LINE_BYTES };

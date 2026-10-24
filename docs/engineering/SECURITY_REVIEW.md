@@ -639,3 +639,17 @@ deployment. It is not a cross-process quota if operators run multiple
 Dashboard instances against the same data directory. Logging failures remain
 best-effort and are not returned to clients; host administrators can still
 modify or delete these diagnostic files.
+
+### Dashboard audit detail redaction and size boundary (2026-10-24, SK-052)
+
+Dashboard audit entries preserve identity and mutation context in a private,
+fsynced JSONL file. Review found that nested details were serialized without a
+central recursive redaction boundary, and the append helper accepted lines of
+unbounded size. Entry construction now applies the shared sensitive-key and
+token redactor to the complete audit record, and the file sink rejects any
+line larger than 32 KiB before opening the file. The existing append-only
+history, symlink/hardlink checks, private permissions, and fsync behavior remain
+in force. Rejected oversized events do not modify prior history; callers retain
+their existing fail/continue behavior, so each route's handling of audit
+failure remains a separate review concern. Host administrators can still
+modify or delete the audit file.

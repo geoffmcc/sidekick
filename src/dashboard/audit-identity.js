@@ -1,5 +1,7 @@
 "use strict";
 
+const { redactSensitiveKeysDeep } = require("../redact");
+
 function principalForRequest(req) {
   const principal = req?.authPrincipal;
   if (principal && typeof principal.principal_id === "string" && principal.principal_id) {
@@ -28,7 +30,7 @@ function createDashboardAuditEntry(req, action, details, actor = null, timestamp
     : (typeof principal?.display_name === "string" && principal.display_name)
       || (typeof req?.authUser === "string" && req.authUser)
       || (principal?.principal_id || "anonymous");
-  return {
+  return redactSensitiveKeysDeep({
     timestamp,
     action,
     key: req?.params?.key || null,
@@ -37,7 +39,7 @@ function createDashboardAuditEntry(req, action, details, actor = null, timestamp
     principal_id: principal?.principal_id || null,
     principal_type: principal?.principal_type || null,
     details,
-  };
+  });
 }
 
 module.exports = { principalForRequest, dashboardActor, createDashboardAuditEntry };
