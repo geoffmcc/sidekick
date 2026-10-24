@@ -13,3 +13,4 @@
 50585a8d00b25e517d8c9040fb76b4255c74d777:test/security.test.js:generic-api-key:97
 50585a8d00b25e517d8c9040fb76b4255c74d777:test/security.test.js:generic-api-key:102
 50585a8d00b25e517d8c9040fb76b4255c74d777:test/security.test.js:generic-api-key:153
+d6b31c34623abdc512d5f7cf2b2082ec8c4b5349:test/security/security-boundaries.test.js:private-key:213

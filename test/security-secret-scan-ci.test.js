@@ -20,7 +20,7 @@ test("CI scans complete Git history with a pinned, constrained Gitleaks containe
 
 test("historical false positives are fingerprint-specific instead of path-wide", () => {
   const entries = ignore.split(/\r?\n/).filter(line => line && !line.startsWith("#"));
-  assert.equal(entries.length, 13);
+  assert.equal(entries.length, 14);
   for (const entry of entries) assert.match(entry, /^[0-9a-f]{40}:.+:[a-z0-9-]+:\d+$/);
   assert.ok(!entries.some(entry => /:test\/\*|:test\/security\/?$/.test(entry)), "no whole test path may be excluded");
 });
