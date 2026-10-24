@@ -928,3 +928,54 @@ test("direct database routes enforce their identity permission before accessing 
   assert.deepEqual(permissions, ["database.inspect", "database.inspect", "tools.execute", "tools.execute_high"]);
   assert.equal(stateReads, 0, "denied callers must not reach direct database/filesystem operations or policy checks");
 });
+
+test("authorized database read routes use canonical dispatcher tools and preserve response shapes", async () => {
+  const handlers = new Map();
+  const app = {
+    get: (route, handler) => handlers.set(`GET ${route}`, handler),
+    post: (route, handler) => handlers.set(`POST ${route}`, handler),
+  };
+  const dispatches = [];
+  registerDatabaseRoutes({
+    app,
+    dbStore: { getDb: () => { throw new Error("direct DB reads must not run"); } },
+    dataDir: "C:/sidekick-test-data", path: require("node:path"), fs: { statSync: () => { throw new Error("direct filesystem reads must not run"); } },
+    callDashboardTool: async (name, args) => {
+      dispatches.push({ name, args });
+      const values = {
+        db_schema: [{ name: "memories", columns: [{ name: "id" }], indexes: [], rowCount: 12 }],
+        db_stats: { dbSize: 100, totalTables: 1, journalMode: "wal", pageCount: 1, pageSize: 4096 },
+        db_migrate: { currentVersion: 4, migrations: [{ file: "004_test.sql", version: 4, applied: true }] },
+      };
+      return { content: [{ type: "text", text: JSON.stringify(values[name]) }] };
+    },
+    dashboardExecutionMetadata: (_req, actor) => ({ actor, authIdentity: { principal_id: "db-reader" } }),
+    authenticatedUser: () => "db-reader", requireDashboardTool: () => true,
+    requireIdentityPermission: () => true, auditLog: () => {},
+    errorResponse: (_req, res, _error, options) => res.status(options.status).json({ code: options.code }),
+  });
+  const invoke = async (method, route) => {
+    const response = {
+      statusCode: 200,
+      status(code) { this.statusCode = code; return this; },
+      json(body) { this.body = body; return this; },
+    };
+    await handlers.get(`${method} ${route}`)({ query: {}, params: {}, body: {} }, response);
+    assert.equal(response.statusCode, 200, route);
+    return response.body;
+  };
+
+  assert.deepEqual((await invoke("GET", "/api/db/schema")).schema, {
+    memories: { columns: [{ name: "id" }], indexes: [], rowCount: 12 },
+  });
+  assert.deepEqual(await invoke("GET", "/api/db/stats"), {
+    ok: true, size: 100, tableCount: 1, walMode: "wal", dbSize: 4096,
+  });
+  assert.deepEqual(await invoke("GET", "/api/db/migrations"), {
+    ok: true, currentVersion: 4, migrations: [{ file: "004_test.sql", version: 4, applied: true }],
+  });
+  assert.deepEqual(dispatches.map(call => call.name), ["db_schema", "db_stats", "db_migrate"]);
+  assert.equal(dispatches[0].args.verbose, true);
+  assert.equal(dispatches[1].args.detailed, false);
+  assert.equal(dispatches[2].args.action, "status");
+});

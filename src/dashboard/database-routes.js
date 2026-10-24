@@ -1,20 +1,37 @@
 /** Dashboard database administration surface. SQL remains governed by the dispatcher. */
-function registerDatabaseRoutes({ app, dbStore, dataDir, path, fs, callDashboardTool, dashboardExecutionMetadata, authenticatedUser, requireDashboardTool, requireIdentityPermission, auditLog, errorResponse }) {
-  app.get("/api/db/schema", (req, res) => {
+function registerDatabaseRoutes({ app, dataDir, path, callDashboardTool, dashboardExecutionMetadata, authenticatedUser, requireDashboardTool, requireIdentityPermission, auditLog, errorResponse }) {
+  async function callDatabaseTool(req, res, name, args) {
+    const result = await callDashboardTool(name, args, dashboardExecutionMetadata(req, authenticatedUser(req) || "dashboard"));
+    if (result?.isError) {
+      if (result.approvalRequired) {
+        res.status(202).json({ ok: false, code: "approval_required", approval_id: result.approvalId || null });
+        return null;
+      }
+      const code = result.code === "authorization_denied" ? "forbidden"
+        : result.code === "policy_denied" ? "policy_denied"
+        : result.code === "unauthenticated" ? "unauthenticated"
+        : "upstream_unavailable";
+      const status = code === "forbidden" || code === "policy_denied" ? 403 : code === "unauthenticated" ? 401 : 502;
+      errorResponse(req, res, null, { status, code, component: "database" });
+      return null;
+    }
+    try {
+      const text = result?.content?.[0]?.text || "";
+      return JSON.parse(text);
+    } catch {
+      errorResponse(req, res, null, { status: 502, code: "upstream_unavailable", component: "database" });
+      return null;
+    }
+  }
+
+  app.get("/api/db/schema", async (req, res) => {
     if (!requireIdentityPermission(req, res, "database.inspect")) return;
     if (!requireDashboardTool(req, res, "sidekick_db_schema")) return;
     try {
-      const db = dbStore.getDb();
-      const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all();
+      const tables = await callDatabaseTool(req, res, "db_schema", { verbose: true });
+      if (!tables) return;
       const schema = {};
-      for (const table of tables) {
-        const identifier = table.name.replaceAll('"', '""');
-        schema[table.name] = {
-          columns: db.prepare(`PRAGMA table_info("${identifier}")`).all(),
-          indexes: db.prepare(`PRAGMA index_list("${identifier}")`).all(),
-          rowCount: db.prepare(`SELECT COUNT(*) AS count FROM "${identifier}"`).get().count,
-        };
-      }
+      for (const table of tables) schema[table.name] = { columns: table.columns, indexes: table.indexes, rowCount: table.rowCount };
       res.json({ ok: true, schema });
     } catch (error) { return errorResponse(req, res, error, { status: 500, code: "service_unavailable", component: "database" }); }
   });
@@ -33,18 +50,13 @@ function registerDatabaseRoutes({ app, dbStore, dataDir, path, fs, callDashboard
     } catch (error) { return errorResponse(req, res, error, { status: 500, code: "service_unavailable", component: "database" }); }
   });
 
-  app.get("/api/db/stats", (req, res) => {
+  app.get("/api/db/stats", async (req, res) => {
     if (!requireIdentityPermission(req, res, "database.inspect")) return;
     if (!requireDashboardTool(req, res, "sidekick_db_stats")) return;
     try {
-      const db = dbStore.getDb();
-      const dbPath = path.join(dataDir, "sidekick.db");
-      const stats = fs.statSync(dbPath);
-      const walMode = db.prepare("PRAGMA journal_mode").get();
-      const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all();
-      const pageCount = db.prepare("PRAGMA page_count").get();
-      const pageSize = db.prepare("PRAGMA page_size").get();
-      res.json({ ok: true, size: stats.size, tableCount: tables.length, walMode: walMode?.journal_mode, dbSize: (pageCount?.page_count || 0) * (pageSize?.page_size || 4096) });
+      const stats = await callDatabaseTool(req, res, "db_stats", { detailed: false });
+      if (!stats) return;
+      res.json({ ok: true, size: stats.dbSize, tableCount: stats.totalTables, walMode: stats.journalMode, dbSize: (stats.pageCount || 0) * (stats.pageSize || 4096) });
     } catch (error) { return errorResponse(req, res, error, { status: 500, code: "service_unavailable", component: "database" }); }
   });
 
@@ -87,14 +99,13 @@ function registerDatabaseRoutes({ app, dbStore, dataDir, path, fs, callDashboard
     } catch (error) { return errorResponse(req, res, error, { status: 500, code: "service_unavailable", component: "database" }); }
   });
 
-  app.get("/api/db/migrations", (req, res) => {
+  app.get("/api/db/migrations", async (req, res) => {
     if (!requireIdentityPermission(req, res, "tools.execute_high")) return;
     if (!requireDashboardTool(req, res, "sidekick_db_migrate")) return;
     try {
-      const currentVersion = Number.parseInt(dbStore.getDb().prepare("SELECT value FROM meta WHERE key = 'schema_version'").get()?.value || "0", 10);
-      const migrationDir = path.join(__dirname, "..", "..", "migrations");
-      const migrations = fs.existsSync(migrationDir) ? fs.readdirSync(migrationDir).filter(file => file.endsWith(".sql")).map(file => ({ file, version: Number.parseInt(file.match(/^\d+/)?.[0] || "0", 10), applied: Number.parseInt(file.match(/^\d+/)?.[0] || "0", 10) <= currentVersion })).sort((a, b) => a.version - b.version) : [];
-      res.json({ ok: true, currentVersion, migrations });
+      const status = await callDatabaseTool(req, res, "db_migrate", { action: "status" });
+      if (!status) return;
+      res.json({ ok: true, ...status });
     } catch (error) { return errorResponse(req, res, error, { status: 500, code: "service_unavailable", component: "database" }); }
   });
 }

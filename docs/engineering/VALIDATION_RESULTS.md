@@ -438,12 +438,16 @@ failures; `src/redact.js` is at 100% lines, branches, statements, and functions.
 ### Dashboard database route authorization
 
 The direct Dashboard schema, statistics, migration-list, and backup handlers
-previously checked source policy but read SQLite directly without enforcing the
-identity permission used by their governed database tools. The read routes now
-require `database.inspect` or `tools.execute_high`, matching their tool
-permissions. Backup requires `tools.execute` and runs through the canonical
-`db_backup` dispatcher so approval, policy, and tool-audit controls apply. The
-focused `node --test test/security-dashboard-direct-routes.test.js` suite
-passed all 31 tests, including checks that denied callers cannot touch storage
-and an approval-required backup is queued without creating the artifact. The
-broader Dashboard route authorization review remains in progress.
+previously read SQLite or created backups outside the canonical dispatcher.
+Schema and statistics require `database.inspect`, migration status requires
+`tools.execute_high`, and backup requires `tools.execute`; all four now call the
+canonical database tools, applying consistent authorization, policy, approval,
+and tool auditing. The statistics tool now skips per-table count queries when
+`detailed` is false, avoiding unnecessary scans for the Dashboard summary. The
+focused `node test/run-all.js test/security-dashboard-direct-routes.test.js
+test/security-project-access.test.js test/db-tools.test.js
+test/tool-family-database-inspection.test.cjs --concurrency=1
+--overall-timeout-ms=300000` run passed all four suites, including
+denied-before-storage checks, dispatcher use and response compatibility, and
+approval-required backup behavior. The broader Dashboard route authorization
+review remains in progress.

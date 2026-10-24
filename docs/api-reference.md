@@ -57,7 +57,7 @@ Flat aliases (all explicitly authenticated, kept for compatibility): `POST /comp
 
 ### Database
 
-`GET /api/db/schema`, `POST /api/db/query` (routed through the governed dashboard tool path), `GET /api/db/stats`, `POST /api/db/backup`, `GET /api/db/search`, `GET /api/db/migrations`.
+`GET /api/db/schema`, `POST /api/db/query`, `GET /api/db/stats`, `POST /api/db/backup`, `GET /api/db/search`, `GET /api/db/migrations` (all routed through governed database tools).
 
 ### Approvals and reconciliation
 
