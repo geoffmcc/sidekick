@@ -56,7 +56,7 @@ async function sidekick_sync_import({ data, strategy, preserve_ids, project }) {
   try { options.projectScope = scopedProject(project, "write"); } catch (e) { return { content: [{ type: "text", text: e.message }], isError: true }; }
 
   const result = dbStore.importFromSync(parsed, options);
-  const summary = `Sync complete: ${result.imported} imported, ${result.conflicts} conflicts resolved, ${result.skipped} skipped`;
+  const summary = `Sync complete: ${result.imported} imported as pending, ${result.conflicts} conflicts kept local, ${result.skipped} skipped`;
   const errors = result.errors?.length ? `\nErrors: ${result.errors.join(", ")}` : "";
   return { content: [{ type: "text", text: summary + errors }] };
 }
@@ -107,14 +107,14 @@ const descriptors = Object.freeze([
   }),
   Object.freeze({
     name: "sync_import",
-    description: "Import memories from another machine's sync export. Supports conflict resolution strategies.",
+    description: "Import memories from another machine's sync export. Imported records remain pending until explicitly confirmed; conflicts never overwrite local content or trust state.",
     schema: z.object({
       project: z.string().optional().describe("Project scope for imported memories"),
       data: z.string().describe("Sync export data from another machine (JSON string or object)"),
-      strategy: z.enum(["newest", "highest_confidence", "most_confirmed", "merge", "skip"]).optional().describe("Conflict resolution strategy (default: newest)"),
+      strategy: z.enum(["newest", "highest_confidence", "most_confirmed", "merge", "skip"]).optional().describe("Legacy compatibility option. Conflicting local rows are always left unchanged."),
       preserve_ids: z.boolean().optional().describe("Preserve original memory IDs (default: false)"),
     }),
-    args: { project: "string (optional project scope)", data: "string|object (sync export data)", strategy: "string (optional, newest|highest_confidence|most_confirmed|merge|skip - default newest)", preserve_ids: "boolean (optional, preserve original IDs - default false)" },
+    args: { project: "string (optional project scope)", data: "string|object (sync export data)", strategy: "string (legacy conflict option; existing rows are never overwritten)", preserve_ids: "boolean (optional, preserve original IDs - default false)" },
     risk: "medium",
     category: "Context & Learning",
     source: "builtin",
