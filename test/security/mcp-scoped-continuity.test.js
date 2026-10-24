@@ -243,6 +243,34 @@ test("a revoked credential cannot keep executing from a long-lived identity snap
   assert.equal(result.code, "credential_invalid");
 });
 
+test("scope reductions constrain long-lived identity snapshots before the next dispatch", async () => {
+  const principal = identity.createPrincipal({
+    type: "service",
+    displayName: "Synthetic scope reduction client",
+    createdByPrincipalId: owner.principal_id,
+    actorIdentity: owner,
+  });
+  identity.grantPrincipalPermission(principal.principal_id, "packs.read", owner);
+  identity.grantPrincipalPermission(principal.principal_id, "memory.read", owner);
+  const created = authentication.createCredential({
+    principalId: principal.principal_id,
+    displayName: "Synthetic reducible pack and memory reader",
+    scopes: ["packs.read", "memory.read"],
+    createdByPrincipalId: owner.principal_id,
+    actorContext: owner,
+  });
+  const capturedIdentity = authentication.authenticateBearerIdentity(created.token);
+  assert.deepEqual(new Set(capturedIdentity.scopes), new Set(["packs.read", "memory.read"]));
+
+  // Credential scope edits are represented here as a controlled DB state
+  // transition because public lifecycle changes rotate and revoke the ID.
+  db.getDb().prepare("UPDATE identity_credentials SET scopes_json = ? WHERE credential_id = ?")
+    .run(JSON.stringify(["packs.read"]), created.credential.credential_id);
+  const result = await callMcpTool("session", { action: "status" }, { authIdentity: capturedIdentity });
+  assert.equal(result.isError, true);
+  assert.match(result.content?.[0]?.text || "", /required permission: memory\.read/);
+});
+
 test("MCP pack-only credentials explain catalog and continuity denials with exact required scopes", async () => {
   const principal = identity.createPrincipal({
     type: "service",
