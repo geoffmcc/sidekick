@@ -763,7 +763,9 @@
         <label><input id="mcpGrantHigh" type="checkbox"> Use high-risk tools</label>
         <label><input id="mcpGrantCritical" type="checkbox"> Request critical-risk tools</label>
       </fieldset>
-      <div class="sub">Memory read and write are separate grants. Project access is still checked for each memory operation.</div>
+      <label>Projects this client may access (optional)<select id="mcpProjectAccess" multiple size="5" aria-describedby="mcpProjectAccessHelp"></select></label>
+      <label>Selected project access<select id="mcpProjectAccessLevel"><option value="read">Read only</option><option value="write">Read and write</option></select></label>
+      <div class="sub" id="mcpProjectAccessHelp">Memory read/write permissions and project membership are both required. Project grants are optional and require project access administration authority.</div>
       <div class="sub">Pack access is separate from standard tool execution. Enable standard tools if this client should run routine tools such as Jellyfin playback queries; pack permissions alone do not grant that access.</div>
       <div class="sub">Critical actions still follow Sidekick policy and approval checks. Only grant permissions this agent needs.</div>
       <button class="btn btn-sm" type="button" data-dashboard-action="identity" data-handler="createMcpServiceCredential">Create client credential</button>

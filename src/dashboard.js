@@ -451,6 +451,7 @@ const { requireIdentityPermission, hasIdentityPermission, requireIdentityAdminis
   identity,
   authentication,
   authorization,
+  projectAccess,
   timingSafeCompare,
   dashboardUser: DASHBOARD_USER,
   dashboardPass: DASHBOARD_PASS,

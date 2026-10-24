@@ -15,6 +15,8 @@ dbStore.runPendingMigrations();
 const identity = require("../src/core/identity");
 const authentication = require("../src/core/authentication");
 const authorization = require("../src/core/authorization");
+const projectAccess = require("../src/core/project-access");
+const platformKernel = require("../src/platform/kernel");
 const { registerAuthRoutes } = require("../src/dashboard/auth-routes");
 
 const owner = identity.bootstrapOwner({ username: "service-owner", password: "correct horse battery staple", displayName: "Owner" });
@@ -22,7 +24,7 @@ const handlers = new Map();
 const app = Object.fromEntries(["get", "post", "put", "patch", "delete"].map(method => [method, (route, handler) => handlers.set(`${method.toUpperCase()} ${route}`, handler)]));
 app.use = () => {};
 registerAuthRoutes({
-  app, dbStore, identity, authentication, authorization,
+  app, dbStore, identity, authentication, authorization, projectAccess,
   timingSafeCompare: () => false, dashboardUser: "", dashboardPass: "",
   bootstrapCompleted: () => true, authAttemptKeys: () => [], rejectIfAuthThrottled: () => false,
   recordAuthFailure() {}, clearAuthFailures() {}, legacyDashboardPrincipal: () => null,
@@ -55,6 +57,10 @@ test("MCP client setup distinguishes standard tool execution from pack permissio
   assert.match(dashboardClientCode, /mcpGrantKnowledgeRead[^\n]*knowledge\.read/);
   assert.match(dashboardClientCode, /mcpGrantCatalogRead[^\n]*tools\.catalog\.read/);
   assert.match(dashboardClientCode, /mcpGrantWorkflows[^\n]*workflows\.execute/);
+  assert.match(dashboardMarkup, /mcpProjectAccess[^>]*multiple/);
+  assert.match(dashboardMarkup, /Project grants are optional and require project access administration authority/);
+  assert.match(dashboardClientCode, /authFetch\('\/api\/projects\?limit=200'\)/);
+  assert.match(dashboardClientCode, /body\.project_grants = selectedProjects\.map/);
 });
 
 test("MCP service identities can receive explicitly selected continuity and discovery permissions", () => {
@@ -74,6 +80,66 @@ test("MCP service identities can receive explicitly selected continuity and disc
     assert.equal(authorization.authorize({ principalId: auth.principal_id, permission, credentialScopes: auth.scopes }).ok, true, `${permission} is effective when explicitly granted`);
   }
   assert.equal(authorization.authorize({ principalId: auth.principal_id, permission: "tools.execute_critical", credentialScopes: auth.scopes }).ok, false, "unselected critical execution remains denied");
+});
+
+test("MCP setup grants only selected project access atomically with the service credential", () => {
+  const project = `credential_setup_${process.pid}`;
+  platformKernel.registerProject({ project_id: project, owner_actor_id: owner.principal_id });
+  const res = response();
+  handlers.get("POST /api/auth/service-credentials")({
+    authPrincipal: owner,
+    body: {
+      display_name: "Project-scoped MCP client",
+      permissions: ["memory.read", "memory.write"],
+      scopes: ["memory.read", "memory.write"],
+      project_grants: [{ project_id: project, access_level: "write" }],
+    },
+  }, res);
+
+  assert.equal(res.statusCode, 201);
+  assert.deepEqual(res.body.project_grants, [{ project_id: project, access_level: "write" }]);
+  assert.equal(projectAccess.hasProjectAccess(res.body.principal.principal_id, project, "read", res.body.credential.scopes), true);
+  assert.equal(projectAccess.hasProjectAccess(res.body.principal.principal_id, project, "write", res.body.credential.scopes), true);
+
+  const missingProject = response();
+  const before = identity.listPrincipals({ type: "service" }).length;
+  handlers.get("POST /api/auth/service-credentials")({
+    authPrincipal: owner,
+    body: {
+      display_name: "Must roll back",
+      permissions: ["memory.read"],
+      scopes: ["memory.read"],
+      project_grants: [{ project_id: `missing_${process.pid}`, access_level: "write" }],
+    },
+  }, missingProject);
+  assert.equal(missingProject.statusCode, 400);
+  assert.equal(identity.listPrincipals({ type: "service" }).length, before, "failed project grant rolls back principal, grants, and credential");
+});
+
+test("MCP setup rejects project grants without current project access administration authority", () => {
+  const limitedPrincipal = identity.createPrincipal({ type: "service", displayName: "Limited credential provisioner", actorIdentity: owner });
+  for (const permission of ["principals.manage", "roles.manage", "credentials.create"]) identity.grantPrincipalPermission(limitedPrincipal.principal_id, permission, owner);
+  const limited = authentication.createCredential({
+    principalId: limitedPrincipal.principal_id,
+    displayName: "Limited provisioner credential",
+    scopes: ["principals.manage", "roles.manage", "credentials.create"],
+    createdByPrincipalId: owner.principal_id,
+    actorContext: owner,
+  });
+  const principalContext = authentication.authenticateBearerIdentity(limited.token);
+  const before = identity.listPrincipals({ type: "service" }).length;
+  const res = response();
+  handlers.get("POST /api/auth/service-credentials")({
+    authPrincipal: principalContext,
+    body: {
+      display_name: "Must be denied",
+      permissions: ["credentials.create"],
+      scopes: ["credentials.create"],
+      project_grants: [{ project_id: "any_project", access_level: "read" }],
+    },
+  }, res);
+  assert.equal(res.statusCode, 403);
+  assert.equal(identity.listPrincipals({ type: "service" }).length, before, "denied project grant creates no identity or credential");
 });
 
 test("service credential provisioning is atomic, audited, narrowly scoped, and revocable", () => {
