@@ -401,7 +401,9 @@ vector payloads are also sanitized before context recall; existing stored
 payloads are not rewritten.
 Handoff provenance verification and repository-backed checkpoint, readiness,
 and preflight operations apply the MCP or Dashboard filesystem path policy
-before Git reads a workspace named by a request or persisted handoff. Session
+before Git reads a workspace named by a request or persisted handoff. The MCP
+handoff tool also refuses to persist a packet repository path outside its
+configured allow-list. Session
 workspaces are checked by the session tool before they are persisted or reused
 for Git-backed checkpoints. Direct internal Agent Bridge and database-store
 call paths remain under review.

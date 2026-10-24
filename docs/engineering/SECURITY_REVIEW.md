@@ -239,17 +239,19 @@ passed (3 suites, 0 failures); no live vector store was used.
 Confirmed that handoff provenance verification and repository checkpoint,
 readiness, and preflight operations could invoke Git against a caller-supplied
 or persisted `working_directory` without first applying the filesystem path
-policy. MCP handoff operations now check repository paths against the active
-MCP path policy before Git-backed operations. Dashboard readiness, start-here,
+policy. MCP handoff create/update now reject packet repository paths outside
+the active MCP path policy, and Git-backed operations recheck the effective
+path immediately before use. Dashboard readiness, start-here,
 and preflight routes apply the Dashboard path policy before reading checkpoint
 or provenance repositories. Out-of-policy paths fail closed with a policy
 error; list projections omit repository-backed readiness details and show a
 blocked state.
 
 Validation: `test/security-project-access.test.js` passes all 74 assertions.
-The regression dispatches authenticated MCP provenance verification and a
-Dashboard preflight against a synthetic path outside each configured allow
-root and confirms both are rejected before repository evidence is returned.
+The regression confirms an out-of-policy handoff path is not persisted, then
+dispatches authenticated MCP verification and Dashboard preflight against
+synthetic outside paths and confirms both are rejected before repository
+evidence is returned.
 The canonical session tool also checks an explicit workspace at session begin
 and rechecks persisted workspaces before checkpoint, finalization, or partial-
 session resume. Direct internal Agent Bridge and database-store call sites

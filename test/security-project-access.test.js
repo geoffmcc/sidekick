@@ -1675,6 +1675,20 @@ test("handoff provenance verification enforces the caller filesystem path policy
     assert.equal(result.isError, true, JSON.stringify(result));
     assert.match(result.content[0].text, /Path blocked by policy/, JSON.stringify(result));
 
+    const createResult = await dispatcher.callMcpTool("handoff", {
+      action: "create", project: "memory_a", title: "Blocked out-of-scope repository",
+      content: "Synthetic record that must not persist an out-of-scope repository path.",
+      packet: { objective: "Reject an out-of-scope persisted repository", provenance: { working_directory: outsideRoot } },
+    }, {
+      authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+      project: "memory_a",
+      sessionId: "synthetic-handoff-create-path-policy-session",
+    });
+    assert.equal(createResult.isError, true, JSON.stringify(createResult));
+    assert.match(createResult.content[0].text, /Path blocked by policy/, JSON.stringify(createResult));
+    assert.equal(db.listHandoffs({ project: "memory_a", limit: 100 }).some(item => item.title === "Blocked out-of-scope repository"), false,
+      "out-of-scope repository paths must not be persisted by the MCP handoff tool");
+
     const dashboardHandoff = db.saveHandoff({
       project: "memory_a",
       content: "Synthetic dashboard path-scope fixture.",

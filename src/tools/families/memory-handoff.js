@@ -166,6 +166,9 @@ async function sidekick_handoff({ action, id, key, project, title, content, sour
   }
   if (action === "create" || action === "update") {
     const existing = id ? scopedHandoff(id, project, authIdentity) : null;
+    const packetRepositoryPath = packet?.provenance?.working_directory;
+    const packetPathDenied = packetRepositoryPath ? enforcePathPolicy(packetRepositoryPath, "read") : null;
+    if (packetPathDenied) return packetPathDenied;
     if (action === "create" && !existing) {
       const requestedProject = project || agentTask?.project_id || boundProject;
       const resolvedProject = canonicalizeProjectName(requestedProject);
