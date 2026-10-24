@@ -22,6 +22,7 @@ const path = require("path");
 const { execFile, execFileSync, spawn } = require("child_process");
 const { childProcessEnv } = require("../../security/child-process");
 const { z } = require("zod");
+const toolContext = require("../context");
 const { enforcePathPolicy } = require("../path-policy");
 const { requireToolExecution, requireCanonicalInvocation } = require("../read-authorization");
 const { validateOutboundUrl, resolveOutboundUrl } = require("../../security/outbound-url");
@@ -41,6 +42,7 @@ const { hashFile: hashFileDetails } = require("../../core/stream-file-hash");
 
 const TRANSCRIPTION_JOB_ROOT = path.join(DATA_DIR, "transcription-jobs");
 const MAX_TRANSCRIPTION_OUTPUT_BYTES = 2 * 1024 * 1024;
+const TRANSCRIPTION_JOB_ID_PATTERN = /^tr_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const transcriptionJobs = new Map();
 
 function readTranscriptionText(filePath, maxBytes = MAX_TRANSCRIPTION_OUTPUT_BYTES) {
@@ -50,7 +52,19 @@ function readTranscriptionText(filePath, maxBytes = MAX_TRANSCRIPTION_OUTPUT_BYT
 }
 
 function transcriptionJobPath(jobId) {
+  if (typeof jobId !== "string" || !TRANSCRIPTION_JOB_ID_PATTERN.test(jobId)) {
+    throw new Error("invalid transcription job ID");
+  }
   return path.join(TRANSCRIPTION_JOB_ROOT, `${jobId}.json`);
+}
+
+function transcriptionJobBelongsToPrincipal(job, principalId) {
+  return Boolean(principalId && job?.owner_principal_id && job.owner_principal_id === principalId);
+}
+
+function publicTranscriptionJob(job) {
+  const { child, owner_principal_id, ...publicJob } = job;
+  return publicJob;
 }
 
 function saveTranscriptionJob(job) {
@@ -181,9 +195,11 @@ function startTranscriptionJob({ audioPath, model, language, backend, device: re
   const selected = selectTranscriptionBackend(backend);
   const device = selectTranscriptionDevice(selected.name, requestedDevice);
   const jobId = `tr_${crypto.randomUUID()}`;
+  const ownerPrincipalId = toolContext.getExecutionContext().authIdentity?.principal_id || null;
+  if (!ownerPrincipalId) throw new Error("authenticated principal required for asynchronous transcription");
   const outputDir = path.join(TRANSCRIPTION_JOB_ROOT, jobId);
   fs.mkdirSync(outputDir, { recursive: true, mode: 0o700 });
-  const job = { job_id: jobId, status: "queued", backend: selected.name, device, model, language: language || null, input: audioPath, created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+  const job = { job_id: jobId, owner_principal_id: ownerPrincipalId, status: "queued", backend: selected.name, device, model, language: language || null, input: audioPath, created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
   saveTranscriptionJob(job);
 
   const child = spawn(selected.command, transcriptionArgs(selected.name, device, audioPath, model, language, outputDir), {
@@ -348,17 +364,19 @@ async function sidekick_transcribe({ path: audioPath, model, language, async: ru
     if (action === "status") {
       if (!jobId) return { content: [{ type: "text", text: "Error: job_id is required for status" }], isError: true };
       const job = loadTranscriptionJob(jobId);
-      if (!job) return { content: [{ type: "text", text: `Error: transcription job not found: ${jobId}` }], isError: true };
-      const { child, ...publicJob } = job;
+      const principalId = toolContext.getExecutionContext().authIdentity?.principal_id || null;
+      if (!job || !transcriptionJobBelongsToPrincipal(job, principalId)) return { content: [{ type: "text", text: "Error: transcription job not found" }], isError: true };
+      const publicJob = publicTranscriptionJob(job);
       return { content: [{ type: "text", text: JSON.stringify(publicJob) }] };
     }
     if (action === "cancel") {
       if (!jobId) return { content: [{ type: "text", text: "Error: job_id is required for cancel" }], isError: true };
       const job = loadTranscriptionJob(jobId);
-      if (!job) return { content: [{ type: "text", text: `Error: transcription job not found: ${jobId}` }], isError: true };
+      const principalId = toolContext.getExecutionContext().authIdentity?.principal_id || null;
+      if (!job || !transcriptionJobBelongsToPrincipal(job, principalId)) return { content: [{ type: "text", text: "Error: transcription job not found" }], isError: true };
       if (job.child && !job.child.killed) job.child.kill("SIGTERM");
       finishTranscriptionJob(job, { status: "cancelled" });
-      const { child, ...publicJob } = job;
+      const publicJob = publicTranscriptionJob(job);
       return { content: [{ type: "text", text: JSON.stringify(publicJob) }] };
     }
     if (!audioPath) return { content: [{ type: "text", text: "Error: path is required" }], isError: true };
@@ -374,7 +392,7 @@ async function sidekick_transcribe({ path: audioPath, model, language, async: ru
     const device = selectTranscriptionDevice(selected.name, requestedDevice);
     if (runAsync) {
       const job = startTranscriptionJob({ audioPath, model: m, language: lang, backend, device });
-      const { child, ...publicJob } = job;
+      const publicJob = publicTranscriptionJob(job);
       return { content: [{ type: "text", text: JSON.stringify(publicJob) }] };
     }
     const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-transcribe-"));
@@ -880,7 +898,7 @@ const SCHEMAS = {
     language: z.string().optional().describe("Language code"),
     async: z.boolean().optional().default(false).describe("Return a persistent job ID instead of waiting for completion"),
     action: z.enum(["submit", "status", "cancel"]).optional().default("submit").describe("Transcription job action"),
-    job_id: z.string().optional().describe("Job ID for status or cancel"),
+    job_id: z.string().regex(TRANSCRIPTION_JOB_ID_PATTERN).optional().describe("Job ID for status or cancel"),
     backend: z.enum(["auto", "faster-whisper", "whisper.cpp", "whisper"]).optional().default("auto").describe("Transcription backend; auto prefers optimized installed backends"),
     device: z.enum(["auto", "cpu", "cuda", "metal", "vulkan"]).optional().default("auto").describe("Local inference device; Vulkan supports compatible AMD/Intel/NVIDIA backends")
   }),
@@ -970,4 +988,4 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_ocr, sidekick_media, sidekick_transcribe, sidekick_analytics, sidekick_insight_report, sidekick_download, localCudaAvailable, localVulkanAvailable, readTranscriptionText, transcriptionOutputPath, MAX_TRANSCRIPTION_OUTPUT_BYTES };
+module.exports = { descriptors, sidekick_ocr, sidekick_media, sidekick_transcribe, sidekick_analytics, sidekick_insight_report, sidekick_download, localCudaAvailable, localVulkanAvailable, readTranscriptionText, transcriptionOutputPath, transcriptionJobPath, transcriptionJobBelongsToPrincipal, saveTranscriptionJob, MAX_TRANSCRIPTION_OUTPUT_BYTES };

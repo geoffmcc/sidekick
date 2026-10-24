@@ -703,6 +703,49 @@ test("direct media and analytics handlers require canonical dispatch", async () 
   }
 });
 
+test("transcription job IDs cannot traverse paths and job records are principal-scoped", async () => {
+  const media = require("../src/tools/families/media");
+  const jobId = "tr_00000000-0000-4000-8000-000000000001";
+  assert.throws(() => media.transcriptionJobPath("../../sidekick.db"), /invalid transcription job ID/);
+
+  const traversal = await dispatcher.callMcpTool("transcribe", { action: "status", job_id: "../../sidekick.db" }, {
+    authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+  });
+  assert.equal(traversal.isError, true);
+  assert.equal(traversal.code, "validation_failed", "untrusted job IDs must be rejected before file lookup");
+
+  media.saveTranscriptionJob({
+    job_id: jobId,
+    owner_principal_id: owner.principal_id,
+    status: "completed",
+    output: "private synthetic transcript",
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  });
+  const ownStatus = await dispatcher.callMcpTool("transcribe", { action: "status", job_id: jobId }, {
+    authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+  });
+  assert.equal(ownStatus.isError, undefined, JSON.stringify(ownStatus));
+  assert.match(ownStatus.content[0].text, /private synthetic transcript/);
+  assert.doesNotMatch(ownStatus.content[0].text, /owner_principal_id/);
+
+  const otherStatus = await dispatcher.callMcpTool("transcribe", { action: "status", job_id: jobId }, {
+    authIdentity: { principal_id: operator.principal_id, principal_type: "human" },
+  });
+  assert.equal(otherStatus.isError, true);
+  assert.equal(otherStatus.code, undefined);
+  assert.doesNotMatch(otherStatus.content[0].text, /private synthetic transcript/);
+
+  const otherCancel = await dispatcher.callMcpTool("transcribe", { action: "cancel", job_id: jobId }, {
+    authIdentity: { principal_id: operator.principal_id, principal_type: "human" },
+  });
+  assert.equal(otherCancel.isError, true);
+  const ownerAfterDeniedCancel = await dispatcher.callMcpTool("transcribe", { action: "status", job_id: jobId }, {
+    authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+  });
+  assert.match(ownerAfterDeniedCancel.content[0].text, /"status":\s*"completed"/);
+});
+
 test("database metadata inspection uses its dedicated scoped permission", async () => {
   for (const name of ["db_schema", "db_stats"]) {
     const descriptor = tools.getBuiltinRegistry().get(name);
