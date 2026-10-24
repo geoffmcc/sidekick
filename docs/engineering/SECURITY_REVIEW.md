@@ -305,3 +305,16 @@ current credential-scope narrowing, and denied Agent envelopes.
 checking or dispatching when authority is absent and passes current identity
 and Agent scope to an authorized action. No production watch store was read or
 migrated.
+
+### Browser E2E runtime propagation (2026-10-24, SK-036)
+
+The authoritative suite runner intentionally scrubs ambient environment from
+child processes. Its browser resource provisioner previously forwarded only the
+disposable browser profile root, not the separately installed Chromium runtime.
+As a result, the required real-browser suite could exit successfully without
+running its E2E scenarios when its browser binary was not visible. The runner
+now forwards only the absolute, configured browser runtime path (or the normal
+repository-managed runtime when present), while preserving the separate
+per-suite browser profile and credential scrubbing. Missing runtime now emits
+the runner skip code, which fails this required suite; an explicitly configured
+but unavailable runtime fails directly.

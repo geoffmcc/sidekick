@@ -1,4 +1,4 @@
-"use strict";
+﻿"use strict";
 
 // Governed Browser Automation — real Chromium end-to-end.
 //
@@ -10,9 +10,7 @@
 // and egress blocking. A representative slice runs through the SAME
 // descriptor/dispatcher/policy path production MCP clients use.
 //
-// If the browser runtime is not installed this suite prints a loud, actionable
-// notice and exits 0 — it never silently passes. Install with
-// `node scripts/install-browser.js` (CI does this before the test run).
+// If the browser runtime is not installed this suite prints a loud, actionable`n// notice and exits with the runner skip code. Since this suite is required,`n// the runner fails validation instead of silently counting missing E2E coverage`n// as a pass. Install with`n// `node scripts/install-browser.js` (CI does this before the test run).
 
 const assert = require("assert");
 const fs = require("fs");
@@ -91,7 +89,12 @@ function countChromeProcesses() {
     console.log("    node scripts/install-browser.js");
     console.log(`Checked: ${(runtime.checked || []).join(", ")}`);
     console.log("═".repeat(70) + "\n");
-    process.exit(0);
+    // If the suite runner forwarded an explicit operator/CI installation,
+    // silently accepting a missing binary would hide a broken E2E setup.
+    // Explicit runtime paths that are broken are configuration failures. With
+    // no configured runtime, report a skip so required-suite policy fails
+    // closed instead of silently treating missing E2E coverage as a pass.
+    process.exit(process.env.SIDEKICK_BROWSER_BROWSERS_PATH ? 1 : 77);
   }
 
   console.log("\nGoverned Browser Automation — real Chromium E2E\n");

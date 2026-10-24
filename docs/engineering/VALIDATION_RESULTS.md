@@ -682,3 +682,21 @@ were changed. The prior same-day audit snapshot remains recorded in the
 security review but is not a fresh result; dependency advisory status needs to
 be refreshed in an environment with registry access. This check makes no claim
 about current lockfile vulnerability status.
+
+## Browser E2E runtime propagation: 2026-10-24
+
+- Fixed required browser-suite execution under the sanitized suite environment:
+  the browser resource provisioner now forwards the absolute configured
+  `SIDEKICK_BROWSER_BROWSERS_PATH`, or the repository-managed runtime when
+  present. The runtime binaries remain separate from the disposable per-suite
+  browser profile. Ambient credentials remain scrubbed.
+- The missing-runtime path now returns the runner skip code. Since this suite is
+  required, missing E2E coverage fails the validation gate instead of appearing
+  as a successful run. A deliberately invalid configured path failed the
+  required suite as expected.
+- Validation: `test/security/test-runner-environment.test.js`,
+  `test/browser-egress.test.js`, `test/browser-subsystem.test.js`, and
+  `test/run-all.test.js` passed through the authoritative runner. Actual
+  Chromium browser E2E reported 27 passed, 0 failed. `npm.cmd run check:tests`,
+  `npm.cmd run check:docs`, and `git diff --check` passed. This records the
+  targeted result only; the full test tiers were not run.

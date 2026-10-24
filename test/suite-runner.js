@@ -55,7 +55,10 @@ function validateScopedEnv(env, label) {
   if (env === undefined) return {};
   if (!env || typeof env !== "object" || Array.isArray(env)) throw new Error(`${label}: env must be an object`);
   for (const [key, value] of Object.entries(env)) {
-    const allowedKey = /^SIDEKICK_TEST_[A-Z0-9_]+$/.test(key) || /^SIDEKICK_(?:(?:MCP|DASHBOARD|AGENT)_)?(?:ALLOWED|DENIED)_PATHS$/.test(key);
+    const browserRuntimePath = key === "SIDEKICK_BROWSER_BROWSERS_PATH" && typeof value === "string" && path.isAbsolute(value);
+    const allowedKey = /^SIDEKICK_TEST_[A-Z0-9_]+$/.test(key)
+      || /^SIDEKICK_(?:(?:MCP|DASHBOARD|AGENT)_)?(?:ALLOWED|DENIED)_PATHS$/.test(key)
+      || browserRuntimePath;
     if (!allowedKey) throw new Error(`${label}: invalid scoped environment key ${key}`);
     if (!["string", "number", "boolean"].includes(typeof value)) throw new Error(`${label}: scoped environment values must be scalar`);
   }
@@ -94,7 +97,22 @@ registerProvisioner("temp-directory", context => {
 registerProvisioner("process-group", context => ({ value: { id: context.suite.id }, env: { SIDEKICK_TEST_PROCESS_SCOPE: context.token } }));
 registerProvisioner("browser-profile", context => {
   const directory = resourceDirectory(context, "browser");
-  return { value: { path: directory }, env: { SIDEKICK_TEST_BROWSER_ROOT: directory }, owned_paths: [directory] };
+  // Browser binaries are installed outside the per-suite profile root. The
+  // runner scrubs ambient environment variables from test children, so pass
+  // only this operator-selected runtime path through the resource contract.
+  // CI provides SIDEKICK_BROWSER_BROWSERS_PATH; local runs may use the normal
+  // repository data installation.
+  const configuredRuntime = process.env.SIDEKICK_BROWSER_BROWSERS_PATH;
+  const repositoryRuntime = path.join(root, "data", "browser", "ms-playwright");
+  const runtimePath = configuredRuntime || (fs.existsSync(repositoryRuntime) ? repositoryRuntime : null);
+  return {
+    value: { path: directory, runtime_path: runtimePath },
+    env: {
+      SIDEKICK_TEST_BROWSER_ROOT: directory,
+      ...(runtimePath ? { SIDEKICK_BROWSER_BROWSERS_PATH: path.resolve(runtimePath) } : {}),
+    },
+    owned_paths: [directory],
+  };
 });
 registerProvisioner("git-workspace", context => {
   const directory = resourceDirectory(context, "git");
