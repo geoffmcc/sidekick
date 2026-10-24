@@ -55,17 +55,20 @@ Model inference is routed by **Compute**. On startup Sidekick registers managed
 providers from the environment (see `docs/compute.md` → *Providers and
 credentials*):
 
-- `OLLAMA_URL` (default `http://127.0.0.1:11434`) → local Ollama, trusted for all
-  data classifications, preferred over cloud.
+- `OLLAMA_URL` (default `http://127.0.0.1:11434`) → Ollama, preferred over
+  cloud. Loopback endpoints are trusted for all data classifications; remote
+  endpoints default to `public`/`internal` only. Promote a remote endpoint to
+  private data only after verifying its destination and access controls.
 - `groq_api_key` (+ optional `GROQ_MODEL`) → Groq as an OpenAI-compatible cloud
   provider.
 - `openai_api_key` (+ optional `OPENAI_BASE_URL`, `OPENAI_MODEL`,
   `OPENAI_EMBEDDING_MODEL`) → OpenAI-compatible cloud provider.
 
-Cloud providers are seeded **secure by default**: they serve `public`/`internal`
-data only and rank below local, so private inference stays local and fails closed
-rather than silently egressing to the cloud. Promote a cloud provider to private
-data explicitly via the `compute` tool (`action=update`, `data_classifications`).
+Remote Ollama and cloud providers are seeded **secure by default**: they serve
+`public`/`internal` data only, so private inference fails closed rather than
+silently sending content to a separately hosted endpoint. Promote a provider to
+private data explicitly via `compute_providers` (`action=update`,
+`data_classifications`) after verifying the destination.
 
 Cloud provider credentials are file-backed and the provider record keeps only a
 reference (never the plaintext). Set `SIDEKICK_DISABLE_PROVIDER_BOOTSTRAP=1` to

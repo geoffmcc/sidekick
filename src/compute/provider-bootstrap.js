@@ -18,12 +18,12 @@
  *    untouched, so operator edits (trust promotion, disable, priority, endpoint)
  *    survive restarts. Deleting a managed row is respected until the next
  *    process start.
- *  - Secure by default: local Ollama (loopback) is trusted for
- *    public/internal/private; cloud providers (Groq, OpenAI) are seeded for
- *    public/internal ONLY and at lower priority, so private inference stays on
- *    local/trusted providers and fails closed rather than silently egressing to
- *    a cloud API. Promoting a cloud provider to private is an explicit operator
- *    step (`compute` action=update), exactly as for a manually-created provider.
+ *  - Secure by default: loopback Ollama is trusted for
+ *    public/internal/private; remote Ollama and cloud providers are seeded for
+ *    public/internal ONLY, so private inference fails closed rather than
+ *    silently sending data to a separately hosted endpoint. Promoting a remote
+ *    provider to private is an explicit operator step (`compute_providers`
+ *    action=update), exactly as for a manually-created provider.
  *  - Credentials are stored as secret references, never plaintext: a cloud
  *    provider's API key is migrated into the encrypted secret store and the
  *    provider row keeps only the reference. With no master SIDEKICK_SECRET_KEY
@@ -36,6 +36,7 @@ const modelRegistry = require("./model-registry");
 const { readSecret } = require("../core/runtime-secrets");
 const { hasSecretKey, encryptSecret } = require("../core/secret-cipher");
 const { loadSecrets, saveSecrets } = require("../core/secrets-store");
+const { isLoopbackHost } = require("./control-plane-url");
 
 const LOCAL_CLASSIFICATIONS = Object.freeze(["public", "internal", "private"]);
 const CLOUD_CLASSIFICATIONS = Object.freeze(["public", "internal"]);
@@ -43,6 +44,20 @@ const CLOUD_CLASSIFICATIONS = Object.freeze(["public", "internal"]);
 function configuredModel(value) {
   const model = String(value || "").trim();
   return model && model !== "." && model.toLowerCase() !== "inherit" ? model : null;
+}
+
+function isLoopbackOllamaEndpoint(endpoint) {
+  try { return isLoopbackHost(new URL(endpoint).hostname); }
+  catch { return false; } // Endpoint validation reports malformed values at use.
+}
+
+function ollamaDataClassifications(endpoint) {
+  // The default loopback service is local to Core and may receive private data.
+  // OLLAMA_URL can also point at another machine (for example a desktop or GPU
+  // worker); configuring connectivity to that host must not implicitly grant
+  // it private-data authority. An operator can explicitly promote it through
+  // compute_providers update after verifying the destination.
+  return isLoopbackOllamaEndpoint(endpoint) ? [...LOCAL_CLASSIFICATIONS] : [...CLOUD_CLASSIFICATIONS];
 }
 
 function findManaged(bootstrapKey) {
@@ -83,7 +98,7 @@ function seedOllama() {
   const endpoint = process.env.OLLAMA_URL || "http://127.0.0.1:11434";
   const provider = providerRegistry.createProvider({
     providerType: "ollama",
-    displayName: "Ollama (local)",
+    displayName: isLoopbackOllamaEndpoint(endpoint) ? "Ollama (local)" : "Ollama (remote)",
     endpoint,
     enabled: true,
     trustLevel: "trusted",
@@ -91,7 +106,7 @@ function seedOllama() {
     capabilities: ["chat", "generate", "embeddings", "model_listing"],
     priority: 80,
     costPolicy: "free",
-    dataClassifications: [...LOCAL_CLASSIFICATIONS],
+    dataClassifications: ollamaDataClassifications(endpoint),
     mode: "direct",
     metadata: { managed: "env-bootstrap", bootstrapKey: "ollama", source: "OLLAMA_URL" },
   });

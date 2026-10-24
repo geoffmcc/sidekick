@@ -26,7 +26,7 @@ process.env.SIDEKICK_API_KEY = "sk-sidekick-test-key";
 // Start from a clean env so host configuration cannot influence the scenarios.
 for (const k of [
   "GROQ_API_KEY", "GROQ_MODEL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_API_BASE",
-  "OPENAI_MODEL", "OPENAI_EMBEDDING_MODEL", "OLLAMA_MODEL", "SIDEKICK_AGENT_MODEL",
+  "OPENAI_MODEL", "OPENAI_EMBEDDING_MODEL", "OLLAMA_URL", "OLLAMA_MODEL", "SIDEKICK_AGENT_MODEL",
   "SIDEKICK_EMBEDDING_MODEL", "SIDEKICK_DISABLE_PROVIDER_BOOTSTRAP",
   "SIDEKICK_DISABLE_OLLAMA_BOOTSTRAP", "SIDEKICK_SECRET_KEY",
 ]) delete process.env[k];
@@ -97,6 +97,29 @@ test("seeds a trusted local Ollama provider with chat+embedding models", () => {
   const models = modelRegistry.listModels({ providerId: ollama.providerId, enabled: true });
   assert.ok(models.some(m => m.capabilities.includes("chat")), "has a chat model");
   assert.ok(models.some(m => m.supportsEmbedding), "has an embedding model");
+});
+
+test("remote configured Ollama gets no private-data authority until explicit promotion", () => {
+  resetRegistry();
+  process.env.OLLAMA_URL = "http://192.168.1.50:11434";
+  try {
+    bootstrapProviders();
+    const ollama = managed("ollama");
+    assert.ok(ollama, "configured remote Ollama remains available");
+    assert.strictEqual(ollama.displayName, "Ollama (remote)");
+    assert.deepStrictEqual(ollama.dataClassifications.sort(), ["internal", "public"]);
+    assert.ok(!eligibleFor("private").some(candidate => candidate.provider.providerId === ollama.providerId),
+      "private data is not sent to a remote Ollama endpoint by default");
+    assert.ok(eligibleFor("public").some(candidate => candidate.provider.providerId === ollama.providerId),
+      "remote Ollama remains eligible for public inference");
+
+    providerRegistry.updateProvider(ollama.providerId, { dataClassifications: ["public", "internal", "private"] });
+    bootstrapProviders();
+    assert.deepStrictEqual(providerRegistry.getProvider(ollama.providerId).dataClassifications.sort(), ["internal", "private", "public"],
+      "an explicit operator promotion survives subsequent bootstrap");
+  } finally {
+    delete process.env.OLLAMA_URL;
+  }
 });
 
 test("bootstrap is idempotent (no duplicate managed rows)", () => {

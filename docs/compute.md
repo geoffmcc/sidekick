@@ -143,10 +143,14 @@ On `compute.initialize()`, `src/compute/provider-bootstrap.js` registers managed
 providers from the environment Sidekick already supports, so the InferenceService
 authority has real providers to route to without manual operator setup:
 
-- **Ollama (local)** from `OLLAMA_URL` (default `http://127.0.0.1:11434`), seeded
-  `trusted` for `public`/`internal`/`private` at high priority, with a chat model
-  (`OLLAMA_MODEL` / `SIDEKICK_AGENT_MODEL`) and an embedding model
-  (`SIDEKICK_EMBEDDING_MODEL`, default `nomic-embed-text`).
+- **Ollama** from `OLLAMA_URL` (default `http://127.0.0.1:11434`), seeded
+  `trusted` at high priority, with a chat model (`OLLAMA_MODEL` /
+  `SIDEKICK_AGENT_MODEL`) and an embedding model (`SIDEKICK_EMBEDDING_MODEL`,
+  default `nomic-embed-text`). Loopback Ollama is eligible for
+  `public`/`internal`/`private`; a non-loopback endpoint is eligible only for
+  `public`/`internal` until an operator explicitly promotes its
+  `data_classifications` after verifying the destination. Remote Ollama remains
+  available for authorized public/internal inference.
 - **Groq (cloud)** when the protected `groq_api_key` file is present — registered as an
   `openai-compatible` provider at `https://api.groq.com/openai/v1` with
   `GROQ_MODEL`.
@@ -158,17 +162,23 @@ Bootstrap is **idempotent and secure by default**:
 - Managed rows are tagged (`metadata.managed = "env-bootstrap"`) and matched by a
   stable key, so re-running never duplicates them and operator edits (trust
   promotion, disable, priority, endpoint) survive restarts.
-- Cloud providers are seeded for `public`/`internal` **only** and at lower
-  priority than local. Private/sensitive inference stays on local/trusted
-  providers and **fails closed** rather than silently egressing to a cloud API.
-  Authorizing a cloud provider for private data is an explicit operator step
-  (`compute` `action=update` with `data_classifications`).
+- Remote Ollama and cloud providers are seeded for `public`/`internal` **only**;
+  cloud providers also rank below local Ollama. Private inference **fails
+  closed** rather than silently sending data to a separately hosted endpoint.
+  Authorizing a remote provider for private data is an explicit operator step
+  (`compute_providers` `action=update` with `data_classifications`) after
+  verifying the destination and its access controls.
 - Provider endpoints are checked when registered and resolved again before
   every adapter request. The HTTP layer pins the validated address, preserves
   the configured Host/TLS SNI, refuses metadata/link-local answers, does not
   follow redirects, and caps response bodies. Explicitly configured private
   providers remain supported; this is separate from the caller-facing
   `SIDEKICK_ALLOW_PRIVATE_FETCH` policy.
+- Existing provider rows preserve operator edits across bootstrap. After
+  upgrading from a version that treated every configured Ollama endpoint as
+  private-data eligible, inspect remote Ollama providers and remove `private`
+  from `data_classifications` unless that destination was intentionally
+  authorized for private inference.
 - Set `SIDEKICK_DISABLE_PROVIDER_BOOTSTRAP=1` to manage providers entirely by
   hand, or `SIDEKICK_DISABLE_OLLAMA_BOOTSTRAP=1` to skip only the local default.
 

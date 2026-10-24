@@ -841,3 +841,20 @@ system prompt and present only in the labeled user message. This reduces the
 instruction-channel exposure; it is not a guarantee that a model will resist
 prompt injection. Plan schema validation, current dispatcher policy, and
 approval remain the enforcement boundaries for proposed actions.
+
+### Configured remote Ollama data scope (2026-10-24, SK-066)
+
+Confirmed trust-default mismatch: bootstrap described loopback Ollama as the
+private-data provider but granted `public`/`internal`/`private` classifications
+to every `OLLAMA_URL`, including a separately hosted desktop or GPU node. The
+provider HTTP layer intentionally permits administrator-configured private
+network endpoints, so network address validation did not provide a data-scope
+boundary. New bootstrap rows now grant private-data eligibility only to
+loopback Ollama. A remote endpoint remains usable for public/internal inference
+and requires an explicit `compute_providers` update to receive private data.
+The display name distinguishes local and remote endpoints. Regressions verify
+remote private placement is denied, public placement remains available, and an
+explicit promotion survives re-bootstrap. Existing provider rows preserve
+operator edits; legacy remote rows therefore require operator review and are a
+deployment migration residual until checked. This review did not inspect a live
+database or infer whether any existing promotion was intentional.

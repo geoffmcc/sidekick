@@ -1209,3 +1209,16 @@ about current lockfile vulnerability status.
   run as intermittent-failure history rather than a current failing result.
 - `bb6c761` is a signed commit on `codex/security-hardening-followup`; no push,
   PR, merge, or deployment was performed.
+
+## Configured remote Ollama data scope: 2026-10-24 (SK-066)
+
+- `npm.cmd run test:all -- test/compute-provider-bootstrap.test.js` passed the
+  focused bootstrap suite after adding remote endpoint classification and
+  operator-promotion persistence coverage.
+- `npm.cmd run test:compute` passed all 34 Compute-domain suites, including
+  worker integration and provider registry authorization behavior.
+- `npm.cmd run check:docs`, `npm.cmd run check:tests`,
+  `npm.cmd run check:architecture`, and `git diff --check` passed.
+- Existing remote Ollama rows were not modified or inspected. Upgrade
+  operators must review existing `data_classifications`; this is a deployment
+  migration residual, not a verified live-state fix.
