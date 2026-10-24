@@ -1267,3 +1267,12 @@ about current lockfile vulnerability status.
   associated with a different principal or project across receipt, workflow,
   and execution reference types.
 - Broader proof-role semantics remain unverified and tracked as SK-007.
+
+## Authorization surface parity slice: 2026-10-24 (SK-008)
+
+- `npm.cmd run test:all -- test/security-capability-show-configuration.test.js`
+  passed. A service principal granted only `packs.read` can show the same pack
+  through MCP, Dashboard, and Agent dispatch; all three surfaces deny `enable`
+  without `packs.manage`.
+- This verifies one permission/action pair across those dispatcher surfaces.
+  Alias, project-ownership, and other privileged-action matrices remain open.

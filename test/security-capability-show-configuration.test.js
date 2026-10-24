@@ -21,12 +21,12 @@ const bundled = require("../src/packs/bundled");
 const lifecycle = require("../src/packs/lifecycle");
 const tools = require("../src/tools");
 
-test("detailed capability reads require scoped identity when they include runtime configuration", async t => {
-  t.after(() => {
-    db.closeDatabase();
-    fs.rmSync(dataDir, { recursive: true, force: true });
-  });
+test.after(() => {
+  db.closeDatabase();
+  fs.rmSync(dataDir, { recursive: true, force: true });
+});
 
+test("detailed capability reads require scoped identity when they include runtime configuration", async () => {
   const owner = identity.bootstrapOwner({
     username: "capability_reader",
     password: "synthetic capability reader password",
@@ -60,4 +60,29 @@ test("detailed capability reads require scoped identity when they include runtim
   assert.match(authorizedShow.content[0].text, /10\.77\.88\.99/);
   assert.doesNotMatch(authorizedShow.content[0].text, /synthetic_internal_admin_token/);
   assert.match(authorizedShow.content[0].text, /\[REDACTED\]/, "credential references remain redacted even for an authorized reader");
+});
+
+test("capability authorization is consistent across MCP, Dashboard, and Agent dispatch", async () => {
+  const owner = identity.getPrincipal(identity.listPrincipals({ type: "human", enabled: true })[0].principal_id);
+  const reader = require("./helpers/authorized-identity").createPrincipal(identity, {
+    type: "service",
+    displayName: "Scoped capability reader",
+    createdByPrincipalId: owner.principal_id,
+    actorPrincipalId: owner.principal_id,
+  }, owner);
+  identity.grantPrincipalPermission(reader.principal_id, "packs.read", owner);
+  const authIdentity = { principal_id: reader.principal_id, principal_type: "service", scopes: null };
+  const surfaces = [
+    ["MCP", tools.callMcpTool],
+    ["Dashboard", tools.callDashboardTool],
+    ["Agent", tools.callAgentTool],
+  ];
+
+  for (const [surface, dispatch] of surfaces) {
+    const allowed = await dispatch("capability", { action: "show", name: "proxmox" }, { authIdentity });
+    assert.equal(allowed.isError, undefined, `${surface} must honor packs.read`);
+    const denied = await dispatch("capability", { action: "enable", name: "proxmox" }, { authIdentity });
+    assert.equal(denied.isError, true, `${surface} must deny pack management without packs.manage`);
+    assert.equal(denied.code, "authorization_denied", `${surface} must use the canonical authorization decision`);
+  }
 });
