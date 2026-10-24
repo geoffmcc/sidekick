@@ -157,7 +157,11 @@ credentials in that protected directory; do not add credentials to the app's
 `.env` file. The shared `sidekick` service account currently means the Core
 services can read one another's secret files; separate per-service credential
 isolation is a documented hardening limitation and is not provided by this
-directory setting.
+directory setting. The units also use `UMask=0077`, so files created by a
+service default to owner-only permissions unless the application explicitly
+sets a stricter mode. After manually replacing unit files, run
+`sudo systemctl daemon-reload` and restart the affected services to apply the
+updated mask.
 
 The installer creates `/etc/sudoers.d/sidekick-deploy` for the SSH deployment
 scripts, limited to start, stop, restart, and status for the three Sidekick

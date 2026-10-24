@@ -15,6 +15,7 @@ const CORE_UNITS = [
 test("Core systemd units apply host filesystem and kernel hardening without blocking Sidekick state", () => {
   const required = [
     "NoNewPrivileges=true",
+    "UMask=0077",
     "PrivateTmp=true",
     "RemoveIPC=true",
     "ProtectSystem=full",
