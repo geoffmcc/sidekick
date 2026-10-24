@@ -955,18 +955,22 @@ Confirmed persistence trust gap: handoff extraction required confirmation only
 for entries classified as facts. The same untrusted handoff could label
 instruction-like content as a decision, procedure, negative, session, or open
 thread; those records were stored as active memories and were eligible for
-automatic recall. Legacy `handoff` and `task_session` memories of those types
-also bypassed the confirmation check when their rows predated the explicit
-confirmation flag.
+automatic recall. Agent Bridge calls to `memory remember` were also stored as
+`explicit` user memories and entered recall immediately. Legacy `agent`,
+`handoff`, and `task_session` memories could bypass confirmation when their
+rows predated the explicit confirmation flag.
 
-All agent-generated memories from those two sources now require explicit
-confirmation, regardless of memory type. Existing legacy rows receive the
-same protection during recall without rewriting stored data. Direct review
-remains available, and an authenticated confirmation restores automatic recall.
-This limits memory trust promotion; it does not claim that confirmed content is
-factually correct or eliminate prompt injection from other untrusted sources.
+Agent-originated memory writes and all extracted memories from `handoff` and
+`task_session` now require explicit confirmation, regardless of memory type.
+Existing legacy rows receive the same protection during recall without
+rewriting stored data. Direct authenticated user writes retain their current
+workflow; an authenticated confirmation restores agent-authored content to
+automatic recall. This limits memory trust promotion; it does not claim that
+confirmed content is factually correct or eliminate prompt injection from
+other untrusted sources.
 
-Validation: `test/security-memory-authority.test.js` checks legacy and current
-memory types, and `test/memory-intelligence.test.js` exercises extraction,
-automatic-recall exclusion, and post-confirmation use. The canonical security
-tier passes 168/168 suites. No production database was accessed or changed.
+Validation: `test/security-memory-authority.test.js` checks Agent Bridge writes,
+direct user writes, legacy and current memory types. `test/memory-intelligence.test.js`
+exercises extraction, automatic-recall exclusion, and post-confirmation use. The
+canonical security tier passes 168/168 suites. No production database was
+accessed or changed.

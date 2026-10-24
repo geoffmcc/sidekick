@@ -56,7 +56,12 @@ async function sidekick_memory({ action, id, project, type, memory_class, conten
   if (action === "remember") {
     if (!content && !summary) return { content: [{ type: "text", text: "content or summary required" }], isError: true };
     const text = redactSensitive(content || summary);
-    const memory = dbStore.upsertMemory({ type: type || "fact", project: effectiveProject, content: text, summary: redactSensitive(summary || text), tags: normalizeTags(tags), confidence: Number.isFinite(confidence) ? confidence : 0.8, source: "explicit", source_tool: "sidekick_memory", automatic: false, memory_class: memory_class || memoryClassForToolType(type || "fact"), primary_scope_type: scope_type || (effectiveProject ? "project" : "global"), primary_scope_id: scope_id || effectiveProject || null, evidence_excerpt: redactSensitive(evidence || text), directness: "direct", source_authority: 5, metadata: { user_controlled: true, requested_source: source || null, reason: reason || null } });
+    const execution = toolContext.getExecutionContext();
+    // requestId is also used as a dispatcher taskId for ordinary requests, so
+    // taskId alone cannot identify model-authored writes. Use the trusted
+    // source or the unforgeable Agent authority context instead.
+    const agentAuthored = execution.source === "agent" || Boolean(execution.agentAuthorityContext);
+    const memory = dbStore.upsertMemory({ type: type || "fact", project: effectiveProject, content: text, summary: redactSensitive(summary || text), tags: normalizeTags(tags), confidence: Number.isFinite(confidence) ? confidence : 0.8, source: agentAuthored ? "agent" : "explicit", source_tool: "sidekick_memory", automatic: false, requires_confirmation: agentAuthored, memory_class: memory_class || memoryClassForToolType(type || "fact"), primary_scope_type: scope_type || (effectiveProject ? "project" : "global"), primary_scope_id: scope_id || effectiveProject || null, evidence_excerpt: redactSensitive(evidence || text), directness: "direct", source_authority: 5, metadata: { user_controlled: !agentAuthored, requested_source: source || null, reason: reason || null } });
     dbStore.auditMemoryEvent("remember", "memory", memory.id, { project, type: memory.type }, toolContext.getExecutionSource());
     recordMemoryEvent("memory.remembered", { memory_id: memory.id, project: memory.project, type: memory.type, source: memory.source }, { subjectType: "memory", subjectId: memory.id, project: memory.project });
     return jsonText({ ok: true, memory });

@@ -49,6 +49,22 @@ test("caller-supplied memory source cannot promote authority", async () => {
   assert.equal(stored.metadata.requested_source, "user_correction");
 });
 
+test("Agent Bridge memory writes remain pending until authenticated confirmation", async () => {
+  const result = await dispatcher.dispatchTestTool({
+    descriptor: memory,
+    args: { action: "remember", project: "memory_authority_project", type: "decision", content: "synthetic agent-authored decision" },
+    context: { authIdentity: { principal_id: operator.principal_id, principal_type: "human" }, project: "memory_authority_project", source: "agent", taskId: "agt_memory_authority" },
+  });
+  assert.notEqual(result.isError, true, JSON.stringify(result));
+  const payload = JSON.parse(result.content[0].text);
+  const stored = db.getMemoryById(payload.memory.id, { includeDisabled: true });
+  assert.equal(stored.source, "agent");
+  assert.equal(stored.state, "pending");
+  assert.equal(stored.requires_confirmation, true);
+  assert.equal(stored.metadata.user_controlled, false);
+  assert.equal(requiresMemoryConfirmation(stored), true);
+});
+
 test("legacy handoff and task-session memories of every type remain untrusted until confirmed", () => {
   for (const source of ["handoff", "task_session"]) {
     for (const type of ["fact", "decision", "procedure", "negative", "session", "open_thread", "observation"]) {
