@@ -191,6 +191,27 @@ test("execution node enforces its local execute grant and binds bash cwd to its 
   );
 });
 
+test("execution node refuses symlink components in workspace paths", t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-node-symlink-workspace-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const target = path.join(root, "real-file.txt");
+  const alias = path.join(root, "linked-file.txt");
+  fs.writeFileSync(target, "synthetic workspace content");
+  try { fs.symlinkSync(target, alias, "file"); }
+  catch (error) {
+    if (["EPERM", "EACCES", "UNKNOWN"].includes(error.code)) return t.skip(`symlinks are unavailable in this environment: ${error.code}`);
+    throw error;
+  }
+
+  const workspace = createWorkspace({ name: "symlink-denied", root, permissions: { read: true, write: false } });
+  const read = getCanonicalRegistry({ includeActiveModules: false }).get("read");
+  assert.throws(
+    () => validateLocalArguments(read, { path: alias }, workspace),
+    /symlinks are not permitted/,
+    "workspace validation must inspect the supplied path before realpath follows its symlink"
+  );
+});
+
 test("every node-safe built-in and Developer tool has an explicit workspace permission classification", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-node-permission-map-"));
   const builtin = getCanonicalRegistry({ includeActiveModules: false });

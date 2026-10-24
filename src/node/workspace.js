@@ -40,6 +40,22 @@ function protectedPath(root, target) {
   );
 }
 
+function rejectWorkspaceSymlinks(root, target) {
+  const relative = path.relative(root, target);
+  if (!relative) return;
+  let current = root;
+  for (const segment of relative.split(path.sep).filter(Boolean)) {
+    current = path.join(current, segment);
+    let stat;
+    try { stat = fs.lstatSync(current); }
+    catch (error) {
+      if (["ENOENT", "ENOTDIR"].includes(error.code)) return;
+      throw error;
+    }
+    if (stat.isSymbolicLink()) throw new Error("symlinks are not permitted in workspace paths");
+  }
+}
+
 function createWorkspace({ name, root, permissions = {}, limits = {} }) {
   const canonical = canonicalExisting(root);
   if (!canonical.stat.isDirectory()) throw new Error("workspace root must be a directory");
@@ -70,6 +86,9 @@ function resolveWorkspacePath(workspace, requested, { operation = "read", allowM
   if (!raw || raw.includes("\0") || !path.isAbsolute(raw)) throw new Error("workspace paths must be absolute");
   if (raw.split(/[\\/]/).includes("..")) throw new Error("parent traversal is not permitted");
   const root = canonicalExisting(workspace.root).path;
+  const lexicalTarget = path.resolve(raw);
+  if (!contains(root, lexicalTarget)) throw new Error("path is outside the authorized workspace");
+  rejectWorkspaceSymlinks(root, lexicalTarget);
   let target;
   try {
     target = canonicalExisting(raw).path;
