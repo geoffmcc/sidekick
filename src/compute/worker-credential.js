@@ -143,7 +143,17 @@ function save(record, pathOverride) {
   const credPath = pathOverride || defaultCredentialPath();
   const dir = path.dirname(credPath);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  if (process.platform !== "win32") { try { fs.chmodSync(dir, 0o700); } catch {} }
+  const dirStat = fs.lstatSync(dir);
+  if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) {
+    throw new Error("Refusing to persist worker credentials in an unsafe directory");
+  }
+  if (process.platform !== "win32") {
+    fs.chmodSync(dir, 0o700);
+    const securedDirStat = fs.lstatSync(dir);
+    if (!securedDirStat.isDirectory() || securedDirStat.isSymbolicLink() || (securedDirStat.mode & 0o077)) {
+      throw new Error("Refusing to persist worker credentials in an unsafe directory");
+    }
+  }
   const payload = {
     workerId: record.workerId,
     nodeId: record.nodeId || null,
