@@ -884,8 +884,11 @@ assert.ok(deployShContent.includes('ensure_secret_config'), 'deploy.sh should co
 assert.ok(deployPs1Content.includes('Ensure-SecretConfig'), 'deploy.ps1 should configure protected secret settings');
 assert.ok(deployShContent.includes('ensure-secret-config.sh'), 'deploy.sh should sync the secret config helper');
 assert.ok(deployPs1Content.includes('ensure-secret-config.sh'), 'deploy.ps1 should sync the secret config helper');
-assert.ok(fs.readFileSync(path.join(__dirname, '..', 'scripts', 'ensure-secret-config.sh'), 'utf8').includes('verify-runtime-secrets.js'), 'deploy secret setup must validate runtime credentials before service restart');
+assert.ok(fs.readFileSync(path.join(__dirname, '..', 'scripts', 'ensure-secret-config.sh'), 'utf8').includes('ensure-secret-config.js'), 'deploy secret setup must use the no-follow config helper');
+assert.ok(fs.readFileSync(path.join(__dirname, '..', 'scripts', 'ensure-secret-config.js'), 'utf8').includes('verify-runtime-secrets'), 'deploy secret setup must validate runtime credentials before service restart');
 assert.ok(fs.existsSync(path.join(__dirname, '..', 'scripts', 'verify-runtime-secrets.js')), 'deployment must include the required runtime-secret preflight');
+assert.ok(deployShContent.includes('scripts/ensure-secret-config.js'), 'deploy.sh SCP mode must copy the no-follow secret config helper');
+assert.ok(deployPs1Content.includes('scripts\\ensure-secret-config.js'), 'deploy.ps1 SCP mode must copy the no-follow secret config helper');
 assert.ok(deployShContent.includes('scripts/verify-runtime-secrets.js'), 'deploy.sh SCP mode must copy the runtime-secret preflight');
 assert.ok(deployPs1Content.includes('scripts\\verify-runtime-secrets.js'), 'deploy.ps1 SCP mode must copy the runtime-secret preflight');
 assert.ok(deployShContent.includes('wait_sidekick_services || exit 1'), 'deploy.sh must fail unless required services become active');

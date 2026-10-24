@@ -106,6 +106,7 @@ function makeMock(overrides = {}) {
         fs.writeFileSync(path.join(target, 'package-lock.json'), '{}');
         fs.writeFileSync(path.join(target, 'scripts', 'seed-knowledge.js'), '');
         fs.writeFileSync(path.join(target, 'scripts', 'ensure-secret-config.sh'), '#!/usr/bin/env bash\n');
+        fs.writeFileSync(path.join(target, 'scripts', 'ensure-secret-config.js'), '');
         return 'cloned\n';
       }
       if (joined === 'branch --show-current') return `${state.branch}\n`;
