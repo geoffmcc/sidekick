@@ -16,7 +16,7 @@ const authentication = require("../src/core/authentication");
 const authorization = require("../src/core/authorization");
 const express = require("express");
 const { registerExecutionNodeAdminRoutes } = require("../src/node/admin-api");
-const { validateLocalArguments } = require("../src/node/agent");
+const { validateLocalArguments, boundedResult, effectiveConcurrency, effectiveOutputLimit } = require("../src/node/agent");
 const { createWorkspace } = require("../src/node/workspace");
 const { getCanonicalRegistry } = require("../src/tools/canonical-registry");
 
@@ -161,4 +161,14 @@ test("execution node enforces its local workspace write grant for file writes", 
     /outside the authorized workspace/,
     "write permission remains bounded to the configured workspace"
   );
+});
+
+test("execution node applies workspace concurrency and output limits", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-node-local-limits-"));
+  const limitedWorkspace = createWorkspace({ name: "bounded", root, limits: { maxConcurrent: 1, maxOutputBytes: 2048 } });
+  assert.equal(effectiveConcurrency(limitedWorkspace), 1, "node claims are bounded by the smaller workspace concurrency grant");
+  assert.equal(effectiveOutputLimit(limitedWorkspace), 2048, "result bounds reflect the workspace output grant");
+  const result = boundedResult({ content: [{ type: "text", text: "x".repeat(4096) }] }, effectiveOutputLimit(limitedWorkspace));
+  assert.ok(Buffer.byteLength(JSON.stringify(result), "utf8") <= 2048, "normalized worker output remains within the configured byte limit");
+  assert.equal(result.truncated, true);
 });

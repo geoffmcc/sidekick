@@ -88,6 +88,14 @@ function binaries() {
   return names.filter(name => commandOnPath(name));
 }
 function capabilities() { return { nodeId: nodeId(), executionHost: os.hostname(), nodeVersion: process.version, osType: os.type(), osRelease: os.release(), architecture: os.arch(), platform: process.platform, descriptorSetHash: descriptorSetHash(), binaries: binaries(), packs: Array.isArray(nodeConfig.packs) ? nodeConfig.packs.slice(0, 16) : [], workspaces: workspace ? [{ name: workspace.name, root: workspace.root, permissions: workspace.permissions, limits: workspace.limits }] : [], networkScopes: networkScopes(), browser: false, privilege: false, healthy: true }; }
+function effectiveConcurrency(targetWorkspace = workspace) {
+  const workspaceLimit = Number(targetWorkspace?.limits?.maxConcurrent);
+  return Math.min(CONCURRENCY, Number.isInteger(workspaceLimit) && workspaceLimit > 0 ? workspaceLimit : CONCURRENCY);
+}
+function effectiveOutputLimit(targetWorkspace = workspace) {
+  const workspaceLimit = Number(targetWorkspace?.limits?.maxOutputBytes);
+  return Math.min(MAX_OUTPUT, Number.isInteger(workspaceLimit) && workspaceLimit > 0 ? workspaceLimit : MAX_OUTPUT);
+}
 function request(method, endpoint, body, timeoutMs = 15000) {
   return new Promise((resolve, reject) => {
     let url;
@@ -158,12 +166,13 @@ function validateLocalArguments(descriptor, args, workspaceOverride = workspace)
   }
   return parsed.data;
 }
-function boundedResult(result) {
+function boundedResult(result, maxOutputBytes = effectiveOutputLimit()) {
+  const outputLimit = Math.max(1024, Math.min(MAX_OUTPUT, Number(maxOutputBytes) || MAX_OUTPUT));
   const normalized = result && typeof result === "object" ? result : { content: [{ type: "text", text: String(result || "") }] };
   let truncated = false;
   function trim(value, depth = 0) {
     if (typeof value === "string") {
-      const next = redact(value).slice(0, Math.min(MAX_OUTPUT, 8192));
+      const next = redact(value).slice(0, Math.min(outputLimit, 8192));
       truncated ||= next.length !== value.length;
       return next;
     }
@@ -173,10 +182,10 @@ function boundedResult(result) {
     return Object.fromEntries(Object.entries(value).slice(0, 256).map(([key, item]) => [key, trim(item, depth + 1)]));
   }
   let bounded = trim(normalized);
-  while (Buffer.byteLength(JSON.stringify(bounded), "utf8") > MAX_OUTPUT) {
+  while (Buffer.byteLength(JSON.stringify(bounded), "utf8") > outputLimit) {
     truncated = true;
     const text = JSON.stringify(bounded);
-    bounded = { content: [{ type: "text", text: text.slice(0, MAX_OUTPUT - 128) }], truncated: true };
+    bounded = { content: [{ type: "text", text: text.slice(0, outputLimit - 128) }], truncated: true };
     break;
   }
   if (truncated && bounded && typeof bounded === "object" && !Array.isArray(bounded)) bounded.truncated = true;
@@ -184,13 +193,13 @@ function boundedResult(result) {
 }
 async function enroll() {
   const existing = credentialStore.load(CREDENTIAL_PATH);
-  if (existing) { workerId = existing.workerId; credential = existing.credential; const check = await request("POST", "/execution-node/node/heartbeat", { capabilities: capabilities(), descriptorSetHash: descriptorSetHash(), protocolVersion: PROTOCOL_VERSION, limits: { maxConcurrent: CONCURRENCY, maxOutputBytes: MAX_OUTPUT } }); if (check.status === 200) return; workerId = null; credential = null; }
+  if (existing) { workerId = existing.workerId; credential = existing.credential; const check = await request("POST", "/execution-node/node/heartbeat", { capabilities: capabilities(), descriptorSetHash: descriptorSetHash(), protocolVersion: PROTOCOL_VERSION, limits: { maxConcurrent: effectiveConcurrency(), maxOutputBytes: effectiveOutputLimit() } }); if (check.status === 200) return; workerId = null; credential = null; }
   const enrollmentToken = token(); if (!enrollmentToken) throw new Error("node enrollment token is not configured");
-  const result = await request("POST", "/execution-node/enrollment/exchange", { token: enrollmentToken, nodeId: nodeId(), displayName: process.env.SIDEKICK_NODE_NAME || os.hostname(), platform: process.platform, architecture: os.arch(), nodeVersion: VERSION, protocolVersion: PROTOCOL_VERSION, descriptorSetHash: descriptorSetHash(), capabilities: capabilities(), limits: { maxConcurrent: CONCURRENCY, maxOutputBytes: MAX_OUTPUT } });
+  const result = await request("POST", "/execution-node/enrollment/exchange", { token: enrollmentToken, nodeId: nodeId(), displayName: process.env.SIDEKICK_NODE_NAME || os.hostname(), platform: process.platform, architecture: os.arch(), nodeVersion: VERSION, protocolVersion: PROTOCOL_VERSION, descriptorSetHash: descriptorSetHash(), capabilities: capabilities(), limits: { maxConcurrent: effectiveConcurrency(), maxOutputBytes: effectiveOutputLimit() } });
   if (result.status !== 200 || !result.body.credential) throw new Error(`node enrollment failed (${result.status})`);
   workerId = result.body.worker.workerId; credential = result.body.credential; saveCredential({ workerId, nodeId: nodeId(), credential });
 }
-async function heartbeat() { const result = await request("POST", "/execution-node/node/heartbeat", { capabilities: capabilities(), descriptorSetHash: descriptorSetHash(), protocolVersion: PROTOCOL_VERSION, limits: { maxConcurrent: CONCURRENCY, maxOutputBytes: MAX_OUTPUT } }); if (result.status === 401 || result.status === 403) throw new Error("node credential rejected or node revoked"); if (result.status !== 200) throw new Error(`heartbeat failed (${result.status})`); }
+async function heartbeat() { const result = await request("POST", "/execution-node/node/heartbeat", { capabilities: capabilities(), descriptorSetHash: descriptorSetHash(), protocolVersion: PROTOCOL_VERSION, limits: { maxConcurrent: effectiveConcurrency(), maxOutputBytes: effectiveOutputLimit() } }); if (result.status === 401 || result.status === 403) throw new Error("node credential rejected or node revoked"); if (result.status !== 200) throw new Error(`heartbeat failed (${result.status})`); }
 async function disconnect() { if (!workerId) return; try { await request("POST", "/execution-node/node/disconnect", { reason: "node_shutdown" }, 5000); } catch {} }
 async function execute(job, controller = new AbortController()) {
   const descriptor = registry().get(job.toolName);
@@ -216,7 +225,7 @@ async function execute(job, controller = new AbortController()) {
     return { result, receipt };
   } finally { if (deadlineTimer) clearTimeout(deadlineTimer); }
 }
-async function claimLoop() { const active = new Set(); while (running) { if (active.size < CONCURRENCY) { try { const response = await request("POST", "/execution-node/node/jobs/claim", { leaseMs: 120000 }); if (response.status === 200 && response.body.job) { const job = response.body.job; const controller = new AbortController(); activeControllers.add(controller); const cancelPoll = setInterval(async () => { try { const status = await request("POST", `/execution-node/node/jobs/${job.jobId}/cancellation`, { leaseId: job.leaseId }); if (status.body.cancellation?.requested) controller.abort(Object.assign(new Error("node execution cancelled"), { code: "node_execution_cancelled" })); } catch {} }, Math.max(1000, Math.min(10000, POLL_MS * 10))); const renewPoll = setInterval(() => request("POST", `/execution-node/node/jobs/${job.jobId}/renew`, { leaseId: job.leaseId, leaseMs: 120000 }).catch(() => {}), 30000); const promise = execute(job, controller).then(output => request("POST", `/execution-node/node/jobs/${job.jobId}/complete`, { leaseId: job.leaseId, result: output.result, receipt: output.receipt })).catch(error => request("POST", `/execution-node/node/jobs/${job.jobId}/fail`, { leaseId: job.leaseId, code: error.code || "local_execution_failed", message: redact(error.message) })).catch(error => { log(`job ${job.jobId} outcome delivery failed: ${error.message}`); }).finally(() => { clearInterval(cancelPoll); clearInterval(renewPoll); activeControllers.delete(controller); active.delete(promise); }); active.add(promise); } else await sleep(POLL_MS); } catch (e) { log(e.message); await sleep(Math.min(30000, POLL_MS * 2)); } } else await sleep(POLL_MS); } await Promise.allSettled([...active]); }
+async function claimLoop() { const active = new Set(); while (running) { if (active.size < effectiveConcurrency()) { try { const response = await request("POST", "/execution-node/node/jobs/claim", { leaseMs: 120000 }); if (response.status === 200 && response.body.job) { const job = response.body.job; const controller = new AbortController(); activeControllers.add(controller); const cancelPoll = setInterval(async () => { try { const status = await request("POST", `/execution-node/node/jobs/${job.jobId}/cancellation`, { leaseId: job.leaseId }); if (status.body.cancellation?.requested) controller.abort(Object.assign(new Error("node execution cancelled"), { code: "node_execution_cancelled" })); } catch {} }, Math.max(1000, Math.min(10000, POLL_MS * 10))); const renewPoll = setInterval(() => request("POST", `/execution-node/node/jobs/${job.jobId}/renew`, { leaseId: job.leaseId, leaseMs: 120000 }).catch(() => {}), 30000); const promise = execute(job, controller).then(output => request("POST", `/execution-node/node/jobs/${job.jobId}/complete`, { leaseId: job.leaseId, result: output.result, receipt: output.receipt })).catch(error => request("POST", `/execution-node/node/jobs/${job.jobId}/fail`, { leaseId: job.leaseId, code: error.code || "local_execution_failed", message: redact(error.message) })).catch(error => { log(`job ${job.jobId} outcome delivery failed: ${error.message}`); }).finally(() => { clearInterval(cancelPoll); clearInterval(renewPoll); activeControllers.delete(controller); active.delete(promise); }); active.add(promise); } else await sleep(POLL_MS); } catch (e) { log(e.message); await sleep(Math.min(30000, POLL_MS * 2)); } } else await sleep(POLL_MS); } await Promise.allSettled([...active]); }
 function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 function prepare() { nodeConfig = loadConfig(); nodeRegistry = null; workspaceRoot = nodeConfig.workspaceRoot || nodeConfig.workspace || workspaceRoot; workspaceName = nodeConfig.workspaceName || nodeConfig.name || workspaceName; if (!workspaceRoot || !workspaceName) throw new Error("workspaceRoot and workspaceName must be explicitly configured"); workspace = createWorkspace({ name: workspaceName, root: workspaceRoot, permissions: nodeConfig.permissions || { read: true, write: process.env.SIDEKICK_NODE_ALLOW_WRITES === "1", execute: process.env.SIDEKICK_NODE_ALLOW_EXECUTE === "1" }, limits: nodeConfig.limits || { maxConcurrent: CONCURRENCY } }); }
 async function main() { prepare(); log(`workspace ${workspace.name} configured with ${discoverRepositories(workspace).length} repository(s)`); await enroll(); await heartbeat(); let timer = null; const stop = () => { running = false; if (timer) clearInterval(timer); for (const controller of activeControllers) controller.abort(new Error("node shutting down")); }; timer = setInterval(() => heartbeat().catch(e => { log(e.message); stop(); }), HEARTBEAT_MS); process.on("SIGTERM", stop); process.on("SIGINT", stop); await claimLoop(); await disconnect(); }
@@ -224,4 +233,4 @@ function status() { const record = credentialStore.load(CREDENTIAL_PATH); consol
 async function doctor() { const checks = []; try { prepare(); checks.push({ name: "workspace", ok: true, repositories: discoverRepositories(workspace).length }); } catch (error) { checks.push({ name: "workspace", ok: false, error: error.message }); } const record = credentialStore.load(CREDENTIAL_PATH); checks.push({ name: "credential", ok: Boolean(record), state: record ? "present" : "not_enrolled" }); checks.push({ name: "enrollment_token", ok: Boolean(token()), state: token() ? "configured" : "not_configured" }); checks.push({ name: "descriptor_set", ok: (() => { try { descriptorSetHash(); return true; } catch { return false; } })() }); console.log(JSON.stringify({ ok: checks.every(check => check.ok), checks }, null, 2)); if (checks.some(check => !check.ok)) process.exitCode = 1; }
 async function runCommand(command) { if (command === "version") return console.log(VERSION); if (command === "status") { nodeConfig = loadConfig(); return status(); } if (command === "doctor") return doctor(); if (command === "enroll") { prepare(); await enroll(); return; } return main(); }
 if (require.main === module) runCommand(process.argv[2] || "run").catch(error => { log(error.message); process.exitCode = 1; });
-module.exports = { capabilities, descriptorSetHash, validateLocalArguments, boundedResult, createWorkspace, binaries, commandOnPath, request };
+module.exports = { capabilities, descriptorSetHash, validateLocalArguments, boundedResult, effectiveConcurrency, effectiveOutputLimit, createWorkspace, binaries, commandOnPath, request };
