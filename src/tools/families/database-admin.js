@@ -17,6 +17,15 @@ const dbStore = require("../../db");
 const pgStore = require("../../pg");
 const { enforcePathPolicy } = require("../path-policy");
 const { requireToolExecution, requireCanonicalInvocation } = require("../read-authorization");
+const { writeTextFile } = require("../../core/json-file-store");
+
+const MAX_DATABASE_EXPORT_BYTES = 50 * 1024 * 1024;
+
+function writeDatabaseExport(outputPath, data) {
+  const policyError = enforcePathPolicy(outputPath, "write");
+  if (policyError) throw new Error("Database export output is outside the configured write scope");
+  writeTextFile(outputPath, data, { maxBytes: MAX_DATABASE_EXPORT_BYTES, mode: 0o600 });
+}
 
 async function sidekick_db_backup({ path: destPath, compress }) {
   const dispatchError = requireCanonicalInvocation("db_backup");
@@ -59,7 +68,7 @@ async function sidekick_db_export({ table, format, path: outputPath, database })
       if (table) {
         const data = await pgStore.exportTable(table, fmt);
         if (outputPath) {
-          fs.writeFileSync(outputPath, data);
+          writeDatabaseExport(outputPath, data);
           return { content: [{ type: "text", text: `Exported ${table} to ${outputPath}` }] };
         }
         return { content: [{ type: "text", text: data }] };
@@ -71,7 +80,7 @@ async function sidekick_db_export({ table, format, path: outputPath, database })
       }
       const output = JSON.stringify(allData, null, 2);
       if (outputPath) {
-        fs.writeFileSync(outputPath, output);
+        writeDatabaseExport(outputPath, output);
         return { content: [{ type: "text", text: `Exported all tables to ${outputPath}` }] };
       }
       return { content: [{ type: "text", text: output }] };
@@ -79,7 +88,7 @@ async function sidekick_db_export({ table, format, path: outputPath, database })
     if (table) {
       const data = dbStore.exportTable(table, fmt);
       if (outputPath) {
-        fs.writeFileSync(outputPath, data);
+        writeDatabaseExport(outputPath, data);
         return { content: [{ type: "text", text: `Exported ${table} to ${outputPath}` }] };
       }
       return { content: [{ type: "text", text: data }] };
@@ -91,7 +100,7 @@ async function sidekick_db_export({ table, format, path: outputPath, database })
     }
     const output = JSON.stringify(allData, null, 2);
     if (outputPath) {
-      fs.writeFileSync(outputPath, output);
+      writeDatabaseExport(outputPath, output);
       return { content: [{ type: "text", text: `Exported all tables to ${outputPath}` }] };
     }
     return { content: [{ type: "text", text: output }] };
@@ -196,4 +205,4 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_db_backup, sidekick_db_restore, sidekick_db_export, sidekick_db_migrate };
+module.exports = { descriptors, sidekick_db_backup, sidekick_db_restore, sidekick_db_export, sidekick_db_migrate, writeDatabaseExport, MAX_DATABASE_EXPORT_BYTES };

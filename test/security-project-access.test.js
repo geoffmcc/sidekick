@@ -739,6 +739,30 @@ test("DuckDB analytics disables external access before caller SQL and bounds fil
   }
 });
 
+test("database exports atomically replace the output leaf instead of following symlinks", () => {
+  const databaseAdmin = require("../src/tools/families/database-admin");
+  const outputPath = path.join(dataDir, "database-export.json");
+  const linkedTargetPath = path.join(dataDir, "database-export-target.json");
+  fs.writeFileSync(linkedTargetPath, "keep target unchanged");
+  fs.symlinkSync(linkedTargetPath, outputPath);
+  const priorAllowedPaths = process.env.SIDEKICK_MCP_ALLOWED_PATHS;
+  process.env.SIDEKICK_MCP_ALLOWED_PATHS = dataDir;
+  try {
+    toolContext.runWithContext({ source: "mcp" }, () => databaseAdmin.writeDatabaseExport(outputPath, "export contents"));
+    assert.equal(fs.readFileSync(linkedTargetPath, "utf8"), "keep target unchanged");
+    assert.equal(fs.readFileSync(outputPath, "utf8"), "export contents");
+    assert.equal(fs.lstatSync(outputPath).isSymbolicLink(), false);
+
+    assert.throws(
+      () => databaseAdmin.writeDatabaseExport(outputPath, "x".repeat(databaseAdmin.MAX_DATABASE_EXPORT_BYTES + 1)),
+      /exceeds/,
+    );
+  } finally {
+    if (priorAllowedPaths === undefined) delete process.env.SIDEKICK_MCP_ALLOWED_PATHS;
+    else process.env.SIDEKICK_MCP_ALLOWED_PATHS = priorAllowedPaths;
+  }
+});
+
 test("transcription job IDs cannot traverse paths and job records are principal-scoped", async () => {
   const media = require("../src/tools/families/media");
   const jobId = "tr_00000000-0000-4000-8000-000000000001";
