@@ -579,7 +579,7 @@ test("deployment secret preflight fails closed before restart when required cred
   }
   fs.rmSync(proxyPath);
   fs.symlinkSync(apiPath, proxyPath);
-  assert.throws(() => verifyRequiredRuntimeSecrets(tempDir), /regular, non-symlink/);
+  assert.throws(() => verifyRequiredRuntimeSecrets(tempDir), /must not be a symlink/);
 });
 
 test("Agent proxy identity requires a fresh request-bound signature and rejects replay", () => {

@@ -121,6 +121,7 @@ function assertSafeFile(filePath, name) {
   }
   if (stat.isSymbolicLink()) throw new Error(`${name} secret file must not be a symlink`);
   if (!stat.isFile()) throw new Error(`${name} secret path is not a regular file`);
+  if (stat.nlink !== 1) throw new Error(`${name} secret file must have exactly one link`);
 
   // A group-readable file may be used with a dedicated service group, but
   // world-readable secret files expose credentials to unrelated local users
@@ -137,6 +138,46 @@ function assertSafeFile(filePath, name) {
   return { resolved, stat };
 }
 
+function readSecretFile(filePath, name) {
+  const safeFile = assertSafeFile(filePath, name);
+  let fd;
+  try {
+    const flags = fs.constants.O_RDONLY |
+      (fs.constants.O_NOFOLLOW || 0) |
+      (fs.constants.O_NONBLOCK || 0);
+    fd = fs.openSync(safeFile.resolved, flags);
+    const opened = fs.fstatSync(fd);
+    if (!opened.isFile() || opened.nlink !== 1 ||
+        (safeFile.stat.dev !== opened.dev || safeFile.stat.ino !== opened.ino) ||
+        (!isWindows() && ((opened.mode & 0o022) !== 0 || (opened.mode & 0o004) !== 0))) {
+      throw new Error(`${name} secret file changed or became unsafe while opening`);
+    }
+    if (opened.size > MAX_SECRET_BYTES) throw new Error(`${name} secret file is too large`);
+    const buffer = Buffer.alloc(MAX_SECRET_BYTES + 1);
+    let bytesRead = 0;
+    while (bytesRead < buffer.length) {
+      const count = fs.readSync(fd, buffer, bytesRead, buffer.length - bytesRead, null);
+      if (count === 0) break;
+      bytesRead += count;
+    }
+    if (bytesRead > MAX_SECRET_BYTES) throw new Error(`${name} secret file is too large`);
+    let value = buffer.subarray(0, bytesRead).toString("utf8");
+    value = value.replace(/\r?\n$/, "");
+    if (!value || value.includes("\0")) throw new Error(`${name} secret file is invalid`);
+    return value;
+  } catch (error) {
+    if (error.message === `${name} secret file is too large` ||
+        error.message === `${name} secret file is invalid` ||
+        error.message === `${name} secret file changed or became unsafe while opening` ||
+        error.message === `${name} secret file must have exactly one link`) throw error;
+    throw new Error(`${name} secret file could not be read`);
+  } finally {
+    if (fd !== undefined) {
+      try { fs.closeSync(fd); } catch {}
+    }
+  }
+}
+
 function secretFilePath(name) {
   const explicit = process.env[`${name}_FILE`];
   if (explicit !== undefined && explicit.trim() !== "") return explicit.trim();
@@ -150,49 +191,13 @@ function readSecret(name, options = {}) {
   const explicitFile = process.env[`${name}_FILE`];
   const filePath = secretFilePath(name);
   if (filePath) {
-    let safeFile;
     try {
-      safeFile = assertSafeFile(filePath, name);
+      return readSecretFile(filePath, name);
     } catch (error) {
       // A shared secret directory may legitimately omit optional integrations.
       // Explicit per-secret paths and required credentials always fail closed.
       if (!explicitFile && !options.required && /secret (?:file|directory) is unavailable$/.test(error.message)) return "";
       throw error;
-    }
-    let fd;
-    try {
-      const flags = fs.constants.O_RDONLY |
-        (fs.constants.O_NOFOLLOW || 0) |
-        (fs.constants.O_NONBLOCK || 0);
-      fd = fs.openSync(safeFile.resolved, flags);
-      const opened = fs.fstatSync(fd);
-      if (!opened.isFile() ||
-          (safeFile.stat.dev !== opened.dev || safeFile.stat.ino !== opened.ino) ||
-          (!isWindows() && ((opened.mode & 0o022) !== 0 || (opened.mode & 0o004) !== 0))) {
-        throw new Error(`${name} secret file changed or became unsafe while opening`);
-      }
-      if (opened.size > MAX_SECRET_BYTES) throw new Error(`${name} secret file is too large`);
-      const buffer = Buffer.alloc(MAX_SECRET_BYTES + 1);
-      let bytesRead = 0;
-      while (bytesRead < buffer.length) {
-        const count = fs.readSync(fd, buffer, bytesRead, buffer.length - bytesRead, null);
-        if (count === 0) break;
-        bytesRead += count;
-      }
-      if (bytesRead > MAX_SECRET_BYTES) throw new Error(`${name} secret file is too large`);
-      let value = buffer.subarray(0, bytesRead).toString("utf8");
-      value = value.replace(/\r?\n$/, "");
-      if (!value || value.includes("\0")) throw new Error(`${name} secret file is invalid`);
-      return value;
-    } catch (error) {
-      if (error.message === `${name} secret file is too large` ||
-          error.message === `${name} secret file is invalid` ||
-          error.message === `${name} secret file changed or became unsafe while opening`) throw error;
-      throw new Error(`${name} secret file could not be read`);
-    } finally {
-      if (fd !== undefined) {
-        try { fs.closeSync(fd); } catch {}
-      }
     }
   }
 
@@ -218,4 +223,4 @@ function isFileBacked(name) {
   return Boolean(secretFilePath(name));
 }
 
-module.exports = { FILE_SECRET_NAMES, SECRET_FILE_NAMES, assertSafeSecretDirectory, readSecret, hasSecret, isFileBacked };
+module.exports = { FILE_SECRET_NAMES, SECRET_FILE_NAMES, assertSafeSecretDirectory, readSecretFile, readSecret, hasSecret, isFileBacked };
