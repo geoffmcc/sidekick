@@ -27,7 +27,6 @@ const crypto = require("crypto");
 const path = require("path");
 
 const { PROTOCOL_VERSION, HELPER_VERSION } = require("./openvino-config");
-const { childProcessEnv } = require("../security/child-process");
 
 function killWindowsProcessTree(pid, { spawnSyncImpl, systemRoot = process.env.SystemRoot || process.env.SYSTEMROOT || "C:\\Windows" } = {}) {
   const run = spawnSyncImpl || require("child_process").spawnSync;
@@ -35,7 +34,9 @@ function killWindowsProcessTree(pid, { spawnSyncImpl, systemRoot = process.env.S
   return run(executable, ["/T", "/F", "/PID", String(pid)], {
     shell: false,
     timeout: 5000,
-    env: childProcessEnv(),
+    // taskkill is addressed by absolute path; it needs no inherited PATH or
+    // Sidekick service environment. Keep only the Windows system root.
+    env: { SYSTEMROOT: systemRoot },
   });
 }
 
