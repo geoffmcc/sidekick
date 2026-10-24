@@ -4,7 +4,7 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const path = require("node:path");
-const { binaries, commandOnPath, shellIsolationStatus } = require("../src/node/agent");
+const { binaries, commandOnPath, shellIsolationStatus, shellIsolationDoctorCheck } = require("../src/node/agent");
 const { resolveCommandOnPath } = require("../src/security/command-lookup");
 const { ownedTempRoot, withEnv } = require("./helpers/isolated");
 
@@ -20,6 +20,12 @@ test("execution-node shell isolation capability is explicit and does not disclos
   assert.equal(status.configured ? status.code === null : typeof status.code === "string", true);
   assert.deepEqual(Object.keys(status).sort(), ["backend", "code", "configured"]);
   assert.doesNotMatch(JSON.stringify(status), /[A-Za-z]:\\|\/usr\/|\/home\//, "isolation diagnostics must not reveal binary or workspace paths");
+  assert.deepEqual(shellIsolationDoctorCheck({ permissions: { execute: true } }, { configured: false, code: "unsupported_platform" }), {
+    name: "shell_isolation", ok: false, required: true, configured: false, code: "unsupported_platform",
+  }, "execute-enabled nodes must diagnose unavailable OS isolation");
+  assert.deepEqual(shellIsolationDoctorCheck({ permissions: { execute: false } }, { configured: false, code: "unsupported_platform" }), {
+    name: "shell_isolation", ok: true, required: false, configured: false, code: "unsupported_platform",
+  }, "read-only nodes may operate without shell isolation");
 });
 
 test("execution-node binary discovery inspects PATH without launching helper processes", async () => {
