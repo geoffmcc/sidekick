@@ -844,3 +844,18 @@ about current lockfile vulnerability status.
   --overall-timeout-ms=600000 --json` passed (1 suite, 33 API/security
   assertions, 0 failures, 0 skips; 144.7 seconds), including the live task
   response cache-header assertion and task ownership/recovery boundaries.
+
+## Executable packs and declarative workflow boundaries: 2026-10-24 (SK-043)
+
+- `node test/run-all.js test/modules-third-party-lifecycle.test.js
+  test/capability-packs.test.js test/pack-contract.test.js
+  test/workflow-definitions.test.js --concurrency=1
+  --overall-timeout-ms=900000 --json` passed all 4 suites, 0 failures, 0 skips.
+- Coverage includes no third-party entry execution during inspection/install,
+  fail-closed entry loading and direct activation, tamper and first-party
+  provenance checks, pack workflow declaration validation, per-step dispatcher
+  authorization, nested workflow authority attenuation, and resume identity
+  rejection.
+- Third-party executable modules remain unavailable because there is no
+  enforced OS isolation backend. Bundled first-party modules share Core's
+  privileges and are not isolated; that trust exception remains explicit.

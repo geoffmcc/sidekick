@@ -491,3 +491,24 @@ proxy responses preserve the Agent response headers.
 The live Agent Bridge regression asserts no-store on a task-creation response
 and reruns project membership, task ownership, pause/cancel, delegation,
 recovery, lineage, and SSE boundary checks. No authorization behavior changed.
+
+### Executable packs and declarative workflows (2026-10-24, SK-043)
+
+Reviewed pack installation, module entry resolution, activation and restore,
+first-party provenance, workflow enablement, and workflow tool dispatch.
+Third-party executable module entries fail closed before package code is
+required or descriptor builders are called. Integrity hashes and package
+provenance do not substitute for isolation. No supported OS isolation backend
+is currently present, so third-party executable modules remain unavailable.
+Bundled first-party modules are a documented trusted in-process exception and
+share Core's privileges; they are not sandboxed.
+
+Pack workflows are declarative definitions, installed disabled and only made
+runnable when their pack is explicitly enabled. Each step is routed through the
+canonical dispatcher using the current execution identity, permission,
+project, policy, and approval context. Workflow tests verify that a misleading
+`read_only` label cannot authorize mutation, nested workflows retain parent
+authority, and resume options cannot manufacture identity. No executable-pack
+isolation bypass or workflow authority bypass was confirmed in the reviewed
+paths. This does not establish that untrusted executable packs are contained;
+they are blocked from execution until OS-enforced isolation exists.
