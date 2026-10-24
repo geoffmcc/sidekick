@@ -229,8 +229,20 @@ function consumeEnrollmentToken(token, workerId) {
   if (!row) throw new EnrollmentError("Invalid enrollment token");
   if (row.consumed_at) throw new EnrollmentError("Enrollment token already used");
   if (new Date(row.expires_at) < new Date()) throw new EnrollmentError("Enrollment token expired");
-  db.prepare("UPDATE compute_enrollment_tokens SET consumed_at = ?, consumed_by_worker = ? WHERE token_id = ?")
-    .run(nowIso(), workerId, row.token_id);
+  const consumedAt = nowIso();
+  // Treat redemption as a compare-and-set. Multiple Core processes may read
+  // the same unused token concurrently; only the process that atomically
+  // changes an unconsumed, unexpired row may enroll a worker.
+  const claim = db.prepare(`
+    UPDATE compute_enrollment_tokens
+    SET consumed_at = ?, consumed_by_worker = ?
+    WHERE token_id = ? AND consumed_at IS NULL AND expires_at > ?
+  `).run(consumedAt, workerId, row.token_id, consumedAt);
+  if (claim.changes !== 1) {
+    const current = db.prepare("SELECT consumed_at, expires_at FROM compute_enrollment_tokens WHERE token_id = ?").get(row.token_id);
+    if (current?.consumed_at) throw new EnrollmentError("Enrollment token already used");
+    throw new EnrollmentError("Enrollment token expired");
+  }
   return {
     tokenId: row.token_id,
     trustLevel: row.trust_level,

@@ -577,6 +577,34 @@ test('consumeEnrollmentToken rejects already-used token', () => {
   assert.throws(() => workerManager.consumeEnrollmentToken(result.token, 'node-2'), /already used/, 'rejects reuse');
 });
 
+test('consumeEnrollmentToken rejects a concurrent redemption that loses the atomic claim', () => {
+  const result = workerManager.createEnrollmentToken({ displayName: 'concurrent-use', expiresInMs: 600000 });
+  const db = dbStore.getDb();
+  const originalPrepare = db.prepare;
+  let claimSql = '';
+  db.prepare = function(sql) {
+    if (/UPDATE compute_enrollment_tokens\s+SET consumed_at/i.test(sql)) {
+      claimSql = sql;
+      // Model another process atomically consuming the row after this call's
+      // initial SELECT but before its compare-and-set UPDATE.
+      return { run: (...params) => {
+        originalPrepare.call(db, "UPDATE compute_enrollment_tokens SET consumed_at = ?, consumed_by_worker = ? WHERE token_id = ?")
+          .run(params[0], 'winning-node', params[2]);
+        return { changes: 0 };
+      } };
+    }
+    return originalPrepare.call(this, sql);
+  };
+  try {
+    assert.throws(() => workerManager.consumeEnrollmentToken(result.token, 'losing-node'), /already used/,
+      'a stale reader must not proceed when its conditional update claims no row');
+    assert.match(claimSql, /consumed_at IS NULL/i);
+    assert.match(claimSql, /expires_at > \?/i);
+  } finally {
+    db.prepare = originalPrepare;
+  }
+});
+
 test('consumeEnrollmentToken rejects expired token', () => {
   const result = workerManager.createEnrollmentToken({ displayName: 'expired', expiresInMs: 60000 });
   dbStore.getDb().prepare('UPDATE compute_enrollment_tokens SET expires_at = ? WHERE token_id = ?').run(new Date(Date.now() - 1000).toISOString(), result.tokenId);
