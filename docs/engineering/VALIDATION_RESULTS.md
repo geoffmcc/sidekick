@@ -811,3 +811,14 @@ about current lockfile vulnerability status.
 - No bypass was confirmed in these tested paths. Legacy non-browser Basic-auth
   clients may omit Origin/Fetch Metadata when no dashboard session cookie is
   present; this compatibility boundary remains a review item.
+
+## Generic credential response caching: 2026-10-24 (SK-040)
+
+- Fixed generic credential create and rotate responses to emit
+  `Cache-Control: no-store` and `Pragma: no-cache` before returning bearer
+  token material.
+- `node test/run-all.js test/security-dashboard-service-credentials.test.js
+  test/security-dashboard-principal.test.js --concurrency=1
+  --overall-timeout-ms=600000 --json` passed 2 suites, 0 failures, 0 skips.
+  Credential tests verify no-store headers on issuance/rotation, prior-token
+  invalidation, and existing scope/ownership denials.

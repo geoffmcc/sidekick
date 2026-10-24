@@ -448,3 +448,19 @@ Legacy Basic-auth API clients without a session cookie retain compatibility
 when they omit browser Origin/Fetch Metadata headers; this behavior remains a
 known compatibility boundary and should be reconsidered if browser clients
 continue to rely on Basic auth directly.
+
+### Generic credential response caching (2026-10-24, SK-040)
+
+The generic Dashboard credential creation and rotation routes returned newly
+minted bearer tokens in JSON without an explicit no-store response policy. The
+parallel managed service-credential flow already marked its token response
+`Cache-Control: no-store`, but the generic endpoints did not. A browser cache or
+intermediary retaining either response could extend exposure beyond the
+intended one-time display.
+
+Both generic credential issuance paths now set `Cache-Control: no-store` and
+`Pragma: no-cache` before returning token material. Existing ownership,
+scope-attenuation, and revocation checks are unchanged. Regressions assert both
+headers on successful create and rotation responses, assert rotation invalidates
+the previous credential, and retain negative tests for cross-principal and
+out-of-scope credential operations.

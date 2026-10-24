@@ -252,6 +252,8 @@ test("generic credential routes cannot create, rotate, or revoke another princip
   }, selfCredential);
   assert.equal(selfCredential.statusCode, 201, "the Owner retains credential creation within its own authority");
   assert.deepEqual(selfCredential.body.credential.scopes, ["secrets.read"]);
+  assert.equal(selfCredential.headers["Cache-Control"], "no-store", "credential creation tokens must not be cached");
+  assert.equal(selfCredential.headers.Pragma, "no-cache", "credential creation tokens must not be cached by legacy intermediaries");
 
   const ownerCredential = authentication.createCredential({
     principalId: owner.principal_id,
@@ -275,6 +277,16 @@ test("generic credential routes cannot create, rotate, or revoke another princip
   }, rotate);
   assert.equal(rotate.statusCode, 403, "an Administrator cannot rotate another principal's credential");
   assert.ok(authentication.authenticateCredential(ownerCredential.token));
+
+  const ownerRotate = response();
+  handlers.get("POST /api/auth/credentials/:id/rotate")({
+    authPrincipal: owner,
+    params: { id: ownerCredential.credential.credential_id },
+  }, ownerRotate);
+  assert.equal(ownerRotate.statusCode, 201, "the owning principal can rotate its own credential");
+  assert.equal(ownerRotate.headers["Cache-Control"], "no-store", "rotated credential tokens must not be cached");
+  assert.equal(ownerRotate.headers.Pragma, "no-cache", "rotated credential tokens must not be cached by legacy intermediaries");
+  assert.equal(authentication.authenticateCredential(ownerCredential.token), null, "rotation invalidates the old token");
 });
 
 test("an MCP agent can receive standard tool access without pack-management authority", () => {
