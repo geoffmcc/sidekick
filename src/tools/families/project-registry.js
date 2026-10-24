@@ -11,10 +11,11 @@
 // Never imports tools-legacy.js.
 
 const { z } = require("zod");
-const { requireCanonicalInvocation } = require("../read-authorization");
+const { requireCanonicalInvocation, requirePermission } = require("../read-authorization");
 const platformKernel = require("../../platform/kernel");
 const { canonicalizeProjectName } = require("../../core/project-identity");
 const toolContext = require("../context");
+const projectAccess = require("../../core/project-access");
 
 function textResult(text) {
   return { content: [{ type: "text", text }] };
@@ -28,17 +29,31 @@ async function sidekick_project_registry({ action, project, state, limit, displa
   const authorizationError = requireCanonicalInvocation("project_registry");
   if (authorizationError) return authorizationError;
   const execution = toolContext.getExecutionContext();
-  if (!execution.authIdentity?.principal_id && execution.source !== "test") {
-    return { content: [{ type: "text", text: "Authenticated principal required for project registry access" }], isError: true, code: "unauthenticated" };
-  }
+  const principalId = execution.authIdentity?.principal_id || null;
+  const scopes = execution.authIdentity?.scopes;
+  const delegationId = execution.authIdentity?.delegation_id || null;
+  const readAction = ["list", "get", "sources"].includes(action);
+  const requiredPermission = readAction ? "memory.read" : "projects.access.manage";
+  const permissionError = requirePermission(requiredPermission, { tool: "project_registry", action, project: project || null });
+  if (permissionError) return permissionError;
   try {
     switch (action) {
       case "list": {
-        const projects = platformKernel.listProjects({ state, limit });
+        const projects = platformKernel.listProjects({ state, limit: Math.min(Number(limit) || 100, 1000) });
+        if (!projectAccess.hasGlobalProjectAccess(principalId, scopes, delegationId)) {
+          const accessible = new Set(projectAccess.listAccessibleProjectsForPermission(
+            principalId, "memory.read", scopes, delegationId,
+          ).map(row => row.project_id));
+          const visibleProjects = projects.filter(row => accessible.has(row.project_id));
+          return textResult(JSON.stringify({ count: visibleProjects.length, projects: visibleProjects }, null, 2));
+        }
         return textResult(JSON.stringify({ count: projects.length, projects }, null, 2));
       }
       case "get": {
         if (!project) return errorResult("project required for get");
+        if (!projectAccess.hasProjectPermission(principalId, project, "memory.read", "read", scopes, delegationId)) {
+          return { content: [{ type: "text", text: "Project registry access denied" }], isError: true, code: "project_access_denied" };
+        }
         const row = platformKernel.getProject(project);
         if (!row) return errorResult(`Project not found: ${project}`);
         return textResult(JSON.stringify(row, null, 2));
@@ -62,6 +77,9 @@ async function sidekick_project_registry({ action, project, state, limit, displa
       }
       case "sources": {
         if (!project) return errorResult("project required for sources");
+        if (!projectAccess.hasProjectPermission(principalId, project, "memory.read", "read", scopes, delegationId)) {
+          return { content: [{ type: "text", text: "Project registry access denied" }], isError: true, code: "project_access_denied" };
+        }
         const sources = platformKernel.getProjectSources(project);
         return textResult(JSON.stringify({ project: canonicalizeProjectName(project), count: sources.length, sources }, null, 2));
       }

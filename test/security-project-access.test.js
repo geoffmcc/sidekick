@@ -1280,6 +1280,29 @@ test("dispatcher requires an attributable principal for every non-low-risk opera
   assert.match(authorized.content[0].text, /identity_ok/);
 });
 
+test("project registry reads require memory authority and filter by current project membership", async () => {
+  const anonymous = await dispatcher.callMcpTool("project_registry", { action: "list" });
+  assert.equal(anonymous.isError, true);
+  assert.equal(anonymous.code, "unauthenticated");
+
+  const operatorContext = { authIdentity: { principal_id: operator.principal_id, principal_type: "human" } };
+  const listing = await dispatcher.callMcpTool("project_registry", { action: "list" }, operatorContext);
+  assert.equal(listing.isError, undefined);
+  const listedProjects = JSON.parse(listing.content[0].text).projects;
+  assert.deepEqual(listedProjects.map(project => project.project_id), ["memory_a"]);
+  assert.doesNotMatch(listing.content[0].text, /Project B private/);
+
+  const ownProject = await dispatcher.callMcpTool("project_registry", { action: "get", project: "memory_a" }, operatorContext);
+  assert.equal(ownProject.isError, undefined);
+  const foreignProject = await dispatcher.callMcpTool("project_registry", { action: "get", project: "memory_b" }, operatorContext);
+  assert.equal(foreignProject.isError, true);
+  assert.equal(foreignProject.code, "project_access_denied");
+  assert.doesNotMatch(foreignProject.content?.[0]?.text || "", /Project B private/);
+  const foreignSources = await dispatcher.callMcpTool("project_registry", { action: "sources", project: "memory_b" }, operatorContext);
+  assert.equal(foreignSources.isError, true);
+  assert.equal(foreignSources.code, "project_access_denied");
+});
+
 test("canonical memory dispatcher blocks cross-project reads before returning content", async () => {
   const result = await dispatcher.callMcpTool("memory", { action: "get", id: secretB.id, project: "memory_b" }, {
     authIdentity: { principal_id: operator.principal_id, principal_type: "human" },

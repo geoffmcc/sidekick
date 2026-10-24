@@ -139,6 +139,9 @@ function requiredToolPermission(descriptor, args = {}) {
     const readActions = new Set(["list", "available", "show", "inspect", "validate", "health", "doctor"]);
     return readActions.has(args.action || "list") ? "packs.read" : "packs.manage";
   }
+  if (descriptor.name === "project_registry") {
+    return ["list", "get", "sources"].includes(args.action) ? "memory.read" : "projects.access.manage";
+  }
   if (descriptor.name === "workflow") {
     return ["run", "resume"].includes(args.action) ? "workflows.execute" : "workflows.read";
   }
@@ -287,7 +290,9 @@ async function executeResolvedTool(descriptor, args, context, requestedName = de
   const requiresScopedIdentity = (descriptor.name === "workflow"
     && ["list", "show"].includes(executionArgs.action || "list"))
     || (descriptor.name === "capability"
-      && ["show", "inspect", "validate", "health", "doctor", "maturity"].includes(executionArgs.action));
+      && ["show", "inspect", "validate", "health", "doctor", "maturity"].includes(executionArgs.action))
+    || (descriptor.name === "project_registry"
+      && ["list", "get", "sources"].includes(executionArgs.action));
   const requiresIdentity = !options.testExecution && (
     descriptor.name === "secret" || descriptor.name === "predict" || effectiveRisk !== "low" || requiresScopedIdentity
   );
