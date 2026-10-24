@@ -295,14 +295,14 @@ function stopServices(result) {
   return servicesStopped(serviceStates(deploymentServices()));
 }
 
-function preflightRuntimeSecrets(result) {
-  const helper = path.join(APP_DIR, 'scripts', 'ensure-secret-config.sh');
+function preflightRuntimeSecrets(result, appDir = APP_DIR, field = 'runtime_secret_preflight') {
+  const helper = path.join(appDir, 'scripts', 'ensure-secret-config.sh');
   if (!fs.existsSync(helper)) {
     fail(result, 'runtime secret preflight is unavailable; refusing to stop services');
     return false;
   }
-  const check = run('bash', [helper, APP_DIR], { cwd: APP_DIR });
-  result.runtime_secret_preflight = check.ok ? 'ok' : 'failed';
+  const check = run('bash', [helper, appDir], { cwd: appDir });
+  result[field] = check.ok ? 'ok' : 'failed';
   if (!check.ok) {
     fail(result, 'runtime secret preflight failed; services were not stopped', { stderr: check.stderr });
     return false;
@@ -498,6 +498,9 @@ function convert() {
     result.dependency_install = install.ok ? 'ok' : 'failed';
     if (!install.ok) return fail(result, 'staging dependency installation failed', { stderr: install.stderr });
 
+    copyIfExists(path.join(APP_DIR, '.env'), path.join(staging, '.env'));
+    if (!preflightRuntimeSecrets(result, staging, 'staging_runtime_secret_preflight')) return result;
+
     for (const svc of SERVICES) {
       const stop = service('stop', svc);
       result.restarted_services.push({ service: svc, status: stop.ok ? 'stopped' : 'stop_failed' });
@@ -516,6 +519,9 @@ function convert() {
 
     copyIfExists(path.join(backup, '.env'), path.join(staging, '.env'));
     copyIfExists(path.join(backup, 'data'), path.join(staging, 'data'));
+    if (!preflightRuntimeSecrets(result, staging, 'staged_runtime_secret_preflight')) {
+      throw new Error('staged runtime secret preflight failed; restoring the existing installation');
+    }
     fs.chmodSync(path.join(staging, '.env'), 0o600);
     ensureComposeIdentity(path.join(staging, '.env'));
     const chown = run('chown', ['-R', 'sidekick:sidekick', staging]);

@@ -69,7 +69,8 @@ function makeMock(overrides = {}) {
     if (cmd === 'df') return 'Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/root 9999999 1 9999999 1% /\n';
     if (cmd === 'chown') return '';
     if (cmd === 'bash' && args[0].endsWith('ensure-secret-config.sh')) {
-      if (state.failSecretPreflight) fail('SIDEKICK_AGENT_PROXY_KEY is missing');
+      state.secretPreflightCalls = (state.secretPreflightCalls || 0) + 1;
+      if (state.failSecretPreflight || (state.failSecondSecretPreflight && state.secretPreflightCalls === 2)) fail('SIDEKICK_AGENT_PROXY_KEY is missing');
       return 'preflight ok\n';
     }
     if (cmd === 'npm') {
@@ -104,6 +105,7 @@ function makeMock(overrides = {}) {
         fs.mkdirSync(path.join(target, 'scripts'), { recursive: true });
         fs.writeFileSync(path.join(target, 'package-lock.json'), '{}');
         fs.writeFileSync(path.join(target, 'scripts', 'seed-knowledge.js'), '');
+        fs.writeFileSync(path.join(target, 'scripts', 'ensure-secret-config.sh'), '#!/usr/bin/env bash\n');
         return 'cloned\n';
       }
       if (joined === 'branch --show-current') return `${state.branch}\n`;
@@ -219,9 +221,15 @@ try {
 
   resetApp();
   fs.rmSync(path.join(appDir, '.git'), { recursive: true, force: true });
-  makeMock();
+  state = makeMock();
   result = gitDeploy.convert();
   assert.strictEqual(result.status, 'ok', 'non-Git conversion should succeed');
+  assert.strictEqual(result.staging_runtime_secret_preflight, 'ok', 'conversion should validate credentials before stopping services');
+  assert.strictEqual(result.staged_runtime_secret_preflight, 'ok', 'conversion should validate staged credentials before switching installs');
+  assert.strictEqual(state.secretPreflightCalls, 2, 'conversion should validate current inputs and the prepared staged environment');
+  const conversionPreflightIndex = state.calls.findIndex(command => command.includes(path.join(result.staging, 'scripts', 'ensure-secret-config.sh')));
+  const conversionStopIndex = state.calls.findIndex(command => command.includes('systemctl stop sidekick-dashboard'));
+  assert.ok(conversionPreflightIndex >= 0 && conversionPreflightIndex < conversionStopIndex, 'conversion secret preflight must precede service interruption');
   assert.ok(fs.existsSync(result.backup), 'conversion should create durable backup');
   assert.ok(fs.existsSync(result.rollback), 'conversion should retain rollback directory');
   assert.strictEqual(result.push_url, 'DISABLED', 'conversion should disable push URL');
@@ -231,6 +239,22 @@ try {
   makeMock({ failClone: true });
   result = gitDeploy.convert();
   assert.strictEqual(result.status, 'failed', 'clone failure should fail conversion');
+
+  resetApp();
+  fs.rmSync(path.join(appDir, '.git'), { recursive: true, force: true });
+  state = makeMock({ failSecretPreflight: true });
+  result = gitDeploy.convert();
+  assert.strictEqual(result.status, 'failed', 'missing runtime credentials should block conversion');
+  assert.strictEqual(result.staging_runtime_secret_preflight, 'failed');
+  assert.ok(!state.calls.some(command => command.includes('systemctl stop')), 'conversion preflight failure must not interrupt services');
+
+  resetApp();
+  fs.rmSync(path.join(appDir, '.git'), { recursive: true, force: true });
+  state = makeMock({ failSecondSecretPreflight: true });
+  result = gitDeploy.convert();
+  assert.strictEqual(result.status, 'failed', 'staged runtime credentials must be revalidated before switching installs');
+  assert.strictEqual(result.staged_runtime_secret_preflight, 'failed');
+  assert.strictEqual(result.rollback_status, 'completed', 'failed staged preflight should restart the existing install');
 
   resetApp();
   fs.rmSync(path.join(appDir, '.git'), { recursive: true, force: true });
