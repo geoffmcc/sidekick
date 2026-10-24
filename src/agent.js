@@ -1702,7 +1702,6 @@ const beginTaskRun = createTaskRunner({
     if (handoffId) {
       const handoff = dbStore.getHandoff(handoffId);
       if (!handoff) throw new Error("handoff not found");
-      if (!handoffRepositoryPathAllowed(handoff)) throw new Error("handoff repository path is blocked by filesystem policy");
       const authIdentity = parentContext?.authIdentity || null;
       const requestedProject = parentContext?.project || null;
       if ((handoff.project || null) !== requestedProject) throw new Error("handoff project does not match task project");
@@ -1717,6 +1716,7 @@ const beginTaskRun = createTaskRunner({
       if (!canManageHandoffs && handoff.owner_principal_id !== ownerId && handoff.created_by_principal_id !== authIdentity.principal_id) {
         throw new Error("handoff principal scope does not match task principal");
       }
+      if (!handoffRepositoryPathAllowed(handoff)) throw new Error("handoff repository path is blocked by filesystem policy");
     }
     const task = durableTaskModel.createTask({
       task_id: taskId,
