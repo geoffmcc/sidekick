@@ -420,14 +420,17 @@ records before sending their content to the embedding store. Legacy non-memory
 vector payloads are also sanitized before context recall; existing stored
 payloads are not rewritten.
 Handoff provenance verification and repository-backed checkpoint, readiness,
-and preflight operations apply the MCP or Dashboard filesystem path policy
+preflight, and claim operations apply the MCP or Dashboard filesystem path policy
 before Git reads a workspace named by a request or persisted handoff. The MCP
 handoff tool also refuses to persist a packet repository path outside its
 configured allow-list. Session
 workspaces are checked by the session tool before they are persisted or reused
 for Git-backed checkpoints. Agent workspaces are rechecked during task
-attachment, recovery, and automatic continuity checkpoints. Direct database-
-store callers remain under review.
+attachment, recovery, and automatic continuity checkpoints. The database
+handoff store is internal to trusted Sidekick services; production callers that
+can trigger Git-backed operations check the relevant MCP, Dashboard, or Agent
+path policy first. The claim path specifically checks the saved checkpoint
+workspace before the store performs its internal readiness/Git check.
 Handoff claim tokens are one-time bearer capabilities: dispatcher exposure is
 allowlisted for authenticated sessions, while generic results and persisted
 tool logs redact them. An integration regression covers token delivery, log

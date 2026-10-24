@@ -656,3 +656,19 @@ shared helper that restricts removal to the named `mkdtemp` child of the OS temp
 directory, rejects a replaced/symlink fixture root, and unlinks symlinks rather
 than following them. The architecture check now passes all 420 suites, and the
 systemd hardening suite passes on Windows.
+
+### Handoff claim repository path policy (2026-10-24, SK-035)
+
+The handoff call-site audit found `claimHandoff` evaluates readiness and reads
+the checkpoint repository internally, while the MCP `claim` action had not
+checked that persisted workspace against the caller's filesystem policy. The
+MCP action now rejects the request before the store call when the checkpoint
+workspace is outside the allowed roots. A regression prepares a disposable
+Git repository outside the configured MCP allow-list, captures a ready
+handoff checkpoint there, and verifies that the authenticated claim fails
+with a path-policy error and leaves the handoff unclaimed.
+
+`node test/run-all.js test/security-project-access.test.js --concurrency=1
+--overall-timeout-ms=300000` passed (1 suite, 0 failures). This validates the
+MCP entry path; it does not make the internal database store a standalone
+authorization boundary or cover arbitrary code executing inside Core.

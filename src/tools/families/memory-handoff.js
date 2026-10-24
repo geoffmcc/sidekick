@@ -25,7 +25,7 @@ function handoffRepositoryPathError(handoff, action, requestedPath) {
     if (requestedPath || packetPath) paths.add(requestedPath || packetPath);
   }
   if (action === "refresh_evidence" && requestedPath) paths.add(requestedPath);
-  if (["start_here", "readiness", "preflight", "simulate_resume", "begin_resume"].includes(action)) {
+  if (["start_here", "readiness", "preflight", "simulate_resume", "begin_resume", "claim"].includes(action)) {
     if (requestedPath || checkpointPath) paths.add(requestedPath || checkpointPath);
     if (["preflight", "simulate_resume", "begin_resume"].includes(action) && packetPath) paths.add(packetPath);
   }

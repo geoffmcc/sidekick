@@ -1658,6 +1658,12 @@ test("handoff provenance verification enforces the caller filesystem path policy
   process.env.SIDEKICK_DASHBOARD_ALLOWED_PATHS = allowedRoot;
   process.env.SIDEKICK_ALLOWED_PATHS = allowedRoot;
   try {
+    const { execFileSync } = require("node:child_process");
+    fs.writeFileSync(path.join(outsideRoot, "README.md"), "Synthetic out-of-scope handoff claim fixture\n");
+    execFileSync("git", ["init", "-b", "main", outsideRoot], { stdio: "ignore" });
+    execFileSync("git", ["-C", outsideRoot, "add", "README.md"], { stdio: "ignore" });
+    execFileSync("git", ["-C", outsideRoot, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "-m", "out-of-scope claim fixture"], { stdio: "ignore" });
+
     const handoff = db.saveHandoff({
       project: "memory_a",
       content: "Synthetic fixture with a repository outside the caller's path scope.",
@@ -1708,6 +1714,40 @@ test("handoff provenance verification enforces the caller filesystem path policy
       authPrincipal: { principal_id: owner.principal_id, scopes: null },
     }, response);
     assert.equal(response.statusCode, 403, "Dashboard preflight must not inspect a handoff repo outside its filesystem policy");
+
+    const claimHandoff = db.saveHandoff({
+      project: "memory_a",
+      content: "Synthetic out-of-scope repository claim fixture.",
+      owner_principal_id: owner.principal_id,
+      created_by_principal_id: owner.principal_id,
+      packet: {
+        objective: "Reject claim of an out-of-scope repository",
+        status: "active",
+        current_state: "Synthetic fixture",
+        completed_steps: ["Created disposable repository"],
+        next_step: "Continue after an authorized claim",
+        acceptance_criteria: ["Claiming checks repository path policy before readiness inspection"],
+        provenance: {
+          working_directory: outsideRoot,
+          commit_sha: execFileSync("git", ["-C", outsideRoot, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
+          branch: "main",
+        },
+        evidence: [{ type: "test", label: "synthetic claim fixture", status: "passed", observed_at: new Date().toISOString() }],
+      },
+    });
+    db.captureHandoffCheckpoint(claimHandoff.id, { working_directory: outsideRoot });
+    db.refreshHandoffEvidence(claimHandoff.id, { working_directory: outsideRoot });
+    db.transitionHandoff(claimHandoff.id, "ready", { expectedVersion: claimHandoff.version });
+    const claimResult = await dispatcher.callMcpTool("handoff", {
+      action: "claim", id: claimHandoff.id, project: "memory_a", owner: owner.principal_id,
+    }, {
+      authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+      project: "memory_a",
+      sessionId: "synthetic-handoff-claim-path-policy-session",
+    });
+    assert.equal(claimResult.isError, true, JSON.stringify(claimResult));
+    assert.match(claimResult.content[0].text, /Path blocked by policy/, JSON.stringify(claimResult));
+    assert.equal(db.getHandoff(claimHandoff.id).claim, null, "an out-of-scope repository must be rejected before claim/readiness work");
 
     const sessionResult = await dispatcher.callMcpTool("session", {
       action: "begin", goal: "Reject an out-of-scope workspace", project: "memory_a", working_directory: outsideRoot,

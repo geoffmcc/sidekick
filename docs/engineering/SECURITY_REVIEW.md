@@ -256,8 +256,14 @@ The canonical session tool also checks an explicit workspace at session begin
 and rechecks persisted workspaces before checkpoint, finalization, or partial-
 session resume. Agent task attachment, restart recovery, and automatic
 continuity checkpoints now recheck the Agent filesystem path policy before
-reading or persisting repository state. Direct database-store callers remain
-under review before this finding can be closed platform-wide.
+reading or persisting repository state. A call-site audit found the MCP
+`claim` action was missing a check even though `claimHandoff` internally
+evaluates repository-backed readiness. The action now checks the persisted
+checkpoint workspace before calling the store. The remaining production
+callers are service-internal and their HTTP/MCP/session/Agent entry paths
+perform the corresponding source policy check. Tests may call the database
+store directly for isolated fixtures; that API is not exposed to network
+clients.
 
 ### Retrieved context trust-label hardening (2026-10-24)
 
