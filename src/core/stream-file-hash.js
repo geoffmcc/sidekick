@@ -2,6 +2,7 @@
 
 const crypto = require("crypto");
 const fs = require("fs");
+const { openRegularFile } = require("./bounded-file-read");
 
 const HASH_STREAM_HIGH_WATER_MARK = 64 * 1024;
 const HASH_FILE_TIMEOUT_MS = 5 * 60 * 1000;
@@ -13,16 +14,12 @@ function hashFile(filePath, algorithm = "sha256", options = {}) {
 
   return new Promise((resolve, reject) => {
     const hash = crypto.createHash(algorithm);
-    const noFollow = typeof fs.constants.O_NOFOLLOW === "number" ? fs.constants.O_NOFOLLOW : 0;
-    const nonBlocking = typeof fs.constants.O_NONBLOCK === "number" ? fs.constants.O_NONBLOCK : 0;
     let fd = null;
     let stream;
     try {
-      // O_NONBLOCK prevents a caller-selected FIFO from blocking before the
-      // regular-file check. O_NOFOLLOW closes the final-component symlink gap
-      // on platforms that expose it.
-      fd = fs.openSync(filePath, fs.constants.O_RDONLY | noFollow | nonBlocking);
-      if (!fs.fstatSync(fd).isFile()) throw new Error("Hash input must be a regular file");
+      // Reject special files before streaming, and reject symlinks on every
+      // platform rather than relying only on O_NOFOLLOW availability.
+      fd = openRegularFile(filePath, { noFollow: true }).fd;
       stream = fs.createReadStream(null, { fd, autoClose: true, highWaterMark: HASH_STREAM_HIGH_WATER_MARK });
       fd = null;
     } catch (error) {

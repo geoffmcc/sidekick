@@ -16,26 +16,20 @@ function sameFileIdentity(left, right) {
     && left.dev === right.dev && left.ino === right.ino;
 }
 
-function readTextBounded(filePath, { maxBytes = DEFAULT_FILE_READ_BYTES, offset = 0, requireComplete = false, noFollow = false } = {}) {
-  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > MAX_BOUNDED_FILE_READ_BYTES) {
-    throw fileReadError("File read limit is invalid", "FILE_READ_LIMIT_INVALID");
-  }
-  if (!Number.isSafeInteger(offset) || offset < 0) {
-    throw fileReadError("File read offset is invalid", "FILE_READ_OFFSET_INVALID");
-  }
-
-  const nonBlocking = fs.constants.O_NONBLOCK || 0;
+function openRegularFile(filePath, { noFollow = false, nonBlocking = true } = {}) {
   const hasNoFollow = noFollow && typeof fs.constants.O_NOFOLLOW === "number";
   let pathStat = null;
   if (noFollow && !hasNoFollow) {
     try { pathStat = fs.lstatSync(filePath); }
     catch { throw fileReadError("Path could not be safely inspected", "FILE_READ_NOT_REGULAR"); }
-    if (pathStat.isSymbolicLink() || !pathStat.isFile()) {
-      throw fileReadError("Path must be a regular, non-symlink file", "FILE_READ_SYMLINK");
-    }
+    if (pathStat.isSymbolicLink()) throw fileReadError("Path is not a regular file (symlinks are not allowed)", "FILE_READ_SYMLINK");
+    if (!pathStat.isFile()) throw fileReadError("Path does not refer to a regular file", "FILE_READ_NOT_REGULAR");
   }
-  const followFlag = hasNoFollow ? fs.constants.O_NOFOLLOW : 0;
-  const fd = fs.openSync(filePath, fs.constants.O_RDONLY | nonBlocking | followFlag);
+
+  const flags = fs.constants.O_RDONLY
+    | (nonBlocking ? (fs.constants.O_NONBLOCK || 0) : 0)
+    | (hasNoFollow ? fs.constants.O_NOFOLLOW : 0);
+  const fd = fs.openSync(filePath, flags);
   try {
     const stat = fs.fstatSync(fd);
     if (!stat.isFile()) throw fileReadError("Path does not refer to a regular file", "FILE_READ_NOT_REGULAR");
@@ -47,7 +41,23 @@ function readTextBounded(filePath, { maxBytes = DEFAULT_FILE_READ_BYTES, offset 
         throw fileReadError("Path changed while it was being opened", "FILE_READ_SYMLINK");
       }
     }
+    return { fd, stat };
+  } catch (error) {
+    try { fs.closeSync(fd); } catch {}
+    throw error;
+  }
+}
 
+function readTextBounded(filePath, { maxBytes = DEFAULT_FILE_READ_BYTES, offset = 0, requireComplete = false, noFollow = false } = {}) {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > MAX_BOUNDED_FILE_READ_BYTES) {
+    throw fileReadError("File read limit is invalid", "FILE_READ_LIMIT_INVALID");
+  }
+  if (!Number.isSafeInteger(offset) || offset < 0) {
+    throw fileReadError("File read offset is invalid", "FILE_READ_OFFSET_INVALID");
+  }
+
+  const { fd, stat } = openRegularFile(filePath, { noFollow });
+  try {
     const bytesAvailable = Math.max(0, stat.size - offset);
     if (requireComplete && bytesAvailable > maxBytes) {
       throw fileReadError(`File exceeds the ${maxBytes}-byte read limit`, "FILE_READ_TOO_LARGE");
@@ -77,4 +87,4 @@ function readTextBounded(filePath, { maxBytes = DEFAULT_FILE_READ_BYTES, offset 
   }
 }
 
-module.exports = { readTextBounded, MAX_BOUNDED_FILE_READ_BYTES, DEFAULT_FILE_READ_BYTES };
+module.exports = { openRegularFile, readTextBounded, MAX_BOUNDED_FILE_READ_BYTES, DEFAULT_FILE_READ_BYTES };

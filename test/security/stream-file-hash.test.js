@@ -39,11 +39,14 @@ test("file hashing refuses directories before streaming", async () => {
   await assert.rejects(hashFile(root, "sha256"), /regular file/i);
 });
 
-test("file hashing refuses symlinks on platforms with O_NOFOLLOW", async t => {
-  if (typeof fs.constants.O_NOFOLLOW !== "number") return t.skip("platform does not expose O_NOFOLLOW");
+test("file hashing refuses symlinks on every supported platform", async t => {
   const target = path.join(root, "target.txt");
   const link = path.join(root, "link.txt");
   fs.writeFileSync(target, "sensitive");
-  fs.symlinkSync(target, link);
+  try { fs.symlinkSync(target, link); }
+  catch (error) {
+    if (["EPERM", "EACCES", "ENOTSUP"].includes(error.code)) return t.skip(`symlink creation is unavailable: ${error.code}`);
+    throw error;
+  }
   await assert.rejects(hashFile(link, "sha256"));
 });
