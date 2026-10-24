@@ -1600,6 +1600,54 @@ test("revoked and disabled principals cannot retain project access", () => {
   assert.equal(projectAccess.hasProjectAccess(operator.principal_id, "memory_a", "write"), false);
 });
 
+test("handoff claim tokens are exposed once to authenticated dispatch and excluded from logs", async () => {
+  const root = path.join(dataDir, "claim-token-repository");
+  const { execFileSync } = require("node:child_process");
+  fs.mkdirSync(root, { recursive: true });
+  execFileSync("git", ["init", "-b", "main", root], { stdio: "ignore" });
+  fs.writeFileSync(path.join(root, "README.md"), "Synthetic handoff claim fixture\n");
+  execFileSync("git", ["-C", root, "add", "README.md"], { stdio: "ignore" });
+  execFileSync("git", ["-C", root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "-m", "claim fixture"], { stdio: "ignore" });
+  const packet = {
+    objective: "Verify one-time claim output",
+    status: "active",
+    current_state: "A ready, disposable security fixture",
+    completed_steps: ["Created a synthetic handoff"],
+    next_step: "Verify claim handling",
+    acceptance_criteria: ["An authenticated caller receives the one-time token; logs do not"],
+    provenance: {
+      working_directory: root,
+      commit_sha: execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(),
+      branch: "main",
+    },
+    evidence: [{ type: "test", label: "synthetic claim fixture", status: "passed", observed_at: new Date().toISOString() }],
+  };
+  const handoff = db.saveHandoff({ project: "memory_a", content: "Synthetic claim-token test fixture.", packet });
+  db.captureHandoffCheckpoint(handoff.id, { working_directory: root });
+  db.refreshHandoffEvidence(handoff.id, { working_directory: root });
+  db.transitionHandoff(handoff.id, "ready", { expectedVersion: handoff.version });
+
+  const result = await dispatcher.callMcpTool("handoff", {
+    action: "claim", id: handoff.id, project: "memory_a", owner: owner.principal_id,
+  }, {
+    authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+    project: "memory_a",
+    sessionId: "synthetic-claim-token-session",
+  });
+  assert.notEqual(result.isError, true, JSON.stringify(result));
+  const payload = JSON.parse(result.content[0].text);
+  assert.ok(payload.claim_token, "authenticated dispatch must return the one-time token");
+  assert.equal(payload.handoff.lifecycle_state, "claimed");
+  assert.equal(JSON.stringify(db.readToolLogs(100)).includes(payload.claim_token), false, "the bearer token must not enter tool logs");
+
+  const denied = await dispatcher.callMcpTool("handoff", {
+    action: "claim", id: handoff.id, project: "memory_a", owner: owner.principal_id,
+  }, { project: "memory_a", sessionId: "synthetic-unauthenticated-session" });
+  assert.equal(denied.isError, true, "identityless dispatch must not receive a claim token");
+  assert.equal(JSON.stringify(denied).includes(payload.claim_token), false);
+  assert.equal(db.getHandoff(handoff.id).claim.owner, owner.principal_id, "denied retry must not change the active claim");
+});
+
 test.after(() => {
   try { db.close(); } catch {}
   try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch {}

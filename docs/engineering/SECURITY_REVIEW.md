@@ -33,7 +33,17 @@ Project mismatch in stored resume links is a confirmed fail-open validation defe
 
 Stale/future evidence (SK-002) and undetected workspace changes (SK-004) can mislead a receiving agent. These checks must fail closed and must never imply current approvals. Secret redaction, scope authorization, dispatcher schema/policy and execution receipts remain required.
 
-Remaining review: identity/ownership matrix across MCP, Dashboard, Agent and resume; handoff path authorization and Git helper execution; symlink/SSRF redirects; pack code privilege boundaries; retrieval injection; redaction by sensitive key; claim token exposure; CI/dependency advisories. No dependency changes or new external services are introduced in this milestone.
+Remaining review: complete identity/ownership matrix across MCP, Dashboard,
+Agent and resume; handoff path authorization and Git helper execution; browser
+and downloader redirect/egress behavior; pack code privilege boundaries; and
+retrieval injection resistance. Structured memory, legacy context, handoff,
+journal, and memory-audit redaction now have focused synthetic coverage for
+known credential patterns and sensitive field names; arbitrary secrets in
+ordinary values and unmodified historical database contents remain residual
+risks. The MCP claim-token boundary now has an integration regression proving
+the authenticated caller receives the one-time bearer token while tool logs
+and identityless retries do not. CI and dependency state remain subject to
+continuous verification.
 
 Confirmed P1 project-scope leak (SK-020): through canonical MCP dispatch, a
 valid operator bound to one project could list its own handoff from another

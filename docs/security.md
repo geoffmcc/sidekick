@@ -397,6 +397,10 @@ credential patterns and keyed values in legacy records without changing the
 stored row. Legacy context JSON documents are similarly sanitized on write and
 read, and the context tool sanitizes decision, problem, pattern, and session
 records before sending their content to the embedding store.
+Handoff claim tokens are one-time bearer capabilities: dispatcher exposure is
+allowlisted for authenticated sessions, while generic results and persisted
+tool logs redact them. An integration regression covers token delivery, log
+exclusion, and denial of identityless retries.
 
 ## Database query safety
 

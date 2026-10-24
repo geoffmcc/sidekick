@@ -601,3 +601,12 @@ test/security-project-access.test.js --concurrency=1
 --overall-timeout-ms=300000` passed all 3 suites. The synthetic legacy-row test
 confirms a read is redacted while the underlying JSON remains unchanged; no
 live vector store was used.
+
+### Handoff claim-token dispatch boundary (2026-10-24)
+
+`node test/run-all.js test/security-project-access.test.js --concurrency=1
+--overall-timeout-ms=300000` passed (1 suite, 73 assertions). The new integration
+case claims a synthetic, ready handoff through the MCP dispatcher, confirms the
+authenticated response contains the one-time token, confirms tool logs do not,
+and confirms an identityless retry receives no token and does not replace the
+active claim. The fixture uses a disposable Git repository and SQLite database.
