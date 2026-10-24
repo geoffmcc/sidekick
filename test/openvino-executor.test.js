@@ -261,22 +261,20 @@ async function runManifestTests() {
     }
   });
 
-  await test("verifyModelIntegrity: matching hashes pass", () => {
+  await test("verifyModelIntegrity: approved E5 fixture matches pinned hashes", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ov-integrity-"));
     try {
       const e5Dir = path.join(dir, "e5-small-v2-qint8");
       fs.mkdirSync(e5Dir, { recursive: true });
+      const fixtureDir = path.join(__dirname, "spike-openvino-python", "e5-small-v2-baseline", "models", "e5-small-v2-qint8-ov");
+      for (const name of ["config.json", "tokenizer.json"]) {
+        fs.copyFileSync(path.join(fixtureDir, name), path.join(e5Dir, name));
+      }
 
-      // Compute actual SHA-256 of the files we write.
-      const configContent = "test config";
-      const tokenizerContent = "test tokenizer";
-      fs.writeFileSync(path.join(e5Dir, "config.json"), configContent);
-      fs.writeFileSync(path.join(e5Dir, "tokenizer.json"), tokenizerContent);
-
-      // Verify fails because placeholder hashes don't match.
-      const result = verifyModelIntegrity(dir);
-      assert.strictEqual(result.ok, false);
-      assert.strictEqual(result.manifestMismatch, true);
+      const result = verifyModelFileHash("e5-small-v2-qint8", dir);
+      assert.strictEqual(result.ok, true, `approved E5 fixture should match: ${JSON.stringify(result)}`);
+      assert.strictEqual(result.checked, 2);
+      assert.strictEqual(result.matched, 2);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
