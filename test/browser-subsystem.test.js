@@ -379,7 +379,7 @@ function countChromeProcesses() {
   });
 
   await test("cross-session isolation: a fresh session shares no auth cookie", async () => {
-    const fresh = parse(await dispatch({ action: "open", network_scope: "browser-fixture", label: "fresh" }, { project: "other-project" }));
+    const fresh = parse(await dispatch({ action: "open", network_scope: "browser-fixture", label: "fresh" }));
     const freshId = fresh.session.id;
     const dash = parse(await dispatch({ action: "navigate", session: freshId, url: `${base}/dashboard` }));
     const check = parse(await dispatch({ action: "assert", session: freshId, assertions: [{ kind: "text_visible", value: "Not logged in" }] }));
