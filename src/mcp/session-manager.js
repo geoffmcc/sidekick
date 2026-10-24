@@ -1,6 +1,18 @@
 const crypto = require("crypto");
 const { WebStandardStreamableHTTPServerTransport } = require("@modelcontextprotocol/server");
 const { MAX_MCP_REQUEST_BODY_BYTES, MAX_MCP_SESSIONS, MAX_MCP_SESSIONS_PER_IDENTITY } = require("./limits");
+const { sanitizeMcpLogLabel } = require("./log-label");
+
+function logSafeSessionId(sessionId) {
+  return sanitizeMcpLogLabel(sessionId, "invalid");
+}
+
+function safeClientInfo(clientInfo) {
+  if (!clientInfo || typeof clientInfo !== "object" || Array.isArray(clientInfo)) return null;
+  const name = typeof clientInfo.name === "string" ? sanitizeMcpLogLabel(clientInfo.name) : null;
+  const version = typeof clientInfo.version === "string" ? sanitizeMcpLogLabel(clientInfo.version) : null;
+  return name || version ? { ...(name ? { name } : {}), ...(version ? { version } : {}) } : null;
+}
 
 function sameSessionPrincipal(established, presented) {
   if (!established || !presented || typeof established !== "object" || typeof presented !== "object") return false;
@@ -34,15 +46,17 @@ function createSessionManager({ createMcpServer, logDebug, now = () => Date.now(
 
   function registerSession(sessionId, server, transport, metadata = {}) {
     if (!getSessionCapacity(metadata.authIdentity).allowed) return false;
-    logDebug("REGISTER_SESSION", { sessionId, sessionCount: sessions.size + 1, userAgent: metadata.userAgent, clientInfo: metadata.clientInfo });
+    const safeUserAgent = typeof metadata.userAgent === "string" ? sanitizeMcpLogLabel(metadata.userAgent) : null;
+    const safeInfo = safeClientInfo(metadata.clientInfo);
+    logDebug("REGISTER_SESSION", { sessionId: logSafeSessionId(sessionId), sessionCount: sessions.size + 1, userAgent: safeUserAgent, clientInfo: safeInfo });
     sessions.set(sessionId, {
       server,
       transport,
       createdAt: now(),
       lastAccess: now(),
       initialized: false,
-      userAgent: metadata.userAgent || null,
-      clientInfo: metadata.clientInfo || null,
+      userAgent: safeUserAgent,
+      clientInfo: safeInfo,
       authIdentity: metadata.authIdentity || null,
       authState: metadata.authState || { current: metadata.authIdentity || null }
     });
@@ -53,7 +67,7 @@ function createSessionManager({ createMcpServer, logDebug, now = () => Date.now(
     const entry = sessions.get(sessionId);
     if (entry) {
       entry.initialized = true;
-      logDebug("SESSION_INITIALIZED", { sessionId });
+      logDebug("SESSION_INITIALIZED", { sessionId: logSafeSessionId(sessionId) });
     }
   }
 
@@ -65,17 +79,17 @@ function createSessionManager({ createMcpServer, logDebug, now = () => Date.now(
   }
 
   async function getTransportForRequest(sessionId, metadata = {}, options = {}) {
-    logDebug("getTransportForRequest", { requestedSessionId: sessionId, sessionCount: sessions.size });
+    logDebug("getTransportForRequest", { requestedSessionId: sessionId == null ? null : logSafeSessionId(sessionId), sessionCount: sessions.size });
     if (sessionId && sessions.has(sessionId)) {
       const entry = sessions.get(sessionId);
       if (metadata.authIdentity !== undefined && !authorizeSessionIdentity(sessionId, metadata.authIdentity)) {
-        logDebug("SESSION_IDENTITY_MISMATCH", { sessionId });
+        logDebug("SESSION_IDENTITY_MISMATCH", { sessionId: logSafeSessionId(sessionId) });
         return { transport: null, isNew: false, identityMismatch: true };
       }
       const age = now() - entry.createdAt;
       const idle = now() - entry.lastAccess;
       entry.lastAccess = now();
-      logDebug("REUSE_SESSION", { sessionId, age_ms: age, idle_ms: idle });
+      logDebug("REUSE_SESSION", { sessionId: logSafeSessionId(sessionId), age_ms: age, idle_ms: idle });
       return { transport: entry.transport, isNew: false };
     }
 
@@ -83,11 +97,11 @@ function createSessionManager({ createMcpServer, logDebug, now = () => Date.now(
       const staleEntry = staleSessionMap.get(sessionId);
       const replacementId = staleEntry?.replacementId;
       if (replacementId && sessions.has(replacementId)) {
-        logDebug("STALE_SESSION_KNOWN_REPLACEMENT", { staleSessionId: sessionId, replacementId });
+        logDebug("STALE_SESSION_KNOWN_REPLACEMENT", { staleSessionId: logSafeSessionId(sessionId), replacementId: logSafeSessionId(replacementId) });
         if (options.allowStalePost) {
           const entry = sessions.get(replacementId);
           if (metadata.authIdentity !== undefined && !authorizeSessionIdentity(replacementId, metadata.authIdentity)) {
-            logDebug("SESSION_IDENTITY_MISMATCH", { sessionId, replacementId });
+            logDebug("SESSION_IDENTITY_MISMATCH", { sessionId: logSafeSessionId(sessionId), replacementId: logSafeSessionId(replacementId) });
             return { transport: null, isNew: false, newSessionId: replacementId, identityMismatch: true };
           }
           entry.lastAccess = now();
@@ -96,7 +110,7 @@ function createSessionManager({ createMcpServer, logDebug, now = () => Date.now(
         return { transport: null, isNew: false, newSessionId: replacementId, staleRedirect: true };
       }
 
-      logDebug("UNKNOWN_SESSION", { sessionId, sessionCount: sessions.size });
+      logDebug("UNKNOWN_SESSION", { sessionId: logSafeSessionId(sessionId), sessionCount: sessions.size });
       return { transport: null, isNew: false, newSessionId: null, staleRedirect: true };
     }
 
@@ -115,7 +129,7 @@ function createSessionManager({ createMcpServer, logDebug, now = () => Date.now(
       return { transport: null, isNew: false, capacityExceeded: true, capacityScope: latestCapacity.scope, capacityLimit: latestCapacity.limit };
     }
     await server.connect(transport);
-    logDebug("CREATED_NEW_TRANSPORT", { newSessionId });
+    logDebug("CREATED_NEW_TRANSPORT", { newSessionId: logSafeSessionId(newSessionId) });
     return { transport, isNew: true, newSessionId };
   }
 
@@ -147,7 +161,7 @@ function createSessionManager({ createMcpServer, logDebug, now = () => Date.now(
       sessions: sessions.size,
       staleMappings: staleSessionMap.size,
       sessionDetails: Array.from(sessions.entries()).map(([id, entry]) => ({
-        id, age: now() - entry.createdAt, idle: now() - entry.lastAccess,
+        id: logSafeSessionId(id), age: now() - entry.createdAt, idle: now() - entry.lastAccess,
         initialized: entry.initialized, userAgent: entry.userAgent, clientInfo: entry.clientInfo
       }))
     };

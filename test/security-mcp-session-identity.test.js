@@ -56,6 +56,31 @@ test("MCP log label sanitizer removes control characters and bounds client metad
   assert.equal(sanitizeMcpLogLabel(undefined, "unknown"), "unknown");
 });
 
+test("MCP session manager bounds and projects client metadata before retaining it", async t => {
+  const events = [];
+  const manager = createSessionManager({
+    createMcpServer: () => ({}),
+    logDebug: (event, details) => events.push({ event, details }),
+  });
+  t.after(() => manager.dispose());
+  manager.registerSession("safe-session", {}, {}, {
+    authIdentity: { principal_id: "prn_test" },
+    userAgent: `${"u".repeat(200)}\r\nforged`,
+    clientInfo: { name: "n".repeat(200), version: "v\nforged", extra: "discard this" },
+  });
+
+  const snapshot = manager.getHealthSnapshot();
+  assert.equal(snapshot.sessionDetails[0].userAgent.length, 128);
+  assert.doesNotMatch(snapshot.sessionDetails[0].userAgent, /[\r\n]/);
+  assert.deepEqual(snapshot.sessionDetails[0].clientInfo, { name: "n".repeat(128), version: "v?forged" });
+  assert.deepEqual(events[0].details.clientInfo, snapshot.sessionDetails[0].clientInfo);
+
+  await manager.getTransportForRequest(`${"s".repeat(300)}\r\nforged`, { authIdentity: { principal_id: "prn_test" } });
+  const requestEvent = events.find(event => event.event === "getTransportForRequest");
+  assert.equal(requestEvent.details.requestedSessionId.length, 128);
+  assert.doesNotMatch(JSON.stringify(events), /[\r\n]forged/);
+});
+
 test("MCP session identity rejects a different principal without rebinding the session", async t => {
   const manager = createSessionManager({ createMcpServer: () => ({}), logDebug() {} });
   t.after(() => manager.dispose());
