@@ -168,6 +168,12 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
     return redactSensitiveKeysDeep(value);
   }
 
+  function redactStoredPacketJson(value) {
+    const raw = String(value || "{}");
+    try { return JSON.stringify(redactPacket(JSON.parse(raw))); }
+    catch { return redactSensitive(raw); }
+  }
+
   function parseHandoffPacket(value) {
     if (!value) return {};
     try { return JSON.parse(value); } catch { return {}; }
@@ -432,9 +438,9 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
    * Save a handoff.
    *
    * A handoff is a durable, versioned artifact: the memory_handoffs row is
-   * always the LATEST version, and every superseded version is preserved
-   * verbatim in memory_handoff_versions before the row changes. Nothing about a
-   * save can destroy prior content.
+   * always the LATEST version, and every superseded version is snapshotted in
+   * memory_handoff_versions before the row changes. Credential-shaped content
+   * is redacted before persistence in either current or historical text.
    *
    * Rules:
    *  - `existing` is resolved by structured id only. There is no alternate
@@ -451,7 +457,9 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
   function saveHandoff({ id, project, title, source, task_id, content, previous_id, extraction_state, extraction_version, expectedVersion, packet, owner_principal_id, created_by_principal_id }) {
     if (!hasTable("memory_handoffs")) throw new Error("memory_handoffs table is not available; run migrations");
     const ts = nowIso();
-  const redacted = redactSensitive(String(content || ""));
+    const redacted = redactSensitive(String(content || ""));
+    const safeTitle = title == null ? null : redactSensitive(String(title));
+    const safeSource = source == null ? null : redactSensitive(String(source));
     const hash = stableHash(redacted);
     const packetValue = packet === undefined || packet === null ? null : redactPacket(normalizeHandoffPacket(packet));
     const packetJson = packetValue === null ? null : JSON.stringify(packetValue);
@@ -462,8 +470,11 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
       throw new Error(`Handoff "${existing.id}" changed concurrently: expected version ${expectedVersion}, found ${existing.version}`);
     }
 
-    const packetChanged = existing && packetValue !== null && packetJson !== (existing.packet_json || "{}");
-    if (existing && existing.content_hash === hash && !packetChanged) {
+    const persistedPacketJson = packetJson === null
+      ? (existing ? redactStoredPacketJson(existing.packet_json) : null)
+      : packetJson;
+    const packetChanged = existing && persistedPacketJson !== (existing.packet_json || "{}");
+    if (existing && existing.content_hash === hash && existing.content === redacted && !packetChanged) {
       return db.transaction(() => {
         // Metadata-only writes still need compare-and-swap: the handoff may
         // have advanced after the initial read, and a failed compatibility
@@ -481,7 +492,7 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
             owner_principal_id = COALESCE(?, owner_principal_id),
             created_by_principal_id = COALESCE(?, created_by_principal_id)
           WHERE id = ? AND version = ? AND content_hash = ?
-        `).run(ts, project || null, title || null, source || null, task_id || null, extraction_state || null, extraction_version || null, owner_principal_id || null, created_by_principal_id || null, existing.id, existing.version, existing.content_hash);
+        `).run(ts, project || null, safeTitle || null, safeSource || null, task_id || null, extraction_state || null, extraction_version || null, owner_principal_id || null, created_by_principal_id || null, existing.id, existing.version, existing.content_hash);
         if (outcome.changes !== 1) {
           throw new Error(`Handoff "${existing.id}" changed concurrently during metadata save (version ${existing.version} is no longer current)`);
         }
@@ -507,7 +518,7 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
           INSERT OR IGNORE INTO memory_handoff_versions (
             handoff_id, version, title, project, source, task_id, content, redacted_content, content_hash, created_at, superseded_at, packet_json
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(existing.id, existing.version, existing.title, existing.project, existing.source, existing.task_id, existing.content, existing.redacted_content, existing.content_hash, existing.updated_at || existing.created_at, ts, existing.packet_json || "{}");
+        `).run(existing.id, existing.version, redactSensitive(existing.title || "handoff"), existing.project, redactSensitive(existing.source || "handoff"), existing.task_id, redactSensitive(existing.content || ""), redactSensitive(existing.redacted_content || ""), existing.content_hash, existing.updated_at || existing.created_at, ts, redactStoredPacketJson(existing.packet_json));
         // The history row at (id, version) must hold THIS content — whether we
         // just wrote it or an identical concurrent snapshot beat us to it. A
         // mismatched pre-existing row (out-of-band write, restored backup) would
@@ -537,14 +548,14 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
           WHERE id = ? AND version = ?
         `).run(
           nextVersion,
-          String(content || ""),
+          redacted,
           redacted,
           hash,
-          packetJson === null ? (existing.packet_json || "{}") : packetJson,
+          persistedPacketJson || "{}",
           ts,
           project || null,
-          title || null,
-          source || null,
+          safeTitle || null,
+          safeSource || null,
           task_id || null,
           extraction_state || "pending",
           extraction_version || null,
@@ -556,9 +567,9 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
         if (outcome.changes === 0) {
           throw new Error(`Handoff "${existing.id}" changed concurrently during save (version ${existing.version} is no longer current)`);
         }
-        auditMemoryEvent("handoff_updated", "handoff", existing.id, { project: project || existing.project, version: nextVersion, content_hash: hash }, source || "system");
+        auditMemoryEvent("handoff_updated", "handoff", existing.id, { project: project || existing.project, version: nextVersion, content_hash: hash }, safeSource || "system");
         updated = getHandoff(existing.id);
-        appendHandoffEvent(existing.id, nextVersion, "updated", { content_hash: hash }, { actor: source || "system", source: source || "handoff" });
+        appendHandoffEvent(existing.id, nextVersion, "updated", { content_hash: hash }, { actor: safeSource || "system", source: safeSource || "handoff" });
         persistHandoffLinks(updated);
         if (!inTransaction) db.exec("COMMIT");
       } catch (error) {
@@ -589,13 +600,13 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
       `).run(
         handoffId,
         project || null,
-        title || "handoff",
-        source || "handoff",
+        safeTitle || "handoff",
+        safeSource || "handoff",
         task_id || null,
         1,
         previous_id || null,
         hash,
-        String(content || ""),
+        redacted,
         redacted,
         extraction_state || "pending",
         extraction_version || null,
@@ -606,8 +617,8 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
         created_by_principal_id || null,
         3
       );
-      auditMemoryEvent("handoff_created", "handoff", handoffId, { project, version: 1, content_hash: hash }, source || "system");
-      appendHandoffEvent(handoffId, 1, "created", { content_hash: hash }, { actor: source || "system", source: source || "handoff" });
+      auditMemoryEvent("handoff_created", "handoff", handoffId, { project, version: 1, content_hash: hash }, safeSource || "system");
+      appendHandoffEvent(handoffId, 1, "created", { content_hash: hash }, { actor: safeSource || "system", source: safeSource || "handoff" });
       created = getHandoff(handoffId);
       if (!inTransaction) db.exec("COMMIT");
     } catch (error) {

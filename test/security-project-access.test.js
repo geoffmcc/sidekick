@@ -1554,6 +1554,32 @@ test("handoff packet persistence redacts credentials by nested field name", () =
   assert.match(persisted, /\[REDACTED\]/);
 });
 
+test("handoff content and titles persist only redacted credential text", () => {
+  const apiKey = "SYNTHETIC_HANDOFF_CONTENT_API_KEY_VALUE";
+  const password = "SYNTHETIC_HANDOFF_CONTENT_PASSWORD_VALUE";
+  const handoff = db.saveHandoff({
+    project: "memory_a", title: `Synthetic api_key=${apiKey}`, source: "test",
+    content: JSON.stringify({ summary: "Synthetic handoff", password }),
+    packet: { objective: "Synthetic safe objective", status: "active", next_step: "Continue safely" },
+  });
+  const dbHandle = db.getDb();
+  const legacyRawContent = JSON.stringify({ summary: "Synthetic handoff", password });
+  const legacyRawPacket = JSON.stringify({ objective: "Synthetic safe objective", status: "active", next_step: "Continue safely", provenance: { api_key: apiKey } });
+  dbHandle.prepare("UPDATE memory_handoffs SET title = ?, content = ?, packet_json = ? WHERE id = ?")
+    .run(`Legacy api_key=${apiKey}`, legacyRawContent, legacyRawPacket, handoff.id);
+  const updated = db.saveHandoff({
+    id: handoff.id, project: "memory_a", expectedVersion: handoff.version,
+    title: `Legacy api_key=${apiKey}`,
+    content: legacyRawContent,
+  });
+  const current = dbHandle.prepare("SELECT title, content, redacted_content FROM memory_handoffs WHERE id = ?").get(handoff.id);
+  const history = dbHandle.prepare("SELECT title, content, redacted_content FROM memory_handoff_versions WHERE handoff_id = ?").all(handoff.id);
+  const persisted = JSON.stringify({ current, history, updated });
+  assert.doesNotMatch(persisted, /SYNTHETIC_HANDOFF_CONTENT_API_KEY_VALUE/);
+  assert.doesNotMatch(persisted, /SYNTHETIC_HANDOFF_CONTENT_PASSWORD_VALUE/);
+  assert.match(persisted, /\[REDACTED\]/);
+});
+
 test("handoff extraction cannot write memories into an ungranted project", async () => {
   const context = tools.context.createMcpExecutionContext({
     authIdentity: { principal_id: operator.principal_id, principal_type: "human" },

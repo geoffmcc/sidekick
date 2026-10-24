@@ -132,3 +132,23 @@ risk requiring a separately backed-up, operator-approved remediation plan.
 Validation: the packet regression and `test/handoff-reliability.test.js` pass;
 the regression confirms synthetic values are absent from current rows, version
 history, and linked payloads. No production database was accessed.
+
+### Handoff text persistence (2026-10-24, SK-028)
+
+Confirmed secret persistence gap: the current `memory_handoffs.content` and
+`title` columns retained credential-shaped text even when the separate
+`redacted_content` field had removed it. Version snapshots also copied raw
+content. A synthetic test reproduced this for JSON `password` values and
+`api_key`/`token` assignments. New saves now persist the redacted content,
+title, and source; an explicitly updated legacy row is snapshotted only after
+redacting its content, title, source, and packet. The versioning test now
+asserts credential values are absent from persistent text columns.
+
+This is write-time enforcement, not a bulk database migration. Existing
+untouched rows and their prior history may still contain sensitive text; no
+production database was inspected or changed. Review and remediation of
+historical deployments requires a separate backup and approved operation.
+
+Validation: `test/security-project-access.test.js`,
+`test/handoff-versioning.test.js`, `test/handoff-reliability.test.js`, and
+`test/security-phase-07-secrets-redaction.test.js` passed (4 suites, 0 failures).

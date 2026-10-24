@@ -377,7 +377,11 @@ including extracted memories; compatibility queries that also return legacy
 unscoped rows do not broaden a handoff reader's scope. New packet saves apply
 the shared recursive key-aware redactor before packet, history, and linked
 payload persistence. Existing handoff packet rows are not retroactively changed
-by this write-time control.
+by this write-time control unless an operator explicitly updates that handoff;
+there is no bulk database migration in this change. New handoff content, titles,
+and source labels are also pattern-redacted before current or historical text
+storage. This does not prove that untouched historical records are free of
+credentials.
 
 ## Database query safety
 

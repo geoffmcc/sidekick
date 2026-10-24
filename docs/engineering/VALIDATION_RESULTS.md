@@ -558,3 +558,19 @@ and recovery, MCP identity, secrets, sandbox fail-closed behavior, installation,
 network boundaries, supply-chain controls, and the security-invariant suites.
 This is non-live regression evidence; it does not validate deployed Linux
 systemd behavior, external attack surfaces, or untested paths.
+
+### Handoff text credential persistence
+
+The previous test contract verified that raw handoff content stayed in the
+database even when `redacted_content` was sanitized. A synthetic regression now
+checks content and title text across create and version update, including a
+legacy fixture with raw credential-shaped text already in the current row and
+packet. Saves now persist redacted current text; when the legacy fixture is
+explicitly updated, its new history snapshot is also redacted. Untouched
+historical production rows were not inspected or migrated.
+
+Validation: `node test/run-all.js test/security-project-access.test.js
+test/handoff-versioning.test.js test/handoff-reliability.test.js
+test/security-phase-07-secrets-redaction.test.js --concurrency=2
+--overall-timeout-ms=300000` passed all four suites (4 passed, 0 failed, 0
+skipped). The regression used synthetic credentials and disposable SQLite.

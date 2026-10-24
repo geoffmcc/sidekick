@@ -193,9 +193,10 @@ function parse(result) {
   // --- HV.9 raw content stored unredacted; redacted column redacts ---------
   const secretish = parse(await TOOLS.handoff({ action: "create", project: "hv-test", title: "redaction probe", content: "Fact: uses api_key=TEST_API_KEY_PLACEHOLDER for the probe service." }));
   const row = dbStore.getDb().prepare("SELECT content, redacted_content FROM memory_handoffs WHERE id = ?").get(secretish.handoff.id);
-  assert.ok(row.content.includes("TEST_API_KEY_PLACEHOLDER"), "raw content column preserves the artifact verbatim");
-  assert.ok(!row.redacted_content.includes("TEST_API_KEY_PLACEHOLDER"), "redacted column must not carry the value");
-  console.log("HV.10 passed: raw preserved, redacted derived");
+  assert.ok(!row.content.includes("TEST_API_KEY_PLACEHOLDER"), "the current content column must not retain credential values");
+  assert.ok(!row.redacted_content.includes("TEST_API_KEY_PLACEHOLDER"), "the redacted column must not carry the value");
+  assert.ok(row.content.includes("[REDACTED]"), "the persisted content keeps the surrounding handoff text with the credential redacted");
+  console.log("HV.10 passed: credentials redacted before persistence");
 
   // --- HV.10 extraction stays idempotent across version bumps --------------
   const before = dbStore.getDb().prepare("SELECT COUNT(*) AS c FROM memories WHERE source_ref = ?").get(handoffId).c;
