@@ -1174,8 +1174,9 @@ about current lockfile vulnerability status.
 - The Windows secret ACL invariant suite passed during the full run. Earlier
   direct invocation had one environment-specific failure, so the direct-run
   failure is not treated as a confirmed product defect.
-- Overall non-live verification is not fully green until the Dashboard journey
-  timeout is reproduced or the full suite passes on a subsequent run.
+- At that point, overall non-live verification was not fully green; the
+  Dashboard timeout required reproduction or a subsequent complete passing
+  run. The follow-up result is recorded below.
 - `node scripts/test-flake.js test/e2e/dashboard-agent-journey.test.js
   test/e2e/dashboard-platform-journeys.test.js` passed its bounded diagnostic:
   both suites passed all 3 repetitions at alternating runner concurrency
@@ -1193,5 +1194,18 @@ about current lockfile vulnerability status.
   survives a second bootstrap. The test fixture now uses the runner-owned
   temporary data root instead of deleting a fixed repository test-data path.
 - `node test/run-all.js test/compute-provider-bootstrap.test.js --json` passed
-  (10 assertions in the suite, 0 failures). Full required-suite verification
-  after this change is pending.
+  (10 assertions in the suite, 0 failures). At the time of this initial entry,
+  full required-suite verification was pending; see the follow-up below.
+
+### Follow-up verification on signed commit bb6c761
+
+- `npm.cmd test` passed 381/381 required unit, contract, integration, and
+  security suites with 0 failures and 0 skips (419.8 seconds).
+- `npm.cmd run test:all` passed 421/421 non-live suites with 0 failures and 0
+  skips (466.1 seconds). This includes all four Dashboard E2E suites and the
+  new Compute bootstrap regression.
+- The previous full-run Dashboard timeout did not recur. Its cause remains
+  unconfirmed, but the exact later full matrix is green; retain the earlier
+  run as intermittent-failure history rather than a current failing result.
+- `bb6c761` is a signed commit on `codex/security-hardening-followup`; no push,
+  PR, merge, or deployment was performed.
