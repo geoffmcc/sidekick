@@ -858,3 +858,13 @@ explicit promotion survives re-bootstrap. Existing provider rows preserve
 operator edits; legacy remote rows therefore require operator review and are a
 deployment migration residual until checked. This review did not inspect a live
 database or infer whether any existing promotion was intentional.
+
+### npm dependency advisory snapshot (2026-10-24)
+
+The complete locked npm dependency graph was checked against the npm advisory
+service with `npm audit --json`: 0 reported vulnerabilities across 219
+dependencies (131 production, 87 development, 3 optional). The production-only
+scan also reported zero. This is a time-specific registry advisory result; it
+does not prove package provenance, protect against a compromised registry or
+maintainer, cover optional host-installed binaries or Python packages, or
+replace CI rescanning. No dependency versions or lockfiles were changed.

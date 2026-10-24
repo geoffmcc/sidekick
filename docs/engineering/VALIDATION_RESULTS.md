@@ -1222,3 +1222,13 @@ about current lockfile vulnerability status.
 - Existing remote Ollama rows were not modified or inspected. Upgrade
   operators must review existing `data_classifications`; this is a deployment
   migration residual, not a verified live-state fix.
+
+## npm advisory scan: 2026-10-24
+
+- `npm.cmd audit --json` completed against the npm advisory service with 0
+  reported vulnerabilities across 219 locked dependencies: 131 production, 87
+  development, and 3 optional. `npm.cmd audit --omit=dev --json` independently
+  reported 0 production vulnerabilities.
+- This is a dated advisory snapshot. It does not verify package provenance,
+  registry integrity, optional host-installed binaries, Python dependencies, or
+  future advisory changes. No packages or lockfiles were changed.
