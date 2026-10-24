@@ -917,3 +917,19 @@ code until a trusted receipt producer is implemented. Maturity always reports
 provider integration as unverified, including historical evidence that lacks
 such a receipt. This does not disable local pack operation or other maturity
 levels; live-provider certification remains unavailable and is a known limit.
+
+### Pack maturity role self-attestation (2026-10-24, SK-070)
+
+Confirmed integrity weakness: `record_verification` accepted caller-selected
+role labels on terminal receipts, workflows, and executions. One unrelated
+operation could therefore be labeled as canonical dispatch, discovery,
+workflow, single-pack, cross-pack, and skeptical-verification evidence and
+promote a pack to `certified`. Verification now accepts canonical-dispatch
+evidence only from an attributable receipt for a tool owned by that pack, and
+workflow evidence only from a completed workflow owned by that pack. Other
+roles fail closed until trusted producers can substantiate them. Evidence
+records carry contract version 2; maturity treats older caller-labeled rows as
+malformed, so they cannot remain current. Packs remain operable at their
+observed operational level. Server-side producers for all six certification
+roles remain open; certification is intentionally unavailable until that
+evidence path exists.

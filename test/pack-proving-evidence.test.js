@@ -27,7 +27,7 @@ const receiptStore = require("../src/agent/receipt-store");
 
 const installed = bundled.installBundledPack("api-engineering");
 
-test("capability verification cannot claim a different authenticated actor", async () => {
+test("capability verification cannot claim another actor or self-attested evidence roles", async () => {
   const verifier = identity.bootstrapOwner({
     username: "pack_verifier",
     password: "synthetic pack verification test password",
@@ -56,37 +56,29 @@ test("capability verification cannot claim a different authenticated actor", asy
     platformKernel.transitionExecution(execution.execution_id, "completed", { source: "test", actor_id: verifier.principal_id });
     return { type: "execution", id: execution.execution_id, role };
   });
-  const attributed = await tools.callDashboardTool("capability", {
-    action: "record_verification",
-    name: installed.pack.name,
-    config: { project_ref: "pack-proving-evidence", evidence_refs },
-  }, {
-    authIdentity: { principal_id: verifier.principal_id, principal_type: "human", scopes: null },
-  });
-  assert.equal(JSON.parse(attributed.content[0].text).ok, true, attributed.content[0].text);
-  const saved = db.getDb().prepare("SELECT actor_ref FROM platform_pack_verification_evidence WHERE pack_name = ? ORDER BY created_at DESC LIMIT 1").get(installed.pack.name);
-  assert.equal(saved.actor_ref, verifier.principal_id, "the durable verifier identity comes from authenticated dispatch context");
+  assert.throws(() => lifecycle.recordVerification(installed.pack.name, {
+    actor_ref: verifier.principal_id,
+    project_ref: "pack-proving-evidence",
+    evidence_refs,
+  }), /server-verifiable evidence source/);
+  const saved = db.getDb().prepare("SELECT COUNT(*) AS count FROM platform_pack_verification_evidence WHERE pack_name = ?").get(installed.pack.name);
+  assert.equal(saved.count, 0, "caller-assigned role labels must not persist as verification evidence");
 });
 
 test("pack evidence rejects a non-terminal execution reference", () => {
-  const execution = platformKernel.createExecution({
-    project_id: "pack-proving-evidence",
-    actor_id: "test",
-    actor_principal_id: "test-principal",
-    operation_type: "pack_proving",
-    source: "test",
-  });
+  const task = taskStore.insertTask(taskModel.createTask({ objective: "non-terminal evidence fixture", project_id: "pack-proving-evidence", actor_id: "test", actor_principal_id: "test-principal" }));
+  const receipt = receiptStore.createReceipt({ task_id: task.task_id, action_fingerprint: "non-terminal-evidence-fingerprint", capability: "api_contract_check", args: { url: "https://example.test" }, project_ref: "pack-proving-evidence", principal_ref: "test-principal", effect_class: "read_only", risk_class: "low" });
   assert.throws(
     () => lifecycle.recordVerification(installed.pack.name, {
       actor_ref: "test-principal",
       project_ref: "pack-proving-evidence",
-      evidence_refs: [{ type: "execution", id: execution.execution_id, role: "canonical_dispatch" }],
+      evidence_refs: [{ type: "receipt", id: receipt.receipt_id, role: "canonical_dispatch" }],
     }),
-    /not completed/
+    /not terminal/
   );
 });
 
-test("pack evidence does not reuse one receipt for multiple certification roles", () => {
+test("pack evidence rejects a caller-claimed unsupported certification role", () => {
   const task = taskStore.insertTask(taskModel.createTask({
     objective: "pack evidence fixture",
     project_id: "pack-proving-evidence",
@@ -114,27 +106,22 @@ test("pack evidence does not reuse one receipt for multiple certification roles"
         { type: "receipt", id: receipt.receipt_id, role: "single_pack" },
       ],
     }),
-    /cannot support multiple verification roles/
+    /no server-verifiable evidence source/
   );
 });
 
 test("pack evidence rejects duplicated references even when the role is unchanged", () => {
-  const execution = platformKernel.createExecution({
-    project_id: "pack-proving-evidence",
-    actor_id: "test",
-    actor_principal_id: "test-principal",
-    operation_type: "pack_proving",
-    source: "test",
-  });
-  platformKernel.transitionExecution(execution.execution_id, "running", { source: "test", actor_id: "test" });
-  platformKernel.transitionExecution(execution.execution_id, "completed", { source: "test", actor_id: "test" });
+  const task = taskStore.insertTask(taskModel.createTask({ objective: "duplicate evidence fixture", project_id: "pack-proving-evidence", actor_id: "test", actor_principal_id: "test-principal" }));
+  const receipt = receiptStore.createReceipt({ task_id: task.task_id, action_fingerprint: "duplicate-evidence-fingerprint", capability: "api_contract_check", args: { url: "https://example.test" }, project_ref: "pack-proving-evidence", principal_ref: "test-principal", effect_class: "read_only", risk_class: "low" });
+  receiptStore.transitionReceipt(receipt.receipt_id, "dispatched");
+  receiptStore.transitionReceipt(receipt.receipt_id, "finalized");
   assert.throws(
     () => lifecycle.recordVerification(installed.pack.name, {
       actor_ref: "test-principal",
       project_ref: "pack-proving-evidence",
       evidence_refs: [
-        { type: "execution", id: execution.execution_id, role: "canonical_dispatch" },
-        { type: "execution", id: execution.execution_id, role: "canonical_dispatch" },
+        { type: "receipt", id: receipt.receipt_id, role: "canonical_dispatch" },
+        { type: "receipt", id: receipt.receipt_id, role: "canonical_dispatch" },
       ],
     }),
     /duplicated for verification role/
@@ -207,7 +194,7 @@ test("pack evidence cannot be attributed across principals or projects", () => {
   );
 });
 
-test("pack evidence enforces verifier ownership for execution and workflow references", () => {
+test("pack evidence enforces verifier ownership and rejects unproven execution sources", () => {
   const execution = platformKernel.createExecution({
     project_id: "pack-proving-evidence",
     actor_id: "other-principal",
@@ -223,7 +210,7 @@ test("pack evidence enforces verifier ownership for execution and workflow refer
       project_ref: "pack-proving-evidence",
       evidence_refs: [{ type: "execution", id: execution.execution_id, role: "canonical_dispatch" }],
     }),
-    /not performed by the attributed verifier/
+    /cannot substantiate verification role canonical_dispatch/
   );
 
   const workflow = platformKernel.createWorkflow({
@@ -242,6 +229,22 @@ test("pack evidence enforces verifier ownership for execution and workflow refer
     }),
     /not performed by the attributed verifier/
   );
+});
+
+test("pack workflow evidence must reference a workflow owned by the pack", () => {
+  const workflow = platformKernel.createWorkflow({
+    name: "unrelated workflow",
+    project_id: "pack-proving-evidence",
+    actor_principal_id: "test-principal",
+    steps: [],
+  });
+  platformKernel.startWorkflow(workflow.workflow_id, { source: "test", actor_id: "test-principal" });
+  platformKernel.advanceWorkflow(workflow.workflow_id, { source: "test", actor_id: "test-principal" });
+  assert.throws(() => lifecycle.recordVerification(installed.pack.name, {
+    actor_ref: "test-principal",
+    project_ref: "pack-proving-evidence",
+    evidence_refs: [{ type: "workflow", id: workflow.workflow_id, role: "workflow" }],
+  }), /not owned by pack/);
 });
 
 test("provider integration cannot be self-attested with a caller-supplied boolean", () => {
