@@ -26,7 +26,7 @@ function isSensitiveKey(key) {
   // Workspace APIs deliberately expose credential names for administration;
   // the corresponding values never leave the encrypted store.
   if (normalized === "secretnames") return false;
-  return SENSITIVE_KEY_RE.test(normalized);
+  return normalized === "sig" || normalized.endsWith("signature") || SENSITIVE_KEY_RE.test(normalized);
 }
 
 /**

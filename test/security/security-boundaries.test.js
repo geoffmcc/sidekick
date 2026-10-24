@@ -152,9 +152,17 @@ test("security audit records server-derived provenance without password material
 
 test("redaction covers nested credentials, encoded tokens, and structured result content", () => {
   const secret = ["boundary", "-secret-", "value"].join("");
-  const nested = redactSensitiveKeysDeep({ config: { password: secret }, headers: { Authorization: `Bearer ${secret}` }, safe: "visible" });
+  const nested = redactSensitiveKeysDeep({
+    config: { password: secret },
+    headers: { Authorization: `Bearer ${secret}` },
+    signed: { sig: secret, signature: secret, xGoogSignature: secret },
+    signal: "visible",
+    safe: "visible",
+  });
   assert.equal(nested.config.password, "[REDACTED]");
   assert.doesNotMatch(nested.headers.Authorization, new RegExp(secret));
+  assert.deepEqual(nested.signed, { sig: "[REDACTED]", signature: "[REDACTED]", xGoogSignature: "[REDACTED]" });
+  assert.equal(nested.signal, "visible", "signature matching must not redact the ordinary signal key");
   assert.equal(nested.safe, "visible");
   assert.doesNotMatch(redactSensitive(`token=${encodeURIComponent(secret)}`), new RegExp(secret));
 
