@@ -922,3 +922,17 @@ about current lockfile vulnerability status.
   suites with 0 failures and 0 skips.
 - The client-wide limit is enforced alongside the principal limit. Limits are
   process-local and reset at restart; durable log retention remains unbounded.
+
+## Identity audit detail redaction and size boundary: 2026-10-24 (SK-050)
+
+- `node test/run-all.js test/security-identity-audit-atomicity.test.js
+  test/identity-foundation.test.js test/security-dashboard-event-audit.test.js
+  test/security-compute-admin.test.js --concurrency=1
+  --overall-timeout-ms=900000 --json` passed all 4 suites, 0 failures and
+  0 skips.
+- Synthetic nested `api_key` and authorization fields are absent from stored
+  details; an oversized event fails before insertion. Existing identity
+  mutation audit-failure tests continue to verify rollback of role,
+  delegation, credential, session, and user-state changes.
+- `npm.cmd test` passed all 379 unit, contract, integration, and security
+  suites with 0 failures and 0 skips after this change.

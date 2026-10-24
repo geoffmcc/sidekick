@@ -612,3 +612,17 @@ principal and 120 per client IP per minute. These limits apply only to the
 frontend telemetry endpoint; normal error handling and authentication remain
 unchanged. The limits reset on process restart and do not replace a bounded log
 retention policy, which remains an operational hardening item.
+
+### Identity audit detail redaction and size boundary (2026-10-24, SK-050)
+
+The shared identity audit writer serialized caller-provided event details
+directly. Existing call sites mostly construct small summaries, but the sink
+itself did not prevent a future caller from persisting sensitive values or
+oversized data. The sink now applies the repository's recursive key and token
+redactor and rejects serialized detail payloads larger than 32 KiB before
+insertion. Existing identity mutation transactions continue to roll back when
+the audit insert fails. Synthetic regressions verify nested sensitive-field
+redaction and that oversized details create no audit row. This does not make
+SQLite audit rows tamper-resistant against a host or database administrator,
+and it cannot identify an arbitrary secret placed under an innocuous key unless
+the common value-pattern redactor recognizes it.
