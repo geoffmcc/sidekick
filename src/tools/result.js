@@ -56,12 +56,13 @@ function textResult(text, metadata = {}) {
 function errorResult(error, code = "handler_error", metadata = {}) {
   const safeMessage = sanitizeText(error && error.message ? error.message : String(error || "Unknown error"));
   const safeMetadata = redactResultValue(metadata);
+  const safeCode = typeof code === "string" ? redactSensitive(code) : code;
   const definition = DEFINITIONS[code];
   const status = canonicalStatus(safeMetadata.status || STATUS_BY_CODE[code], code === "approval_required" ? "approval_required" : "failed");
   return {
     content: [{ type: "text", text: code === "handler_error" ? "Error: " + safeMessage : safeMessage }],
     isError: true,
-    code,
+    code: safeCode,
     status,
     result_status: status,
     httpStatus: safeMetadata.httpStatus || definition?.[0],
@@ -97,7 +98,7 @@ function structuredResult(payload, metadata = {}) {
   // `task_runnable`) on `status`; `result_status` is the stable execution
   // classification consumed by generic callers.
   const exposedStatus = explicitStatus && !RESULT_STATUSES.includes(String(explicitStatus).toLowerCase()) && safeValue.ok !== false
-    ? explicitStatus
+    ? redactSensitive(String(explicitStatus))
     : status;
   const ok = status === "succeeded" || status === "partial";
   return {
@@ -109,7 +110,7 @@ function structuredResult(payload, metadata = {}) {
     ...(explicitStatus && ok && safeValue.ok === false ? { finding_ok: false } : {}),
     status: exposedStatus,
     result_status: status,
-    code: value.code || metadata.code || (status === "succeeded" ? null : `result_${status}`),
+    code: redactSensitive(String(value.code || metadata.code || (status === "succeeded" ? "" : `result_${status}`))) || null,
     retry_safe: safeValue.retry_safe ?? safeValue.retryable ?? metadata.retry_safe ?? false,
     evidence_refs: Array.isArray(safeValue.evidence_refs) ? safeValue.evidence_refs.slice(0, 100) : [],
     warnings: Array.isArray(safeValue.warnings) ? safeValue.warnings.slice(0, 50) : [],
@@ -141,7 +142,7 @@ function normalizeResult(result, { allowSensitiveOnce = false } = {}) {
     }
     const canonical = result.isError ? canonicalStatus(result.status, "failed") : "succeeded";
     const exposedStatus = !result.isError && result.status && !RESULT_STATUSES.includes(String(result.status).toLowerCase())
-      ? result.status
+      ? redactSensitive(String(result.status))
       : canonical;
     return { ...redactResultValue(result), ok: !result.isError, status: exposedStatus, result_status: canonical, retry_safe: result.retry_safe ?? result.retryable ?? false, content: sanitizeContent(result.content) };
   }

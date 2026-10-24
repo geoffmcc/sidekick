@@ -48,10 +48,22 @@ assert.strictEqual(structuredLeak.credential, "[REDACTED]", "structured fields m
 assert.strictEqual(structuredLeak.nested.access_token, "[REDACTED]");
 assert.ok(!JSON.stringify(structuredLeak).includes(syntheticCredential), "normalized top-level fields must not bypass text redaction");
 
+const statusLeak = normalizeResult({
+  content: [{ type: "text", text: JSON.stringify({ ok: true, status: `token=${syntheticCredential}`, code: `token=${syntheticCredential}` }) }],
+});
+assert.ok(!JSON.stringify(statusLeak).includes(syntheticCredential), "free-form status/code metadata must not bypass redaction");
+const nonStructuredStatusLeak = normalizeResult({
+  content: [{ type: "text", text: "operation completed" }],
+  status: `token=${syntheticCredential}`,
+});
+assert.ok(!JSON.stringify(nonStructuredStatusLeak).includes(syntheticCredential));
+
 const metadataLeak = errorResult("operation failed", "handler_error", {
   details: { api_key: syntheticCredential },
   warnings: [{ message: `Authorization: Bearer ${syntheticCredential}` }],
   recovery: { next_step: `token=${syntheticCredential}` },
 });
 assert.ok(!JSON.stringify(metadataLeak).includes(syntheticCredential), "error metadata must pass through the same redaction boundary");
+const codeLeak = errorResult("operation failed", `token=${syntheticCredential}`);
+assert.ok(!JSON.stringify(codeLeak).includes(syntheticCredential), "error codes must be redacted if a caller supplies malformed free-form data");
 console.log("Structured result redaction preserves valid JSON");
