@@ -383,9 +383,8 @@ final document. After the fix, `node test/run-all.js test/handoff-reliability.te
   caught a JSON formatting regression; the redactor now preserves indentation
   and the failing suite passes in isolation. The second run failed
   `compute-worker-resilience.test.js` under full-suite load; its isolated rerun
-  passed all seven internal assertions. Therefore the combined required tiers
-  These preliminary runs were not passing; see the corrected combined-tier
-  rerun below.
+  passed all seven internal assertions. These preliminary runs were not
+  passing; see the corrected combined-tier rerun below.
 - No deployment, live-service change, production data access, or dependency
   update was performed.
 
@@ -402,3 +401,14 @@ Result: 377 passed, 0 failed, 0 skipped, 0 cancelled, 0 timed out, and 0 not
 run in 387.325 seconds. The Compute Worker resilience suite now also includes a
 negative regression proving an initial 401 stops the worker without installing
 a recurring heartbeat timer.
+
+### All non-live suites
+
+```text
+node test/run-all.js --concurrency=4 --overall-timeout-ms=900000 --json
+```
+
+Result: 417 passed, 0 failed, 0 skipped, 0 cancelled, 0 timed out, and 0 not
+run in 418.801 seconds. Architecture boundary, test-architecture, and
+documentation checks also pass (519 files, 419 suites, and documentation drift
+checks respectively).
