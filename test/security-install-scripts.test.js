@@ -25,6 +25,18 @@ test("setup-tools uses a fingerprint-pinned Docker APT source", () => {
   assert.doesNotMatch(setup, /get\.docker\.com\s*\|\s*sh/);
 });
 
+test("setup-tools runs third-party Python and npm package hooks as sidekick", () => {
+  const setup = read("scripts/setup-tools.sh");
+  assert.match(setup, /sudo -u "\$USERNAME" "\$TOOLS_PYTHON" -m pip install -q yt-dlp/);
+  assert.match(setup, /sudo -u "\$USERNAME" "\$TOOLS_PYTHON" -m pip install -q openai-whisper/);
+  assert.match(setup, /sudo -u "\$USERNAME" "\$TOOLS_PYTHON" -m pip install -q duckdb/);
+  assert.match(setup, /sudo -u "\$USERNAME" env NPM_CONFIG_PREFIX="\$TOOLS_NPM_PREFIX" npm install --global @mermaid-js\/mermaid-cli/);
+  assert.doesNotMatch(setup, /^\s*pip3?\s+install\b/m);
+  assert.doesNotMatch(setup, /^\s*npm\s+install\s+-g\b/m);
+  assert.match(setup, /find -P "\$TOOLS_VENV" -xdev[\s\S]*-exec chown "\$USERNAME:\$USERNAME"/);
+  assert.match(setup, /\[ -L "\$TOOLS_VENV" \]/);
+});
+
 test("downloaded setup binaries are pinned, verified, and safely extracted", () => {
   const setup = read("scripts/setup-tools.sh");
   const ollama = read("scripts/lib/install-ollama.sh");
