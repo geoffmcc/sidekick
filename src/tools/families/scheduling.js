@@ -351,7 +351,7 @@ function mergeCrontabEntries(current, sidekickEntries) {
   return merged.length ? `${merged.join("\n")}\n` : "";
 }
 
-function cronRunnerEnvironment(source) {
+function cronRunnerEnvironment(source, environment = process.env) {
   const suffixes = ["TOOL_POLICY", "ALLOWED_TOOLS", "DISABLED_TOOLS", "BLOCKED_TOOLS", "APPROVAL_MODE", "APPROVAL_REQUIRED_TOOLS", "APPROVAL_EXEMPT_TOOLS"];
   const keys = new Set([
     "NODE_ENV",
@@ -365,7 +365,9 @@ function cronRunnerEnvironment(source) {
     "SIDEKICK_APPROVAL_EXEMPT_TOOLS",
     ...suffixes.map(suffix => `SIDEKICK_${String(source || "mcp").toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_${suffix}`),
   ]);
-  return [...keys].filter(key => typeof process.env[key] === "string" && process.env[key] !== "").map(key => [key, process.env[key]]);
+  return [...keys]
+    .filter(key => typeof environment[key] === "string" && environment[key] !== "" && !/[\u0000\r\n]/.test(environment[key]))
+    .map(key => [key, environment[key]]);
 }
 
 function isSafeCronSchedule(schedule) {
@@ -1254,5 +1256,5 @@ module.exports = {
   descriptors,
   sidekick_cron, sidekick_delay, sidekick_watch,
   loadDelays, saveDelays, recoverStrandedDelays, pauseWatchForCancel,
-  loadWatches, saveWatches, mergeCrontabEntries,
+  loadWatches, saveWatches, mergeCrontabEntries, cronRunnerEnvironment,
 };

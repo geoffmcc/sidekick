@@ -23,7 +23,7 @@ const tools = require('../src/tools');
 const db = require('../src/db');
 const scheduledExecution = require('../src/tools/scheduled-execution');
 const { createDelayScheduler } = require('../src/agent/delay-scheduler');
-const { mergeCrontabEntries } = require('../src/tools/families/scheduling');
+const { mergeCrontabEntries, cronRunnerEnvironment } = require('../src/tools/families/scheduling');
 const { verifyScheduledWatchAuthority } = require('../src/security/scheduled-authority');
 const toolContext = require('../src/tools/context');
 const { createOwnerContext, createServiceContext } = require('./helpers/authorized-context');
@@ -50,6 +50,16 @@ console.log('Test SP.0z: Sidekick cron reconciliation preserves unrelated user j
   assert.equal(merged, '15 3 * * * /usr/local/bin/backup # operator-backup\n0 2 * * * /usr/bin/node new-runner.js new-id # sidekick:new-id\n');
   assert.equal(mergeCrontabEntries('0 3 * * * /usr/local/bin/backup', []).includes('backup'), true);
   assert.equal(mergeCrontabEntries('* * * * * /usr/bin/node old.js # sidekick:old', []), '');
+  const env = Object.fromEntries(cronRunnerEnvironment('mcp', {
+    NODE_ENV: 'production',
+    SIDEKICK_DATA_DIR: '/safe/path\n* * * * * injected-command',
+    SIDEKICK_SECRET_KEY: 'synthetic-secret-must-not-be-forwarded',
+    SIDEKICK_MCP_TOOL_POLICY: 'restricted',
+  }));
+  assert.equal(env.NODE_ENV, 'production');
+  assert.equal(env.SIDEKICK_DATA_DIR, undefined, 'newline-bearing values must not split cron records');
+  assert.equal(env.SIDEKICK_MCP_TOOL_POLICY, 'restricted');
+  assert.equal(env.SIDEKICK_SECRET_KEY, undefined, 'raw secret values must never be propagated');
 }
 console.log('Passed\n');
 

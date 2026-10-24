@@ -754,7 +754,8 @@ about current lockfile vulnerability status.
   permission and refuses Agent envelopes requiring future approval.
 - Crontab reconciliation now replaces only Sidekick-marked entries, preserves
   unrelated jobs, and gives the runner an allowlist of non-secret runtime paths
-  and policy settings. No secret values are written to crontab.
+  and policy settings. NUL/newline-bearing values are excluded, and raw secret
+  values are never forwarded to crontab.
 - Validation: `node --test test/scheduled-authority.test.js` passed (10 tests);
   `node test/scheduler-platform.test.js` passed on Windows for the applicable
   identity, migration, scope, and preservation assertions; its shell boundary

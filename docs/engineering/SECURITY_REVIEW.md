@@ -384,7 +384,8 @@ explicitly invokes `cron action="authorize"`. The runner verifies the signed
 context before canonical dispatch and retains the initiating source policy.
 Crontab reconciliation now replaces only lines marked as Sidekick-owned,
 preserves unrelated entries, and passes only an allowlisted set of non-secret
-runtime paths and policy settings to the runner.
+runtime paths and policy settings to the runner. Values containing NUL or line
+break characters are omitted so they cannot create additional cron records.
 
 Validation: `test/scheduled-authority.test.js` verifies the signature binds
 command and schedule; `test/scheduler-platform.test.js` verifies the OS runner
