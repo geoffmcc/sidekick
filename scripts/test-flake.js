@@ -4,6 +4,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
+const { childProcessEnv } = require("../src/security/child-process");
 
 const root = path.resolve(__dirname, "..");
 const HISTORY_VERSION = 1;
@@ -211,7 +212,7 @@ function runSuiteBatch(suites, repetitions) {
     let child;
     try {
       child = spawnSync(process.execPath, ["test/run-all.js", ...suites, `--concurrency=${concurrency}`, `--seed=${seed}`, "--json"], {
-        cwd: root, env: { ...process.env, SIDEKICK_PROPERTY_SEED: String(seed), SIDEKICK_TEST_OVERALL_TIMEOUT_MS: "300000" }, encoding: "utf8", timeout: 330000,
+        cwd: root, env: childProcessEnv({ SIDEKICK_PROPERTY_SEED: String(seed), SIDEKICK_TEST_OVERALL_TIMEOUT_MS: "300000" }), encoding: "utf8", timeout: 330000,
       });
     } catch (error) {
       child = { error };
