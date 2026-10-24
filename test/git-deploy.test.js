@@ -26,6 +26,7 @@ function resetApp() {
   fs.writeFileSync(path.join(appDir, 'data', 'sidekick.db'), 'db');
   fs.writeFileSync(path.join(appDir, 'package-lock.json'), '{}');
   fs.writeFileSync(path.join(appDir, 'scripts', 'seed-knowledge.js'), '');
+  fs.writeFileSync(path.join(appDir, 'scripts', 'ensure-secret-config.sh'), '#!/usr/bin/env bash\n');
 }
 
 function makeMock(overrides = {}) {
@@ -67,6 +68,10 @@ function makeMock(overrides = {}) {
     if (cmd === 'df' && state.lowDisk) return 'Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/root 9999999 9999998 1 99% /\n';
     if (cmd === 'df') return 'Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/root 9999999 1 9999999 1% /\n';
     if (cmd === 'chown') return '';
+    if (cmd === 'bash' && args[0].endsWith('ensure-secret-config.sh')) {
+      if (state.failSecretPreflight) fail('SIDEKICK_AGENT_PROXY_KEY is missing');
+      return 'preflight ok\n';
+    }
     if (cmd === 'npm') {
       state.installCalls += 1;
       if (args[0] === 'ci' && args[1] === '--omit=dev') state.installTimeouts.push(options.timeout);
@@ -168,12 +173,23 @@ try {
   assert.strictEqual(result.previous_commit, 'aaa111');
   assert.strictEqual(result.deployed_commit, 'bbb222');
   assert.ok(result.backup, 'changed deploy should create a pre-deploy backup');
+  assert.strictEqual(result.runtime_secret_preflight, 'ok', 'changed deploy should verify runtime credentials before stopping services');
   assert.deepStrictEqual(state.installTimeouts, [600000], 'production dependency installation should allow up to ten minutes');
   assert.ok(fs.existsSync(path.join(result.backup, '.env')), 'backup should include .env');
   assert.ok(fs.existsSync(path.join(result.backup, 'data')), 'backup should include data');
   assert.ok(fs.existsSync(path.join(result.backup, 'manifest.json')), 'backup should include a manifest');
   assert.ok(state.calls.includes('sudo systemctl stop sidekick-mcp'), 'SSH deployment should quiesce MCP through the narrow sudoers grant');
+  assert.ok(state.calls.indexOf(`bash ${path.join(appDir, 'scripts', 'ensure-secret-config.sh')} ${appDir}`) < state.calls.indexOf('sudo systemctl stop sidekick-mcp'), 'runtime secret preflight must run before service interruption');
   assert.strictEqual(gitDeploy.allowedFetchUrl('git://github.com/geoffmcc/sidekick.git'), false, 'git protocol should not be allowed for deploy origin');
+
+  resetApp();
+  state = makeMock({ failSecretPreflight: true });
+  result = gitDeploy.deploy();
+  assert.strictEqual(result.status, 'failed', 'missing runtime credentials should block deployment');
+  assert.match(result.error, /runtime secret preflight failed/);
+  assert.strictEqual(result.runtime_secret_preflight, 'failed');
+  assert.ok(!state.calls.some(command => command.includes('systemctl stop')), 'secret preflight failure must not interrupt services');
+  assert.ok(!state.calls.includes('git merge --ff-only origin/main'), 'secret preflight failure must happen before updating the checkout');
 
   for (const [name, overrides, expected] of [
     ['dirty tracked tree', { status: ' M src/tools.js' }, 'tracked working tree is not clean'],

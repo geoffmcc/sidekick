@@ -295,6 +295,21 @@ function stopServices(result) {
   return servicesStopped(serviceStates(deploymentServices()));
 }
 
+function preflightRuntimeSecrets(result) {
+  const helper = path.join(APP_DIR, 'scripts', 'ensure-secret-config.sh');
+  if (!fs.existsSync(helper)) {
+    fail(result, 'runtime secret preflight is unavailable; refusing to stop services');
+    return false;
+  }
+  const check = run('bash', [helper, APP_DIR], { cwd: APP_DIR });
+  result.runtime_secret_preflight = check.ok ? 'ok' : 'failed';
+  if (!check.ok) {
+    fail(result, 'runtime secret preflight failed; services were not stopped', { stderr: check.stderr });
+    return false;
+  }
+  return true;
+}
+
 function pruneDeployBackups() {
   if (!fs.existsSync(BACKUP_ROOT)) return;
   const backups = fs.readdirSync(BACKUP_ROOT, { withFileTypes: true })
@@ -372,6 +387,7 @@ function deploy() {
 
     const oldHead = result.previous_commit;
     if (result.behind > 0) {
+      if (!preflightRuntimeSecrets(result)) return result;
       servicesStoppedForBackup = true;
       if (!stopServices(result)) return fail(result, 'service stop verification failed', { services: result.stopped_services });
       try {
