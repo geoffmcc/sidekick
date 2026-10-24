@@ -518,9 +518,11 @@ service was accessed.
 ### Security-focused regression suite refresh (2026-10-24)
 
 Command: `node test/run-all.js <119 root-level security*.test.js suites>
---concurrency=4 --overall-timeout-ms=900000`. Result: 119 passed, 0 failed,
-0 skipped. The run includes dashboard and project access, Agent proxy and
-recovery, MCP identity, secrets, sandbox fail-closed behavior, installation,
+--concurrency=4 --overall-timeout-ms=900000`, followed by
+`node test/run-all.js test/security/security-boundaries.test.js
+--concurrency=1 --overall-timeout-ms=300000`. Combined result: 120 passed,
+0 failed, 0 skipped. The runs include dashboard and project access, Agent proxy
+and recovery, MCP identity, secrets, sandbox fail-closed behavior, installation,
 network boundaries, supply-chain controls, and the security-invariant suites.
 This is non-live regression evidence; it does not validate deployed Linux
 systemd behavior, external attack surfaces, or untested paths.
