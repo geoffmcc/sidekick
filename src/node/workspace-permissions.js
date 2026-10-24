@@ -4,7 +4,8 @@
 function workspacePermissionForTool(toolName, args = {}) {
   const name = String(toolName || "");
   if (name === "bash") return "execute";
-  if (["read", "list", "search", "summarize", "filter", "diff_files", "find", "semantic_repo", "dev_repo_profile", "dev_change_summary", "dev_verify", "security_scan", "hash", "parse", "validate", "transform", "extract", "anonymize"].includes(name)) return "read";
+  if (name === "dev_verify") return args.dry_run === true ? "read" : "execute";
+  if (["read", "list", "search", "summarize", "filter", "diff_files", "find", "semantic_repo", "dev_repo_profile", "dev_change_summary", "security_scan", "hash", "parse", "validate", "transform", "extract", "anonymize"].includes(name)) return "read";
   if (name === "write") return "write";
   if (name === "git") {
     const action = String(args.action || "");

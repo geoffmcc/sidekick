@@ -258,7 +258,7 @@ test("execution node applies workspace concurrency and output limits", () => {
 
 test("node-safe tools bind implicit paths to the authorized workspace root", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-node-path-defaults-"));
-  const readWriteWorkspace = createWorkspace({ name: "bounded-defaults", root, permissions: { read: true, write: true } });
+  const readWriteWorkspace = createWorkspace({ name: "bounded-defaults", root, permissions: { read: true, write: true, execute: true } });
   const registry = getCanonicalRegistry({ includeActiveModules: false });
   const cases = [
     ["list", {}],
@@ -282,6 +282,14 @@ test("node-safe tools bind implicit paths to the authorized workspace root", () 
     assert.ok(descriptor, `developer ${name} descriptor is available`);
     assert.equal(validateLocalArguments(descriptor, {}, readWriteWorkspace).path, root, `${name} defaults stay in the workspace`);
   }
+  const dryRunWorkspace = createWorkspace({ name: "bounded-dry-run", root, permissions: { read: true, write: false, execute: false } });
+  const verify = developerDescriptors.find(item => item.name === "dev_verify");
+  assert.equal(validateLocalArguments(verify, { dry_run: true }, dryRunWorkspace).path, root, "non-executing verification planning needs read access only");
+  assert.throws(
+    () => validateLocalArguments(verify, {}, dryRunWorkspace),
+    /does not permit execute/,
+    "verification with commands selected requires the node's execute grant"
+  );
 });
 
 test("execution-node Developer service keeps nested tool calls behind workspace grants and canonical dispatch", async () => {
