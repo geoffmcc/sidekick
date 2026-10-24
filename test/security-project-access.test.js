@@ -387,6 +387,50 @@ test("direct dependency inspection requires canonical dispatch before process in
   assert.equal(result.code, "canonical_dispatch_required");
 });
 
+test("dependency inspection scopes npm project paths and strips credentials from child processes", async () => {
+  const development = require("../src/tools/families/development");
+  const descriptor = development.descriptors.find(item => item.name === "depend");
+  assert.equal(descriptor.schema.safeParse({ action: "tree", type: "npm", depth: -1 }).success, false);
+  assert.equal(descriptor.schema.safeParse({ action: "tree", type: "npm", depth: 11 }).success, false);
+  assert.equal(descriptor.schema.safeParse({ action: "tree", type: "npm", target: "x".repeat(4097) }).success, false);
+  const priorAllowedPaths = process.env.SIDEKICK_MCP_ALLOWED_PATHS;
+  const priorDeniedPaths = process.env.SIDEKICK_MCP_DENIED_PATHS;
+  const priorSecret = process.env.SIDEKICK_TEST_DEPENDENCY_SECRET;
+  process.env.SIDEKICK_MCP_ALLOWED_PATHS = dataDir;
+  const blockedProjectPath = path.join(dataDir, "blocked-dependency-project");
+  process.env.SIDEKICK_MCP_DENIED_PATHS = blockedProjectPath;
+  process.env.SIDEKICK_TEST_DEPENDENCY_SECRET = "synthetic-dependency-secret";
+  try {
+    const projectPath = path.join(dataDir, "dependency-project");
+    fs.mkdirSync(projectPath, { recursive: true });
+    const resolved = toolContext.runWithContext({ source: "mcp" }, () => development.resolveNpmProjectDirectory(projectPath));
+    assert.equal(resolved, fs.realpathSync(projectPath));
+
+    let captured = null;
+    const output = development.runDependencyCommand("npm", ["ls"], { cwd: resolved }, (program, args, options) => {
+      captured = { program, args, options };
+      return "ok";
+    });
+    assert.equal(output, "ok");
+    assert.equal(captured.program, "npm");
+    assert.equal(captured.options.env.SIDEKICK_TEST_DEPENDENCY_SECRET, undefined);
+    assert.equal(captured.options.env.SIDEKICK_SECRET_KEY, undefined);
+
+    const outside = await dispatcher.callMcpTool("depend", { action: "tree", type: "npm", target: blockedProjectPath }, {
+      authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+    });
+    assert.equal(outside.isError, true, "npm cannot inspect a project outside the configured path scope");
+    assert.match(outside.content[0].text, /outside the configured read scope/);
+  } finally {
+    if (priorAllowedPaths === undefined) delete process.env.SIDEKICK_MCP_ALLOWED_PATHS;
+    else process.env.SIDEKICK_MCP_ALLOWED_PATHS = priorAllowedPaths;
+    if (priorDeniedPaths === undefined) delete process.env.SIDEKICK_MCP_DENIED_PATHS;
+    else process.env.SIDEKICK_MCP_DENIED_PATHS = priorDeniedPaths;
+    if (priorSecret === undefined) delete process.env.SIDEKICK_TEST_DEPENDENCY_SECRET;
+    else process.env.SIDEKICK_TEST_DEPENDENCY_SECRET = priorSecret;
+  }
+});
+
 test("direct runbook creation requires canonical dispatch before persistence", async () => {
   const runbook = require("../src/tools/families/runbook");
   const runbookPath = path.join(dataDir, "runbooks.json");

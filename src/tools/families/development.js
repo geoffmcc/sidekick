@@ -618,10 +618,23 @@ async function sidekick_changelog({ action, from, to, format, group_by, use_llm,
 const MAX_DEPEND_DEPTH = 10;
 const MAX_DEPEND_RESULTS = 100;
 
+function resolveNpmProjectDirectory(requestedPath) {
+  const candidate = path.resolve(requestedPath || process.cwd());
+  if (enforcePathPolicy(candidate, "read")) throw new Error("npm project directory is outside the configured read scope");
+  const canonical = fs.realpathSync(candidate);
+  if (enforcePathPolicy(canonical, "read")) throw new Error("npm project directory is outside the configured read scope");
+  if (!fs.statSync(canonical).isDirectory()) throw new Error("npm project path must be a directory");
+  return canonical;
+}
+
+function runDependencyCommand(program, args, options = {}, execute = execFileSync) {
+  return execute(program, args, { ...options, env: childProcessEnv() });
+}
+
 async function sidekick_depend({ action, type, target, depth, format }) {
   const denied = requireCanonicalInvocation("depend");
   if (denied) return denied;
-  const maxDepth = Math.min(depth || 5, MAX_DEPEND_DEPTH);
+  const maxDepth = Math.min(depth ?? 5, MAX_DEPEND_DEPTH);
   const fmt = format || "tree";
 
   if (action === "tree") {
@@ -630,9 +643,9 @@ async function sidekick_depend({ action, type, target, depth, format }) {
     }
 
     if (type === "npm") {
-      const cwd = target || process.cwd();
       try {
-        const result = execFileSync("npm", ["ls", `--depth=${maxDepth}`, "--json"], {
+        const cwd = resolveNpmProjectDirectory(target);
+        const result = runDependencyCommand("npm", ["ls", `--depth=${maxDepth}`, "--json"], {
           encoding: "utf8",
           cwd,
           timeout: 10000,
@@ -669,7 +682,7 @@ async function sidekick_depend({ action, type, target, depth, format }) {
         return { content: [{ type: "text", text: "target required for service tree" }], isError: true };
       }
       try {
-        const result = execFileSync("systemctl", ["list-dependencies", validIdentifier(target, "service name", 128), "--no-pager"], {
+        const result = runDependencyCommand("systemctl", ["list-dependencies", validIdentifier(target, "service name", 128), "--no-pager"], {
           encoding: "utf8",
           timeout: 5000,
           stdio: ["pipe", "pipe", "pipe"]
@@ -684,7 +697,7 @@ async function sidekick_depend({ action, type, target, depth, format }) {
       const pid = target || "1";
       try {
         if (!/^\d+$/.test(String(pid))) throw new Error("Invalid PID");
-        const result = execFileSync("pstree", ["-p", String(pid)], {
+        const result = runDependencyCommand("pstree", ["-p", String(pid)], {
           encoding: "utf8",
           timeout: 5000,
           stdio: ["pipe", "pipe", "pipe"]
@@ -704,9 +717,9 @@ async function sidekick_depend({ action, type, target, depth, format }) {
     }
 
     if (type === "npm") {
-      const cwd = process.cwd();
       try {
-        const result = execFileSync("npm", ["ls", "--all", "--json"], {
+        const cwd = resolveNpmProjectDirectory();
+        const result = runDependencyCommand("npm", ["ls", "--all", "--json"], {
           encoding: "utf8",
           cwd,
           timeout: 15000,
@@ -741,7 +754,7 @@ async function sidekick_depend({ action, type, target, depth, format }) {
 
     if (type === "service") {
       try {
-        const result = execFileSync("systemctl", ["list-dependencies", "--reverse", validIdentifier(target, "service name", 128), "--no-pager"], {
+        const result = runDependencyCommand("systemctl", ["list-dependencies", "--reverse", validIdentifier(target, "service name", 128), "--no-pager"], {
           encoding: "utf8",
           timeout: 5000,
           stdio: ["pipe", "pipe", "pipe"]
@@ -755,7 +768,7 @@ async function sidekick_depend({ action, type, target, depth, format }) {
     if (type === "process") {
       try {
         if (!/^\d+$/.test(String(target))) throw new Error("Invalid PID");
-        const result = execFileSync("ps", ["-o", "pid,ppid,comm", "--ppid", String(target)], {
+        const result = runDependencyCommand("ps", ["-o", "pid,ppid,comm", "--ppid", String(target)], {
           encoding: "utf8",
           timeout: 5000,
           stdio: ["pipe", "pipe", "pipe"]
@@ -773,9 +786,9 @@ async function sidekick_depend({ action, type, target, depth, format }) {
     if (type !== "npm") {
       return { content: [{ type: "text", text: "outdated only supported for npm" }], isError: true };
     }
-    const cwd = target || process.cwd();
     try {
-      const result = execFileSync("npm", ["outdated", "--json"], {
+      const cwd = resolveNpmProjectDirectory(target);
+      const result = runDependencyCommand("npm", ["outdated", "--json"], {
         encoding: "utf8",
         cwd,
         timeout: 15000,
@@ -812,9 +825,10 @@ async function sidekick_depend({ action, type, target, depth, format }) {
 
     if (type === "npm") {
       try {
-        const result = execFileSync("npm", ["ls", "--all", "--json"], {
+        const cwd = resolveNpmProjectDirectory();
+        const result = runDependencyCommand("npm", ["ls", "--all", "--json"], {
           encoding: "utf8",
-          cwd: process.cwd(),
+          cwd,
           timeout: 15000,
           stdio: ["pipe", "pipe", "pipe"]
         });
@@ -847,7 +861,7 @@ async function sidekick_depend({ action, type, target, depth, format }) {
       }
     } else if (type === "service") {
       try {
-        const result = execFileSync("systemctl", ["list-dependencies", "--reverse", validIdentifier(target, "service name", 128), "--no-pager"], {
+        const result = runDependencyCommand("systemctl", ["list-dependencies", "--reverse", validIdentifier(target, "service name", 128), "--no-pager"], {
           encoding: "utf8",
           timeout: 5000,
           stdio: ["pipe", "pipe", "pipe"]
@@ -871,8 +885,8 @@ async function sidekick_depend({ action, type, target, depth, format }) {
     if (type !== "npm") {
       return { content: [{ type: "text", text: "orphans only supported for npm" }], isError: true };
     }
-    const cwd = target || process.cwd();
     try {
+      const cwd = resolveNpmProjectDirectory(target);
       const pkgPath = path.join(cwd, "package.json");
       if (!fs.existsSync(pkgPath)) {
         return { content: [{ type: "text", text: "No package.json found" }], isError: true };
@@ -880,7 +894,7 @@ async function sidekick_depend({ action, type, target, depth, format }) {
       const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
       const declared = Object.keys(pkg.dependencies || {});
 
-      const result = execFileSync("npm", ["ls", "--depth=0", "--json"], {
+      const result = runDependencyCommand("npm", ["ls", "--depth=0", "--json"], {
         encoding: "utf8",
         cwd,
         timeout: 10000,
@@ -927,8 +941,8 @@ const SCHEMAS = {
   depend: z.object({
     action: z.enum(["tree", "reverse", "outdated", "impact", "orphans"]),
     type: z.enum(["npm", "service", "process"]),
-    target: z.string().optional().describe("Package, service, or PID to analyze"),
-    depth: z.number().optional().default(5),
+    target: z.string().max(4096).optional().describe("Package, service, process, or scoped project directory to analyze"),
+    depth: z.number().int().min(0).max(MAX_DEPEND_DEPTH).optional().default(5),
     format: z.enum(["tree", "flat", "json"]).optional().default("tree")
   }),
 };
@@ -970,4 +984,4 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_git, sidekick_changelog, sidekick_depend, parseGitExtraArgs };
+module.exports = { descriptors, sidekick_git, sidekick_changelog, sidekick_depend, parseGitExtraArgs, resolveNpmProjectDirectory, runDependencyCommand };
