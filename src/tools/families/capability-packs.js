@@ -154,7 +154,14 @@ async function sidekick_capability({ action = "list", name, path: sourcePath, ex
     }
 
     if (action === "record_verification") {
-      const result = lifecycle.recordVerification(requireName(name, action), config || {});
+      const principalId = runtime.context?.authIdentity?.principal_id;
+      if (typeof principalId !== "string" || !principalId.trim()) {
+        return failure("Recording pack verification requires an authenticated principal", { code: "verification_identity_required" });
+      }
+      if (config?.actor_ref && config.actor_ref !== principalId) {
+        return failure("actor_ref must match the authenticated verifier", { code: "verification_actor_mismatch" });
+      }
+      const result = lifecycle.recordVerification(requireName(name, action), { ...(config || {}), actor_ref: principalId });
       return jsonText({ ok: true, action, ...result });
     }
 
