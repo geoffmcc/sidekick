@@ -26,27 +26,10 @@ class BrowserActionError extends Error {
   }
 }
 
-function redactDiagnosticUrls(value) {
-  return String(value).replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+/gi, (raw) => {
-    let candidate = raw;
-    let suffix = "";
-    while (/[.,;:!?)}\]]$/.test(candidate)) {
-      suffix = candidate.slice(-1) + suffix;
-      candidate = candidate.slice(0, -1);
-    }
-    try {
-      const url = new URL(candidate);
-      return `${url.protocol}${url.host ? `//${url.host}` : ""}${suffix}`;
-    } catch {
-      return `[URL redacted]${suffix}`;
-    }
-  });
-}
-
 function classifyError(error) {
   if (error instanceof BrowserActionError) return error;
   const message = String(error && error.message || error);
-  const first = redactDiagnosticUrls(message.split("\n")[0].slice(0, 400));
+  const first = egress.redactDiagnosticUrls(message.split("\n")[0].slice(0, 400));
   if (/ERR_BLOCKED_BY_CLIENT/.test(message)) {
     return new BrowserActionError("Request blocked by the session's egress policy", "blocked_by_policy");
   }
@@ -150,7 +133,7 @@ async function pageState(session, entry) {
   try { title = await entry.page.title(); } catch { /* page may be navigating */ }
   return {
     id: entry.id,
-    url: entry.page.url(),
+    url: egress.safeEvidenceTarget(entry.page.url(), "http"),
     title: sessionsStore.scrubSecrets(session, String(title).slice(0, 300)),
   };
 }
@@ -686,7 +669,7 @@ async function runAssertions(session, args, runtime) {
       switch (kind) {
         case "url_contains": {
           const actual = entry.page.url();
-          item.actual = actual;
+          item.actual = egress.safeEvidenceTarget(actual, "http");
           item.passed = actual.includes(String(assertion.value));
           break;
         }

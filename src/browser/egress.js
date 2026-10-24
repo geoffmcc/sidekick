@@ -221,10 +221,28 @@ function safeEvidenceTarget(target, kind) {
     if (url.protocol) {
       // URLs can contain credentials in userinfo, paths, or query values.
       // Evidence only needs the destination authority; never persist the raw URL.
+      if (url.href === "about:blank") return "about:blank";
       return (url.host ? `${url.protocol}//${url.host}` : url.protocol).slice(0, 500);
     }
   } catch { /* host:port evidence (for CONNECT) is not a URL */ }
   return value.slice(0, 500);
+}
+
+function redactDiagnosticUrls(value) {
+  return String(value).replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+/gi, (raw) => {
+    let candidate = raw;
+    let suffix = "";
+    while (/[.,;:!?)}\]]$/.test(candidate)) {
+      suffix = candidate.slice(-1) + suffix;
+      candidate = candidate.slice(0, -1);
+    }
+    try {
+      const url = new URL(candidate);
+      return `${url.protocol}${url.host ? `//${url.host}` : ""}${suffix}`;
+    } catch {
+      return `[URL redacted]${suffix}`;
+    }
+  });
 }
 
 async function createSessionProxy(policy, { onBlocked = () => {}, onRequest = () => {}, credential = null } = {}) {
@@ -448,5 +466,7 @@ module.exports = {
   resolveAndValidate,
   createSessionProxy,
   matchHostPattern,
+  safeEvidenceTarget,
+  redactDiagnosticUrls,
   clearDnsCache,
 };
