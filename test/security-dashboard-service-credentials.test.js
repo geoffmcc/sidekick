@@ -47,6 +47,33 @@ test("MCP client setup distinguishes standard tool execution from pack permissio
   assert.match(dashboardMarkup, /Pack access is separate from standard tool execution[\s\S]*pack permissions alone do not grant that access/);
   assert.match(dashboardClientCode, /mcpGrantTools[^\n]*tools\.execute/);
   assert.match(dashboardClientCode, /mcpGrantPacks[^\n]*packs\.read', 'packs\.manage/);
+  assert.match(dashboardMarkup, /mcpGrantMemoryRead[^>]*> Read memory and handoffs/);
+  assert.match(dashboardMarkup, /mcpGrantMemoryWrite[^>]*> Save memory and handoffs/);
+  assert.match(dashboardMarkup, /mcpGrantKnowledgeRead[^>]*> Search Sidekick knowledge/);
+  assert.match(dashboardClientCode, /mcpGrantMemoryRead[^\n]*memory\.read/);
+  assert.match(dashboardClientCode, /mcpGrantMemoryWrite[^\n]*memory\.write/);
+  assert.match(dashboardClientCode, /mcpGrantKnowledgeRead[^\n]*knowledge\.read/);
+  assert.match(dashboardClientCode, /mcpGrantCatalogRead[^\n]*tools\.catalog\.read/);
+  assert.match(dashboardClientCode, /mcpGrantWorkflows[^\n]*workflows\.execute/);
+});
+
+test("MCP service identities can receive explicitly selected continuity and discovery permissions", () => {
+  const res = response();
+  handlers.get("POST /api/auth/service-credentials")({
+    authPrincipal: owner,
+    body: {
+      display_name: "Continuity-enabled MCP client",
+      permissions: ["memory.read", "memory.write", "knowledge.read", "tools.catalog.read", "workflows.execute"],
+      scopes: ["memory.read", "memory.write", "knowledge.read", "tools.catalog.read", "workflows.execute"],
+    },
+  }, res);
+
+  assert.equal(res.statusCode, 201);
+  const auth = authentication.authenticateCredential(res.body.token);
+  for (const permission of ["memory.read", "memory.write", "knowledge.read", "tools.catalog.read", "workflows.execute"]) {
+    assert.equal(authorization.authorize({ principalId: auth.principal_id, permission, credentialScopes: auth.scopes }).ok, true, `${permission} is effective when explicitly granted`);
+  }
+  assert.equal(authorization.authorize({ principalId: auth.principal_id, permission: "tools.execute_critical", credentialScopes: auth.scopes }).ok, false, "unselected critical execution remains denied");
 });
 
 test("service credential provisioning is atomic, audited, narrowly scoped, and revocable", () => {
@@ -74,7 +101,7 @@ test("service credential provisioning is atomic, audited, narrowly scoped, and r
   const status = response();
   handlers.get("GET /api/auth/service-credentials")({ authPrincipal: owner }, status);
   assert.equal(status.statusCode, 200);
-  assert.equal(status.body.service_principals[0].principal_id, auth.principal_id);
+  assert.ok(status.body.service_principals.some(principal => principal.principal_id === auth.principal_id));
   assert.equal(JSON.stringify(status.body).includes(res.body.token), false, "status never reveals a credential token");
 
   const audit = dbStore.getDb().prepare("SELECT event_type, actor_principal_id, details_json FROM identity_audit_events WHERE principal_id = ?").all(auth.principal_id);
@@ -82,9 +109,10 @@ test("service credential provisioning is atomic, audited, narrowly scoped, and r
   assert.ok(audit.some(row => row.event_type === "credential.created" && row.actor_principal_id === owner.principal_id));
 
   const denied = response();
+  const principalsBeforeDeniedAttempt = identity.listPrincipals({ type: "service" }).length;
   handler({ authPrincipal: { ...auth, scopes: auth.scopes }, body: { display_name: "Escalation", permissions: ["packs.manage"] } }, denied);
   assert.equal(denied.statusCode, 403, "the resulting service identity cannot provision or expand its own authority");
-  assert.equal(identity.listPrincipals({ type: "service" }).length, 1);
+  assert.equal(identity.listPrincipals({ type: "service" }).length, principalsBeforeDeniedAttempt, "denied provisioning creates no service principal");
 
   const rotated = response();
   const scopedRotation = response();

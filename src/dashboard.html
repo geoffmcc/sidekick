@@ -754,10 +754,16 @@
       <fieldset>
         <legend>Allow this client to</legend>
         <label><input id="mcpGrantTools" type="checkbox" checked> Use standard tools (low and medium risk)</label>
+        <label><input id="mcpGrantMemoryRead" type="checkbox"> Read memory and handoffs</label>
+        <label><input id="mcpGrantMemoryWrite" type="checkbox"> Save memory and handoffs</label>
+        <label><input id="mcpGrantKnowledgeRead" type="checkbox"> Search Sidekick knowledge</label>
+        <label><input id="mcpGrantCatalogRead" type="checkbox"> Discover available tools</label>
+        <label><input id="mcpGrantWorkflows" type="checkbox"> Run workflows</label>
         <label><input id="mcpGrantPacks" type="checkbox"> View and manage Capability Packs</label>
         <label><input id="mcpGrantHigh" type="checkbox"> Use high-risk tools</label>
         <label><input id="mcpGrantCritical" type="checkbox"> Request critical-risk tools</label>
       </fieldset>
+      <div class="sub">Memory read and write are separate grants. Project access is still checked for each memory operation.</div>
       <div class="sub">Pack access is separate from standard tool execution. Enable standard tools if this client should run routine tools such as Jellyfin playback queries; pack permissions alone do not grant that access.</div>
       <div class="sub">Critical actions still follow Sidekick policy and approval checks. Only grant permissions this agent needs.</div>
       <button class="btn btn-sm" type="button" data-dashboard-action="identity" data-handler="createMcpServiceCredential">Create client credential</button>

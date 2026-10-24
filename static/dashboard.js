@@ -746,6 +746,11 @@ async function createMcpServiceCredential(principalId) {
   const name = String($('mcpClientName')?.value || '').trim();
   const permissions = [];
   if ($('mcpGrantTools')?.checked) permissions.push('tools.execute');
+  if ($('mcpGrantMemoryRead')?.checked) permissions.push('memory.read');
+  if ($('mcpGrantMemoryWrite')?.checked) permissions.push('memory.write');
+  if ($('mcpGrantKnowledgeRead')?.checked) permissions.push('knowledge.read');
+  if ($('mcpGrantCatalogRead')?.checked) permissions.push('tools.catalog.read');
+  if ($('mcpGrantWorkflows')?.checked) permissions.push('workflows.execute');
   if ($('mcpGrantPacks')?.checked) permissions.push('packs.read', 'packs.manage');
   if ($('mcpGrantHigh')?.checked) permissions.push('tools.execute_high');
   if ($('mcpGrantCritical')?.checked) permissions.push('tools.execute_critical');
