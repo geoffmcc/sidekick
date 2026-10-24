@@ -4,9 +4,23 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const path = require("node:path");
-const { binaries, commandOnPath } = require("../src/node/agent");
+const { binaries, commandOnPath, shellIsolationStatus } = require("../src/node/agent");
 const { resolveCommandOnPath } = require("../src/security/command-lookup");
 const { ownedTempRoot, withEnv } = require("./helpers/isolated");
+
+test("execution-node shell isolation capability is explicit and does not disclose host paths", () => {
+  assert.deepEqual(shellIsolationStatus("win32"), {
+    backend: "bubblewrap",
+    available: false,
+    code: "unsupported_platform",
+  });
+  const status = shellIsolationStatus();
+  assert.equal(status.backend, "bubblewrap");
+  assert.equal(typeof status.available, "boolean");
+  assert.equal(status.available ? status.code === null : typeof status.code === "string", true);
+  assert.deepEqual(Object.keys(status).sort(), ["available", "backend", "code"]);
+  assert.doesNotMatch(JSON.stringify(status), /[A-Za-z]:\\|\/usr\/|\/home\//, "isolation diagnostics must not reveal binary or workspace paths");
+});
 
 test("execution-node binary discovery inspects PATH without launching helper processes", async () => {
   const owned = await ownedTempRoot("sidekick-node-binaries-");

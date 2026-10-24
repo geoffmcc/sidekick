@@ -19,6 +19,7 @@ const { descriptorIdentity } = require("./placement");
 const { createWorkspace, resolveWorkspacePath, discoverRepositories, stableId } = require("./workspace");
 const { workspacePermissionForTool } = require("./workspace-permissions");
 const { resolveCommandOnPath } = require("../security/command-lookup");
+const { resolveBubblewrap, resolvePrlimit } = require("../core/bubblewrap-executor");
 
 const VERSION = require("../../package.json").version;
 const PROTOCOL_VERSION = "1";
@@ -104,7 +105,18 @@ function binaries() {
   const names = ["git", "rg", "grep", "node", "npm", "python3", "go", "cargo", "ruby", "java"];
   return names.filter(name => commandOnPath(name));
 }
-function capabilities() { return { nodeId: nodeId(), executionHost: os.hostname(), nodeVersion: process.version, osType: os.type(), osRelease: os.release(), architecture: os.arch(), platform: process.platform, descriptorSetHash: descriptorSetHash(), binaries: binaries(), packs: Array.isArray(nodeConfig.packs) ? nodeConfig.packs.slice(0, 16) : [], workspaces: workspace ? [{ name: workspace.name, root: workspace.root, permissions: workspace.permissions, limits: workspace.limits }] : [], networkScopes: networkScopes(), browser: false, privilege: false, healthy: true }; }
+function shellIsolationStatus(platform = process.platform) {
+  if (platform !== "linux") return { backend: "bubblewrap", available: false, code: "unsupported_platform" };
+  try {
+    resolveBubblewrap();
+    resolvePrlimit();
+    return { backend: "bubblewrap", available: true, code: null };
+  } catch (error) {
+    const code = /^[a-z0-9_]{1,64}$/.test(String(error?.code || "")) ? error.code : "isolation_unavailable";
+    return { backend: "bubblewrap", available: false, code };
+  }
+}
+function capabilities() { return { nodeId: nodeId(), executionHost: os.hostname(), nodeVersion: process.version, osType: os.type(), osRelease: os.release(), architecture: os.arch(), platform: process.platform, descriptorSetHash: descriptorSetHash(), binaries: binaries(), packs: Array.isArray(nodeConfig.packs) ? nodeConfig.packs.slice(0, 16) : [], workspaces: workspace ? [{ name: workspace.name, root: workspace.root, permissions: workspace.permissions, limits: workspace.limits }] : [], networkScopes: networkScopes(), shellIsolation: shellIsolationStatus(), browser: false, privilege: false, healthy: true }; }
 function effectiveConcurrency(targetWorkspace = workspace) {
   const workspaceLimit = Number(targetWorkspace?.limits?.maxConcurrent);
   return Math.min(CONCURRENCY, Number.isInteger(workspaceLimit) && workspaceLimit > 0 ? workspaceLimit : CONCURRENCY);
@@ -271,4 +283,4 @@ function status() { const record = credentialStore.load(CREDENTIAL_PATH); consol
 async function doctor() { const checks = []; try { prepare(); checks.push({ name: "workspace", ok: true, repositories: discoverRepositories(workspace).length }); } catch (error) { checks.push({ name: "workspace", ok: false, error: error.message }); } const record = credentialStore.load(CREDENTIAL_PATH); checks.push({ name: "credential", ok: Boolean(record), state: record ? "present" : "not_enrolled" }); checks.push({ name: "enrollment_token", ok: Boolean(token()), state: token() ? "configured" : "not_configured" }); checks.push({ name: "descriptor_set", ok: (() => { try { descriptorSetHash(); return true; } catch { return false; } })() }); console.log(JSON.stringify({ ok: checks.every(check => check.ok), checks }, null, 2)); if (checks.some(check => !check.ok)) process.exitCode = 1; }
 async function runCommand(command) { if (command === "version") return console.log(VERSION); if (command === "status") { nodeConfig = loadConfig(); return status(); } if (command === "doctor") return doctor(); if (command === "enroll") { prepare(); await enroll(); return; } return main(); }
 if (require.main === module) runCommand(process.argv[2] || "run").catch(error => { log(error.message); process.exitCode = 1; });
-module.exports = { capabilities, descriptorSetHash, validateLocalArguments, createDeveloperServices, createNodeExecutionContext, boundedResult, effectiveConcurrency, effectiveOutputLimit, createWorkspace, binaries, commandOnPath, request };
+module.exports = { capabilities, shellIsolationStatus, descriptorSetHash, validateLocalArguments, createDeveloperServices, createNodeExecutionContext, boundedResult, effectiveConcurrency, effectiveOutputLimit, createWorkspace, binaries, commandOnPath, request };

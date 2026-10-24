@@ -39,6 +39,7 @@ async function maybeExecute(descriptor, args, context = {}, nodeAuthorization = 
   manager.ensureSchema();
   const requestedPaths = pathArguments(args);
   const requiredWorkspacePermission = manager.workspacePermissionForTool(descriptor.name, args);
+  const requiredIsolation = descriptor.name === "bash" || (descriptor.name === "dev_verify" && args?.dry_run !== true) ? "bubblewrap" : null;
   const nodes = manager.list().filter(node => node.worker && node.worker.connectionState === "online");
   const placement = selectNode(nodes.map(node => ({ nodeId: node.nodeId, capabilities: {
     ...node.capabilities,
@@ -49,7 +50,7 @@ async function maybeExecute(descriptor, args, context = {}, nodeAuthorization = 
     networkScopes: node.authorizedNetworkScopes,
     healthy: node.capabilityState === "healthy",
     authorized: node.worker.adminState === "enabled" && node.worker.credentialState === "active",
-  }, node })), descriptor, { descriptorSetHash: context.descriptorSetHash, protocolVersion: "1", requestedPaths, requiredWorkspacePermission });
+  }, node })), descriptor, { descriptorSetHash: context.descriptorSetHash, protocolVersion: "1", requestedPaths, requiredWorkspacePermission, requiredIsolation });
   if (!placement.selected) {
     const pathIsRemoteOnly = requestedPaths.length > 0 && requestedPaths.some(target => !visibleOnServer(target));
     if (pathIsRemoteOnly) return {

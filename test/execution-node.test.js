@@ -47,6 +47,21 @@ assert.throws(() => workspace.resolveWorkspacePath(writable, path.join(outside, 
 const descriptor = { name: "read", version: "1", placement: { locations: ["node"], nodeSafe: true, requirements: { os: ["linux"], workspaces: ["security-research"] } } };
 const eligible = placement.checkEligibility(descriptor, { nodeId: "node_a", platform: "linux", protocolVersion: "1", workspaces: ["security-research"], authorized: true, healthy: true });
 assert.strictEqual(eligible.eligible, true);
+const shellExecutionDescriptor = { ...descriptor, name: "bash" };
+const isolationMissing = placement.checkEligibility(shellExecutionDescriptor, {
+  nodeId: "node_no_sandbox", platform: "linux", protocolVersion: "1", workspaces: ["security-research"], authorized: true, healthy: true,
+}, { requiredIsolation: "bubblewrap" });
+assert.strictEqual(isolationMissing.eligible, false, "legacy nodes without an isolation report cannot receive shell execution");
+assert.ok(isolationMissing.reasons.includes("isolation_unavailable:bubblewrap"));
+const isolationReady = placement.checkEligibility(shellExecutionDescriptor, {
+  nodeId: "node_sandbox", platform: "linux", protocolVersion: "1", workspaces: ["security-research"], authorized: true, healthy: true,
+  shellIsolation: { backend: "bubblewrap", available: true, code: null },
+}, { requiredIsolation: "bubblewrap" });
+assert.strictEqual(isolationReady.eligible, true);
+const isolationUnneeded = placement.checkEligibility(descriptor, {
+  nodeId: "node_read_only", platform: "linux", protocolVersion: "1", workspaces: ["security-research"], authorized: true, healthy: true,
+}, { requiredIsolation: null });
+assert.strictEqual(isolationUnneeded.eligible, true, "read-only work does not require shell isolation");
 const visible = placement.checkEligibility(descriptor, { nodeId: "node_path", platform: "linux", protocolVersion: "1", workspaces: [{ name: "security-research", root }], authorized: true, healthy: true }, { requestedPaths: [path.join(root, "buried", "repo")] });
 assert.strictEqual(visible.eligible, true);
 const invisible = placement.checkEligibility(descriptor, { nodeId: "node_path", platform: "linux", protocolVersion: "1", workspaces: [{ name: "security-research", root }], authorized: true, healthy: true }, { requestedPaths: [outside] });
