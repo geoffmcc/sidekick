@@ -79,9 +79,16 @@ test("memory import is visible in the real Memory workspace", async () => {
     assert.equal(imported.status, 200, JSON.stringify(imported.body));
     assert.equal(imported.body.ok, true);
     assert.equal(imported.body.imported, 1);
+    const scopedMemories = await fixture.request("GET", "/api/memories?project=e2e_journey&include_disabled=true&limit=500");
+    assert.equal(scopedMemories.status, 200, JSON.stringify(scopedMemories.body));
+    assert.equal(scopedMemories.body.memories[0]?.summary, "E2E durable memory");
+    assert.equal(scopedMemories.body.memories[0]?.category, "unresolved", "imported memories remain untrusted until confirmed");
+    const memoryStats = await fixture.request("GET", "/api/memories/stats");
+    assert.equal(memoryStats.body.stats.durable_active, 0, "pending imported content is not counted as durable active memory");
 
     await page.goto(`${fixture.baseUrl}/#memory`, { waitUntil: "domcontentloaded" });
     await page.locator("#page-memory.active").waitFor({ state: "attached" });
+    await page.locator("#memoryCategoryUnresolved").click();
     await page.locator("#memoryList").getByText("E2E durable memory").waitFor({ state: "visible" });
     assert.match(await page.locator("#memoryList").textContent(), /e2e_journey/);
     await page.locator("#memoryCategoryAll").click();

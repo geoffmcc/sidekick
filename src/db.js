@@ -1339,7 +1339,7 @@ function getMemoryIntelligenceStats() {
   // string, so an ISO row always sorts above such a bound. Bind an ISO value.
   const countSince = (sql, bound) => db.prepare(sql).get(bound).count;
   const nowBound = nowIso();
-  stats.durable_active = count("SELECT COUNT(*) AS count FROM memories WHERE enabled = 1 AND COALESCE(memory_class, 'semantic') NOT IN ('working') AND type NOT IN ('tool_call')");
+  stats.durable_active = count("SELECT COUNT(*) AS count FROM memories WHERE enabled = 1 AND COALESCE(state, 'active') != 'pending' AND type != 'open_thread' AND COALESCE(memory_class, 'semantic') NOT IN ('working') AND type NOT IN ('tool_call')");
   stats.pending_review = count("SELECT COUNT(*) AS count FROM memories WHERE enabled = 1 AND state = 'pending'");
   stats.conflicting = count("SELECT COUNT(*) AS count FROM memories WHERE enabled = 1 AND (conflict_group IS NOT NULL OR metadata_json LIKE '%conflicts_with%')");
   stats.expired = countSince("SELECT COUNT(*) AS count FROM memories WHERE state = 'expired' OR (expires_at IS NOT NULL AND expires_at <= ?)", nowBound);
