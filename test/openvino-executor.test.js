@@ -7,7 +7,7 @@ const assert = require("assert");
 
 const { initOpenVinoExecutor, executeOpenVinoEmbed, getCapabilityStatus, getOpenVinoCapabilities } = require("../src/compute/openvino-executor");
 const { loadOpenVinoConfig, validateConfigPath, validatePythonPath } = require("../src/compute/openvino-config");
-const { validateJobRequest, getApprovedModel, verifyModelIntegrity, verifyModelFileHash, sha256File, MAX_MODEL_MANIFEST_FILE_BYTES, CERTIFICATION_TIER } = require("../src/compute/openvino-model-manifest");
+const { validateJobRequest, getApprovedModel, listApprovedModels, verifyModelIntegrity, verifyModelFileHash, sha256File, MAX_MODEL_MANIFEST_FILE_BYTES, CERTIFICATION_TIER } = require("../src/compute/openvino-model-manifest");
 const { HelperManager, HelperProcess } = require("../src/compute/openvino-helper-manager");
 
 // ---------------------------------------------------------------------------
@@ -220,12 +220,17 @@ async function runManifestTests() {
     assert.ok(result.reason.includes("not in approved manifest"));
   });
 
-  await test("verifyModelFileHash: model with no integrity hashes passes", () => {
-    // Temporarily create a model without integrity for testing.
-    // Instead, verify that model entries have integrity declared.
-    const e5 = getApprovedModel("e5-small-v2-qint8");
-    assert.ok(e5.integrity, "E5 model has integrity hashes");
-    assert.strictEqual(e5.integrity.algorithm, "sha256");
+  await test("certified models declare concrete SHA-256 integrity hashes", () => {
+    const certified = listApprovedModels().filter(model => model.status === CERTIFICATION_TIER.CERTIFIED);
+    assert.ok(certified.length > 0, "the catalogue must contain certified models");
+    for (const model of certified) {
+      assert.equal(model.integrity?.algorithm, "sha256", `${model.modelId}: integrity algorithm`);
+      const files = Object.entries(model.integrity?.files || {});
+      assert.ok(files.length > 0, `${model.modelId}: certified model must pin integrity files`);
+      for (const [name, digest] of files) {
+        assert.match(digest, /^[a-f0-9]{64}$/, `${model.modelId}/${name}: digest must be a concrete SHA-256 value`);
+      }
+    }
   });
 
   await test("verifyModelIntegrity: missing model dir reports missing files but not manifestMismatch", () => {
