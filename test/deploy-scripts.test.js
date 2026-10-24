@@ -901,8 +901,8 @@ assert.ok(deployPs1Content.includes('$status.Trim() -eq "active"'), 'deploy.ps1 
 assert.ok(deployShContent.lastIndexOf('wait_sidekick_services || exit 1') < deployShContent.indexOf('=== Deploy complete ==='), 'deploy.sh must report completion only after service readiness');
 assert.ok(deployPs1Content.lastIndexOf('Wait-SidekickServices') < deployPs1Content.indexOf('=== Deploy complete ==='), 'deploy.ps1 must report completion only after service readiness');
 assert.ok(bootstrapShContent.includes('/etc/sidekick/secrets'), 'bootstrap.sh should create the protected secret directory');
-assert.ok(bootstrapShContent.includes('generate_secret_file'), 'bootstrap.sh should generate missing core secret files');
-assert.ok(bootstrapShContent.includes('chmod 600'), 'bootstrap.sh should protect generated secret files');
+assert.ok(bootstrapShContent.includes('provision-runtime-secrets.js'), 'bootstrap.sh should provision core secrets through the no-follow helper');
+assert.ok(fs.readFileSync(path.join(__dirname, '..', 'scripts', 'provision-runtime-secrets.js'), 'utf8').includes('O_NOFOLLOW'), 'runtime secret provisioning must open files without following symlinks');
 console.log('✓ both deploy routes and bootstrap configure protected secrets\n');
 
 // SUMMARY
