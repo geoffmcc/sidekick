@@ -1549,78 +1549,107 @@ const { clampLimit, isReadonlySql, quoteIdentifier, executeQuery } = databaseQue
 
 const { getTableList, getTableInfo, getDatabaseStats, formatBytes } = databaseInspection;
 
+function createPrivateTempDirectory(parentPath, prefix) {
+  const tempDirectory = fs.mkdtempSync(path.join(parentPath, prefix));
+  fs.chmodSync(tempDirectory, 0o700);
+  return tempDirectory;
+}
+
+function readRegularBackupNoFollow(filePath) {
+  let before;
+  try { before = fs.lstatSync(filePath); }
+  catch (error) {
+    if (error && error.code === "ENOENT") throw new Error(`Backup file not found: ${filePath}`);
+    throw error;
+  }
+  if (before.isSymbolicLink() || !before.isFile()) {
+    throw new Error("Backup path must be a regular file, not a symlink or special file");
+  }
+
+  const flags = fs.constants.O_RDONLY
+    | (fs.constants.O_NONBLOCK || 0)
+    | (fs.constants.O_NOFOLLOW || 0);
+  const fd = fs.openSync(filePath, flags);
+  try {
+    const opened = fs.fstatSync(fd);
+    const current = fs.lstatSync(filePath);
+    if (!opened.isFile() || current.isSymbolicLink() || !current.isFile()
+      || (Number.isFinite(before.dev) && Number.isFinite(before.ino) && before.ino !== 0
+        && (before.dev !== opened.dev || before.ino !== opened.ino))
+      || (Number.isFinite(opened.dev) && Number.isFinite(opened.ino) && opened.ino !== 0
+        && (opened.dev !== current.dev || opened.ino !== current.ino))) {
+      throw new Error("Backup path changed while it was being opened");
+    }
+    return fs.readFileSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 function createBackup(destPath = null, compress = true) {
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
   const backupName = `sidekick-backup-${timestamp}.db`;
   const backupPath = destPath || path.join(BACKUP_DIR, backupName);
-  
-  const temporaryPath = `${backupPath}.tmp`;
+  const tempDirectory = createPrivateTempDirectory(path.dirname(backupPath), ".sidekick-backup-");
+  const temporaryPath = path.join(tempDirectory, "backup.db");
+
   try {
-    // Checkpoint before copying and validate the resulting artifact. Never
-    // open the destination before replacing it: an open SQLite handle can keep
-    // writing to the old inode and make the backup appear valid while it is
-    // being overwritten.
+    // Checkpoint before copying and validate the resulting artifact. Temporary
+    // files live in a new private directory beside the requested destination,
+    // never at a predictable attacker-controlled sibling path.
     db.pragma("wal_checkpoint(TRUNCATE)");
-    fs.copyFileSync(DB_FILE, temporaryPath);
+    fs.copyFileSync(DB_FILE, temporaryPath, fs.constants.COPYFILE_EXCL);
+    fs.chmodSync(temporaryPath, 0o600);
     const backupDb = new Database(temporaryPath, { readonly: true });
     try {
       if (backupDb.pragma("integrity_check", { simple: true }) !== "ok") throw new Error("backup integrity check failed");
     } finally { backupDb.close(); }
-    fs.renameSync(temporaryPath, backupPath);
-    
+
     if (compress) {
-      const input = fs.readFileSync(backupPath);
-      const compressed = zlib.gzipSync(input);
-      fs.writeFileSync(backupPath + ".gz", compressed);
-      fs.unlinkSync(backupPath);
-      return { path: backupPath + ".gz", size: compressed.length, compressed: true };
+      const compressedPath = path.join(tempDirectory, "backup.db.gz");
+      const compressed = zlib.gzipSync(fs.readFileSync(temporaryPath));
+      fs.writeFileSync(compressedPath, compressed, { flag: "wx", mode: 0o600 });
+      fs.chmodSync(compressedPath, 0o600);
+      fs.renameSync(compressedPath, `${backupPath}.gz`);
+      return { path: `${backupPath}.gz`, size: fs.statSync(`${backupPath}.gz`).size, compressed: true };
     }
-    
+
+    fs.renameSync(temporaryPath, backupPath);
+    fs.chmodSync(backupPath, 0o600);
     return { path: backupPath, size: fs.statSync(backupPath).size, compressed: false };
-  } catch (err) {
-    try { if (fs.existsSync(temporaryPath)) fs.unlinkSync(temporaryPath); } catch {}
-    throw err;
+  } finally {
+    fs.rmSync(tempDirectory, { recursive: true, force: true });
   }
 }
 
 function restoreBackup(backupPath, verify = true) {
-  if (!fs.existsSync(backupPath)) {
-    throw new Error(`Backup file not found: ${backupPath}`);
-  }
-  
-  let tempPath = backupPath;
-  if (backupPath.endsWith(".gz")) {
-    tempPath = backupPath.replace(".gz", ".tmp");
-    const compressed = fs.readFileSync(backupPath);
-    const decompressed = zlib.gunzipSync(compressed);
-    fs.writeFileSync(tempPath, decompressed);
-  }
-  
-  if (verify) {
-    const testDb = new Database(tempPath);
-    try {
-      if (testDb.pragma("integrity_check", { simple: true }) !== "ok") throw new Error("integrity check did not return ok");
-    } catch (e) {
-      testDb.close();
-      if (tempPath !== backupPath) fs.unlinkSync(tempPath);
-      throw new Error("Backup integrity check failed: " + e.message);
+  const restoreDirectory = createPrivateTempDirectory(path.dirname(DB_FILE), ".sidekick-restore-");
+  const tempPath = path.join(restoreDirectory, "restored.db");
+
+  try {
+    const backupBytes = readRegularBackupNoFollow(backupPath);
+    const databaseBytes = backupPath.endsWith(".gz") ? zlib.gunzipSync(backupBytes) : backupBytes;
+    fs.writeFileSync(tempPath, databaseBytes, { flag: "wx", mode: 0o600 });
+    fs.chmodSync(tempPath, 0o600);
+
+    if (verify) {
+      const testDb = new Database(tempPath);
+      try {
+        if (testDb.pragma("integrity_check", { simple: true }) !== "ok") throw new Error("integrity check did not return ok");
+      } catch (e) {
+        throw new Error("Backup integrity check failed: " + e.message);
+      } finally {
+        if (testDb.open) testDb.close();
+      }
     }
-    testDb.close();
-  }
-  
-  // Create a verified pre-restore backup before replacing the live database.
-  const preBackupPath = path.join(BACKUP_DIR, `pre-restore-${Date.now()}.db`);
-  try {
+
+    // Create a verified pre-restore backup before replacing the live database.
+    const preBackupPath = path.join(BACKUP_DIR, `pre-restore-${Date.now()}.db`);
     createBackup(preBackupPath, false);
-  } catch (err) {
-    if (tempPath !== backupPath) fs.unlinkSync(tempPath);
-    throw err;
-  }
-  
-  // Replace the live file only while the process-owned SQLite handle is closed,
-  // then reopen and reapply connection pragmas. Existing callers use the
-  // shared `db` binding, so they see the restored connection immediately.
-  try {
+
+    // Replace the live file only while the process-owned SQLite handle is closed,
+    // then reopen and reapply connection pragmas. Existing callers use the
+    // shared `db` binding, so they see the restored connection immediately.
     db.close();
     for (const sidecar of [`${DB_FILE}-wal`, `${DB_FILE}-shm`]) { try { fs.unlinkSync(sidecar); } catch {} }
     fs.renameSync(tempPath, DB_FILE);
@@ -1628,11 +1657,9 @@ function restoreBackup(backupPath, verify = true) {
     configureDatabase(db);
     module.exports.db = db;
     runPendingMigrations();
-    if (tempPath !== backupPath) fs.unlinkSync(tempPath);
     return { success: true, preBackupPath };
-  } catch (err) {
-    if (tempPath !== backupPath) fs.unlinkSync(tempPath);
-    throw err;
+  } finally {
+    fs.rmSync(restoreDirectory, { recursive: true, force: true });
   }
 }
 

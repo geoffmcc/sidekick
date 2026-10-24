@@ -1017,3 +1017,19 @@ about current lockfile vulnerability status.
   0 failures and 0 skips. The focused installer suite, docs, architecture,
   test-architecture, Git for Windows Bash syntax check, and `git diff --check`
   also passed.
+
+## Database backup temporary-path hard links: 2026-10-24 (SK-056)
+
+- `node test/run-all.js test/security-db-backup-paths.test.js --concurrency=1
+  --overall-timeout-ms=600000 --json` passed all 3 cases. They verify that
+  raw backup, compressed backup, and compressed restore do not write through
+  pre-planted hard links to a synthetic target file.
+- The tests exercise the isolated database storage boundary directly. Full
+  `test/db-tools.test.js` also passed, including its direct-handler authorization
+  check. `npm.cmd run check:docs`, `check:architecture`, `check:tests`, and
+  `git diff --check` passed.
+- After normalizing the new test file to the repository's required LF endings,
+  `npm.cmd test` passed all 380 unit, contract, integration, and security
+  suites in 472.935 seconds, with 0 failures and 0 skips.
+- Backup input and decompressed database contents are currently buffered in
+  memory; large-file resource bounds are not established by these tests.

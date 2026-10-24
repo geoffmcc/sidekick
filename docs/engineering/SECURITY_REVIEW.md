@@ -701,3 +701,21 @@ path, and `npm ci --dry-run --ignore-scripts` validates manifest/lock
 consistency. A real clean install was not run, so Puppeteer's lifecycle browser
 download and end-to-end rendering remain unverified. The Python package
 transitives remain unlocked as noted in SK-054.
+
+### Database backup temporary-path hard links (2026-10-24, SK-056)
+
+Confirmed local filesystem boundary issue: backup and restore previously wrote
+to predictable sibling temporary paths with APIs that followed pre-existing
+hard links. A party able to plant a link in an allowed backup directory could
+redirect a privileged backup or restore write into another file writable by
+the Sidekick service identity. Backup and restore now use fresh private
+temporary directories, exclusive temporary-file creation, and atomic renames;
+restore also rejects symlink and special-file inputs and validates the opened
+file identity where the platform exposes stable device/inode values. Regression
+tests demonstrate that pre-planted hard links beside raw backup, compressed
+backup, and compressed restore paths do not modify their synthetic target.
+These storage-boundary tests call the database module directly; authorization
+of backup/restore requests remains the responsibility of existing canonical
+tool dispatch and route policy. Large backup files are still read and
+decompressed in memory, so resource-bounded streaming remains a separate
+hardening opportunity.
