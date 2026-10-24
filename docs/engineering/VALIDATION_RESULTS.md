@@ -384,6 +384,21 @@ final document. After the fix, `node test/run-all.js test/handoff-reliability.te
   and the failing suite passes in isolation. The second run failed
   `compute-worker-resilience.test.js` under full-suite load; its isolated rerun
   passed all seven internal assertions. Therefore the combined required tiers
-  are not claimed passing.
+  These preliminary runs were not passing; see the corrected combined-tier
+  rerun below.
 - No deployment, live-service change, production data access, or dependency
   update was performed.
+
+### Corrected combined-tier rerun
+
+After preserving JSON formatting in the redactor and fixing the Compute Worker
+initial-heartbeat revocation race, the same combined command passed:
+
+```text
+node test/run-all.js --tier=unit --tier=contract --tier=integration --tier=security --concurrency=4 --overall-timeout-ms=600000 --json
+```
+
+Result: 377 passed, 0 failed, 0 skipped, 0 cancelled, 0 timed out, and 0 not
+run in 387.325 seconds. The Compute Worker resilience suite now also includes a
+negative regression proving an initial 401 stops the worker without installing
+a recurring heartbeat timer.
