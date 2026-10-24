@@ -107,7 +107,11 @@ An earlier supply-chain snapshot on 2026-10-24 reported zero vulnerabilities
 from local npm audit and no open GitHub Dependabot alerts (19 historical alerts
 were marked fixed). A later audit refresh in this session could not reach the
 npm advisory endpoint; treat the earlier result as a point-in-time snapshot,
-not current verification. This does not cover non-NPM assets.
+not current verification. A fresh online audit attempt on 2026-10-24 again
+failed because the advisory endpoint was unreachable. The offline audit found
+zero vulnerabilities using local cache only; that result is not current
+verification. No package or lockfile changes were made. This does not cover
+non-NPM assets.
 
 ### Handoff-linked memory scope (2026-10-24, SK-026)
 

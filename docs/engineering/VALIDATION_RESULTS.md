@@ -437,6 +437,11 @@ failures; `src/redact.js` is at 100% lines, branches, statements, and functions.
   for the current lockfile. The read-only GitHub Dependabot alerts query through
   WSL reported no open alerts; 19 previously reported alerts are marked fixed.
   No dependencies or lockfiles were changed by these checks.
+- A refreshed online `npm.cmd audit` on 2026-10-24 could not reach
+  `registry.npmjs.org`. `npm.cmd audit --offline --json` returned zero findings
+  from local cache, which does not establish current advisory status. No
+  dependency state was changed; current online audit remains pending network
+  availability.
 
 ### Dashboard database route authorization
 
