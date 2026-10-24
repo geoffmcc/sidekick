@@ -8,7 +8,6 @@ const identity = require("./identity");
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_ACTIVE_SESSIONS_PER_PRINCIPAL = 64;
 const SESSION_CLEANUP_BATCH_SIZE = 500;
-const SESSION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const CREDENTIAL_BYTES = 32;
 const SESSION_BYTES = 32;
 const RECOVERY_BYTES = 32;
@@ -86,16 +85,15 @@ function createSession(principalId, { userAgent = null, ipAddress = null, ttlMs 
   const timestamp = Date.now();
   const createdAt = new Date(timestamp).toISOString();
   const expiresAt = new Date(timestamp + Math.max(60_000, Number(ttlMs) || SESSION_TTL_MS)).toISOString();
-  const retainedSince = new Date(timestamp - SESSION_RETENTION_MS).toISOString();
   const safeUserAgent = typeof userAgent === "string" ? userAgent.replace(/[^\x20-\x7E]/g, "?").slice(0, 256) : null;
   const safeIpAddress = typeof ipAddress === "string" && net.isIP(ipAddress) ? ipAddress : null;
   const db = dbStore.getDb();
   db.transaction(() => {
     db.prepare(`DELETE FROM identity_sessions WHERE session_id_hash IN (
       SELECT session_id_hash FROM identity_sessions
-      WHERE expires_at <= ? OR (invalidated_at IS NOT NULL AND invalidated_at <= ?)
-      ORDER BY expires_at ASC LIMIT ?
-    )`).run(createdAt, retainedSince, SESSION_CLEANUP_BATCH_SIZE);
+      WHERE expires_at <= ? OR invalidated_at IS NOT NULL
+      ORDER BY COALESCE(invalidated_at, expires_at) ASC LIMIT ?
+    )`).run(createdAt, SESSION_CLEANUP_BATCH_SIZE);
     const evicted = db.prepare(`UPDATE identity_sessions SET invalidated_at = ?
       WHERE session_id_hash IN (
         SELECT session_id_hash FROM identity_sessions

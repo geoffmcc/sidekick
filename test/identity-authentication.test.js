@@ -76,6 +76,8 @@ try {
       .get(owner.principal_id, new Date().toISOString()).count;
     assert.equal(activeCount, authentication.MAX_ACTIVE_SESSIONS_PER_PRINCIPAL);
     assert.equal(authentication.getSession(created[0].token), null, "the oldest session is revoked when the per-principal limit is exceeded");
+    assert.equal(db.getDb().prepare("SELECT COUNT(*) AS count FROM identity_sessions WHERE session_id_hash = ?").get(require("crypto").createHash("sha256").update(created[0].token, "utf8").digest("hex")).count, 0,
+      "invalidated session records are removed by bounded cleanup");
     const newest = authentication.getSession(created.at(-1).token);
     assert.ok(newest);
     const newestRow = db.getDb().prepare("SELECT user_agent, ip_address FROM identity_sessions WHERE session_id_hash = ?").get(newest.session_id);
