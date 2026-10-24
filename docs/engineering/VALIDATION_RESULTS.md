@@ -1160,3 +1160,19 @@ about current lockfile vulnerability status.
   that exact test working directory. The fixture now sets
   `SIDEKICK_ALLOWED_PATHS=process.cwd()` and the rerun passed all 33 API and
   security cases. Runtime path enforcement was not changed.
+
+## Full non-live suite: 2026-10-24
+
+- `npm.cmd run test:all` completed 421 suites: 420 passed, 1 failed, 0
+  skipped. The sole failure was `test/e2e/dashboard-agent-journey.test.js`,
+  which hit a timeout during the full concurrent run.
+- Rerunning that exact suite alone with
+  `node test/run-all.js test/e2e/dashboard-agent-journey.test.js --json`
+  passed all 3 Dashboard journey tests in 22.9 seconds with no resource leaks
+  or cleanup errors. This confirms the failure is not currently reproducible
+  in isolation; the cause under full-suite load remains undetermined.
+- The Windows secret ACL invariant suite passed during the full run. Earlier
+  direct invocation had one environment-specific failure, so the direct-run
+  failure is not treated as a confirmed product defect.
+- Overall non-live verification is not fully green until the Dashboard journey
+  timeout is reproduced or the full suite passes on a subsequent run.
