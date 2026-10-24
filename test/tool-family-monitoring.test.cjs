@@ -97,6 +97,21 @@ console.log('Running Monitoring Family Tests...');
     assert.strictEqual(result.isError, true);
     assert.strictEqual(text(result), 'File not found: ' + path.join(ROOT, 'missing.log'));
 
+    const deniedDirectory = path.join(ROOT, 'private');
+    fs.mkdirSync(deniedDirectory);
+    fs.writeFileSync(path.join(deniedDirectory, 'recent-private.txt'), 'private', 'utf8');
+    process.env.SIDEKICK_REPOSITORY_ROOT = ROOT;
+    process.env.SIDEKICK_MCP_DENIED_PATHS = deniedDirectory;
+    try {
+      result = await runAuthorized('timeline', { action: 'build', since: '1d', sources: ['files'] });
+      assert.ok(text(result).includes('app.log'), 'timeline lists recent files that are in the allowed subtree');
+      assert.ok(!text(result).includes('recent-private.txt'), 'timeline omits files under a nested denied subtree');
+    } finally {
+      delete process.env.SIDEKICK_REPOSITORY_ROOT;
+      delete process.env.SIDEKICK_MCP_DENIED_PATHS;
+      fs.rmSync(deniedDirectory, { recursive: true, force: true });
+    }
+
     console.log('Monitoring Family Tests passed');
   } finally {
     delete process.env.SIDEKICK_ALLOWED_PATHS;

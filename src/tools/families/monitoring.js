@@ -7,7 +7,7 @@ const { runBoundedShell } = require("../../security/command-execution");
 const { z } = require("zod");
 const dbStore = require("../../db");
 const { redactSensitive } = require("../../redact");
-const { enforcePathPolicy } = require("../path-policy");
+const { enforcePathPolicy, hasConfiguredDeniedPaths } = require("../path-policy");
 const { childProcessEnv } = require("../../security/child-process");
 const { requireToolExecution } = require("../read-authorization");
 const { BoundedRegex } = require("../../core/bounded-regex");
@@ -494,14 +494,18 @@ function parseGitLogLine(line) {
 
 function findRecentFiles(root, startTime, limit = 50) {
   const results = [];
+  if (enforcePathPolicy(root, "read")) return results;
+  const checkDescendantPolicy = hasConfiguredDeniedPaths();
   function walk(dir) {
     if (results.length >= limit) return;
+    if (checkDescendantPolicy && enforcePathPolicy(dir, "read")) return;
     let entries = [];
     try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
     for (const entry of entries) {
       if (results.length >= limit) break;
       if (entry.name === "node_modules" || entry.name === ".git") continue;
       const fullPath = path.join(dir, entry.name);
+      if (checkDescendantPolicy && enforcePathPolicy(fullPath, "read")) continue;
       let stat;
       try { stat = fs.statSync(fullPath); } catch { continue; }
       if (entry.isDirectory()) walk(fullPath);
