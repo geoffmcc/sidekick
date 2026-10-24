@@ -467,6 +467,11 @@ process.on("uncaughtException", (e) => {
 
 
 const app = express();
+app.use((_req, res, next) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Pragma", "no-cache");
+  next();
+});
 app.use(express.json({ limit: "1mb" }));
 app.use("/api", (req, res, next) => {
   if (req.path === "/health") return next();

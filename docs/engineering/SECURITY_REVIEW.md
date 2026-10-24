@@ -479,3 +479,15 @@ Live integration regressions verify no-store on Streamable HTTP MCP
 initialization and tool-call responses and on Compute enrollment token
 issuance. No functional changes to request authentication, credential scope,
 or tool dispatch were made.
+
+### Agent Bridge response caching (2026-10-24, SK-042)
+
+The separate Agent Bridge HTTP process served authenticated task projections,
+transcripts, artifacts, and operation results without an explicit cache policy.
+Added `Cache-Control: no-store` and `Pragma: no-cache` to its HTTP responses.
+The task SSE route intentionally sets `no-cache` for streaming behavior; dashboard
+proxy responses preserve the Agent response headers.
+
+The live Agent Bridge regression asserts no-store on a task-creation response
+and reruns project membership, task ownership, pause/cancel, delegation,
+recovery, lineage, and SSE boundary checks. No authorization behavior changed.

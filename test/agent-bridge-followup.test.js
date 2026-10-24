@@ -88,7 +88,7 @@ function request(method, urlPath, body, extraHeaders = {}, signed = true, signin
       res.on("end", () => {
         let parsed = out;
         try { parsed = JSON.parse(out); } catch {}
-        resolve({ status: res.statusCode, data: parsed });
+        resolve({ status: res.statusCode, headers: res.headers, data: parsed });
       });
     });
     req.on("error", reject);
@@ -169,6 +169,7 @@ let server;
     fake = fakeDirect("hello there");
     const res = await request("POST", "/api/agent/run", { goal: "Say hello" });
     assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.headers["cache-control"], "no-store", "Agent task responses must not be cached");
     assert.match(res.data.taskId, /^[0-9a-f]{8}$/);
     assert.strictEqual(res.data.parentTaskId, undefined, "root task has no parent field");
     await waitForTranscript(res.data.taskId);

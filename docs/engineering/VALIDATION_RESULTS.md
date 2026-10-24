@@ -833,3 +833,12 @@ about current lockfile vulnerability status.
   --json` passed both suites, 0 failures and 0 skips. The tests verify live MCP
   initialization/tool responses and Compute enrollment-token issuance carry
   `Cache-Control: no-store`.
+
+## Agent Bridge response caching: 2026-10-24 (SK-042)
+
+- Added no-store headers to Agent Bridge HTTP responses. Its SSE endpoint
+  continues to use the upstream-compatible `no-cache` streaming policy.
+- `node test/run-all.js test/agent-bridge-followup.test.js --concurrency=1
+  --overall-timeout-ms=600000 --json` passed (1 suite, 33 API/security
+  assertions, 0 failures, 0 skips; 144.7 seconds), including the live task
+  response cache-header assertion and task ownership/recovery boundaries.
