@@ -907,5 +907,8 @@ about current lockfile vulnerability status.
   --overall-timeout-ms=900000 --json` passed both suites, 0 failures and
   0 skips. The live Dashboard route accepts the 30-report principal burst and
   rejects the next report with HTTP 429; bootstrap security regressions pass.
+- After restoring LF line endings in the touched Markdown files,
+  `npm.cmd test` passed all 379 unit, contract, integration, and security
+  suites with 0 failures and 0 skips.
 - The client-wide limit is enforced alongside the principal limit. Limits are
   process-local and reset at restart; durable log retention remains unbounded.
