@@ -1143,9 +1143,11 @@ about current lockfile vulnerability status.
 
 ## Extension-derived planner catalogs: 2026-10-24 (SK-064)
 
-- `node test/brain.test.js` passed all 48 tests. A synthetic hostile tool
-  description and pack instruction are absent from the Brain planner system
-  prompt and appear only in labeled untrusted user messages.
+- `node test/brain.test.js` passed all 49 tests. Synthetic hostile tool
+  descriptions, pack instructions, and retrieved-memory instructions are absent
+  from the Brain planner system prompt and appear only in labeled untrusted
+  user messages. A poisoned-memory plan naming an unlisted tool is rejected
+  before tool dispatch.
 - `node test/agent-bridge-prompt.test.js` passed all 7 tests, including checks
   that the regular Agent loop derives catalog data from currently visible
   tools, omits disabled tools, and passes reference data separately from its
