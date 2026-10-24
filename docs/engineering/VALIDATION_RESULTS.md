@@ -796,3 +796,18 @@ about current lockfile vulnerability status.
   and scope context to its signed upstream request. No bypass was confirmed in
   these paths; this is not exhaustive evidence for every Dashboard or Agent
   route.
+
+## Dashboard session, CSRF, and proxy trust: 2026-10-24
+
+- `node test/run-all.js test/dashboard-api.test.js
+  test/security-dashboard-bootstrap.test.js test/security/trusted-proxies.test.js
+  --concurrency=1 --overall-timeout-ms=600000 --json` passed all 3 suites,
+  0 failures and 0 skips. Dashboard API checks include deceptive host/scheme
+  Origins, originless cross-site requests, originless requests with session
+  cookies, revocation of issued identity cookies, and Grafana permission checks.
+- Source review confirmed proxy trust defaults off and the compatibility `true`
+  value is constrained to loopback. Remote trust requires explicit IP/CIDR
+  entries, and remote bootstrap requires its out-of-band token.
+- No bypass was confirmed in these tested paths. Legacy non-browser Basic-auth
+  clients may omit Origin/Fetch Metadata when no dashboard session cookie is
+  present; this compatibility boundary remains a review item.

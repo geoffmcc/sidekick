@@ -429,3 +429,22 @@ reviewed routes. Targeted integration regressions cover revoked project grants,
 linked memory/handoff scope, unauthenticated memory access, Agent proxy scope
 propagation, and resource concealment. This review does not cover every
 Dashboard endpoint or every Agent Bridge operation.
+
+### Dashboard session, CSRF, and proxy-trust boundary review (2026-10-24)
+
+Reviewed Dashboard session issuance, mutation Origin and Fetch Metadata checks,
+trusted reverse-proxy parsing, and bootstrap exposure. Mutations reject an
+Origin whose exact host or effective scheme differs from the request; an
+originless request with an authenticated session cookie is rejected, and
+originless requests marked cross-site are rejected. Successful HTTPS Basic
+authentication establishes a revocable server-side identity session and sets a
+Secure, HttpOnly, SameSite=Lax cookie. Proxy trust is disabled by default; the
+legacy `true` setting trusts loopback only, while remote proxy addresses must be
+listed as explicit IPs or CIDRs. Network-facing bootstrap requires an
+out-of-band token.
+
+No CSRF or forwarded-header trust bypass was confirmed in the reviewed paths.
+Legacy Basic-auth API clients without a session cookie retain compatibility
+when they omit browser Origin/Fetch Metadata headers; this behavior remains a
+known compatibility boundary and should be reconsidered if browser clients
+continue to rely on Basic auth directly.
