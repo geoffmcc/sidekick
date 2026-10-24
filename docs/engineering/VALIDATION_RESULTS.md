@@ -831,8 +831,10 @@ about current lockfile vulnerability status.
 - `node test/run-all.js test/mcp-v2-runtime.test.cjs
   test/compute-protocol.test.js --concurrency=1 --overall-timeout-ms=900000
   --json` passed both suites, 0 failures and 0 skips. The tests verify live MCP
-  initialization/tool responses and Compute enrollment-token issuance carry
-  `Cache-Control: no-store`.
+  initialization/tool responses, Compute enrollment-token issuance, worker
+  enrollment credentials, and rotated worker credentials carry
+  `Cache-Control: no-store`. A rerun of `test/compute-protocol.test.js` passed
+  after adding the worker credential assertions.
 
 ## Agent Bridge response caching: 2026-10-24 (SK-042)
 
