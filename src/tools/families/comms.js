@@ -17,40 +17,19 @@ const { readSecret } = require("../../core/runtime-secrets");
 const toolContext = require("../context");
 const authorization = require("../../core/authorization");
 const { requireCanonicalInvocation, requireToolExecution, requirePermission } = require("../read-authorization");
-const MAX_NOTIFICATION_ERROR_BYTES = 64 * 1024;
 const MAX_NOTIFICATION_REQUEST_BYTES = 1024 * 1024;
-
-function readBoundedNotificationError(response, maxBytes = MAX_NOTIFICATION_ERROR_BYTES) {
-  return new Promise(resolve => {
-    const chunks = [];
-    let totalBytes = 0;
-    let truncated = false;
-    let settled = false;
-    const finish = () => {
-      if (settled) return;
-      settled = true;
-      const text = Buffer.concat(chunks, totalBytes).toString("utf8");
-      resolve(truncated ? `${text} [truncated: response exceeded ${maxBytes} bytes]` : text);
-    };
-    response.on("data", chunk => {
-      if (truncated) return;
-      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      const available = Math.max(0, maxBytes - totalBytes);
-      if (buffer.byteLength > available) {
-        if (available) chunks.push(buffer.subarray(0, available));
-        totalBytes += Math.min(buffer.byteLength, available);
-        truncated = true;
-        try { response.destroy(); } catch {}
-        finish();
-        return;
-      }
-      chunks.push(buffer);
-      totalBytes += buffer.byteLength;
-    });
-    response.on("end", finish);
-    response.on("close", finish);
-    response.on("error", finish);
-  });
+function notificationEndpointFailure(statusCode, response = null) {
+  // Drain without retaining or reflecting untrusted body bytes.
+  try {
+    response?.on?.("error", () => {});
+    response?.resume?.();
+  } catch { /* response may already be closed */ }
+  const status = Number(statusCode) || 0;
+  return {
+    content: [{ type: "text", text: `Notification endpoint returned HTTP ${status}` }],
+    isError: true,
+    code: "notification_endpoint_rejected",
+  };
 }
 
 function validateEmailHeaders(recipient, title) {
@@ -141,11 +120,11 @@ async function sidekick_notify({ channel, webhook_url, recipient, message, title
           res.destroy();
           return;
         }
-        readBoundedNotificationError(res).then(data => {
-          resolve({ content: [{ type: "text", text: "Failed: " + res.statusCode + " " + data }], isError: true });
-        });
+        // Do not reflect an untrusted endpoint body: Slack/Discord webhook
+        // credentials live in the URL path and a remote error can echo them.
+        resolve(notificationEndpointFailure(res.statusCode, res));
       });
-      req.on("error", (err) => resolve({ content: [{ type: "text", text: "Error: " + err.message }], isError: true }));
+      req.on("error", (err) => resolve({ content: [{ type: "text", text: `Notification request failed (${err.code || "network_error"})` }], isError: true, code: "notification_request_failed" }));
       req.on("timeout", () => { req.destroy(); resolve({ content: [{ type: "text", text: "Timeout" }], isError: true }); });
       req.write(payload);
       req.end();
@@ -303,4 +282,4 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_notify, sidekick_webhook, readBoundedNotificationError, MAX_NOTIFICATION_ERROR_BYTES, MAX_NOTIFICATION_REQUEST_BYTES, validateEmailHeaders, resolveSmtpDestination };
+module.exports = { descriptors, sidekick_notify, sidekick_webhook, notificationEndpointFailure, MAX_NOTIFICATION_REQUEST_BYTES, validateEmailHeaders, resolveSmtpDestination };
