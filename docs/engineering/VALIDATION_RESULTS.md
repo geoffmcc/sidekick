@@ -992,3 +992,9 @@ about current lockfile vulnerability status.
   by the setup script's existing presence checks.
 - Transitive Python/npm resolution, artifact hash verification, and clean-host
   installation compatibility are not covered by this change and remain open.
+- After the installer change, `npm.cmd test` passed all 379 unit, contract,
+  integration, and security suites in 417.023 seconds, with 0 failures and
+  0 skips. The focused installer test also passed independently.
+- `npm.cmd run check:docs`, `npm.cmd run check:architecture`,
+  `npm.cmd run check:tests`, Git for Windows Bash `-n` syntax validation of
+  `scripts/setup-tools.sh`, and `git diff --check` passed.
