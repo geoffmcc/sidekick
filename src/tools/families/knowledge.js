@@ -144,7 +144,7 @@ function findPromotionSource(source, sourceId) {
 
 // --- Knowledge Tool ---
 
-async function sidekick_knowledge({ action, id, category, title, content, tags, query, limit, source, source_id, approver }) {
+async function sidekick_knowledge({ action, id, category, title, content, tags, query, limit, source, source_id }) {
   const denied = requireCanonicalInvocation("knowledge");
   if (denied) return denied;
   try {
@@ -388,7 +388,6 @@ const SCHEMAS = {
     limit: z.number().optional().describe("Max results (for search/list)"),
     source: z.enum(["evolve", "procedure"]).optional().describe("Promotion source type"),
     source_id: z.string().optional().describe("Generated capability ID/name or taught procedure name"),
-    approver: z.string().optional().describe("Explicit human/operator approver for promotion")
   }),
 };
 
@@ -397,7 +396,7 @@ const descriptors = Object.freeze([
     name: "knowledge",
     description: "Knowledge base management: search, get, list, add, promote reviewed evolved/taught knowledge, update, soft-delete, and purge disabled entries",
     schema: SCHEMAS.knowledge,
-    args: { action: "string (search|get|list|add|promote|update|delete|purge)", id: "number (optional, entry ID for get/update/delete/purge)", category: "string (optional, category for list/add/promote/update)", title: "string (optional, title for add/promote/update)", content: "string (optional, content for add/update)", tags: "string (optional, comma-separated tags for add/promote/update)", query: "string (optional, search query for search)", limit: "number (optional, max results for search/list)", source: "string (optional, evolve or procedure for promote)", source_id: "string (optional, source capability/procedure ID for promote)", approver: "string (optional, explicit approver for promote)" },
+    args: { action: "string (search|get|list|add|promote|update|delete|purge)", id: "number (optional, entry ID for get/update/delete/purge)", category: "string (optional, category for list/add/promote/update)", title: "string (optional, title for add/promote/update)", content: "string (optional, content for add/update)", tags: "string (optional, comma-separated tags for add/promote/update)", query: "string (optional, search query for search)", limit: "number (optional, max results for search/list)", source: "string (optional, evolve or procedure for promote)", source_id: "string (optional, source capability/procedure ID for promote)" },
     risk: getStaticToolRisk("knowledge"),
     category: "Context & Learning",
     source: "builtin",

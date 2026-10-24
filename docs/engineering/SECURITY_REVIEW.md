@@ -558,3 +558,16 @@ persisted approver matches the authenticated owner principal instead.
 This closes caller-controlled attribution for this lifecycle action. It does
 not mean all audit storage is independently tamper-resistant against a host or
 database administrator; that remains a deployment-level residual risk.
+
+### Knowledge promotion attribution boundary (2026-10-24, SK-046)
+
+Reviewed knowledge promotion after the Evolve attribution finding. The
+promotion handler already requires dispatcher-approved execution and records
+the authenticated principal from the canonical execution context; its
+`approver` argument is not used to grant authority or set the recorded
+principal. `test/knowledge-promotion.test.js` verifies a forged caller label
+cannot authorize promotion, a separate dispatcher approval is required, and
+the persisted `approved_by` value matches the authenticated reviewing
+principal. No authorization bypass was confirmed. Removed the unused caller
+field from the schema and corrected the tools reference and seeded guidance so
+the documented contract matches implementation.

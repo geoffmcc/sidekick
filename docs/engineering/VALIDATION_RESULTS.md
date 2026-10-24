@@ -882,3 +882,12 @@ about current lockfile vulnerability status.
   verifies lifecycle operations still require an authenticated identity.
 - `npm.cmd run check:docs`, `npm.cmd run check:architecture`,
   `npm.cmd run check:tests`, and `git diff --check` passed.
+
+## Knowledge promotion attribution: 2026-10-24 (SK-046)
+
+- `node test/run-all.js test/knowledge-promotion.test.js --concurrency=1
+  --overall-timeout-ms=600000 --json` verifies forged approver labels do not
+  authorize promotion, a separate dispatcher approval is required, and the
+  persisted `approved_by` value matches the authenticated reviewing principal.
+- The unused `approver` input was removed from the knowledge tool schema and
+  reference guidance now describes the enforced approval path.

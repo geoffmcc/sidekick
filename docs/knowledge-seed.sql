@@ -385,7 +385,7 @@ Optional:
 
 Good entries are concise, specific, and operational. Prefer one topic per entry. Add tags for likely search terms. Update existing entries instead of creating duplicates when the title and meaning match.
 
-Generated or taught material is not durable automatically. After review, use knowledge action="promote" with source="evolve" for an active successfully trialed Evolve capability or source="procedure" for a named taught procedure, plus category and an explicit approver. Promotion redacts sensitive fields, records source/version/provenance metadata, and is idempotent for the same source version.',
+Generated or taught material is not durable automatically. After review, use knowledge action="promote" with source="evolve" for an active successfully trialed Evolve capability or source="procedure" for a named taught procedure, plus category. Promotion requires a separate dispatcher approval and records the authenticated principal from the execution context; callers cannot supply an approver identity. Promotion redacts sensitive fields, records source/version/provenance metadata, and is idempotent for the same source version.',
 'knowledge,authoring,protocol', 1, 'seed-2026-06-16-current', datetime('now')),
 
 ('protocols', 'Manual SQL Import Pattern',
