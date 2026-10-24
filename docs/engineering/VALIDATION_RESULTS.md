@@ -730,3 +730,17 @@ about current lockfile vulnerability status.
   passed (7 suites, 0 failures). The quota regression also injected fractional
   values directly into disposable SQLite task rows to exercise enforcement
   beyond input normalization. No production data was accessed.
+
+## Agent task-control route ownership: 2026-10-24
+
+- Route review verified that `pause` and `cancel` are covered by the shared
+  `enforceTaskRouteAccess` middleware mounted for `/api/agent/tasks/:taskId`
+  and `/api/agent/run/:taskId`. The middleware checks ownership and current
+  project access before route handling.
+- Added an API regression that waits until a task is actively running, attempts
+  pause and cancel as a different authenticated principal, and confirms both
+  requests return 404 without changing control flags or task state.
+- Validation: `node test/run-all.js test/agent-bridge-followup.test.js
+  --concurrency=1 --overall-timeout-ms=300000 --json` passed (1 suite, 33
+  Agent Bridge API/security assertions, 0 failures, 150.1 seconds). No bypass
+  was confirmed; no production state was involved.

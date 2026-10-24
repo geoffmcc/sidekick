@@ -141,6 +141,16 @@ async function waitForTranscript(id, timeoutMs = 60000) {
   }
   throw new Error("timed out waiting for transcript " + id);
 }
+async function waitForTaskState(id, state, timeoutMs = 5000) {
+  const taskStore = require("../src/agent/task-store");
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const task = taskStore.getTask(id);
+    if (task?.state === state) return task;
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  throw new Error(`timed out waiting for task ${id} to reach ${state}`);
+}
 async function runRootTask(goal) {
   const res = await request("POST", "/api/agent/run", { goal });
   assert.strictEqual(res.status, 200);
@@ -287,6 +297,24 @@ let server;
     assert.strictEqual(followupDenied.status, 404, "follow-up must retain principal scoping");
   });
 
+  await ok("1c-control) another principal cannot pause or cancel an active task", async () => {
+    fake = () => new Promise(() => {});
+    const created = await request("POST", "/api/agent/run", {
+      goal: "Keep this authenticated task active for a control authorization check",
+      project: "agent_test_project",
+    }, authenticatedTestHeaders);
+    assert.strictEqual(created.status, 200);
+    const activeTask = await waitForTaskState(created.data.taskId, "running");
+
+    const pauseDenied = await request("POST", "/api/agent/tasks/" + created.data.taskId + "/pause", {}, otherTestHeaders);
+    const cancelDenied = await request("POST", "/api/agent/run/" + created.data.taskId + "/cancel", {}, otherTestHeaders);
+    const task = require("../src/agent/task-store").getTask(created.data.taskId);
+    assert.strictEqual(pauseDenied.status, 404, "pause must not reveal or mutate another principal's task");
+    assert.strictEqual(cancelDenied.status, 404, "cancel must not reveal or mutate another principal's task");
+    assert.notStrictEqual(Boolean(task.control?.pause_requested), true, "unauthorized pause leaves durable control state unchanged");
+    assert.notStrictEqual(Boolean(task.control?.cancel_requested), true, "unauthorized cancel leaves durable control state unchanged");
+    assert.equal(task.state, activeTask.state, "unauthorized controls leave the running task state unchanged");
+  });
   // 2/3) A valid follow-up creates a distinct child with correct parent/root ids.
   let rootId, childId;
   await ok("2/3) follow-up creates a distinct child with correct parent+root ids", async () => {

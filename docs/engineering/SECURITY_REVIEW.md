@@ -347,3 +347,16 @@ Agent and approval-resume concurrency consumers use integer limits as well.
 Regression coverage proves the pre-fix normalizer retained `1.9`, then verifies
 normalization and direct enforcement against deliberately fractional persisted
 records. No production task records were read or changed.
+
+### Agent task-control route ownership boundary (2026-10-24)
+
+A route audit initially flagged `pause` and `cancel` because their handlers do not
+repeat an inline owner check. The shared `enforceTaskRouteAccess` middleware is
+mounted on both `/api/agent/tasks/:taskId` and `/api/agent/run/:taskId` before
+route dispatch, checks the durable task owner and current project access, and
+returns a uniform not-found response for unauthorized principals. An
+integration regression now waits for an authenticated task to be running,
+then verifies a second principal cannot pause or cancel it and that its durable
+state remains unchanged. This confirms the shared enforcement boundary for
+these current routes; new task-id routes must remain under the middleware mounts.
+No control-route authorization bypass was confirmed.
