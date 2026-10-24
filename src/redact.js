@@ -85,6 +85,17 @@ function redactUrlCredentials(text) {
   return copyFrom === 0 ? text : output + text.slice(copyFrom);
 }
 
+function redactUrlSensitiveParameters(text) {
+  return text.replace(/([?&;])([^=?&#\s;]+)=([^&#\s;]*)/g, (match, separator, rawName, value) => {
+    if (!value) return match;
+    let name = rawName;
+    try { name = decodeURIComponent(name.replace(/\+/g, " ")); } catch {}
+    const key = String(name).normalize("NFKC").toLowerCase().replace(/[^a-z0-9]/g, "");
+    const sensitive = key === "key" || key === "auth" || key === "sig" || key.endsWith("signature") || SENSITIVE_KEY_RE.test(key);
+    return sensitive ? `${separator}${rawName}=[REDACTED]` : match;
+  });
+}
+
 function redactJwtTokens(text) {
   let output = "";
   let copyFrom = 0;
@@ -186,7 +197,7 @@ function redactPemPrivateKeys(text) {
 function redactSensitive(text) {
   if (typeof text !== 'string') return text;
   
-  const redacted = redactPemPrivateKeys(text)
+  const redacted = redactUrlSensitiveParameters(redactPemPrivateKeys(text))
     
     // GitHub tokens
     .replace(/ghp_[A-Za-z0-9_]{36}/g, '[REDACTED GITHUB TOKEN]')
@@ -202,8 +213,8 @@ function redactSensitive(text) {
     .replace(/aws[_-]?secret[_-]?access[_-]?key[:\s=]+['"]?([A-Za-z0-9/+=]{40})['"]?/gi, 'aws_secret_access_key=[REDACTED]')
     
     // Passwords in environment variables
-    .replace(/(PASSWORD|PASSWD|PASSPHRASE|SECRET|TOKEN|API[_-]?KEY|CREDENTIALS?)[:\s=]+['"]?([^\s'"]{4,})['"]?/gi, '$1=[REDACTED]')
-    .replace(/(password|passwd|passphrase|secret|token|api[_-]?key|credentials?)\s*[:=]\s*['"]?([^\s,'"}]{4,})['"]?/gi, '$1=[REDACTED]')
+    .replace(/(PASSWORD|PASSWD|PASSPHRASE|SECRET|TOKEN|API[_-]?KEY|CREDENTIALS?)[:\s=]+['"]?([^\s'"&;#]{4,})['"]?/gi, '$1=[REDACTED]')
+    .replace(/(password|passwd|passphrase|secret|token|api[_-]?key|credentials?)\s*[:=]\s*['"]?([^\s,'"}&;#]{4,})['"]?/gi, '$1=[REDACTED]')
     .replace(/(Authorization\s*:\s*)Bearer\s+[^\s]+/gi, '$1Bearer [REDACTED]')
     .replace(/(Authorization\s*:\s*)(?!Bearer\b)[^\s]+/gi, '$1[REDACTED]')
     

@@ -162,6 +162,13 @@ test("redaction covers nested credentials, encoded tokens, and structured result
   const remote = redactSensitive(remoteInput);
   assert.doesNotMatch(remote, /deploy-user|ordinary-password/);
   assert.match(remote, /\[REDACTED\]@git\.example\.test\/team\/repository\.git/);
+  const sasUrl = "https://example.invalid/blob?sv=2026-01-01&sig=synthetic-sas-signature&sp=read";
+  assert.equal(redactSensitive(sasUrl), "https://example.invalid/blob?sv=2026-01-01&sig=[REDACTED]&sp=read");
+  const googleSignedUrl = "https://example.invalid/object?X-Goog-Signature=synthetic-object-signature&generation=42";
+  assert.equal(redactSensitive(googleSignedUrl), "https://example.invalid/object?X-Goog-Signature=[REDACTED]&generation=42");
+  const jdbcUrl = "jdbc:sqlserver://db.internal;password=synthetic-jdbc-password;database=app";
+  assert.equal(redactSensitive(jdbcUrl), "jdbc:sqlserver://db.internal;password=[REDACTED];database=app");
+  assert.equal(redactSensitive("https://example.invalid/object?version=3&mode=read"), "https://example.invalid/object?version=3&mode=read");
   const longSchemeRemote = `${"a".repeat(80)}://deploy-user:ordinary-password@git.example.test/team/repository.git`;
   const redactedLongSchemeRemote = redactSensitive(longSchemeRemote);
   assert.doesNotMatch(redactedLongSchemeRemote, /deploy-user|ordinary-password/);
