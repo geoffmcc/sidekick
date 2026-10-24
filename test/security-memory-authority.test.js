@@ -191,6 +191,37 @@ test("legacy context documents are redacted on write and projection without rewr
     "read sanitization must not silently rewrite historical rows");
 });
 
+test("legacy vector context payloads are redacted before recall", async () => {
+  const marker = "SYNTHETIC_VECTOR_CONTEXT_SECRET";
+  const qdrant = require("../src/qdrant");
+  const inference = require("../src/compute/inference-service");
+  const contextFamily = require("../src/tools/families/context");
+  const originalAvailable = qdrant.isAvailable;
+  const originalSearch = qdrant.search;
+  const originalEmbed = inference.embed;
+  try {
+    qdrant.isAvailable = async () => true;
+    qdrant.search = async () => [{
+      payload: { type: "problem", data: { id: "legacy_vector_problem", project: "memory_authority_project", description: `Security review api_key=${marker}` } },
+      score: 0.9,
+    }];
+    inference.embed = async () => ({ embedding: [0.1, 0.2] });
+    const contextApi = require("../src/tools/context");
+    const executionContext = contextApi.createTestExecutionContext({
+      authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+      project: "memory_authority_project",
+    });
+    const results = await contextApi.runWithContext(executionContext,
+      () => contextFamily.searchContext({}, "Security review", "all", 10, "memory_authority_project"));
+    assert.ok(results.some(result => result.item.id === "legacy_vector_problem"));
+    assert.equal(JSON.stringify(results).includes(marker), false, "legacy vector payload must be sanitized before context recall");
+  } finally {
+    qdrant.isAvailable = originalAvailable;
+    qdrant.search = originalSearch;
+    inference.embed = originalEmbed;
+  }
+});
+
 test("failed replacement persistence rolls back the old-memory deletion", async () => {
   const original = db.upsertMemory({ type: "fact", project: "memory_authority_project", content: "atomic correction original", summary: "atomic correction original", source: "explicit", source_authority: 5 });
   const upsertMemory = db.upsertMemory;

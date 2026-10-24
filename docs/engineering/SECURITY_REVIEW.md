@@ -220,13 +220,16 @@ Confirmed that the legacy context tool could persist caller-provided decision,
 problem, pattern, and session text without consistent key-aware redaction; some
 of these objects are also passed to the embedding store. Context document reads
 and writes now use the shared recursive redactor, and decision/problem/pattern/
-session objects are sanitized before any embedding call. Normalized reads
-redact known credential patterns in historical context rows without rewriting
-those rows. This remains pattern/key-based detection and cannot identify an
-ordinary-looking generic secret value.
+session objects are sanitized before any embedding call. Legacy non-memory
+Qdrant payloads are also redacted before context recall, preventing known
+credential patterns and sensitive-key values from being returned through the
+vector path. Normalized reads redact known credential patterns in historical
+context rows without rewriting those rows. This remains pattern/key-based
+detection and cannot identify an ordinary-looking generic secret value.
 
 Validation: the memory-authority regression writes a synthetic credential to a
 new context document and a legacy fixture, verifies sanitized reads, and
-confirms the legacy raw row remains untouched. `test/context-engine.test.js`,
+confirms the legacy raw row remains untouched. A mocked vector search regression
+also verifies legacy payload redaction before recall. `test/context-engine.test.js`,
 `test/security-memory-authority.test.js`, and `test/security-project-access.test.js`
 passed (3 suites, 0 failures); no live vector store was used.

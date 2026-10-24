@@ -168,7 +168,10 @@ async function searchContext(ctx, query, type, limit = 10, project = null) {
         const filter = type && type !== "all" ? { must: [{ key: "type", match: { value: type } }] } : null;
         const semanticResults = await qdrantStore.search(embedding, limit, filter);
         for (const r of semanticResults) {
-          const item = r.payload.type === "memory" ? findStructuredMemoryById(r.payload.data?.id) : r.payload.data;
+          const retrieved = r.payload.type === "memory" ? findStructuredMemoryById(r.payload.data?.id) : r.payload.data;
+          // Old vector payloads may predate context-document redaction. Treat
+          // them as untrusted persistence and sanitize before recall or output.
+          const item = retrieved && r.payload.type !== "memory" ? redactSensitiveKeysDeep(retrieved) : retrieved;
           if (contextItemIsActive(item) && !requiresMemoryConfirmation(item) && inScope(item, "read", project)) results.push({ type: r.payload.type, item, score: r.score });
         }
       } catch (e) {}

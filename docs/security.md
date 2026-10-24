@@ -396,7 +396,9 @@ of historical memory rows is performed. Normalized memory reads redact known
 credential patterns and keyed values in legacy records without changing the
 stored row. Legacy context JSON documents are similarly sanitized on write and
 read, and the context tool sanitizes decision, problem, pattern, and session
-records before sending their content to the embedding store.
+records before sending their content to the embedding store. Legacy non-memory
+vector payloads are also sanitized before context recall; existing stored
+payloads are not rewritten.
 Handoff claim tokens are one-time bearer capabilities: dispatcher exposure is
 allowlisted for authenticated sessions, while generic results and persisted
 tool logs redact them. An integration regression covers token delivery, log

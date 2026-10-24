@@ -595,10 +595,13 @@ the underlying historical row.
 
 The `context` JSON document now passes through recursive key-aware redaction on
 write and projection. Legacy context tool objects are sanitized before
-embedding-store calls. `node test/run-all.js
+embedding-store calls, and legacy non-memory vector payloads are redacted before
+they are returned by context recall. `node test/run-all.js
 test/security-memory-authority.test.js test/context-engine.test.js
 test/security-project-access.test.js --concurrency=1
---overall-timeout-ms=300000` passed all 3 suites. The synthetic legacy-row test
+--overall-timeout-ms=300000` passed all 3 suites. The focused security-memory
+authority and context-engine suites were rerun after adding the mocked vector
+payload regression and passed 2/2. The synthetic legacy-row test
 confirms a read is redacted while the underlying JSON remains unchanged; no
 live vector store was used.
 
