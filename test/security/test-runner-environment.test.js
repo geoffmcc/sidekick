@@ -12,6 +12,7 @@ test("test suite subprocesses receive fixture scope but not ambient credentials 
   await withEnv({
     GITHUB_TOKEN: "synthetic-github-token",
     SIDEKICK_TEST_INHERITED_API_KEY: "synthetic-api-key",
+    SIDEKICK_PROPERTY_SEED: "700001",
     LD_AUDIT: "synthetic-loader-audit",
     NODE_PATH: path.join(os.tmpdir(), "synthetic-module-path"),
   }, async () => {
@@ -24,6 +25,7 @@ test("test suite subprocesses receive fixture scope but not ambient credentials 
       console.log("RESULT:" + JSON.stringify({
         token: process.env.GITHUB_TOKEN,
         apiKey: process.env.SIDEKICK_TEST_INHERITED_API_KEY,
+        propertySeed: process.env.SIDEKICK_PROPERTY_SEED,
         audit: process.env.LD_AUDIT,
         nodePath: process.env.NODE_PATH,
         fixture: process.env.SIDEKICK_TEST_SUITE_ID,
@@ -51,6 +53,7 @@ test("test suite subprocesses receive fixture scope but not ambient credentials 
       const observed = JSON.parse(result.stdout.match(/RESULT:(\{.*\})/)?.[1]);
       assert.equal(observed.token, undefined);
       assert.equal(observed.apiKey, undefined);
+      assert.equal(observed.propertySeed, "700001");
       assert.equal(observed.audit, undefined);
       assert.equal(observed.nodePath, undefined);
       assert.equal(observed.fixture, suite.id);
