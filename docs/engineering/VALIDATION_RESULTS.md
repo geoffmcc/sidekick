@@ -1176,3 +1176,8 @@ about current lockfile vulnerability status.
   failure is not treated as a confirmed product defect.
 - Overall non-live verification is not fully green until the Dashboard journey
   timeout is reproduced or the full suite passes on a subsequent run.
+- `node scripts/test-flake.js test/e2e/dashboard-agent-journey.test.js
+  test/e2e/dashboard-platform-journeys.test.js` passed its bounded diagnostic:
+  both suites passed all 3 repetitions at alternating runner concurrency
+  settings (2 and 4). This lowers reproducibility concern but does not explain
+  the earlier failure during the full-suite run; that remains recorded above.
