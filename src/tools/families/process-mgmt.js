@@ -17,7 +17,7 @@ const { execFileSync } = require("child_process");
 const { childProcessEnv } = require("../../security/child-process");
 const { z } = require("zod");
 const { redactSensitive } = require("../../redact");
-const { enforcePathPolicy } = require("../path-policy");
+const { enforcePathPolicy, hasDeniedPathOverlap } = require("../path-policy");
 const { requireToolExecution } = require("../read-authorization");
 const { createArchiveSnapshot } = require("../archive-snapshot");
 
@@ -402,6 +402,13 @@ async function sidekick_archive({ action, path: sourcePath, output, format }) {
   }
   const sourceTypeError = validateArchiveSourceType(sourceStat, action);
   if (sourceTypeError) return { content: [{ type: "text", text: sourceTypeError }], isError: true };
+  if (action === "create" && sourceStat.isDirectory() && hasDeniedPathOverlap(sourceAbsolute)) {
+    return {
+      content: [{ type: "text", text: "Archive source overlaps a denied filesystem path; choose a narrower source directory" }],
+      isError: true,
+      code: "path_denied",
+    };
+  }
 
   let extractTarget;
   if (action === "extract") {

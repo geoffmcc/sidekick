@@ -8,6 +8,7 @@ const { execFileSync } = require("child_process");
 const { childProcessEnv } = require("../src/security/child-process");
 const { resolveCommandOnPath } = require("../src/security/command-lookup");
 const { createArchiveSnapshot } = require("../src/tools/archive-snapshot");
+const { hasDeniedPathOverlap } = require("../src/tools/path-policy");
 const { validateArchiveEntryNames, validateArchiveEntryDestinations, validateArchiveEntryTypes, validateZipEntryTypes, validateTarExpandedSize, validateZipExpandedSize, sumArchiveEntrySizes, assertArchiveFitsDestination, validateArchiveSourceType, archiveProcessEnv, MAX_ARCHIVE_ENTRIES, MAX_ARCHIVE_EXPANDED_BYTES, ARCHIVE_FREE_SPACE_RESERVE_BYTES } = require("../src/tools/families/process-mgmt");
 
 for (const entry of [
@@ -152,12 +153,36 @@ assert.match(source, /validateZipEntryTypes\(typeListing\)/, "zip extraction mus
 assert.match(source, /validateZipExpandedSize\(typeListing\)/, "zip extraction must bound expanded data before writing");
 assert.match(source, /\["-Z", "-v", archiveSource\]/, "zip central-directory Unix attributes must be inspected before extraction");
 assert.equal((source.match(/env: archiveProcessEnv\(\)/g) || []).length, 5, "all archive list, preflight, creation, and extraction processes must use sanitized environments");
+assert.match(source, /action === "create" && sourceStat\.isDirectory\(\) && hasDeniedPathOverlap\(sourceAbsolute\)/, "directory archive creation must reject sources that overlap a denied path");
 assert.match(source, /sourceStat = fs\.statSync\(sourceAbsolute\)/, "archive source type must be verified after canonicalization");
 assert.match(source, /validateArchiveSourceType\(sourceStat, action\)/, "archive operations must reject special source files");
 assert.match(source, /snapshot = await createArchiveSnapshot\(sourceAbsolute, sourcePath\)/, "extract preflight and extraction must share a stable source snapshot");
 assert.match(source, /extractTarget = output \? path\.resolve\(output\) : process\.cwd\(\)/, "archive extraction target must be explicit and canonicalized");
 assert.match(source, /"-C", canonicalExtractTarget/, "tar extraction must use the canonical, reauthorized extraction target");
 assert.match(source, /"-d", canonicalExtractTarget/, "zip extraction must use the canonical, reauthorized extraction target");
+
+const overlapParent = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-archive-deny-overlap-"));
+const overlapRoot = path.join(overlapParent, "root");
+const overlapDenied = path.join(overlapRoot, "private");
+const overlapSibling = path.join(overlapParent, "root-sibling");
+const priorAllowedPaths = process.env.SIDEKICK_ALLOWED_PATHS;
+const priorDeniedPaths = process.env.SIDEKICK_MCP_DENIED_PATHS;
+try {
+  fs.mkdirSync(overlapRoot);
+  fs.mkdirSync(overlapDenied);
+  fs.mkdirSync(overlapSibling);
+  process.env.SIDEKICK_ALLOWED_PATHS = overlapRoot;
+  process.env.SIDEKICK_MCP_DENIED_PATHS = overlapDenied;
+  assert.equal(hasDeniedPathOverlap(overlapRoot, "mcp"), true, "a denied descendant overlaps a directory archive source");
+  assert.equal(hasDeniedPathOverlap(overlapDenied, "mcp"), true, "an archive source inside a denied root overlaps");
+  assert.equal(hasDeniedPathOverlap(overlapSibling, "mcp"), false, "a prefix-like sibling does not overlap a denied root");
+} finally {
+  if (priorAllowedPaths === undefined) delete process.env.SIDEKICK_ALLOWED_PATHS;
+  else process.env.SIDEKICK_ALLOWED_PATHS = priorAllowedPaths;
+  if (priorDeniedPaths === undefined) delete process.env.SIDEKICK_MCP_DENIED_PATHS;
+  else process.env.SIDEKICK_MCP_DENIED_PATHS = priorDeniedPaths;
+  fs.rmSync(overlapParent, { recursive: true, force: true });
+}
 
 (async () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-archive-snapshot-test-"));
