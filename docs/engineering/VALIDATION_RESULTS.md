@@ -1078,6 +1078,17 @@ about current lockfile vulnerability status.
   on every resolved package, and use of the lock files by the installer.
 - Clean-host installation and platform runtime behavior remain unverified.
 
+## Dependency advisory and parser peer checks: 2026-10-24
+
+- `npm audit --json` succeeded once and reported 0 vulnerabilities across 219
+  dependencies. An immediate repeat could not reach the advisory endpoint, so
+  the successful result is a dated snapshot rather than repeatable live status.
+- `npm ls --all` exits with `ELSPROBLEMS` because several grammar packages
+  declare optional `tree-sitter` peers below root version 0.25.1.
+- Registry metadata review found no newer compatible Java, Ruby, Rust, or
+  TypeScript grammar versions. The focused `semantic-repository` suite passed
+  across all seven supported languages; no dependency changes were made.
+
 ## Dashboard diagnostic log path integrity: 2026-10-24 (SK-060)
 
 - `node test/run-all.js test/security-dashboard-diagnostic-log.test.js

@@ -103,27 +103,26 @@ Focused validation after the fix: `test/security-project-access.test.js` and
 `test/security-dashboard-direct-routes.test.js` passed (2 suites, 0 failures).
 The broader authorization matrix and live deployment behavior remain open.
 
-An earlier supply-chain snapshot on 2026-10-24 reported zero vulnerabilities
-from local npm audit and no open GitHub Dependabot alerts (19 historical alerts
-were marked fixed). A later audit refresh in this session could not reach the
-npm advisory endpoint; treat the earlier result as a point-in-time snapshot,
-not current verification. A fresh online audit attempt on 2026-10-24 again
-failed because the advisory endpoint was unreachable. The offline audit found
-zero vulnerabilities using local cache only; that result is not current
-verification. No package or lockfile changes were made. This does not cover
-non-NPM assets.
+An online `npm audit --json` request on 2026-10-24 succeeded and returned zero
+vulnerabilities across 219 dependencies. A subsequent request in the same
+session failed because the npm advisory endpoint was unavailable. Treat the
+successful result as a point-in-time snapshot, not continuous verification.
+The report does not cover non-NPM assets.
 
 ### Dependency peer-range inconsistency (2026-10-24, SK-049)
 
 Local `npm ls --all` exits with `ELSPROBLEMS`: root `tree-sitter@0.25.1` is
 deduplicated into the optional peer slots of the pinned Java, Perl, Ruby, Rust,
 and TypeScript grammar packages even though their locked manifests declare
-older peer ranges. The required 379-suite test run passes, and this check did
-not establish an exploitable vulnerability or observed parser failure. It does
-establish that the installed dependency tree is not semver-consistent with
-those declared peer ranges. No versions were changed because a compatible
-resolution requires a controlled parser/runtime compatibility review; the
-current online advisory scan is also unavailable.
+older peer ranges. Current registry metadata shows no newer Java, Ruby, Rust,
+or TypeScript grammar release that raises those peer ranges; the newest Perl
+release does, but is not in the lock. The focused `semantic-repository` suite
+passes and exercises AST parsing across all seven supported languages, so this
+review did not establish an observed parser failure or exploitable
+vulnerability. The installed dependency tree still is not semver-consistent
+with all declared peers. No packages were upgraded or downgraded because a
+clean peer resolution requires an upstream-compatible parser/runtime set and
+controlled validation across supported platforms.
 
 ### Handoff-linked memory scope (2026-10-24, SK-026)
 
