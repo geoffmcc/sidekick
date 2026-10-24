@@ -21,7 +21,7 @@ function request(method, route, body, headers = {}) {
       res.on('end', () => {
         let parsed = {};
         try { parsed = text ? JSON.parse(text) : {}; } catch { parsed = { raw: text }; }
-        resolve({ status: res.statusCode, data: parsed });
+        resolve({ status: res.statusCode, headers: res.headers, data: parsed });
       });
     });
     req.setTimeout(5000, () => req.destroy(new Error(`timeout: ${method} ${route}`)));
@@ -117,6 +117,7 @@ async function main() {
 
     const tokenRes = await request('POST', '/compute/enrollment/tokens', { displayName: 'http-worker', allowedDataClassifications: ['public', 'internal', 'private'], expiresInMs: 600000, maxConcurrentJobs: 1 }, admin);
     assert.strictEqual(tokenRes.status, 200, 'admin can create enrollment token');
+    assert.strictEqual(tokenRes.headers['cache-control'], 'no-store', 'enrollment token responses must not be cached');
     assert.ok(tokenRes.data.token && tokenRes.data.token.startsWith('enroll_'), 'token returned once');
 
     const enrollRes = await request('POST', '/compute/enrollment/exchange', {

@@ -464,3 +464,18 @@ scope-attenuation, and revocation checks are unchanged. Regressions assert both
 headers on successful create and rotation responses, assert rotation invalidates
 the previous credential, and retain negative tests for cross-principal and
 out-of-scope credential operations.
+
+### Core API response caching (2026-10-24, SK-041)
+
+A source sweep after SK-040 found that the Core HTTP app did not establish a
+response cache policy. This included MCP tool results, Compute enrollment
+credentials, and worker protocol responses. Added a Core-wide `Cache-Control:
+no-store` and `Pragma: no-cache` policy. MCP transport header forwarding now
+prevents the SDK response from overriding that policy. The legacy MCP SSE
+transport sets `no-cache, no-transform` itself; its streaming response cannot
+be changed after headers are sent, so it retains the SDK's no-cache behavior.
+
+Live integration regressions verify no-store on Streamable HTTP MCP
+initialization and tool-call responses and on Compute enrollment token
+issuance. No functional changes to request authentication, credential scope,
+or tool dispatch were made.

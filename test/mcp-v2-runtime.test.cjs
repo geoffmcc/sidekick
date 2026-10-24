@@ -63,6 +63,8 @@ function modernRequest(port, id, method, params, headers = {}) {
       protocolVersion: "2025-03-26",
     });
     assert.strictEqual(browserInitialization.status, 200);
+    assert.strictEqual(browserInitialization.headers.get("cache-control"), "no-store",
+      "MCP responses must not be cached");
     const browserSessionId = browserInitialization.headers.get("mcp-session-id");
     assert.ok(browserSessionId, "a current browser session can initialize a live MCP session");
 
@@ -151,6 +153,8 @@ function modernRequest(port, id, method, params, headers = {}) {
     console.log("MCP v2 test: tools/call");
     const callResponse = await modernRequest(port, 3, "tools/call", { name: "tools", arguments: { action: "get", name: "read" } }, { name: "tools" });
     assert.strictEqual(callResponse.status, 200);
+    assert.strictEqual(callResponse.headers.get("cache-control"), "no-store",
+      "MCP tool results must not be cached");
     const call = await callResponse.json();
     assert.ok(!call.error, JSON.stringify(call));
     assert.ok(Array.isArray(call.result.content));

@@ -822,3 +822,14 @@ about current lockfile vulnerability status.
   --overall-timeout-ms=600000 --json` passed 2 suites, 0 failures, 0 skips.
   Credential tests verify no-store headers on issuance/rotation, prior-token
   invalidation, and existing scope/ownership denials.
+
+## Core API response caching: 2026-10-24 (SK-041)
+
+- Added a Core-wide no-store response policy and enforced it after MCP SDK
+  response headers are copied. Legacy MCP SSE still uses the upstream
+  transport's `no-cache, no-transform` streaming policy.
+- `node test/run-all.js test/mcp-v2-runtime.test.cjs
+  test/compute-protocol.test.js --concurrency=1 --overall-timeout-ms=900000
+  --json` passed both suites, 0 failures and 0 skips. The tests verify live MCP
+  initialization/tool responses and Compute enrollment-token issuance carry
+  `Cache-Control: no-store`.
