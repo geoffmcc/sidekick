@@ -1012,3 +1012,8 @@ about current lockfile vulnerability status.
 - The upstream 11.17.0 manifest metadata confirms Node `^18.19 || >=20.0`,
   compatible with the repository's Node >=22 requirement. A clean install,
   Puppeteer browser download, and Mermaid rendering were not validated.
+- After the locked installer change, `npm.cmd test` passed all 379 unit,
+  contract, integration, and security suites in 413.092 seconds, with
+  0 failures and 0 skips. The focused installer suite, docs, architecture,
+  test-architecture, Git for Windows Bash syntax check, and `git diff --check`
+  also passed.
