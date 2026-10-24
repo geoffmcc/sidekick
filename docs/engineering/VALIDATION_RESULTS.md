@@ -1286,3 +1286,13 @@ about current lockfile vulnerability status.
   `provider_verified: false` and `optional_provider_integration: not_verified`.
 - No server-side provider receipt currently exists, so provider integration
   certification remains unavailable by design.
+
+## Full required test tier after SK-068/SK-069: 2026-10-24
+
+- `npm.cmd test` passed 381/381 required unit, contract, integration, and
+  security suites with 0 failures and 0 skips. The longest suites were Agent
+  Bridge follow-up (266.5 seconds), handoff concurrency (63.3 seconds), and
+  handoff reliability (59.4 seconds).
+- This validates the current local branch, including the evidence-attribution,
+  provider self-attestation, and cross-surface authorization regressions. It
+  is not hosted CI, a live-provider test, or a production deployment check.
