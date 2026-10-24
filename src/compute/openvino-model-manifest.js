@@ -20,6 +20,10 @@
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
+const { openRegularFile } = require("../core/bounded-file-read");
+
+const MAX_MODEL_MANIFEST_FILE_BYTES = 50 * 1024 * 1024;
+const MODEL_HASH_CHUNK_BYTES = 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // Certification tier (explicit lifecycle states for runtime trust)
@@ -426,8 +430,42 @@ function getAdvertisedCapabilities(modelId, availableDevices) {
  * @returns {string}  Lowercase hex-encoded SHA-256 digest.
  */
 function sha256File(filePath) {
-  const data = fs.readFileSync(filePath);
-  return crypto.createHash("sha256").update(data).digest("hex");
+  const { fd, stat: initialStat } = openRegularFile(filePath, { noFollow: true });
+  try {
+    if (initialStat.size > MAX_MODEL_MANIFEST_FILE_BYTES) {
+      const error = new Error(`Model manifest file exceeds the ${MAX_MODEL_MANIFEST_FILE_BYTES}-byte integrity limit`);
+      error.code = "MODEL_FILE_TOO_LARGE";
+      throw error;
+    }
+
+    const hash = crypto.createHash("sha256");
+    const buffer = Buffer.allocUnsafe(MODEL_HASH_CHUNK_BYTES);
+    let offset = 0;
+    while (true) {
+      const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, offset);
+      if (bytesRead === 0) break;
+      offset += bytesRead;
+      if (offset > MAX_MODEL_MANIFEST_FILE_BYTES) {
+        const error = new Error(`Model manifest file exceeds the ${MAX_MODEL_MANIFEST_FILE_BYTES}-byte integrity limit`);
+        error.code = "MODEL_FILE_TOO_LARGE";
+        throw error;
+      }
+      hash.update(buffer.subarray(0, bytesRead));
+    }
+
+    const finalStat = fs.fstatSync(fd);
+    if (offset !== initialStat.size
+      || finalStat.size !== initialStat.size
+      || finalStat.mtimeMs !== initialStat.mtimeMs
+      || finalStat.ctimeMs !== initialStat.ctimeMs) {
+      const error = new Error("Model manifest file changed during integrity verification");
+      error.code = "MODEL_FILE_CHANGED";
+      throw error;
+    }
+    return hash.digest("hex");
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 /**
@@ -599,5 +637,6 @@ module.exports = {
   verifyModelIntegrity,
   verifyModelFileHash,
   sha256File,
+  MAX_MODEL_MANIFEST_FILE_BYTES,
   _testOverrideModelStatus,
 };

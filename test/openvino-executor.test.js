@@ -7,7 +7,7 @@ const assert = require("assert");
 
 const { initOpenVinoExecutor, executeOpenVinoEmbed, getCapabilityStatus, getOpenVinoCapabilities } = require("../src/compute/openvino-executor");
 const { loadOpenVinoConfig, validateConfigPath, validatePythonPath } = require("../src/compute/openvino-config");
-const { validateJobRequest, getApprovedModel, verifyModelIntegrity, verifyModelFileHash, CERTIFICATION_TIER } = require("../src/compute/openvino-model-manifest");
+const { validateJobRequest, getApprovedModel, verifyModelIntegrity, verifyModelFileHash, sha256File, MAX_MODEL_MANIFEST_FILE_BYTES, CERTIFICATION_TIER } = require("../src/compute/openvino-model-manifest");
 const { HelperManager, HelperProcess } = require("../src/compute/openvino-helper-manager");
 
 // ---------------------------------------------------------------------------
@@ -100,6 +100,31 @@ async function runConfigTests() {
 
 async function runManifestTests() {
   console.log("\nModel Manifest Tests:");
+
+  await test("model manifest hashes are incremental, bounded, and reject symlinks", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ov-bounded-hash-"));
+    const contentPath = path.join(dir, "config.json");
+    const oversizedPath = path.join(dir, "oversized.json");
+    const linkedPath = path.join(dir, "linked.json");
+    try {
+      fs.writeFileSync(contentPath, "{\"model\":true}");
+      assert.strictEqual(sha256File(contentPath), require("crypto").createHash("sha256").update("{\"model\":true}").digest("hex"));
+
+      const oversizedFd = fs.openSync(oversizedPath, "w");
+      try { fs.ftruncateSync(oversizedFd, MAX_MODEL_MANIFEST_FILE_BYTES + 1); }
+      finally { fs.closeSync(oversizedFd); }
+      assert.throws(() => sha256File(oversizedPath), /integrity limit/);
+
+      try {
+        fs.symlinkSync(contentPath, linkedPath, "file");
+        assert.throws(() => sha256File(linkedPath), /symlink|symbolic link|not a regular file/i);
+      } catch (error) {
+        if (!["EPERM", "EACCES", "ENOTSUP"].includes(error.code)) throw error;
+      }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 
   await test("Validates valid job payload", () => {
     const job = {
