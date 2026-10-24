@@ -110,6 +110,16 @@ async function main() {
     check('worker exits on permanent revocation', exitCode !== null);
     check('exits cleanly (code 0) to avoid restart hot-loop', exitCode === 0);
     check('logs a FATAL revocation message', w.getLogs().includes('FATAL') && /revoked or invalid/.test(w.getLogs()));
+
+    // Startup can race a revocation with the first heartbeat. A terminal
+    // decision before heartbeatTimer exists must not be followed by creation
+    // of a fresh interval that keeps the process alive forever.
+    mode = 'revoked';
+    w = spawnWorker(credPath, port);
+    workers.push(w.child);
+    const initialFatal = await waitFor(w.getLogs, 'FATAL', 8000);
+    const initialExit = await waitExit(w.child, 5000);
+    check('initial heartbeat revocation exits without installing a retry timer', initialFatal && initialExit === 0);
   } finally {
     for (const worker of workers) {
       if (worker.exitCode === null) worker.kill('SIGKILL');
