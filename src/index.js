@@ -334,9 +334,7 @@ try { platformKernelForComputeAudit = require("./platform/kernel"); } catch {}
 const computeEnrollmentRateLimit = new Map();
 
 function sendComputeError(res, error, status = 400) {
-  const code = error.code || "COMPUTE_ERROR";
-  const message = String(error.message || "Compute error").replace(/(wksec_|enroll_)[A-Za-z0-9_-]+/g, "[REDACTED]");
-  res.status(status).json({ ok: false, error: message, code });
+  return require("./compute/admin-api").sendComputeAdminError(res, error, status);
 }
 
 function auditComputeEvent(eventType, { actor = "compute", subjectType, subjectId, payload = {}, severity = "info" } = {}) {
