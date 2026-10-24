@@ -141,7 +141,7 @@ function countChromeProcesses() {
   await test("a different authorized project member cannot list, use, or close another principal's browser session", async () => {
     const { createServiceContext } = require("./helpers/authorized-context");
     const projectAccess = require("../src/core/project-access");
-    const peer = createServiceContext({ role: "operator" });
+    const peer = createServiceContext({ role: "administrator" });
     projectAccess.grantProjectAccess({
       actorPrincipalId: ownerContext.authIdentity.principal_id,
       principalId: peer.authIdentity.principal_id,
