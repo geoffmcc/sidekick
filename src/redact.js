@@ -225,7 +225,11 @@ function redactSensitive(text) {
       try {
         const parsed = JSON.parse(text);
         if (parsed && typeof parsed === "object") {
-          return JSON.stringify(redactSensitiveKeysDeep(parsed));
+          const trimmed = text.trim();
+          const leading = text.slice(0, text.indexOf(trimmed));
+          const trailing = text.slice(text.indexOf(trimmed) + trimmed.length);
+          const indent = text.match(/\n([\t ]+)\S/)?.[1];
+          return leading + JSON.stringify(redactSensitiveKeysDeep(parsed), null, indent) + trailing;
         }
       } catch {
         // Malformed JSON remains ordinary text and receives pattern redaction.
