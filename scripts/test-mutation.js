@@ -163,7 +163,7 @@ function bounded(text, limit) { return String(text || "").slice(0, limit); }
 function executeTests(tests, cwd, policy) {
   const result = spawnSync(process.execPath, ["test/run-all.js", ...tests], {
     cwd,
-    env: { ...process.env, NODE_PATH: path.join(root, "node_modules"), NODE_ENV: "test", SIDEKICK_TEST_OVERALL_TIMEOUT_MS: String(policy.execution.overall_timeout_ms) },
+    env: { ...process.env, SIDEKICK_TEST_MUTATION_NODE_PATH: path.join(root, "node_modules"), NODE_ENV: "test", SIDEKICK_TEST_OVERALL_TIMEOUT_MS: String(policy.execution.overall_timeout_ms) },
     encoding: "utf8",
     timeout: policy.execution.process_timeout_ms,
     maxBuffer: policy.output.max_bytes,
