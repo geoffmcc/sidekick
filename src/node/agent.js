@@ -69,19 +69,32 @@ function registry() {
   const descriptors = [...builtin.list()];
   if (Array.isArray(nodeConfig.packs) && nodeConfig.packs.includes("developer")) {
     const entry = require("../../packs/developer/modules/developer-tools/entry");
-    const services = {
-      config: { repository_roots: [workspace.root] },
-      paths: { enforce: localPathPolicy },
-      dispatch: async (name, args) => {
-        const descriptor = builtin.get(name);
-        if (!descriptor) return { content: [{ type: "text", text: `Unknown local dependency: ${name}` }], isError: true };
-        return descriptor.handler(args || {}, { context: { source: "node" } });
-      },
-    };
+    const services = createDeveloperServices(builtin);
     for (const descriptor of entry.buildDescriptors(services)) descriptors.push(normalizeDescriptor({ ...descriptor, source: "module:developer-tools", family: null }));
   }
   nodeRegistry = createRegistry(descriptors);
   return nodeRegistry;
+}
+function createDeveloperServices(builtin, {
+  targetWorkspace = workspace,
+  dispatchCanonical = (name, args, options) => require("../tools/dispatcher").callTool(name, args, options),
+} = {}) {
+  return {
+    config: { repository_roots: targetWorkspace?.root ? [targetWorkspace.root] : [] },
+    paths: { enforce: localPathPolicy },
+    dispatch: async (name, args, options = {}) => {
+      if (!builtin.get(name)) return { content: [{ type: "text", text: `Unknown local dependency: ${name}` }], isError: true };
+      if (name === "bash") {
+        try {
+          if (targetWorkspace?.permissions?.execute !== true) throw new Error("execution is not granted by the node workspace");
+          workspaceForPath(args?.cwd, "execute", targetWorkspace);
+        } catch (error) {
+          return { content: [{ type: "text", text: `Workspace denied: ${redact(error.message)}` }], isError: true, code: "workspace_denied" };
+        }
+      }
+      return dispatchCanonical(name, args || {}, options);
+    },
+  };
 }
 function descriptorSetHash() { const names = registry().list().map(d => `${d.name}:${descriptorIdentity(d)}`).join("\n"); return crypto.createHash("sha256").update(names).digest("hex"); }
 function commandOnPath(name, searchPath = process.env.PATH || "", pathExt = process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD") {
@@ -244,4 +257,4 @@ function status() { const record = credentialStore.load(CREDENTIAL_PATH); consol
 async function doctor() { const checks = []; try { prepare(); checks.push({ name: "workspace", ok: true, repositories: discoverRepositories(workspace).length }); } catch (error) { checks.push({ name: "workspace", ok: false, error: error.message }); } const record = credentialStore.load(CREDENTIAL_PATH); checks.push({ name: "credential", ok: Boolean(record), state: record ? "present" : "not_enrolled" }); checks.push({ name: "enrollment_token", ok: Boolean(token()), state: token() ? "configured" : "not_configured" }); checks.push({ name: "descriptor_set", ok: (() => { try { descriptorSetHash(); return true; } catch { return false; } })() }); console.log(JSON.stringify({ ok: checks.every(check => check.ok), checks }, null, 2)); if (checks.some(check => !check.ok)) process.exitCode = 1; }
 async function runCommand(command) { if (command === "version") return console.log(VERSION); if (command === "status") { nodeConfig = loadConfig(); return status(); } if (command === "doctor") return doctor(); if (command === "enroll") { prepare(); await enroll(); return; } return main(); }
 if (require.main === module) runCommand(process.argv[2] || "run").catch(error => { log(error.message); process.exitCode = 1; });
-module.exports = { capabilities, descriptorSetHash, validateLocalArguments, boundedResult, effectiveConcurrency, effectiveOutputLimit, createWorkspace, binaries, commandOnPath, request };
+module.exports = { capabilities, descriptorSetHash, validateLocalArguments, createDeveloperServices, boundedResult, effectiveConcurrency, effectiveOutputLimit, createWorkspace, binaries, commandOnPath, request };

@@ -16,7 +16,7 @@ const authentication = require("../src/core/authentication");
 const authorization = require("../src/core/authorization");
 const express = require("express");
 const { registerExecutionNodeAdminRoutes } = require("../src/node/admin-api");
-const { validateLocalArguments, boundedResult, effectiveConcurrency, effectiveOutputLimit } = require("../src/node/agent");
+const { validateLocalArguments, createDeveloperServices, boundedResult, effectiveConcurrency, effectiveOutputLimit } = require("../src/node/agent");
 const { createWorkspace } = require("../src/node/workspace");
 const { getCanonicalRegistry } = require("../src/tools/canonical-registry");
 const developerEntry = require("../packs/developer/modules/developer-tools/entry");
@@ -200,4 +200,53 @@ test("node-safe tools bind implicit paths to the authorized workspace root", () 
     assert.ok(descriptor, `developer ${name} descriptor is available`);
     assert.equal(validateLocalArguments(descriptor, {}, readWriteWorkspace).path, root, `${name} defaults stay in the workspace`);
   }
+});
+
+test("execution-node Developer service keeps nested tool calls behind workspace grants and canonical dispatch", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-node-developer-dispatch-"));
+  const command = { command: "npm test", cwd: root };
+  const options = { timeoutMs: 12345 };
+  const bash = getCanonicalRegistry({ includeActiveModules: false }).get("bash");
+  assert.ok(bash, "canonical bash descriptor is available");
+
+  const readOnlyWorkspace = createWorkspace({ name: "developer-read-only", root, permissions: { read: true, write: false, execute: false } });
+  let calls = 0;
+  const deniedServices = createDeveloperServices(getCanonicalRegistry({ includeActiveModules: false }), {
+    targetWorkspace: readOnlyWorkspace,
+    dispatchCanonical: async () => { calls += 1; return { content: [] }; },
+  });
+  const denied = await deniedServices.dispatch("bash", command, options);
+  assert.equal(denied.isError, true);
+  assert.equal(denied.code, "workspace_denied");
+  assert.match(denied.content[0].text, /execution is not granted/);
+  assert.equal(calls, 0, "a missing local execution grant blocks dispatch before the canonical tool layer");
+
+  const executableWorkspace = createWorkspace({ name: "developer-executable", root, permissions: { read: true, write: false, execute: true } });
+  let dispatched;
+  const allowedServices = createDeveloperServices(getCanonicalRegistry({ includeActiveModules: false }), {
+    targetWorkspace: executableWorkspace,
+    dispatchCanonical: async (...args) => { dispatched = args; return { content: [{ type: "text", text: "synthetic result" }] }; },
+  });
+  const allowed = await allowedServices.dispatch("bash", command, options);
+  assert.equal(allowed.content[0].text, "synthetic result");
+  assert.deepEqual(dispatched, ["bash", command, options], "nested tool execution returns to canonical policy with original arguments and limits");
+
+  const outsideServices = createDeveloperServices(getCanonicalRegistry({ includeActiveModules: false }), {
+    targetWorkspace: executableWorkspace,
+    dispatchCanonical: async () => { calls += 1; return { content: [] }; },
+  });
+  const outside = await outsideServices.dispatch("bash", { command: "npm test", cwd: path.join(root, "..", "outside") }, options);
+  assert.equal(outside.isError, true);
+  assert.equal(outside.code, "workspace_denied");
+  assert.equal(calls, 0, "a path outside the node grant never reaches canonical dispatch");
+
+  const unknown = await allowedServices.dispatch("not_a_tool", {});
+  assert.equal(unknown.isError, true);
+  assert.equal(dispatched.length, 3, "unknown tools never reach canonical dispatch");
+  assert.equal(typeof bash.handler, "function");
+
+  const defaultServices = createDeveloperServices(getCanonicalRegistry({ includeActiveModules: false }), { targetWorkspace: executableWorkspace });
+  const unauthenticated = await defaultServices.dispatch("bash", command, options);
+  assert.equal(unauthenticated.isError, true);
+  assert.equal(unauthenticated.code, "unauthenticated", "the production adapter applies canonical identity policy before a command can execute");
 });
