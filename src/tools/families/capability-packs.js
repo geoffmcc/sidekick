@@ -30,7 +30,9 @@ function requireName(name, action) {
 async function sidekick_capability({ action = "list", name, path: sourcePath, expected_package_hash, config, enable, allow_same_version, allow_downgrade, remove_knowledge, remove_module_data, source, query, kind, owner, state, available, offset, limit }, runtime = {}) {
   const readActions = new Set(["list", "available", "show", "inspect", "validate", "health", "doctor"]);
   const permission = readActions.has(action) ? "packs.read" : "packs.manage";
-  const publicReadActions = new Set(["list", "available", "catalog", "show", "health"]);
+  // Pack summaries include runtime configuration, installation paths and
+  // health details. Keep only the non-sensitive catalog surfaces public.
+  const publicReadActions = new Set(["list", "available", "catalog"]);
   const authorizationError = publicReadActions.has(action)
     ? requireCanonicalInvocation("capability")
     : requireToolExecution({ tool: "capability", action }, permission, "capability");

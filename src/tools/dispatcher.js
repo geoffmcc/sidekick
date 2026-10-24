@@ -280,13 +280,14 @@ async function executeResolvedTool(descriptor, args, context, requestedName = de
   }
   const effectiveRisk = approvalDecision?.risk;
   const permission = requiredToolPermission(descriptor, executionArgs);
-  // Workflow definitions are globally registered and can contain operational
-  // details. Their low-risk list/show actions still require the explicit
-  // workflows.read grant. Other low-risk inventory surfaces (capability and
-  // tool catalogs) are intentionally public, and low-risk actions on higher
-  // risk tools retain their action-level risk behavior.
-  const requiresScopedIdentity = descriptor.name === "workflow"
-    && ["list", "show"].includes(executionArgs.action || "list");
+  // Workflow definitions and detailed pack state can contain operational or
+  // credential-reference metadata. Their low-risk read actions still require
+  // explicit scoped grants. Only capability/tool catalogs remain public;
+  // low-risk actions on higher-risk tools retain their action-level risk.
+  const requiresScopedIdentity = (descriptor.name === "workflow"
+    && ["list", "show"].includes(executionArgs.action || "list"))
+    || (descriptor.name === "capability"
+      && ["show", "inspect", "validate", "health", "doctor", "maturity"].includes(executionArgs.action));
   const requiresIdentity = !options.testExecution && (
     descriptor.name === "secret" || descriptor.name === "predict" || effectiveRisk !== "low" || requiresScopedIdentity
   );
