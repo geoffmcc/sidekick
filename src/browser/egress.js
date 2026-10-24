@@ -212,6 +212,21 @@ async function resolveAndValidate(host, policy, { protocol = "https", port = 443
  *
  * `onBlocked(record)` and `onRequest(record)` receive bounded evidence records.
  */
+function safeEvidenceTarget(target, kind) {
+  const value = String(target);
+  // CONNECT evidence is already a bounded host:port, not a URL.
+  if (kind !== "http") return value.slice(0, 500);
+  try {
+    const url = new URL(value);
+    if (url.protocol) {
+      // URLs can contain credentials in userinfo, paths, or query values.
+      // Evidence only needs the destination authority; never persist the raw URL.
+      return (url.host ? `${url.protocol}//${url.host}` : url.protocol).slice(0, 500);
+    }
+  } catch { /* host:port evidence (for CONNECT) is not a URL */ }
+  return value.slice(0, 500);
+}
+
 async function createSessionProxy(policy, { onBlocked = () => {}, onRequest = () => {}, credential = null } = {}) {
   let connections = 0;
   let selfPort = 0;
@@ -236,7 +251,7 @@ async function createSessionProxy(policy, { onBlocked = () => {}, onRequest = ()
   }
 
   function blocked(kind, target, reason) {
-    try { onBlocked({ kind, target: String(target).slice(0, 500), reason, at: new Date().toISOString() }); } catch { /* evidence only */ }
+    try { onBlocked({ kind, target: safeEvidenceTarget(target, kind), reason, at: new Date().toISOString() }); } catch { /* evidence only */ }
   }
 
   function isSelfTarget(host, port) {
@@ -288,7 +303,7 @@ async function createSessionProxy(policy, { onBlocked = () => {}, onRequest = ()
       res.end("Sidekick browser egress policy: request targets the session proxy itself");
       return;
     }
-    try { onRequest({ kind: "http", target: url.href.slice(0, 500) }); } catch { /* evidence only */ }
+    try { onRequest({ kind: "http", target: safeEvidenceTarget(url.href, "http") }); } catch { /* evidence only */ }
 
     const headers = { ...req.headers };
     delete headers["proxy-authorization"];

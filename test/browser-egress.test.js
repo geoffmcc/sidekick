@@ -165,15 +165,43 @@ const CLOSED = egress.buildSessionPolicy({ allowPrivateNetwork: false }, { allow
     }
   });
 
+  await test("blocked URL evidence omits URL credentials, path, and query", async () => {
+    const blocked = [];
+    const proxy = await egress.createSessionProxy(CLOSED, { onBlocked: (r) => blocked.push(r) });
+    const sensitive = "synthetic-browser-secret-7f2c";
+    try {
+      const request = (url) => new Promise((resolve, reject) => {
+        const socket = net.connect(proxy.port, "127.0.0.1", () => {
+          socket.write(`GET ${url} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n`);
+        });
+        socket.on("data", () => {});
+        socket.on("end", resolve);
+        socket.on("error", reject);
+      });
+      await request(`http://user:${sensitive}@127.0.0.1/private/${sensitive}?token=${sensitive}`);
+      // Unsupported schemes are also refused by the proxy and must not take a
+      // different path that records their raw URL.
+      await request(`ftp://user:${sensitive}@127.0.0.1/private/${sensitive}?token=${sensitive}`);
+      assert.strictEqual(blocked.length, 2);
+      assert.strictEqual(blocked[0].target, "http://127.0.0.1");
+      assert.strictEqual(blocked[1].target, "ftp://127.0.0.1");
+      assert.ok(!JSON.stringify(blocked).includes(sensitive), "URL secrets must not enter retained block evidence");
+    } finally {
+      await proxy.close();
+    }
+  });
+
   await test("session proxy forwards an allowed absolute-URI request to the pinned upstream", async () => {
     const upstream = http.createServer((req, res) => { res.writeHead(200); res.end("upstream-ok"); });
     await new Promise((r) => upstream.listen(0, "127.0.0.1", r));
     const upstreamPort = upstream.address().port;
-    const proxy = await egress.createSessionProxy(OPEN);
+    const requests = [];
+    const proxy = await egress.createSessionProxy(OPEN, { onRequest: (r) => requests.push(r) });
+    const sensitive = "synthetic-browser-request-9a4e";
     try {
       const body = await new Promise((resolve, reject) => {
         const socket = net.connect(proxy.port, "127.0.0.1", () => {
-          socket.write(`GET http://127.0.0.1:${upstreamPort}/ HTTP/1.1\r\nHost: 127.0.0.1:${upstreamPort}\r\nConnection: close\r\n\r\n`);
+          socket.write(`GET http://127.0.0.1:${upstreamPort}/private/${sensitive}?token=${sensitive} HTTP/1.1\r\nHost: 127.0.0.1:${upstreamPort}\r\nConnection: close\r\n\r\n`);
         });
         let buf = "";
         socket.on("data", (d) => { buf += d; });
@@ -181,6 +209,8 @@ const CLOSED = egress.buildSessionPolicy({ allowPrivateNetwork: false }, { allow
         socket.on("error", reject);
       });
       assert.ok(body.includes("upstream-ok"), `proxy did not forward: ${body.slice(0, 80)}`);
+      assert.deepStrictEqual(requests.map((request) => request.target), [`http://127.0.0.1:${upstreamPort}`]);
+      assert.ok(!JSON.stringify(requests).includes(sensitive), "request telemetry must omit URL paths and query values");
     } finally {
       await proxy.close();
       await new Promise((r) => upstream.close(r));
