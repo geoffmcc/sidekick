@@ -53,6 +53,14 @@ test("sandbox output limits always resolve to a positive finite hard ceiling", (
   }
 });
 
+test("sandbox applies an explicit per-process address-space ceiling", () => {
+  const args = executor.buildPrlimitArgs("true");
+  const memoryLimit = `--as=${executor.COMMAND_LIMITS.addressSpaceBytes}:${executor.COMMAND_LIMITS.addressSpaceBytes}`;
+  assert.ok(args.includes(memoryLimit), "prlimit must cap soft and hard address-space limits");
+  assert.equal(executor.COMMAND_LIMITS.addressSpaceBytes, 8 * 1024 * 1024 * 1024);
+  assert.throws(() => executor.buildPrlimitArgs(""), error => error.code === "command_invalid");
+});
+
 test("missing Linux isolation backend fails closed", () => {
   if (process.platform !== "linux") return;
   assert.throws(
@@ -94,6 +102,12 @@ test("bubblewrap starts only after namespace setup and clears inherited environm
   });
   assert.equal(result.exitCode, 0, result.stderr);
   assert.equal(result.stdout, "isolated-command-ok");
+});
+
+test("the isolated shell inherits the configured address-space ceiling", { skip: process.platform !== "linux" || !fs.existsSync(executor.DEFAULT_BWRAP) }, async () => {
+  const result = await executor.runBubblewrap({ command: "ulimit -v", source: "mcp" });
+  assert.equal(result.exitCode, 0, result.stderr);
+  assert.equal(Number(result.stdout.trim()), executor.COMMAND_LIMITS.addressSpaceBytes / 1024);
 });
 
 test("legacy bounded-shell callers get the OS boundary, no host filesystem, and no host network", { skip: process.platform !== "linux" || !fs.existsSync(executor.DEFAULT_BWRAP) }, async () => {

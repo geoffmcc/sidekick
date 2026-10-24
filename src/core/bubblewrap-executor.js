@@ -13,6 +13,10 @@ const DEFAULT_OUTPUT_BUFFER_BYTES = 10 * 1024 * 1024;
 const MAX_OUTPUT_BUFFER_BYTES = 50 * 1024 * 1024;
 const COMMAND_LIMITS = Object.freeze({
   cpuSeconds: 300,
+  // Bound virtual address space per process while leaving room for Node/V8,
+  // JVM and ordinary build tools. This is a per-process ceiling; aggregate
+  // cgroup accounting remains a separate deployment-level control.
+  addressSpaceBytes: 8 * 1024 * 1024 * 1024,
   processes: 64,
   openFiles: 1024,
   fileBytes: 256 * 1024 * 1024,
@@ -180,6 +184,19 @@ function validateCommand(command) {
   }
 }
 
+function buildPrlimitArgs(command) {
+  validateCommand(command);
+  return [
+    `--cpu=${COMMAND_LIMITS.cpuSeconds}:${COMMAND_LIMITS.cpuSeconds}`,
+    `--as=${COMMAND_LIMITS.addressSpaceBytes}:${COMMAND_LIMITS.addressSpaceBytes}`,
+    `--nproc=${COMMAND_LIMITS.processes}:${COMMAND_LIMITS.processes}`,
+    `--nofile=${COMMAND_LIMITS.openFiles}:${COMMAND_LIMITS.openFiles}`,
+    `--fsize=${COMMAND_LIMITS.fileBytes}:${COMMAND_LIMITS.fileBytes}`,
+    "--core=0:0",
+    "--", "/bin/sh", "-c", command,
+  ];
+}
+
 function buildBubblewrapArgs({ command, workspace = null, workspaceFd = null, source = "mcp", binaryPath = DEFAULT_BWRAP } = {}) {
   validateCommand(command);
   const executable = resolveBubblewrap(binaryPath);
@@ -213,12 +230,7 @@ function composeBubblewrapArgs({ command, canonicalWorkspace, workspaceFd, execu
   else args.push("--dir", "/workspace");
   args.push(
     "--chdir", "/workspace", "--", PRLIMIT,
-    `--cpu=${COMMAND_LIMITS.cpuSeconds}:${COMMAND_LIMITS.cpuSeconds}`,
-    `--nproc=${COMMAND_LIMITS.processes}:${COMMAND_LIMITS.processes}`,
-    `--nofile=${COMMAND_LIMITS.openFiles}:${COMMAND_LIMITS.openFiles}`,
-    `--fsize=${COMMAND_LIMITS.fileBytes}:${COMMAND_LIMITS.fileBytes}`,
-    "--core=0:0",
-    "--", "/bin/sh", "-c", command,
+    ...buildPrlimitArgs(command),
   );
   return { executable, args, workspace: canonicalWorkspace };
 }
@@ -351,6 +363,7 @@ module.exports = Object.freeze({
   DEFAULT_OUTPUT_BUFFER_BYTES,
   MAX_OUTPUT_BUFFER_BYTES,
   COMMAND_LIMITS,
+  buildPrlimitArgs,
   normalizeOutputBufferLimit,
   hasProtectedAncestors,
   resolveBubblewrap,
