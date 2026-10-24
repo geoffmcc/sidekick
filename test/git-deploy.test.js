@@ -43,6 +43,7 @@ function makeMock(overrides = {}) {
     installCalls: 0,
     installTimeouts: [],
     calls: [],
+    childEnvironments: [],
     ...overrides
   };
   // Per-service state so the mock can model sidekick-mcp staying active while
@@ -64,6 +65,7 @@ function makeMock(overrides = {}) {
 
   function execFileSyncMock(cmd, args, options = {}) {
     state.calls.push([cmd, ...args].join(' '));
+    state.childEnvironments.push(options.env || null);
     const cwd = options.cwd || '';
     if (cmd === 'df' && state.lowDisk) return 'Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/root 9999999 9999998 1 99% /\n';
     if (cmd === 'df') return 'Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/root 9999999 1 9999999 1% /\n';
@@ -148,9 +150,27 @@ console.log('Running Git deployment hardening tests...\n');
 try {
   resetApp();
   let state = makeMock({ head: 'bbb222', origin: 'bbb222', behind: '0' });
-  let result = gitDeploy.verify();
+  const environmentNames = ['SIDEKICK_TEST_DEPLOY_API_KEY', 'NODE_OPTIONS', 'LD_AUDIT', 'GIT_SSH_COMMAND'];
+  const previousEnvironment = new Map(environmentNames.map(name => [name, process.env[name]]));
+  process.env.SIDEKICK_TEST_DEPLOY_API_KEY = 'synthetic-deploy-token';
+  process.env.NODE_OPTIONS = '--require synthetic-hook';
+  process.env.LD_AUDIT = 'synthetic-audit-hook';
+  process.env.GIT_SSH_COMMAND = 'synthetic-ssh-wrapper';
+  let result;
+  try {
+    result = gitDeploy.verify();
+  } finally {
+    for (const [name, value] of previousEnvironment) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
   assert.strictEqual(result.status, 'ok', 'valid checkout should verify');
   assert.ok(state.calls.includes('git fetch --prune origin main'), 'verify should fetch origin main');
+  assert.ok(state.childEnvironments.length > 0, 'deployment subprocesses should receive an explicit environment');
+  for (const env of state.childEnvironments) {
+    for (const name of environmentNames) assert.strictEqual(env[name], undefined, `${name} must not reach deployment subprocesses`);
+  }
 
   resetApp();
   state = makeMock({ head: 'bbb222', origin: 'bbb222', behind: '0' });
