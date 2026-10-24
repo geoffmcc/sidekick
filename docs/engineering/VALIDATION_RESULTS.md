@@ -1140,3 +1140,21 @@ about current lockfile vulnerability status.
   `git diff --check` passed after the implementation and report changes.
 - This verifies prompt placement, not model resistance to injection. Tool
   authorization and approval continue to be enforced outside the model.
+
+## Extension-derived planner catalogs: 2026-10-24 (SK-064)
+
+- `node test/brain.test.js` passed all 48 tests. A synthetic hostile tool
+  description and pack instruction are absent from the Brain planner system
+  prompt and appear only in labeled untrusted user messages.
+- `node test/agent-bridge-prompt.test.js` passed all 7 tests, including checks
+  that the regular Agent loop derives catalog data from currently visible
+  tools, omits disabled tools, and passes reference data separately from its
+  static system prompt.
+- `npm.cmd run check:docs`, `check:architecture`, `check:tests`, and
+  `git diff --check` passed after the implementation and report updates.
+- These checks validate prompt placement, not model resistance to injection.
+- A separate `node test/agent-bridge-followup.test.js` run failed its task
+  control case after the synthetic task failed at its earlier checkpoint
+  because the linked handoff repository path was outside the test's configured
+  filesystem policy. The run did not reach an assertion about prompt assembly;
+  this remains an environment/test-fixture failure to investigate.

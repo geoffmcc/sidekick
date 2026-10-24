@@ -812,6 +812,21 @@ This finding concerns the `web_fetch` protocol dispatch and does not imply
 that the network-scope resolver is unsuitable for its other protocol-aware
 callers.
 
+### Extension-derived tool catalog prompt boundary (2026-10-24, SK-064)
+
+Confirmed prompt-boundary defect in both Agent planners: enabled tool
+descriptions, argument labels, registered action hints, and capability
+shortlists were interpolated into system prompts. These fields can be
+extension-derived, so hostile prose could enter the highest-priority model
+instruction channel. Brain and the regular Agent loop now pass their bounded
+catalogs, pack inventory, and task shortlist as separate user messages marked
+as untrusted reference data. Their system prompts contain only static
+instructions and explicitly identify the catalog as data. Regression tests
+inspect the actual Brain planner model request and the regular Agent request
+assembly. Dispatcher schema, authorization, risk, and approval checks remain
+the enforcement boundary; moving content to user messages is not a prompt
+injection guarantee.
+
 ### Planner pack metadata prompt boundary (2026-10-24, SK-063)
 
 Confirmed prompt-boundary defect: installed capability pack descriptions,
