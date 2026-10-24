@@ -783,3 +783,16 @@ about current lockfile vulnerability status.
 - This evidence covers the reviewed paths and targeted suites; it does not
   establish that every Dashboard, CLI, Agent Bridge, or future route uses the
   same identity boundary.
+
+## Dashboard project and Agent Bridge read boundaries: 2026-10-24
+
+- Targeted command: `node test/run-all.js test/security-project-access.test.js
+  test/security-dashboard-direct-routes.test.js test/security-agent-proxy-scopes.test.js
+  --concurrency=1 --overall-timeout-ms=600000 --json` passed all 3 suites,
+  0 failures, 0 skips. The project-access suite passed 74 assertions, including
+  revocation, cross-project memory/handoff evidence, and scope propagation.
+- Source review found current memory and handoff reads recheck project
+  membership, and the Agent relay binds the authenticated Dashboard identity
+  and scope context to its signed upstream request. No bypass was confirmed in
+  these paths; this is not exhaustive evidence for every Dashboard or Agent
+  route.

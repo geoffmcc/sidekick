@@ -413,3 +413,19 @@ This is a source review with targeted regression evidence, not proof that every
 Dashboard, CLI, Agent Bridge, or future route shares the same enforcement. New
 routes and changes to authentication middleware must be checked against these
 boundaries.
+
+### Dashboard memory, handoff, and Agent Bridge read-boundary review (2026-10-24)
+
+Reviewed the Dashboard project, memory, handoff, memory-evidence, and Agent
+Bridge proxy routes. These project-backed reads require an authenticated
+principal and reevaluate current project membership; handoff ownership does not
+survive project-access revocation. Memory evidence checks both the memory's
+project and any linked handoff project. The Agent Bridge relay signs each
+proxied request with the Dashboard-authenticated principal and current scope
+context, leaving task ownership enforcement to the Agent service.
+
+No cross-project read or identity propagation bypass was confirmed in the
+reviewed routes. Targeted integration regressions cover revoked project grants,
+linked memory/handoff scope, unauthenticated memory access, Agent proxy scope
+propagation, and resource concealment. This review does not cover every
+Dashboard endpoint or every Agent Bridge operation.
