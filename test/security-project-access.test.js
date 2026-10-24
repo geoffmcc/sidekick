@@ -733,6 +733,17 @@ test("DuckDB analytics disables external access before caller SQL and bounds fil
     toolContext.runWithContext({ source: "mcp" }, () => media.copyAnalyticsInput(sourcePath, copiedPath));
     assert.equal(fs.readFileSync(copiedPath, "utf8"), "value\n1\n");
 
+    const linkedInputPath = path.join(dataDir, "analytics-linked-input.csv");
+    try { fs.symlinkSync(sourcePath, linkedInputPath, "file"); }
+    catch (error) {
+      if (!["EPERM", "EACCES", "ENOTSUP"].includes(error.code)) throw error;
+    }
+    if (fs.existsSync(linkedInputPath)) {
+      const linkedCopyPath = path.join(dataDir, "analytics-linked-copy.csv");
+      toolContext.runWithContext({ source: "mcp" }, () => media.copyAnalyticsInput(linkedInputPath, linkedCopyPath));
+      assert.equal(fs.readFileSync(linkedCopyPath, "utf8"), "value\n1\n", "in-scope symlinks keep their supported behavior");
+    }
+
     const oversizedPath = path.join(dataDir, "analytics-oversized.csv");
     fs.closeSync(fs.openSync(oversizedPath, "w"));
     fs.truncateSync(oversizedPath, media.MAX_ANALYTICS_FILE_BYTES + 1);

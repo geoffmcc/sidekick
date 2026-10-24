@@ -37,7 +37,7 @@ const INI = require("ini");
 const { detectFormat } = require("../../core/format");
 const { DATA_DIR } = require("../../db");
 const platformKernel = require("../../platform/kernel");
-const { readTextBounded } = require("../../core/bounded-file-read");
+const { openRegularFile, readTextBounded } = require("../../core/bounded-file-read");
 const { hashFile: hashFileDetails } = require("../../core/stream-file-hash");
 
 const TRANSCRIPTION_JOB_ROOT = path.join(DATA_DIR, "transcription-jobs");
@@ -459,10 +459,9 @@ function copyAnalyticsInput(sourcePath, destinationPath) {
   let sourceFd;
   let destinationFd;
   try {
-    const noFollow = fs.constants.O_NOFOLLOW || 0;
-    sourceFd = fs.openSync(canonicalPath, fs.constants.O_RDONLY | noFollow);
-    const stat = fs.fstatSync(sourceFd);
-    if (!stat.isFile()) throw new Error("Analytics input must be a regular file");
+    const source = openRegularFile(canonicalPath, { noFollow: true });
+    sourceFd = source.fd;
+    const stat = source.stat;
     if (stat.size > MAX_ANALYTICS_FILE_BYTES) throw new Error(`Analytics input exceeds ${MAX_ANALYTICS_FILE_BYTES} bytes`);
 
     destinationFd = fs.openSync(destinationPath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL, 0o600);
