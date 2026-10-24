@@ -938,9 +938,13 @@ evidence path exists.
 
 An authorization matrix regression exposed a read-permission mismatch:
 `capability maturity` was classified as `packs.manage` by both the dispatcher
-and the handler even though it only returns the maturity projection. Both
-action maps now classify it as `packs.read`. The regression exercises canonical
-and aliased tool names through MCP, Dashboard, and Agent dispatch; read actions
-are allowed to a `packs.read` principal and lifecycle mutations are denied
-without `packs.manage`. This closes only the capability action slice; equivalent
-coverage for all tools and direct routes remains open under SK-008.
+and the handler even though it only returns the maturity projection. It also
+found that the dispatcher's permission gate could reject authenticated callers
+for catalog actions that the handler explicitly treats as public. A shared
+action-permission function now keeps dispatcher and handler policy aligned,
+returns no permission requirement for public catalog actions, and requires
+`packs.read` for detailed reads. The regression exercises four tool names
+through MCP, Dashboard, and Agent dispatch, including public access, scoped
+reads, and denied lifecycle mutations. This closes only the capability action
+slice; equivalent coverage for all tools and direct routes remains open under
+SK-008.

@@ -72,6 +72,13 @@ test("capability authorization is consistent across MCP, Dashboard, and Agent di
   }, owner);
   identity.grantPrincipalPermission(reader.principal_id, "packs.read", owner);
   const authIdentity = { principal_id: reader.principal_id, principal_type: "service", scopes: null };
+  const publicReader = require("./helpers/authorized-identity").createPrincipal(identity, {
+    type: "service",
+    displayName: "Public catalog reader",
+    createdByPrincipalId: owner.principal_id,
+    actorPrincipalId: owner.principal_id,
+  }, owner);
+  const publicAuthIdentity = { principal_id: publicReader.principal_id, principal_type: "service", scopes: null };
   const surfaces = [
     ["MCP", tools.callMcpTool],
     ["Dashboard", tools.callDashboardTool],
@@ -81,6 +88,10 @@ test("capability authorization is consistent across MCP, Dashboard, and Agent di
   const aliases = ["capability", "sidekick_capability", "capability_pack", "pack"];
   for (const [surface, dispatch] of surfaces) {
     for (const toolName of aliases) {
+      for (const action of ["list", "available", "catalog"]) {
+        const publicResult = await dispatch(toolName, { action, limit: 1 }, { authIdentity: publicAuthIdentity });
+        assert.equal(publicResult.isError, undefined, `${surface}/${toolName}/${action} must stay public without a pack grant`);
+      }
       for (const action of ["show", "maturity"]) {
         const allowed = await dispatch(toolName, { action, name: "proxmox" }, { authIdentity });
         assert.equal(allowed.isError, undefined, `${surface}/${toolName}/${action} must honor packs.read (${allowed.code || "ok"}: ${allowed.content?.[0]?.text || ""})`);
