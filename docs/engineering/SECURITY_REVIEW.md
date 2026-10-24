@@ -585,3 +585,14 @@ and every resumed step still goes through the canonical dispatcher for fresh
 authorization, policy, and approval checks. Invalid recorded project values
 fail closed. Regression coverage verifies omission retains scope and an
 explicit conflicting project is denied before dispatch.
+
+### Dashboard frontend error-log write amplification (2026-10-24, SK-048)
+
+The authenticated `/api/internal/error-log` endpoint appends a durable
+diagnostic record per request but had only the broad Dashboard request limit.
+An authenticated client could repeatedly submit telemetry and grow the error
+log without a route-specific bound. Added in-memory limits of 30 reports per
+principal and 120 per client IP per minute. These limits apply only to the
+frontend telemetry endpoint; normal error handling and authentication remain
+unchanged. The limits reset on process restart and do not replace a bounded log
+retention policy, which remains an operational hardening item.

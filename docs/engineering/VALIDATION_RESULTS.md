@@ -899,3 +899,13 @@ about current lockfile vulnerability status.
 - Regression `WD.11k` verifies resumed dispatch retains the persisted project
   when the caller omits it and rejects an explicit conflicting project before
   any step dispatch; corrupted persisted project data also fails closed.
+
+## Dashboard frontend error-log write amplification: 2026-10-24 (SK-048)
+
+- `node test/run-all.js test/dashboard-honesty.test.js
+  test/security-dashboard-bootstrap.test.js --concurrency=1
+  --overall-timeout-ms=900000 --json` passed both suites, 0 failures and
+  0 skips. The live Dashboard route accepts the 30-report principal burst and
+  rejects the next report with HTTP 429; bootstrap security regressions pass.
+- The client-wide limit is enforced alongside the principal limit. Limits are
+  process-local and reset at restart; durable log retention remains unbounded.

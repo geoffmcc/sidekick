@@ -271,6 +271,11 @@ function ipInRange(ip, cidr) {
 const RATE_LIMIT_WINDOW = parseInt(process.env.SIDEKICK_DASHBOARD_RATE_LIMIT_WINDOW_MS || String(15 * 60 * 1000), 10);
 const RATE_LIMIT_MAX = parseInt(process.env.SIDEKICK_DASHBOARD_RATE_LIMIT_MAX || "1500", 10);
 const rateLimit = new BoundedRateLimiter({ limit: RATE_LIMIT_MAX, windowMs: RATE_LIMIT_WINDOW, maxKeys: 10_000 });
+// Frontend error reporting writes one durable diagnostic line per request.
+// Keep an authenticated client from turning this telemetry-only route into an
+// unbounded disk-write endpoint, while allowing occasional UI error bursts.
+const frontendErrorPrincipalLimit = new BoundedRateLimiter({ limit: 30, windowMs: 60_000, maxKeys: 10_000 });
+const frontendErrorClientLimit = new BoundedRateLimiter({ limit: 120, windowMs: 60_000, maxKeys: 10_000 });
 
 function checkRateLimit(ip) { return rateLimit.consume(ip).allowed; }
 
@@ -1696,6 +1701,11 @@ registerClearRoutes({ app, dbStore, clearConversationFiles, requireDashboardAdmi
 // 204 says "received, no body" without asserting the write succeeded — the
 // old {ok:true} claimed a persistence result this handler never verifies.
 app.post('/api/internal/error-log', (req, res) => {
+  const principalKey = req.authPrincipal?.principal_id || req.authUser || "anonymous";
+  const clientKey = req.ip || req.socket?.remoteAddress || "unknown";
+  if (!frontendErrorPrincipalLimit.consume(principalKey).allowed || !frontendErrorClientLimit.consume(clientKey).allowed) {
+    return res.status(429).json({ error: "Too many frontend error reports", code: "rate_limited" });
+  }
   try {
     dashboardErrors.logError(req, new Error("frontend error report"), {
       status: Number(req.body?.status) >= 400 && Number(req.body?.status) <= 599 ? Number(req.body.status) : 500,
