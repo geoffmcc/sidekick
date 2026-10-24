@@ -417,6 +417,7 @@ checks respectively).
 
 `npm.cmd run test:coverage` passed after adding regression coverage for the
 redactor's malformed and oversized JSON fallback paths. Aggregate coverage is
-78.84% lines/statements, 70.41% branches, and 81.41% functions. Critical-file,
-security-domain, required-file, and baseline checks have no failures;
-`src/redact.js` is at 100% lines, branches, statements, and functions.
+all 417 suites passed (0 failed or skipped) in 440.889 seconds. Aggregate
+coverage is 78.84% lines/statements, 70.41% branches, and 81.41% functions.
+Critical-file, security-domain, required-file, and baseline checks have no
+failures; `src/redact.js` is at 100% lines, branches, statements, and functions.
