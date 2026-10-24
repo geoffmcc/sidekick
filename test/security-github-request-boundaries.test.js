@@ -64,3 +64,23 @@ test("GitHub pagination stays on the authorized HTTPS resource path", () => {
   ]) assert.equal(github.endpointFromGithubUrl(next, expected), null, next);
   assert.equal(github.MAX_GITHUB_PAGINATED_RESPONSE_BYTES, 16 * 1024 * 1024);
 });
+
+test("GitHub error output redacts exact credentials and sensitive response fields", () => {
+  const token = "synthetic-custom-github-token-7f39bda2";
+  const result = github.redactGithubError({
+    message: `upstream reflected ${token}`,
+    authorization: token,
+    documentation_url: "https://github.example.invalid/errors",
+  }, token);
+  assert.ok(!result.includes(token));
+  assert.match(result, /\[REDACTED\]/);
+  assert.match(result, /documentation_url/);
+
+  const projected = github.redactGithubResult({ content: [
+    { type: "text", text: `private PR body contains ${token}` },
+    { type: "image", data: "synthetic-image-payload" },
+  ] }, token);
+  assert.ok(!JSON.stringify(projected).includes(token));
+  assert.match(projected.content[0].text, /\[REDACTED\]/);
+  assert.equal(projected.content[1].data, "synthetic-image-payload");
+});
