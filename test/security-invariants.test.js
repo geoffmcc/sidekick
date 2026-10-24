@@ -328,20 +328,22 @@ test("legacy installation API key denial explains scoped principal setup without
   assert.match(result.content[0].text, /service credential/);
 });
 
-test("legacy installation API keys cannot bypass scoped permissions on low-risk reads", async () => {
+test("legacy installation API keys cannot bypass scoped permission on low-risk workflow reads", async () => {
   const context = {
     source: "mcp",
     requestId: "legacy-key-scoped-read-no-principal",
     authIdentity: { authentication_method: "legacy_api_key", scopes: ["legacy"] },
   };
 
-  const result = await dispatchTool({
-    name: "workflow",
-    args: { action: "list" },
-    context: { ...context, requestId: `${context.requestId}-workflow` },
-  });
-  assert.equal(result.isError, true, "workflow reads must enforce their scoped read permission");
-  assert.equal(result.code, "unauthenticated");
+  for (const action of ["list", "show"]) {
+    const result = await dispatchTool({
+      name: "workflow",
+      args: { action },
+      context: { ...context, requestId: `${context.requestId}-${action}` },
+    });
+    assert.equal(result.isError, true, `workflow.${action} must enforce its scoped read permission`);
+    assert.equal(result.code, "unauthenticated");
+  }
 });
 
 test("database query, search, log, and diff handlers reject direct calls before access", async () => {
