@@ -61,14 +61,14 @@ const descriptors = Object.freeze([
   }),
   Object.freeze({
     name: "memory_import",
-    description: "Import memories from JSON export. Supports merge (update existing) or skip conflict modes.",
+    description: "Import memories from JSON export. New rows remain pending until explicitly confirmed; duplicate rows never overwrite local content or trust state.",
     schema: z.object({
       project: z.string().optional().describe("Project scope for imported memories"),
       data: z.string().describe("JSON export data (string or object)"),
-      on_conflict: z.enum(["merge", "skip"]).optional().describe("Conflict resolution: merge (update existing) or skip (default: merge)"),
+      on_conflict: z.enum(["merge", "skip"]).optional().describe("Legacy compatibility option. Conflicting existing rows are always left unchanged."),
       preserve_ids: z.boolean().optional().describe("Preserve original memory IDs (default: false)"),
     }),
-    args: { data: "string|object (JSON export data or parsed object)", project: "string (optional project scope)", on_conflict: "string (optional, merge|skip - default merge)", preserve_ids: "boolean (optional, preserve original IDs - default false)" },
+    args: { data: "string|object (JSON export data or parsed object)", project: "string (optional project scope)", on_conflict: "string (legacy merge|skip option; existing rows are never overwritten)", preserve_ids: "boolean (optional, preserve original IDs - default false)" },
     risk: "medium",
     category: "Context & Learning",
     source: "builtin",

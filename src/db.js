@@ -1467,47 +1467,26 @@ function importMemories(data, options = {}) {
       `).get(mem.type, mem.project || null, mem.content);
 
       if (existing) {
-        if (options.onConflict === "skip") {
-          skipped++;
-          continue;
-        }
-
-        const existingMeta = parseJson(existing.metadata_json, {});
-        const newMeta = { ...existingMeta, ...(mem.metadata || {}), imported_at: ts, import_source: "import" };
-
-        db.prepare(`
-          UPDATE memories
-          SET summary = ?,
-              tags = ?,
-              confidence = MAX(confidence, ?),
-              metadata_json = ?,
-              times_confirmed = times_confirmed + 1,
-              updated_at = ?,
-              last_seen_at = ?
-          WHERE id = ?
-        `).run(
-          mem.summary || mem.content,
-          JSON.stringify(mem.tags || []),
-          Number.isFinite(mem.confidence) ? mem.confidence : 0.5,
-          JSON.stringify(newMeta),
-          ts,
-          ts,
-          existing.id
-        );
-        updated++;
+        // Imported snapshots are untrusted even when they claim to be
+        // confirmed or originate from a known machine. Do not let a duplicate
+        // replace a local summary, confidence, provenance, or confirmation
+        // state; those changes require the governed memory lifecycle APIs.
+        skipped++;
         continue;
       }
 
       const id = options.preserveIds && mem.id ? mem.id : `mem_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
-      const metadata = { ...(mem.metadata || {}), imported_at: ts, import_source: "import" };
+      // Keep source metadata available for review without letting its top-level
+      // claims alter the normalized authority/provenance fields used by Core.
+      const metadata = { import_metadata: mem.metadata && typeof mem.metadata === "object" ? mem.metadata : {}, imported_at: ts, import_source: "json_import" };
 
       db.prepare(`
         INSERT INTO memories (
           id, type, project, content, summary, tags, confidence, source, source_tool,
           source_task_id, source_ref, metadata_json, enabled, automatic,
           times_confirmed, created_at, updated_at, last_seen_at, last_confirmed_at,
-          expires_at, origin_machine_id, origin_user_id, sync_version
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          state, requires_confirmation, expires_at, origin_machine_id, origin_user_id, sync_version
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'pending', 1, ?, ?, ?, ?)
       `).run(
         id,
         mem.type,
@@ -1515,23 +1494,22 @@ function importMemories(data, options = {}) {
         mem.content,
         mem.summary || mem.content,
         JSON.stringify(mem.tags || []),
-        Number.isFinite(mem.confidence) ? mem.confidence : 0.5,
-        mem.source || "import",
-        mem.source_tool || null,
-        mem.source_task_id || null,
-        mem.source_ref || null,
+        Number.isFinite(mem.confidence) ? Math.min(0.5, mem.confidence) : 0.5,
+        "import",
+        null,
+        null,
+        null,
         JSON.stringify(metadata),
         mem.enabled === false ? 0 : 1,
         mem.automatic === false ? 0 : 1,
-        Number.isFinite(mem.times_confirmed) ? mem.times_confirmed : 1,
-        mem.created_at || ts,
+        0,
         ts,
-        mem.last_seen_at || ts,
+        ts,
         ts,
         mem.expires_at || null,
-        mem.origin_machine_id || null,
-        mem.origin_user_id || null,
-        mem.sync_version || 1
+        getMachineId(),
+        getUserId(),
+        1
       );
       imported++;
     }

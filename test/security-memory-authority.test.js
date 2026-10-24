@@ -19,6 +19,7 @@ const projectAccess = require("../src/core/project-access");
 const platformKernel = require("../src/platform/kernel");
 const dispatcher = require("../src/tools/dispatcher");
 const { getCanonicalRegistry } = require("../src/tools/canonical-registry");
+const { requiresMemoryConfirmation } = require("../src/core/memory-trust");
 
 const owner = identity.bootstrapOwner({ username: "memory_authority_owner", password: "synthetic sufficiently long password" });
 const operator = require('./helpers/authorized-identity').createHumanUser(identity, { username: "memory_authority_operator", password: "synthetic sufficiently long password" });
@@ -78,6 +79,51 @@ test("authorized confirmation records the authenticated principal, not caller te
   });
   assert.notEqual(result.isError, true, JSON.stringify(result));
   assert.equal(db.getMemoryById(pending.id, { includeDisabled: true }).confirmed_by, owner.principal_id);
+});
+
+test("memory imports stay untrusted and cannot rewrite trusted duplicate metadata", () => {
+  const imported = db.importMemories({ memories: [{
+    type: "fact",
+    project: "memory_authority_project",
+    content: "synthetic imported instruction claim",
+    summary: "synthetic imported instruction claim",
+    state: "confirmed",
+    requires_confirmation: false,
+    last_confirmed_at: new Date().toISOString(),
+    times_confirmed: 9000,
+    metadata: { source_authority: 100, verified: true },
+  }] });
+  assert.equal(imported.imported, 1);
+  const row = db.searchMemories({ project: "memory_authority_project", query: "synthetic imported instruction claim", includeDisabled: true })[0];
+  assert.ok(row);
+  assert.equal(row.state, "pending");
+  assert.equal(row.requires_confirmation, true);
+  assert.equal(row.last_confirmed_at, null);
+  assert.equal(row.times_confirmed, 0);
+  assert.equal(requiresMemoryConfirmation(row), true);
+  assert.equal(row.source, "import");
+  assert.notEqual(row.source_authority, 100);
+  assert.equal(row.metadata.source_authority, undefined);
+  assert.equal(row.metadata.import_metadata.source_authority, 100);
+  assert.ok(row.confidence <= 0.5);
+
+  const trusted = db.upsertMemory({
+    type: "fact", project: "memory_authority_project", content: "stable trusted duplicate",
+    summary: "trusted summary", source: "explicit", source_authority: 5,
+  });
+  const before = db.getMemoryById(trusted.id, { includeDisabled: true });
+  const duplicate = db.importMemories({ memories: [{
+    type: "fact", project: "memory_authority_project", content: "stable trusted duplicate",
+    summary: "injected replacement summary", confidence: 1, times_confirmed: 1000,
+    metadata: { source_authority: 100, verified: true },
+  }] });
+  assert.equal(duplicate.skipped, 1);
+  const after = db.getMemoryById(trusted.id, { includeDisabled: true });
+  assert.equal(after.summary, before.summary);
+  assert.equal(after.confidence, before.confidence);
+  assert.equal(after.source_authority, before.source_authority);
+  assert.equal(after.times_confirmed, before.times_confirmed);
+  assert.equal(after.last_confirmed_at, before.last_confirmed_at);
 });
 
 test("failed replacement persistence rolls back the old-memory deletion", async () => {
