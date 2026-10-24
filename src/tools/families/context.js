@@ -3,7 +3,7 @@
 const { z } = require("zod");
 const dbStore = require("../../db");
 const qdrantStore = require("../../qdrant");
-const { redactSensitive } = require("../../redact");
+const { redactSensitive, redactSensitiveKeysDeep } = require("../../redact");
 const { assembleContext } = require("../../context");
 const { getExecutionContext } = require("../context");
 const { scopedProject: authorizeMemoryProject, inScope } = require("./memory-scope");
@@ -234,21 +234,21 @@ async function sidekick_context({ action, project, context, decision, reasoning,
   }
   if (action === "track_decision") {
     if (!context || !decision) return { content: [{ type: "text", text: "context and decision required" }], isError: true };
-    const dec = { id: generateId("dec"), date: now, project: project || null, context, decision, reasoning: reasoning || null, outcome: null };
+    const dec = redactSensitiveKeysDeep({ id: generateId("dec"), date: now, project: project || null, context, decision, reasoning: reasoning || null, outcome: null });
     ctx.decisions.push(dec); if (project && ctx.projects[project]) ctx.projects[project].lastWorked = now; saveContext(ctx);
     try { if (await qdrantStore.isAvailable()) { const embedding = await generateEmbedding(`${context} ${decision} ${reasoning || ""}`); if (embedding) await qdrantStore.upsert(dec.id, embedding, { type: "decision", data: dec }); } } catch (e) {}
     return { content: [{ type: "text", text: `Tracked decision: ${decision} (id: ${dec.id})` }] };
   }
   if (action === "track_problem") {
     if (!problem) return { content: [{ type: "text", text: "problem required" }], isError: true };
-    const prob = { id: generateId("prob"), date: now, project: project || null, description: problem, solution: solution || null, resolved: !!solution };
+    const prob = redactSensitiveKeysDeep({ id: generateId("prob"), date: now, project: project || null, description: problem, solution: solution || null, resolved: !!solution });
     ctx.problems.push(prob); if (project && ctx.projects[project]) ctx.projects[project].lastWorked = now; saveContext(ctx);
     try { if (await qdrantStore.isAvailable()) { const embedding = await generateEmbedding(`${problem} ${solution || ""}`); if (embedding) await qdrantStore.upsert(prob.id, embedding, { type: "problem", data: prob }); } } catch (e) {}
     return { content: [{ type: "text", text: `Tracked problem: ${problem} (id: ${prob.id})` }] };
   }
   if (action === "track_pattern") {
     if (!pattern) return { content: [{ type: "text", text: "pattern required" }], isError: true };
-    const pat = { id: generateId("pat"), date: now, project: project || null, description: pattern, example: context || null };
+    const pat = redactSensitiveKeysDeep({ id: generateId("pat"), date: now, project: project || null, description: pattern, example: context || null });
     ctx.patterns.push(pat); saveContext(ctx);
     try { if (await qdrantStore.isAvailable()) { const embedding = await generateEmbedding(`${pattern} ${context || ""}`); if (embedding) await qdrantStore.upsert(pat.id, embedding, { type: "pattern", data: pat }); } } catch (e) {}
     return { content: [{ type: "text", text: `Tracked pattern: ${pattern} (id: ${pat.id})` }] };
@@ -257,7 +257,7 @@ async function sidekick_context({ action, project, context, decision, reasoning,
     if (!summary) return { content: [{ type: "text", text: "summary required" }], isError: true };
     const redactedSummary = redactSensitive(summary); const redactedNotes = notes ? redactSensitive(notes) : null;
     const topicList = topics ? topics.split(",").map(t => redactSensitive(t.trim())).filter(Boolean) : [];
-    const sess = { id: generateId("sess"), date: now, project: project || null, summary: redactedSummary, topics: topicList, outcome: outcome || null, notes: redactedNotes };
+    const sess = redactSensitiveKeysDeep({ id: generateId("sess"), date: now, project: project || null, summary: redactedSummary, topics: topicList, outcome: outcome || null, notes: redactedNotes });
     if (!ctx.sessions) ctx.sessions = []; ctx.sessions.push(sess); if (ctx.sessions.length > 100) ctx.sessions = ctx.sessions.slice(-100);
     if (project && ctx.projects[project]) ctx.projects[project].lastWorked = now; saveContext(ctx);
     try { if (await qdrantStore.isAvailable()) { const embedding = await generateEmbedding(`${redactedSummary} ${topicList.join(" ")} ${redactedNotes || ""}`); if (embedding) await qdrantStore.upsert(sess.id, embedding, { type: "session", data: sess }); } } catch (e) {}

@@ -175,6 +175,22 @@ test("memory writes and imports redact credential-shaped content and metadata be
   assert.equal(JSON.stringify(legacyRaw).includes(marker), true, "read sanitization must not silently rewrite historical database rows");
 });
 
+test("legacy context documents are redacted on write and projection without rewriting legacy rows", () => {
+  const marker = "SYNTHETIC_CONTEXT_PERSISTENCE_SECRET";
+  db.setDocument("context", { decisions: [{ context: `api_key=${marker}`, decision: "Use a governed tool" }] });
+  const stored = db.getDb().prepare("SELECT data_json FROM json_documents WHERE name = 'context'").get();
+  assert.equal(stored.data_json.includes(marker), false, "new context documents must be sanitized before storage");
+  assert.equal(JSON.stringify(db.loadDocument("context", {})).includes(marker), false);
+
+  db.getDb().prepare("UPDATE json_documents SET data_json = ? WHERE name = 'context'").run(
+    JSON.stringify({ problems: [{ description: `password=${marker}` }] }),
+  );
+  const legacyProjection = db.loadDocument("context", {});
+  assert.equal(JSON.stringify(legacyProjection).includes(marker), false, "known credential patterns in old context rows must be sanitized on read");
+  assert.equal(db.getDb().prepare("SELECT data_json FROM json_documents WHERE name = 'context'").get().data_json.includes(marker), true,
+    "read sanitization must not silently rewrite historical rows");
+});
+
 test("failed replacement persistence rolls back the old-memory deletion", async () => {
   const original = db.upsertMemory({ type: "fact", project: "memory_authority_project", content: "atomic correction original", summary: "atomic correction original", source: "explicit", source_authority: 5 });
   const upsertMemory = db.upsertMemory;

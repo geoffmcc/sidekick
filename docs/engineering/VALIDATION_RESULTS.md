@@ -590,3 +590,14 @@ rows. These tests do not detect secrets supplied as generic values in ordinary
 fields and do not inspect or migrate historical databases. A synthetic legacy
 row test also confirms normalized reads redact known patterns without changing
 the underlying historical row.
+
+### Legacy context document redaction (2026-10-24)
+
+The `context` JSON document now passes through recursive key-aware redaction on
+write and projection. Legacy context tool objects are sanitized before
+embedding-store calls. `node test/run-all.js
+test/security-memory-authority.test.js test/context-engine.test.js
+test/security-project-access.test.js --concurrency=1
+--overall-timeout-ms=300000` passed all 3 suites. The synthetic legacy-row test
+confirms a read is redacted while the underlying JSON remains unchanged; no
+live vector store was used.

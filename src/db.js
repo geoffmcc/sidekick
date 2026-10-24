@@ -263,18 +263,20 @@ function tableColumns(table) {
 function getDocument(name, fallback) {
   const row = db.prepare("SELECT data_json FROM json_documents WHERE name = ?").get(name);
   if (!row) return fallback;
-  return parseJson(row.data_json, fallback);
+  const value = parseJson(row.data_json, fallback);
+  return name === "context" ? redactSensitiveKeysDeep(value) : value;
 }
 
 function setDocument(name, data) {
   const ts = nowIso();
+  const safeData = name === "context" ? redactSensitiveKeysDeep(data) : data;
   db.prepare(`
     INSERT INTO json_documents (name, data_json, created_at, updated_at)
     VALUES (?, ?, ?, ?)
     ON CONFLICT(name) DO UPDATE SET
       data_json = excluded.data_json,
       updated_at = excluded.updated_at
-  `).run(name, JSON.stringify(data, null, 2), ts, ts);
+  `).run(name, JSON.stringify(safeData, null, 2), ts, ts);
 }
 
 function loadDocument(name, fallback) {

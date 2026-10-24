@@ -203,3 +203,20 @@ handoff reliability, project-access, and phase-7 secret-redaction suites
 (6 suites, 0 failures); a legacy-row projection check confirms read-time
 redaction while leaving its synthetic raw fixture unchanged in SQLite. No live
 database or service was used.
+
+### Legacy context document persistence (2026-10-24, SK-032)
+
+Confirmed that the legacy context tool could persist caller-provided decision,
+problem, pattern, and session text without consistent key-aware redaction; some
+of these objects are also passed to the embedding store. Context document reads
+and writes now use the shared recursive redactor, and decision/problem/pattern/
+session objects are sanitized before any embedding call. Normalized reads
+redact known credential patterns in historical context rows without rewriting
+those rows. This remains pattern/key-based detection and cannot identify an
+ordinary-looking generic secret value.
+
+Validation: the memory-authority regression writes a synthetic credential to a
+new context document and a legacy fixture, verifies sanitized reads, and
+confirms the legacy raw row remains untouched. `test/context-engine.test.js`,
+`test/security-memory-authority.test.js`, and `test/security-project-access.test.js`
+passed (3 suites, 0 failures); no live vector store was used.

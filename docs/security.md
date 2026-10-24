@@ -394,7 +394,9 @@ supersession reasons receive the same text redaction. This cannot identify a
 secret represented as a generic value in an ordinary field, and no bulk cleanup
 of historical memory rows is performed. Normalized memory reads redact known
 credential patterns and keyed values in legacy records without changing the
-stored row.
+stored row. Legacy context JSON documents are similarly sanitized on write and
+read, and the context tool sanitizes decision, problem, pattern, and session
+records before sending their content to the embedding store.
 
 ## Database query safety
 
