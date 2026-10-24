@@ -933,3 +933,14 @@ malformed, so they cannot remain current. Packs remain operable at their
 observed operational level. Server-side producers for all six certification
 roles remain open; certification is intentionally unavailable until that
 evidence path exists.
+
+### Capability read permission parity (2026-10-24, SK-071)
+
+An authorization matrix regression exposed a read-permission mismatch:
+`capability maturity` was classified as `packs.manage` by both the dispatcher
+and the handler even though it only returns the maturity projection. Both
+action maps now classify it as `packs.read`. The regression exercises canonical
+and aliased tool names through MCP, Dashboard, and Agent dispatch; read actions
+are allowed to a `packs.read` principal and lifecycle mutations are denied
+without `packs.manage`. This closes only the capability action slice; equivalent
+coverage for all tools and direct routes remains open under SK-008.

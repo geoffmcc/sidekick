@@ -78,11 +78,18 @@ test("capability authorization is consistent across MCP, Dashboard, and Agent di
     ["Agent", tools.callAgentTool],
   ];
 
+  const aliases = ["capability", "sidekick_capability", "capability_pack", "pack"];
   for (const [surface, dispatch] of surfaces) {
-    const allowed = await dispatch("capability", { action: "show", name: "proxmox" }, { authIdentity });
-    assert.equal(allowed.isError, undefined, `${surface} must honor packs.read`);
-    const denied = await dispatch("capability", { action: "enable", name: "proxmox" }, { authIdentity });
-    assert.equal(denied.isError, true, `${surface} must deny pack management without packs.manage`);
-    assert.equal(denied.code, "authorization_denied", `${surface} must use the canonical authorization decision`);
+    for (const toolName of aliases) {
+      for (const action of ["show", "maturity"]) {
+        const allowed = await dispatch(toolName, { action, name: "proxmox" }, { authIdentity });
+        assert.equal(allowed.isError, undefined, `${surface}/${toolName}/${action} must honor packs.read (${allowed.code || "ok"}: ${allowed.content?.[0]?.text || ""})`);
+      }
+      for (const action of ["enable", "record_verification", "uninstall"]) {
+        const denied = await dispatch(toolName, { action, name: "proxmox", config: {}, remove_knowledge: true }, { authIdentity });
+        assert.equal(denied.isError, true, `${surface}/${toolName}/${action} must deny pack management without packs.manage`);
+        assert.equal(denied.code, "authorization_denied", `${surface}/${toolName}/${action} must use the canonical authorization decision`);
+      }
+    }
   }
 });

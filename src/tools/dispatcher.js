@@ -137,7 +137,7 @@ function requiredToolPermission(descriptor, args = {}) {
     // executable module code.  That risk must not make harmless inventory and
     // inspection unavailable to administrators, who are explicitly granted
     // packs.read.  Keep lifecycle changes behind the stronger manage grant.
-    const readActions = new Set(["list", "available", "show", "inspect", "validate", "health", "doctor"]);
+    const readActions = new Set(["list", "available", "show", "inspect", "validate", "health", "maturity", "doctor"]);
     return readActions.has(args.action || "list") ? "packs.read" : "packs.manage";
   }
   if (descriptor.name === "project_registry") {
