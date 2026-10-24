@@ -397,3 +397,19 @@ test mode wrote three synthetic Sidekick entries to the WSL user's crontab.
 Inspection showed only those three entries; they were removed by their exact
 Sidekick markers, and a subsequent read confirmed no entries remained. Test
 mode now skips OS crontab writes. No production crontab or job was accessed.
+
+### Inbound MCP, Compute, and execution-node identity boundary review (2026-10-24)
+
+Reviewed the inbound bearer-authentication path, MCP session creation and reuse,
+identity replacement at the MCP handler boundary, Compute worker/enrollment
+routes, scoped Compute administration routes, and execution-node administration
+routes. MCP requests use the authenticated session provider's principal rather
+than transport-supplied identity, and session reuse is bound to the established
+principal. Worker and enrollment routes apply their local token or one-time
+enrollment checks; administration routes require their scoped credentials.
+
+No identity-spoofing or route-bypass defect was confirmed in the reviewed paths.
+This is a source review with targeted regression evidence, not proof that every
+Dashboard, CLI, Agent Bridge, or future route shares the same enforcement. New
+routes and changes to authentication middleware must be checked against these
+boundaries.

@@ -767,3 +767,19 @@ about current lockfile vulnerability status.
   `npm.cmd run check:tests`, `npm.cmd run check:docs`, `node --check` on changed
   JavaScript, and `git diff --check` passed. No production crontab or database
   was accessed.
+
+## Inbound identity boundary review: 2026-10-24
+
+- Reviewed MCP bearer authentication/session identity, Compute worker and
+  enrollment routes, scoped Compute administration, and execution-node admin
+  routes. No identity spoofing or route bypass was confirmed in the reviewed
+  source paths.
+- Targeted regression command:
+  `node test/run-all.js test/security-mcp-session-identity.test.js
+  test/mcp-v2-runtime.test.cjs test/compute-jobs-mcp-contract.test.js
+  test/execution-node-protocol.test.js --concurrency=1
+  --overall-timeout-ms=600000 --json` passed all 4 suites with 0 failures and
+  0 skips.
+- This evidence covers the reviewed paths and targeted suites; it does not
+  establish that every Dashboard, CLI, Agent Bridge, or future route uses the
+  same identity boundary.
