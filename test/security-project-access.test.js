@@ -378,6 +378,41 @@ test("direct Git handler calls require canonical dispatch even for an authorized
   assert.equal(result.code, "canonical_dispatch_required", "direct Git mutation must fail before invoking Git");
 });
 
+test("changelog refs are resolved past Git option parsing and saves reject symlinks", () => {
+  const development = require("../src/tools/families/development");
+  const descriptor = development.descriptors.find(item => item.name === "changelog");
+  assert.equal(descriptor.schema.safeParse({ action: "preview", from: "HEAD" }).success, true);
+  assert.equal(descriptor.schema.safeParse({ action: "preview", from: "x".repeat(development.MAX_CHANGELOG_REVISION_LENGTH + 1) }).success, false);
+  assert.match(development.resolveChangelogRevision(process.cwd(), "HEAD"), /^[0-9a-f]{40,64}$/i);
+
+  let revParseArgs = null;
+  const fakeHash = "a".repeat(40);
+  const resolved = development.resolveChangelogRevision(process.cwd(), "--output=/tmp/untrusted-log-output", (_program, args) => {
+    revParseArgs = args;
+    return fakeHash;
+  });
+  assert.equal(resolved, fakeHash);
+  assert.ok(revParseArgs.includes("--end-of-options"), "untrusted refs are parsed as revision data after the option boundary");
+
+  const outputPath = path.join(dataDir, "CHANGELOG.md");
+  const linkedTargetPath = path.join(dataDir, "changelog-target.md");
+  const regularPath = path.join(dataDir, "ordinary-CHANGELOG.md");
+  fs.writeFileSync(linkedTargetPath, "keep changelog target unchanged");
+  fs.symlinkSync(linkedTargetPath, outputPath);
+  const priorAllowedPaths = process.env.SIDEKICK_MCP_ALLOWED_PATHS;
+  process.env.SIDEKICK_MCP_ALLOWED_PATHS = dataDir;
+  try {
+    development.writeChangelogFile(regularPath, "authorized changelog");
+    assert.equal(fs.readFileSync(regularPath, "utf8"), "authorized changelog", "ordinary authorized changelog writes remain supported");
+    assert.throws(() => development.readChangelogFile(outputPath), /symlink/);
+    assert.throws(() => development.writeChangelogFile(outputPath, "untrusted replacement"), /symlink/);
+    assert.equal(fs.readFileSync(linkedTargetPath, "utf8"), "keep changelog target unchanged");
+  } finally {
+    if (priorAllowedPaths === undefined) delete process.env.SIDEKICK_MCP_ALLOWED_PATHS;
+    else process.env.SIDEKICK_MCP_ALLOWED_PATHS = priorAllowedPaths;
+  }
+});
+
 test("direct dependency inspection requires canonical dispatch before process inspection", async () => {
   const context = toolContext.createAgentExecutionContext({
     authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
