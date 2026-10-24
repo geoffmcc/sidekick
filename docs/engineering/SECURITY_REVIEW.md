@@ -890,3 +890,18 @@ manage packs and a server-local candidate path; it is not an unauthenticated
 route. The attestation protects against package-content drift while its source
 remains trusted; it does not protect against an actor who can alter both Core
 source and the attestation in a new release.
+
+### Pack maturity evidence attribution (2026-10-24, SK-068)
+
+Confirmed evidence-attribution defect: pack verification accepted terminal
+receipt, workflow, and execution references without checking that their stored
+principal and project matched the verifier and project recorded for the
+verification. A verifier could therefore associate another principal's or
+another project's work with its pack maturity result. Verification now requires
+a project attribution, binds each referenced record to the authenticated
+verifier, and compares projects using Sidekick's canonical project identity.
+Focused regressions cover valid same-verifier/project evidence and mismatched
+receipt, workflow, and execution records. Existing evidence rows are not
+rewritten. This does not yet prove that an evidence reference's claimed role
+matches the behavior performed; role-specific evidence semantics remain open
+under SK-007.

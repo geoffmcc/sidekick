@@ -33,7 +33,7 @@ assert.strictEqual(lifecycle.maturity(installed.pack.name).level, "operational")
 
 const task = taskStore.insertTask(taskModel.createTask({ objective: "pack verification fixture", project_id: "pack-maturity", actor_id: "test", actor_principal_id: "test-principal" }));
 const evidence_refs = ["canonical_dispatch", "agent_discovery", "workflow", "single_pack", "cross_pack", "skeptical_verification"].map((role, index) => {
-  const receipt = receiptStore.createReceipt({ task_id: task.task_id, action_fingerprint: `pack-maturity-fingerprint-${index}`, capability: "api_contract_check", capability_version: "1", args: { url: "https://example.test" }, project_ref: "pack-maturity", effect_class: "read_only", risk_class: "low" });
+  const receipt = receiptStore.createReceipt({ task_id: task.task_id, action_fingerprint: `pack-maturity-fingerprint-${index}`, capability: "api_contract_check", capability_version: "1", args: { url: "https://example.test" }, project_ref: "pack-maturity", principal_ref: "test-principal", effect_class: "read_only", risk_class: "low" });
   receiptStore.transitionReceipt(receipt.receipt_id, "dispatched");
   receiptStore.transitionReceipt(receipt.receipt_id, "finalized");
   return { type: "receipt", id: receipt.receipt_id, role };

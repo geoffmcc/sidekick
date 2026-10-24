@@ -1219,6 +1219,7 @@ about current lockfile vulnerability status.
   worker integration and provider registry authorization behavior.
 - `npm.cmd run check:docs`, `npm.cmd run check:tests`,
   `npm.cmd run check:architecture`, and `git diff --check` passed.
+
 - Follow-up attestation test covers all 27 bundled packs against
   `src/packs/bundled-attestations.js`; a synthetic wrong hash is rejected.
   `npm.cmd run test:all -- test/pack-contract.test.js
@@ -1256,3 +1257,13 @@ about current lockfile vulnerability status.
   unchanged by the regression run.
 - `npm.cmd run check:docs`, `npm.cmd run check:tests`,
   `npm.cmd run check:architecture`, and `git diff --check` passed.
+
+## Pack maturity evidence attribution: 2026-10-24 (SK-068)
+
+- `npm.cmd run test:all -- test/pack-proving-evidence.test.js
+  test/pack-maturity.test.js` passed both suites.
+- `node test/pack-proving-evidence.test.js` passed all 7 direct cases.
+- Regressions cover correct verifier/project attribution and reject evidence
+  associated with a different principal or project across receipt, workflow,
+  and execution reference types.
+- Broader proof-role semantics remain unverified and tracked as SK-007.
