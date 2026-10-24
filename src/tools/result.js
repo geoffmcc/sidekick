@@ -31,10 +31,16 @@ function sanitizeText(value) {
 }
 
 function redactResultValue(value, key = "") {
-  // Status metadata such as credentialState and hasCredential is not secret;
-  // only redact fields that carry the credential itself.
-  const metadataKey = /(?:state|status|type|id|at)$/i.test(key) || /^has[A-Z]/.test(key);
-  if (isSensitiveKey(key) && !metadataKey) return "[REDACTED]";
+  // Preserve only known non-secret credential metadata. A broad suffix rule
+  // (e.g. every key ending in `state` or `id`) lets attacker-controlled result
+  // fields such as secretStatus/privateKeyId bypass sensitive-key redaction.
+  const normalizedKey = String(key || "").normalize("NFKC").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const safeCredentialState = normalizedKey === "credentialstate"
+    && ["active", "revoked", "pending", "expired", "missing", "unknown", "unavailable", "invalid", "configured"].includes(String(value).toLowerCase());
+  const safeCredentialTimestamp = ["credentialrotatedat", "credentialrevokedat"].includes(normalizedKey)
+    && (value === null || (typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:?\d{2})$/.test(value)));
+  const safePresenceFlag = normalizedKey.startsWith("has") && typeof value === "boolean";
+  if (isSensitiveKey(key) && !safeCredentialState && !safeCredentialTimestamp && !safePresenceFlag) return "[REDACTED]";
   if (Array.isArray(value)) return value.map(item => redactResultValue(item));
   if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([childKey, childValue]) => [childKey, redactResultValue(childValue, childKey)]));
   return typeof value === "string" ? redactSensitive(value) : value;

@@ -58,6 +58,28 @@ const nonStructuredStatusLeak = normalizeResult({
 });
 assert.ok(!JSON.stringify(nonStructuredStatusLeak).includes(syntheticCredential));
 
+const metadataSuffixBoundary = normalizeResult({
+  content: [{ type: "text", text: JSON.stringify({
+    ok: true,
+    result_status: "succeeded",
+    credentialState: "active",
+    credentialRotatedAt: "2026-10-23T12:34:56.000Z",
+    hasCredential: true,
+    secretStatus: syntheticCredential,
+    privateKeyId: syntheticCredential,
+    hasCredentialDescription: syntheticCredential,
+    credentialStateInjected: syntheticCredential,
+  }) }],
+});
+assert.equal(metadataSuffixBoundary.credentialState, "active");
+assert.equal(metadataSuffixBoundary.credentialRotatedAt, "2026-10-23T12:34:56.000Z");
+assert.equal(metadataSuffixBoundary.hasCredential, true);
+assert.equal(metadataSuffixBoundary.secretStatus, "[REDACTED]");
+assert.equal(metadataSuffixBoundary.privateKeyId, "[REDACTED]");
+assert.equal(metadataSuffixBoundary.hasCredentialDescription, "[REDACTED]");
+assert.equal(metadataSuffixBoundary.credentialStateInjected, "[REDACTED]");
+assert.ok(!JSON.stringify(metadataSuffixBoundary).includes(syntheticCredential));
+
 const metadataLeak = errorResult("operation failed", "handler_error", {
   details: { api_key: syntheticCredential },
   warnings: [{ message: `Authorization: Bearer ${syntheticCredential}` }],
