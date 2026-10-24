@@ -17,6 +17,7 @@ const { createRegistry } = require("../tools/registry");
 const { normalizeDescriptor } = require("../tools/descriptor");
 const { descriptorIdentity } = require("./placement");
 const { createWorkspace, resolveWorkspacePath, discoverRepositories, stableId } = require("./workspace");
+const { workspacePermissionForTool } = require("./workspace-permissions");
 const { resolveCommandOnPath } = require("../security/command-lookup");
 
 const VERSION = require("../../package.json").version;
@@ -117,9 +118,9 @@ function request(method, endpoint, body, timeoutMs = 15000) {
 }
 function saveCredential(record) { fs.mkdirSync(path.dirname(CREDENTIAL_PATH), { recursive: true, mode: 0o700 }); credentialStore.save(record, CREDENTIAL_PATH); }
 function pathFields(args) { return Object.entries(args || {}).filter(([key, value]) => typeof value === "string" && /(?:^path$|_path$|^path_[ab]$|^destination$|^output$|^target$|^cwd$)/i.test(key)); }
-function workspaceForPath(value, operation) {
-  if (!workspace) throw new Error("workspace is not configured");
-  return resolveWorkspacePath(workspace, value, { operation, allowMissing: operation === "write" });
+function workspaceForPath(value, operation, targetWorkspace = workspace) {
+  if (!targetWorkspace) throw new Error("workspace is not configured");
+  return resolveWorkspacePath(targetWorkspace, value, { operation, allowMissing: operation === "write" });
 }
 function localPathPolicy(target, operation = "read") {
   try {
@@ -129,7 +130,7 @@ function localPathPolicy(target, operation = "read") {
     return { content: [{ type: "text", text: `Path policy denied: ${redact(error.message)}` }], isError: true, code: "path_policy_denied" };
   }
 }
-function validateLocalArguments(descriptor, args) {
+function validateLocalArguments(descriptor, args, workspaceOverride = workspace) {
   const rawArgs = args || {};
   const parsed = descriptor.schema.safeParse(rawArgs); if (!parsed.success) throw new Error("local argument validation failed");
   const safetyArguments = {
@@ -147,9 +148,13 @@ function validateLocalArguments(descriptor, args) {
     // arbitrary node egress would misrepresent authorization as isolation.
     throw new Error("network Git operations are unavailable: this execution node has no enforced scoped egress broker");
   }
+  const requiredPermission = workspacePermissionForTool(descriptor.name, parsed.data) || "read";
+  if (!workspaceOverride || workspaceOverride.permissions?.[requiredPermission] !== true) {
+    throw new Error(`execution node workspace does not permit ${requiredPermission}`);
+  }
   for (const [key, value] of pathFields(parsed.data)) {
-    const operation = ["destination", "output", "path_a", "path_b"].includes(key) ? "write" : "read";
-    workspaceForPath(value, operation === "write" && descriptor.name !== "read" ? "write" : "read");
+    const operation = requiredPermission === "write" || ["destination", "output", "path_a", "path_b"].includes(key) ? "write" : "read";
+    workspaceForPath(value, operation === "write" ? "write" : "read", workspaceOverride);
   }
   return parsed.data;
 }

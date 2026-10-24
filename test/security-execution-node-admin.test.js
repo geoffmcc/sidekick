@@ -17,6 +17,7 @@ const authorization = require("../src/core/authorization");
 const express = require("express");
 const { registerExecutionNodeAdminRoutes } = require("../src/node/admin-api");
 const { validateLocalArguments } = require("../src/node/agent");
+const { createWorkspace } = require("../src/node/workspace");
 const { getCanonicalRegistry } = require("../src/tools/canonical-registry");
 
 const owner = identity.bootstrapOwner({ username: "node_admin_test_owner", password: "synthetic test password with sufficient length" });
@@ -140,4 +141,24 @@ test("execution node refuses network Git actions even when a scope name is confi
     if (previousScope === undefined) delete process.env.SIDEKICK_NODE_NETWORK_SCOPE;
     else process.env.SIDEKICK_NODE_NETWORK_SCOPE = previousScope;
   }
+});
+
+test("execution node enforces its local workspace write grant for file writes", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-node-local-write-"));
+  const target = path.join(root, "output.txt");
+  const write = getCanonicalRegistry({ includeActiveModules: false }).get("write");
+  assert.ok(write, "canonical write descriptor is available");
+  const readOnlyWorkspace = createWorkspace({ name: "read-only", root, permissions: { read: true, write: false } });
+  assert.throws(
+    () => validateLocalArguments(write, { path: target, content: "synthetic" }, readOnlyWorkspace),
+    /does not permit write/,
+    "local read permission cannot be treated as permission to write"
+  );
+  const writableWorkspace = createWorkspace({ name: "writable", root, permissions: { read: true, write: true } });
+  assert.deepEqual(validateLocalArguments(write, { path: target, content: "synthetic" }, writableWorkspace), { path: target, content: "synthetic" });
+  assert.throws(
+    () => validateLocalArguments(write, { path: path.join(os.tmpdir(), "outside-node-workspace.txt"), content: "synthetic" }, writableWorkspace),
+    /outside the authorized workspace/,
+    "write permission remains bounded to the configured workspace"
+  );
 });
