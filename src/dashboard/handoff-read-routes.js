@@ -1,5 +1,6 @@
 const authorization = require("../core/authorization");
 const projectAccess = require("../core/project-access");
+const { getPathPolicyDecision } = require("../tools/path-policy");
 
 function registerHandoffReadRoutes({ app, dbStore, errorResponse }) {
   function canRead(req, handoff) {
@@ -27,6 +28,16 @@ function registerHandoffReadRoutes({ app, dbStore, errorResponse }) {
     return handoff;
   }
 
+  function repositoryPathDenied(handoff, includeProvenance = false) {
+    const paths = new Set();
+    if (handoff.checkpoint?.workspace?.root) paths.add(handoff.checkpoint.workspace.root);
+    if (includeProvenance && handoff.packet?.provenance?.working_directory) paths.add(handoff.packet.provenance.working_directory);
+    for (const repositoryPath of paths) {
+      if (!getPathPolicyDecision(repositoryPath, "read", "dashboard").allowed) return true;
+    }
+    return false;
+  }
+
   app.get("/api/handoffs", (req, res) => {
     try {
       const requestedLimit = Number.parseInt(req.query.limit, 10);
@@ -37,6 +48,10 @@ function registerHandoffReadRoutes({ app, dbStore, errorResponse }) {
       const visible = handoffs.filter(handoff => canRead(req, handoff));
       if (req.query.include === "start_here") {
         for (const handoff of visible) {
+          if (repositoryPathDenied(handoff)) {
+            handoff.projection = { readiness: { status: "blocked", reasons: ["repository path blocked by filesystem policy"] } };
+            continue;
+          }
           try { handoff.projection = dbStore.getHandoffReceiverProjection(handoff.id); }
           catch (_) { /* Client will fall back to targeted request. */ }
         }
@@ -47,7 +62,9 @@ function registerHandoffReadRoutes({ app, dbStore, errorResponse }) {
 
   app.get("/api/handoffs/:id/readiness", (req, res) => {
     try {
-      if (!requireHandoff(req, res)) return;
+      const handoff = requireHandoff(req, res);
+      if (!handoff) return;
+      if (repositoryPathDenied(handoff)) return res.status(403).json({ ok: false, error: "repository path blocked by filesystem policy" });
       const readiness = dbStore.getHandoffReadiness(req.params.id, { recipient: req.query.recipient });
       if (readiness.status === "invalid" && readiness.reasons?.includes("handoff not found")) return res.status(404).json({ ok: false, readiness });
       res.json({ ok: true, readiness });
@@ -56,7 +73,9 @@ function registerHandoffReadRoutes({ app, dbStore, errorResponse }) {
 
   app.get("/api/handoffs/:id/start-here", (req, res) => {
     try {
-      if (!requireHandoff(req, res)) return;
+      const handoff = requireHandoff(req, res);
+      if (!handoff) return;
+      if (repositoryPathDenied(handoff)) return res.status(403).json({ ok: false, error: "repository path blocked by filesystem policy" });
       const projection = dbStore.getHandoffReceiverProjection(req.params.id, { recipient: req.query.recipient });
       if (!projection) return res.status(404).json({ ok: false, error: "Handoff not found" });
       res.json({ ok: true, projection });
@@ -65,7 +84,9 @@ function registerHandoffReadRoutes({ app, dbStore, errorResponse }) {
 
   app.get("/api/handoffs/:id/preflight", (req, res) => {
     try {
-      if (!requireHandoff(req, res)) return;
+      const handoff = requireHandoff(req, res);
+      if (!handoff) return;
+      if (repositoryPathDenied(handoff, true)) return res.status(403).json({ ok: false, error: "repository path blocked by filesystem policy" });
       const preflight = dbStore.getHandoffResumePreflight(req.params.id, { recipient: req.query.recipient, simulate: req.query.simulate === "true" });
       if (preflight.status === "invalid") return res.status(404).json({ ok: false, preflight });
       res.json({ ok: true, preflight });

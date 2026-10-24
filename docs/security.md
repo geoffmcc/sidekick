@@ -399,6 +399,10 @@ read, and the context tool sanitizes decision, problem, pattern, and session
 records before sending their content to the embedding store. Legacy non-memory
 vector payloads are also sanitized before context recall; existing stored
 payloads are not rewritten.
+Handoff provenance verification and repository-backed checkpoint, readiness,
+and preflight operations apply the MCP or Dashboard filesystem path policy
+before Git reads a workspace named by a request or persisted handoff. Internal
+Agent Bridge, session, and direct database-store call paths remain under review.
 Handoff claim tokens are one-time bearer capabilities: dispatcher exposure is
 allowlisted for authenticated sessions, while generic results and persisted
 tool logs redact them. An integration regression covers token delivery, log

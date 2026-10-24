@@ -1648,6 +1648,64 @@ test("handoff claim tokens are exposed once to authenticated dispatch and exclud
   assert.equal(db.getHandoff(handoff.id).claim.owner, owner.principal_id, "denied retry must not change the active claim");
 });
 
+test("handoff provenance verification enforces the caller filesystem path policy", async () => {
+  const allowedRoot = fs.mkdtempSync(path.join(dataDir, "handoff-allowed-root-"));
+  const outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), "handoff-outside-root-"));
+  const previousAllowed = process.env.SIDEKICK_MCP_ALLOWED_PATHS;
+  const previousGlobalAllowed = process.env.SIDEKICK_ALLOWED_PATHS;
+  const previousDashboardAllowed = process.env.SIDEKICK_DASHBOARD_ALLOWED_PATHS;
+  process.env.SIDEKICK_MCP_ALLOWED_PATHS = allowedRoot;
+  process.env.SIDEKICK_DASHBOARD_ALLOWED_PATHS = allowedRoot;
+  process.env.SIDEKICK_ALLOWED_PATHS = allowedRoot;
+  try {
+    const handoff = db.saveHandoff({
+      project: "memory_a",
+      content: "Synthetic fixture with a repository outside the caller's path scope.",
+      owner_principal_id: owner.principal_id,
+      created_by_principal_id: owner.principal_id,
+      packet: { objective: "Verify scoped repository access", provenance: { working_directory: outsideRoot, commit_sha: "abcdef0123456789" } },
+    });
+    const result = await dispatcher.callMcpTool("handoff", {
+      action: "verify", id: handoff.id, project: "memory_a",
+    }, {
+      authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+      project: "memory_a",
+      sessionId: "synthetic-handoff-path-policy-session",
+    });
+    assert.equal(result.isError, true, JSON.stringify(result));
+    assert.match(result.content[0].text, /Path blocked by policy/, JSON.stringify(result));
+
+    const dashboardHandoff = db.saveHandoff({
+      project: "memory_a",
+      content: "Synthetic dashboard path-scope fixture.",
+      owner_principal_id: owner.principal_id,
+      created_by_principal_id: owner.principal_id,
+      packet: { objective: "Verify dashboard repository path scope", provenance: { working_directory: outsideRoot, commit_sha: "abcdef0123456789" } },
+    });
+    const handlers = new Map();
+    registerHandoffReadRoutes({ app: { get: (route, handler) => handlers.set(route, handler) }, dbStore: db, errorResponse: () => {} });
+    const response = {
+      statusCode: 200,
+      status(code) { this.statusCode = code; return this; },
+      json(body) { this.body = body; return this; },
+    };
+    handlers.get("/api/handoffs/:id/preflight")({
+      params: { id: dashboardHandoff.id }, query: {},
+      authPrincipal: { principal_id: owner.principal_id, scopes: null },
+    }, response);
+    assert.equal(response.statusCode, 403, "Dashboard preflight must not inspect a handoff repo outside its filesystem policy");
+  } finally {
+    if (previousAllowed === undefined) delete process.env.SIDEKICK_MCP_ALLOWED_PATHS;
+    else process.env.SIDEKICK_MCP_ALLOWED_PATHS = previousAllowed;
+    if (previousGlobalAllowed === undefined) delete process.env.SIDEKICK_ALLOWED_PATHS;
+    else process.env.SIDEKICK_ALLOWED_PATHS = previousGlobalAllowed;
+    if (previousDashboardAllowed === undefined) delete process.env.SIDEKICK_DASHBOARD_ALLOWED_PATHS;
+    else process.env.SIDEKICK_DASHBOARD_ALLOWED_PATHS = previousDashboardAllowed;
+    fs.rmSync(allowedRoot, { recursive: true, force: true });
+    fs.rmSync(outsideRoot, { recursive: true, force: true });
+  }
+});
+
 test.after(() => {
   try { db.close(); } catch {}
   try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch {}

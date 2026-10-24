@@ -233,3 +233,23 @@ confirms the legacy raw row remains untouched. A mocked vector search regression
 also verifies legacy payload redaction before recall. `test/context-engine.test.js`,
 `test/security-memory-authority.test.js`, and `test/security-project-access.test.js`
 passed (3 suites, 0 failures); no live vector store was used.
+
+### Handoff repository path-policy enforcement (2026-10-24, SK-033)
+
+Confirmed that handoff provenance verification and repository checkpoint,
+readiness, and preflight operations could invoke Git against a caller-supplied
+or persisted `working_directory` without first applying the filesystem path
+policy. MCP handoff operations now check repository paths against the active
+MCP path policy before Git-backed operations. Dashboard readiness, start-here,
+and preflight routes apply the Dashboard path policy before reading checkpoint
+or provenance repositories. Out-of-policy paths fail closed with a policy
+error; list projections omit repository-backed readiness details and show a
+blocked state.
+
+Validation: `test/security-project-access.test.js` passes all 74 assertions.
+The regression dispatches authenticated MCP provenance verification and a
+Dashboard preflight against a synthetic path outside each configured allow
+root and confirms both are rejected before repository evidence is returned.
+This does not yet establish enforcement for direct internal Agent Bridge,
+session, or database-store call sites; those remain under review before this
+finding can be closed platform-wide.

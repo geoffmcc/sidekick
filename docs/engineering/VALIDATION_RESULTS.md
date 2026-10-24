@@ -605,6 +605,15 @@ payload regression and passed 2/2. The synthetic legacy-row test
 confirms a read is redacted while the underlying JSON remains unchanged; no
 live vector store was used.
 
+### Handoff repository path-policy boundary (2026-10-24)
+
+`node test/run-all.js test/security-project-access.test.js --concurrency=1
+--overall-timeout-ms=300000` passed all 74 assertions. Synthetic authenticated
+MCP verification and Dashboard preflight requests pointing at a repository
+outside the configured source-specific path roots were rejected by policy.
+Direct internal Agent Bridge, session, and database-store paths remain under
+review and are not covered by this result.
+
 ### Handoff claim-token dispatch boundary (2026-10-24)
 
 `node test/run-all.js test/security-project-access.test.js --concurrency=1

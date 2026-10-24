@@ -8,11 +8,32 @@ const { PROJECT_RE, canonicalizeProjectName } = require("../../core/project-iden
 const authorization = require("../../core/authorization");
 const projectAccess = require("../../core/project-access");
 const { requireCanonicalInvocation } = require("../read-authorization");
+const { enforcePathPolicy } = require("../path-policy");
 
 const HANDOFF_EXTRACTION_VERSION = "handoff-rules-v1";
 
 function jsonText(value) {
   return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }] };
+}
+
+function handoffRepositoryPathError(handoff, action, requestedPath) {
+  const packetPath = handoff?.packet?.provenance?.working_directory;
+  const checkpointPath = handoff?.checkpoint?.workspace?.root;
+  const paths = new Set();
+  if (action === "verify" && packetPath) paths.add(packetPath);
+  if (action === "checkpoint") {
+    if (requestedPath || packetPath) paths.add(requestedPath || packetPath);
+  }
+  if (action === "refresh_evidence" && requestedPath) paths.add(requestedPath);
+  if (["start_here", "readiness", "preflight", "simulate_resume", "begin_resume"].includes(action)) {
+    if (requestedPath || checkpointPath) paths.add(requestedPath || checkpointPath);
+    if (["preflight", "simulate_resume", "begin_resume"].includes(action) && packetPath) paths.add(packetPath);
+  }
+  for (const repositoryPath of paths) {
+    const denied = enforcePathPolicy(repositoryPath, "read");
+    if (denied) return denied;
+  }
+  return null;
 }
 
 function classifyHandoffLine(line) {
@@ -289,12 +310,17 @@ async function sidekick_handoff({ action, id, key, project, title, content, sour
     if (!id) return { content: [{ type: "text", text: "handoff verify requires id" }], isError: true };
     const handoff = scopedHandoff(id, project, authIdentity);
     if (!handoff) return { content: [{ type: "text", text: "Handoff not found" }], isError: true };
+    const pathDenied = handoffRepositoryPathError(handoff, action, working_directory);
+    if (pathDenied) return pathDenied;
     const verification = dbStore.verifyHandoffProvenance(handoff.packet, { requireResume: true });
     return jsonText({ ok: true, handoff_id: handoff.id, version: handoff.version, ...verification });
   }
   if (["start_here", "quality", "preflight", "simulate_resume"].includes(action)) {
     if (!id) return { content: [{ type: "text", text: `handoff ${action} requires id` }], isError: true };
-    if (!scopedHandoff(id, project, authIdentity)) return { content: [{ type: "text", text: "Handoff not found" }], isError: true };
+    const handoff = scopedHandoff(id, project, authIdentity);
+    if (!handoff) return { content: [{ type: "text", text: "Handoff not found" }], isError: true };
+    const pathDenied = handoffRepositoryPathError(handoff, action, working_directory);
+    if (pathDenied) return pathDenied;
     if (action === "start_here") return jsonText({ ok: true, projection: dbStore.getHandoffReceiverProjection(id, { working_directory, recipient: owner || null }) });
     if (action === "quality") {
       const handoff = scopedHandoff(id, project, authIdentity);
@@ -305,12 +331,19 @@ async function sidekick_handoff({ action, id, key, project, title, content, sour
   }
   if (action === "refresh_evidence") {
     if (!id) return { content: [{ type: "text", text: "handoff refresh_evidence requires id" }], isError: true };
+    const handoff = scopedHandoff(id, project, authIdentity);
+    if (!handoff) return { content: [{ type: "text", text: "Handoff not found" }], isError: true };
+    const pathDenied = handoffRepositoryPathError(handoff, action, working_directory);
+    if (pathDenied) return pathDenied;
     try { return jsonText({ ok: true, evidence: dbStore.refreshHandoffEvidence(id, { working_directory, actor: actorPrincipalId || ownerPrincipalId || "system" }) }); } catch (error) { return { content: [{ type: "text", text: String(error.message || error) }], isError: true }; }
   }
   if (["checkpoint", "readiness", "events", "transition", "claim", "renew_claim", "begin_resume", "release"].includes(action)) {
     if (!id) return { content: [{ type: "text", text: `handoff ${action} requires id` }], isError: true };
     try {
-       if (!scopedHandoff(id, project, authIdentity)) return { content: [{ type: "text", text: "Handoff not found" }], isError: true };
+       const handoff = scopedHandoff(id, project, authIdentity);
+       if (!handoff) return { content: [{ type: "text", text: "Handoff not found" }], isError: true };
+      const pathDenied = handoffRepositoryPathError(handoff, action, working_directory);
+      if (pathDenied) return pathDenied;
       if (action === "checkpoint") return jsonText({ ok: true, handoff: dbStore.captureHandoffCheckpoint(id, { working_directory, expectedVersion: expected_version, actor: actorPrincipalId || ownerPrincipalId || "system", source: source || toolContext.getExecutionSource() }) });
       if (action === "readiness") return jsonText({ ok: true, readiness: dbStore.getHandoffReadiness(id, { working_directory, recipient: owner || null }) });
       if (action === "events") return jsonText({ ok: true, handoff_id: id, events: dbStore.listHandoffEvents(id, limit || 100) });
