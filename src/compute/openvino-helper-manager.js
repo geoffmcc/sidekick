@@ -26,6 +26,16 @@ const { EventEmitter } = require("events");
 const crypto = require("crypto");
 
 const { PROTOCOL_VERSION, HELPER_VERSION } = require("./openvino-config");
+const { childProcessEnv } = require("../security/child-process");
+
+function killWindowsProcessTree(pid, { spawnSyncImpl } = {}) {
+  const run = spawnSyncImpl || require("child_process").spawnSync;
+  return run("taskkill", ["/T", "/F", "/PID", String(pid)], {
+    shell: false,
+    timeout: 5000,
+    env: childProcessEnv(),
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -502,11 +512,7 @@ class HelperProcess extends EventEmitter {
     try {
       if (process.platform === "win32") {
         // On Windows, use taskkill /T /F to kill the entire process tree.
-        const { spawnSync } = require("child_process");
-        spawnSync("taskkill", ["/T", "/F", "/PID", String(this.child.pid)], {
-          shell: false,
-          timeout: 5000,
-        });
+        killWindowsProcessTree(this.child.pid);
       } else {
         this.child.kill("SIGKILL");
       }
@@ -758,4 +764,5 @@ module.exports = {
   HelperProcess,
   HelperManager,
   HELPER_STATES,
+  killWindowsProcessTree,
 };
