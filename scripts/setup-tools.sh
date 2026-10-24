@@ -295,26 +295,26 @@ if [ ! -x "$TOOLS_PYTHON" ]; then
 fi
 
 # yt-dlp
-if sudo -u "$USERNAME" "$TOOLS_PYTHON" -m pip show yt-dlp &>/dev/null; then
-  skip "yt-dlp $(sudo -u "$USERNAME" "$TOOLS_VENV/bin/yt-dlp" --version)"
+if sudo -H -u "$USERNAME" "$TOOLS_PYTHON" -m pip show yt-dlp &>/dev/null; then
+  skip "yt-dlp $(sudo -H -u "$USERNAME" "$TOOLS_VENV/bin/yt-dlp" --version)"
 else
-  sudo -u "$USERNAME" "$TOOLS_PYTHON" -m pip install -q yt-dlp
+  sudo -H -u "$USERNAME" "$TOOLS_PYTHON" -m pip install -q yt-dlp
   pass "yt-dlp installed"
 fi
 
 # Whisper
-if sudo -u "$USERNAME" "$TOOLS_PYTHON" -m pip show openai-whisper &>/dev/null; then
+if sudo -H -u "$USERNAME" "$TOOLS_PYTHON" -m pip show openai-whisper &>/dev/null; then
   skip "openai-whisper"
 else
-  sudo -u "$USERNAME" "$TOOLS_PYTHON" -m pip install -q openai-whisper
+  sudo -H -u "$USERNAME" "$TOOLS_PYTHON" -m pip install -q openai-whisper
   pass "Whisper installed"
 fi
 
 # DuckDB
-if sudo -u "$USERNAME" "$TOOLS_PYTHON" -c 'import duckdb' &>/dev/null; then
-  skip "DuckDB $(sudo -u "$USERNAME" "$TOOLS_PYTHON" -c 'import duckdb; print(duckdb.__version__)')"
+if sudo -H -u "$USERNAME" "$TOOLS_PYTHON" -c 'import duckdb' &>/dev/null; then
+  skip "DuckDB $(sudo -H -u "$USERNAME" "$TOOLS_PYTHON" -c 'import duckdb; print(duckdb.__version__)')"
 else
-  sudo -u "$USERNAME" "$TOOLS_PYTHON" -m pip install -q duckdb
+  sudo -H -u "$USERNAME" "$TOOLS_PYTHON" -m pip install -q duckdb
   pass "DuckDB installed"
 fi
 
@@ -326,7 +326,7 @@ if [ -x "$TOOLS_MMDC" ]; then
 elif command -v mmdc &>/dev/null; then
   skip "mermaid-cli"
 else
-  sudo -u "$USERNAME" env NPM_CONFIG_PREFIX="$TOOLS_NPM_PREFIX" npm install --global @mermaid-js/mermaid-cli
+  sudo -H -u "$USERNAME" env NPM_CONFIG_PREFIX="$TOOLS_NPM_PREFIX" npm install --global @mermaid-js/mermaid-cli
   pass "mermaid-cli installed"
 fi
 
@@ -562,7 +562,7 @@ info "Python tools:"
 [ -d "$TOOLS_VENV" ] && pass "Tools venv at $TOOLS_VENV" || fail "Tools venv"
 [ -f "$TOOLS_VENV/bin/yt-dlp" ] && pass "yt-dlp" || fail "yt-dlp"
 [ -f "$TOOLS_VENV/bin/whisper" ] && pass "whisper" || fail "whisper"
-sudo -u "$USERNAME" "$TOOLS_PYTHON" -c "import duckdb" 2>/dev/null && pass "DuckDB" || fail "DuckDB"
+sudo -H -u "$USERNAME" "$TOOLS_PYTHON" -c "import duckdb" 2>/dev/null && pass "DuckDB" || fail "DuckDB"
 
 # Mermaid
 command -v mmdc &>/dev/null && pass "mermaid-cli" || fail "mermaid-cli"
