@@ -43,3 +43,10 @@ test("Core systemd units apply host filesystem and kernel hardening without bloc
       `${relativePath} must preserve legitimate outbound integrations and local IPC`);
   }
 });
+
+test("Compute worker systemd unit defaults newly created files to owner-only", () => {
+  const unit = fs.readFileSync(path.join(root, "systemd/sidekick-compute-worker.service"), "utf8");
+  assert.ok(unit.split(/\r?\n/).includes("UMask=0077"));
+  assert.match(unit, /^User=sidekick-worker$/m);
+  assert.match(unit, /^ReadWritePaths=\/var\/lib\/sidekick-compute-worker$/m);
+});

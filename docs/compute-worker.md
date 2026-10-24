@@ -114,7 +114,9 @@ identity across restarts instead of registering as a new node each time.
 The enrollment token is exchanged once for a persistent **credential**, written
 atomically (temp file + rename) with `0600` permissions on POSIX and NTFS ACLs
 restricting it to the current user on Windows. The credential file is separate
-from the (non-secret) config file. The enrollment token is never persisted.
+from the (non-secret) config file. The Linux systemd unit applies `UMask=0077`
+so worker-created state and artifacts default to owner-only access. The
+enrollment token is never persisted.
 
 - **Rotation** (`rotate-credential`): the worker requests a new credential using
   the current one, persists it atomically *before* switching in memory, then
