@@ -374,7 +374,10 @@ principal's global memory-read permission. Missing or mismatched access returns
 the same not-found response used for absent memories. Dashboard handoff detail
 and canonical MCP handoff inspection apply the same exact-scope rule when
 including extracted memories; compatibility queries that also return legacy
-unscoped rows do not broaden a handoff reader's scope.
+unscoped rows do not broaden a handoff reader's scope. New packet saves apply
+the shared recursive key-aware redactor before packet, history, and linked
+payload persistence. Existing handoff packet rows are not retroactively changed
+by this write-time control.
 
 ## Database query safety
 

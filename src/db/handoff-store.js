@@ -1,6 +1,6 @@
 const fs = require("fs");
 const crypto = require("crypto");
-const { redactSensitive } = require("../redact");
+const { redactSensitive, redactSensitiveKeysDeep } = require("../redact");
 
 function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIso, parseJson, stableHash, stableId, auditMemoryEvent }) {
   const HANDOFF_PACKET_STATUSES = new Set(["active", "blocked", "ready", "completed", "abandoned"]);
@@ -165,9 +165,7 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
   }
 
   function redactPacket(value) {
-    if (Array.isArray(value)) return value.map(redactPacket);
-    if (value && typeof value === "object") return Object.keys(value).reduce((out, key) => { out[key] = redactPacket(value[key]); return out; }, {});
-    return typeof value === "string" ? redactSensitive(value) : value;
+    return redactSensitiveKeysDeep(value);
   }
 
   function parseHandoffPacket(value) {

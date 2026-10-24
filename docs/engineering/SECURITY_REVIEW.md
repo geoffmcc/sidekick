@@ -115,3 +115,20 @@ that precondition, not proof of an ordinary user route to create it.
 
 Focused validation: `test/security-project-access.test.js` and
 `test/security-dashboard-direct-routes.test.js` pass (2 suites, 0 failures).
+
+### Handoff packet credential redaction (2026-10-24, SK-027)
+
+Confirmed persistence leak: handoff packet sanitization recursively applied
+pattern-only text redaction, so arbitrary values under credential-named fields
+such as `api_key`, `token`, and `password` survived in the current packet,
+version history, and first-class evidence/artifact links. Synthetic values
+reproduced this across those storage representations. Packet persistence now
+uses the shared key-aware recursive redactor, replacing values under sensitive
+field names while preserving surrounding handoff content. This applies to new
+packet writes and versions. Existing deployed database rows were not inspected
+or rewritten; any historical sensitive values remain an unverified residual
+risk requiring a separately backed-up, operator-approved remediation plan.
+
+Validation: the packet regression and `test/handoff-reliability.test.js` pass;
+the regression confirms synthetic values are absent from current rows, version
+history, and linked payloads. No production database was accessed.

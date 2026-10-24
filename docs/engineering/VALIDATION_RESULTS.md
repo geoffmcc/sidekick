@@ -515,6 +515,22 @@ test/security-project-access.test.js test/security-dashboard-direct-routes.test.
 failed, 0 skipped). The fixture is synthetic. No production database or live
 service was accessed.
 
+### Handoff packet credential redaction
+
+Before the fix, nested synthetic values under `api_key`, `token`, and
+`password` fields survived packet redaction and appeared in the current row,
+version history, and first-class linked payloads. Handoff packet writes now use
+`redactSensitiveKeysDeep`, preserving the packet shape while replacing values
+under sensitive field names. Regression evidence checks all of these persisted
+representations after both create and update.
+
+Validation after the fix: `node test/run-all.js
+test/security-project-access.test.js test/handoff-reliability.test.js
+test/handoff-versioning.test.js test/security-phase-07-secrets-redaction.test.js
+--concurrency=2 --overall-timeout-ms=300000` passed all four suites (4 passed,
+0 failed, 0 skipped). The test uses synthetic values and disposable SQLite
+state. Existing production rows were not inspected or rewritten.
+
 ### Handoff-linked memory scope
 
 A synthetic project-A handoff fixture linked both a legitimate project-A memory

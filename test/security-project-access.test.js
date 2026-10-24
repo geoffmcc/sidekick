@@ -1520,6 +1520,40 @@ test("handoff details do not include linked memories outside the handoff project
   assert.doesNotMatch(JSON.stringify(inspectedMemories), /Synthetic private global memory/);
 });
 
+test("handoff packet persistence redacts credentials by nested field name", () => {
+  const apiKey = "SYNTHETIC_HANDOFF_API_KEY_VALUE";
+  const token = "SYNTHETIC_HANDOFF_TOKEN_VALUE";
+  const handoff = db.saveHandoff({
+    project: "memory_a", title: "Synthetic packet redaction", source: "test",
+    content: "Synthetic handoff content.",
+    packet: {
+      objective: "Synthetic objective",
+      status: "active",
+      next_step: "Continue safely",
+      provenance: { api_key: apiKey },
+      evidence: [{ type: "test", label: "Synthetic evidence", token }],
+    },
+  });
+  const updated = db.saveHandoff({
+    id: handoff.id, project: "memory_a", content: "Synthetic updated handoff content.",
+    expectedVersion: handoff.version,
+    packet: {
+      ...handoff.packet,
+      next_step: "Updated safely",
+      artifacts: [{ type: "test", password: "SYNTHETIC_HANDOFF_PASSWORD_VALUE" }],
+    },
+  });
+  const dbHandle = db.getDb();
+  const current = dbHandle.prepare("SELECT packet_json FROM memory_handoffs WHERE id = ?").get(handoff.id);
+  const history = dbHandle.prepare("SELECT packet_json FROM memory_handoff_versions WHERE handoff_id = ?").all(handoff.id);
+  const links = dbHandle.prepare("SELECT payload_json FROM memory_handoff_links WHERE handoff_id = ?").all(handoff.id);
+  const persisted = JSON.stringify({ current, history, links, updated });
+  assert.doesNotMatch(persisted, /SYNTHETIC_HANDOFF_API_KEY_VALUE/);
+  assert.doesNotMatch(persisted, /SYNTHETIC_HANDOFF_TOKEN_VALUE/);
+  assert.doesNotMatch(persisted, /SYNTHETIC_HANDOFF_PASSWORD_VALUE/);
+  assert.match(persisted, /\[REDACTED\]/);
+});
+
 test("handoff extraction cannot write memories into an ungranted project", async () => {
   const context = tools.context.createMcpExecutionContext({
     authIdentity: { principal_id: operator.principal_id, principal_type: "human" },
