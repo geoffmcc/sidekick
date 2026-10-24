@@ -612,8 +612,10 @@ live vector store was used.
 MCP handoff creation does not persist an out-of-scope repository path, and
 verification plus Dashboard preflight against outside paths are rejected by
 policy. The session tool also rejects an out-of-scope workspace before creating a session.
-Direct internal Agent Bridge and database-store paths remain under review and
-are not covered by this result.
+Agent continuity has a negative regression proving denied workspace paths stop
+before handoff persistence or Git checkpointing. The Agent Bridge integration
+and continuity suites passed 2/2 (including restart identity recovery); direct
+database-store callers remain under review and are not covered by these results.
 
 ### Handoff claim-token dispatch boundary (2026-10-24)
 

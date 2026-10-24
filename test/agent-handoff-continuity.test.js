@@ -75,6 +75,19 @@ try {
     /Current authority does not permit updating the linked handoff/,
     "a later checkpoint rechecks authority after it is revoked");
   assert.strictEqual(guardedSaves, savesAtRevocation, "revoked authority prevents subsequent continuity mutation");
+
+  let blockedPathWrites = 0;
+  const pathDeniedContinuity = createHandoffContinuity({
+    getTask: () => task,
+    getHandoff: () => handoff,
+    authorizeHandoffWrite: () => true,
+    authorizeRepositoryPath: () => false,
+    saveHandoff: () => { blockedPathWrites += 1; throw new Error("blocked path must not be persisted"); },
+    captureHandoffCheckpoint: () => { blockedPathWrites += 1; throw new Error("blocked path must not be inspected"); },
+  });
+  assert.throws(() => pathDeniedContinuity.checkpointTask(task.task_id), /repository path is blocked by filesystem policy/,
+    "Agent continuity must reject a workspace outside its configured path scope before Git or persistence");
+  assert.strictEqual(blockedPathWrites, 0, "denied workspace paths do not reach Git checkpointing or handoff persistence");
   console.log("Agent handoff continuity: passed");
 } catch (error) {
   console.error(error);

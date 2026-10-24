@@ -11,6 +11,7 @@ const identity = require("./core/identity");
 const projectAccess = require("./core/project-access");
 const { createAgentCatalog } = require("./agent/catalog");
 const { runWithContext } = require("./tools/context");
+const { getPathPolicyDecision } = require("./tools/path-policy");
 const { createTaskExecutionContext } = require("./agent/task-execution-context");
 const { persistedTaskAuthIdentity } = require("./agent/task-identity");
 const { authorizeRecoveredTask } = require("./agent/recovery-authorization");
@@ -205,7 +206,11 @@ function authorizeTaskHandoffWrite(task, handoff) {
   const ownerId = authIdentity.acting_for_principal_id || authIdentity.principal_id;
   return canManageHandoffs || handoff.owner_principal_id === ownerId || handoff.created_by_principal_id === authIdentity.principal_id;
 }
-const handoffContinuity = createHandoffContinuity({ getTask: durableTaskStore.getTask, getHandoff: dbStore.getHandoff, authorizeHandoffWrite: authorizeTaskHandoffWrite, captureHandoffCheckpoint: dbStore.captureHandoffCheckpoint, saveHandoff: dbStore.saveHandoff, transitionHandoff: dbStore.transitionHandoff, refreshHandoffEvidence: dbStore.refreshHandoffEvidence, listPlans: durableTaskStore.listPlans });
+function handoffRepositoryPathAllowed(handoff) {
+  const repositoryPath = handoff?.packet?.provenance?.working_directory;
+  return !repositoryPath || getPathPolicyDecision(repositoryPath, "read", "agent").allowed;
+}
+const handoffContinuity = createHandoffContinuity({ getTask: durableTaskStore.getTask, getHandoff: dbStore.getHandoff, authorizeHandoffWrite: authorizeTaskHandoffWrite, authorizeRepositoryPath: repositoryPath => getPathPolicyDecision(repositoryPath, "read", "agent").allowed, captureHandoffCheckpoint: dbStore.captureHandoffCheckpoint, saveHandoff: dbStore.saveHandoff, transitionHandoff: dbStore.transitionHandoff, refreshHandoffEvidence: dbStore.refreshHandoffEvidence, listPlans: durableTaskStore.listPlans });
 const { determineEffect, decideAutonomy, intersectEnvelope, governedTargetRef } = require("./agent/authority");
 const { recoverDurableAgentTasks } = require("./agent/recovery-scan");
 const { verifyTaskResult, successfulFreshOutcome, applyRecipeGates, applyReceiptGates, applyPlanGates, runVerificationRepair } = require("./agent/verification");
@@ -1697,6 +1702,7 @@ const beginTaskRun = createTaskRunner({
     if (handoffId) {
       const handoff = dbStore.getHandoff(handoffId);
       if (!handoff) throw new Error("handoff not found");
+      if (!handoffRepositoryPathAllowed(handoff)) throw new Error("handoff repository path is blocked by filesystem policy");
       const authIdentity = parentContext?.authIdentity || null;
       const requestedProject = parentContext?.project || null;
       if ((handoff.project || null) !== requestedProject) throw new Error("handoff project does not match task project");
@@ -1785,6 +1791,10 @@ function launchRecoveredDurableTask(taskId, { runAgentImpl = runAgent } = {}) {
     return false;
   }
   if (task.handoff_id) {
+    if (!handoffRepositoryPathAllowed(dbStore.getHandoff(task.handoff_id))) {
+      try { durableTaskStore.updateTask(taskId, { state: "blocked", phase: "recovery", next_action: "reconcile_handoff", stopping_reason: "linked Handoff repository path is outside the Agent filesystem policy", last_error_code: "handoff_repository_path_denied" }, "task.handoff_path_denied"); } catch {}
+      return false;
+    }
     const preflight = dbStore.getHandoffResumePreflight(task.handoff_id, { working_directory: process.cwd(), recipient: task.actor_principal_id || task.requested_by_principal_id || null, simulate: true });
     if (!preflight.safe_to_resume) {
       try { durableTaskStore.updateTask(taskId, { state: "blocked", phase: "recovery", next_action: "reconcile_handoff", stopping_reason: "linked Handoff is not ready for recovery" }, "task.handoff_resume_blocked"); } catch {}
@@ -2223,6 +2233,7 @@ app.post("/api/agent/tasks/:taskId/resume", (req, res) => {
     if (!task) return res.status(404).json({ error: "task not found" });
     if (!["paused", "interrupted", "blocked", "waiting"].includes(task.state)) return res.status(409).json({ error: "task is not resumable from its current state" });
     if (task.handoff_id) {
+      if (!handoffRepositoryPathAllowed(dbStore.getHandoff(task.handoff_id))) return res.status(409).json({ error: "linked Handoff repository path is blocked by filesystem policy" });
       const preflight = dbStore.getHandoffResumePreflight(task.handoff_id, { working_directory: process.cwd(), recipient: task.actor_principal_id || task.requested_by_principal_id || null, simulate: true });
       if (!preflight.safe_to_resume) return res.status(409).json({ error: "linked Handoff is not ready for resume", preflight });
     }

@@ -254,5 +254,7 @@ synthetic outside paths and confirms both are rejected before repository
 evidence is returned.
 The canonical session tool also checks an explicit workspace at session begin
 and rechecks persisted workspaces before checkpoint, finalization, or partial-
-session resume. Direct internal Agent Bridge and database-store call sites
-remain under review before this finding can be closed platform-wide.
+session resume. Agent task attachment, restart recovery, and automatic
+continuity checkpoints now recheck the Agent filesystem path policy before
+reading or persisting repository state. Direct database-store callers remain
+under review before this finding can be closed platform-wide.
