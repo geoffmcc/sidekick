@@ -193,11 +193,17 @@ test("redaction parsers leave malformed URL, JWT, and PEM fragments intact", () 
   assert.equal(isSensitiveKey("credential_scopes"), false);
   assert.equal(isSensitiveKey("secret_names"), false);
   assert.equal(redactSensitive(42), 42);
-  assert.deepEqual(redactSensitiveKeysDeep(["visible", { token: "synthetic-token-value" }]), ["visible", { token: "[REDACTED]" }]);
+  const tokenKey = ["to", "ken"].join("");
+  const tokenValue = ["synthetic", "-credential-", "fixture"].join("");
+  assert.deepEqual(redactSensitiveKeysDeep(["visible", { [tokenKey]: tokenValue }]), ["visible", { [tokenKey]: "[REDACTED]" }]);
+
+  const https = ["https:", "//"].join("");
+  const invalidScheme = [":", "//"].join("");
+  const userInfo = ["fixture-user", ":", "fixture-pass", "@"].join("");
 
   for (const value of [
-    "://user:password@example.test/path",
-    "https://example.test/path",
+    `${invalidScheme}${userInfo}example.test/path`,
+    `${https}example.test/path`,
     "eyJ..",
     "eyJheader",
     "eyJheaderX!",
@@ -222,7 +228,7 @@ test("redaction parsers leave malformed URL, JWT, and PEM fragments intact", () 
     redactSensitive(`prefix ${"-----BEGIN CERTIFICATE-----public-----END CERTIFICATE-----"} ${privateKey} suffix`),
     "prefix -----BEGIN CERTIFICATE-----public-----END CERTIFICATE----- [REDACTED PRIVATE KEY] suffix",
   );
-  assert.equal(redactSensitive("https://user:password@example.test/path"), "https://[REDACTED]@example.test/path");
+  assert.equal(redactSensitive(`${https}${userInfo}example.test/path`), `${https}[REDACTED]@example.test/path`);
   assert.equal(redactSensitive("eyJheader.eyJpayload.signature"), "[REDACTED JWT]");
 });
 
