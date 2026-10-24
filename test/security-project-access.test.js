@@ -707,6 +707,15 @@ test("transcription job IDs cannot traverse paths and job records are principal-
   const media = require("../src/tools/families/media");
   const jobId = "tr_00000000-0000-4000-8000-000000000001";
   assert.throws(() => media.transcriptionJobPath("../../sidekick.db"), /invalid transcription job ID/);
+  const activeJobs = new Map([
+    ["running", { status: "running" }],
+    ["queued", { status: "queued" }],
+    ["completed", { status: "completed" }],
+  ]);
+  assert.equal(media.countActiveTranscriptionJobs(activeJobs), media.MAX_ACTIVE_TRANSCRIPTION_JOBS);
+  assert.throws(() => media.assertTranscriptionCapacity(activeJobs), /capacity reached/);
+  activeJobs.delete("queued");
+  assert.doesNotThrow(() => media.assertTranscriptionCapacity(activeJobs));
 
   const traversal = await dispatcher.callMcpTool("transcribe", { action: "status", job_id: "../../sidekick.db" }, {
     authIdentity: { principal_id: owner.principal_id, principal_type: "human" },

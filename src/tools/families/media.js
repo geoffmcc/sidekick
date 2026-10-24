@@ -42,6 +42,7 @@ const { hashFile: hashFileDetails } = require("../../core/stream-file-hash");
 
 const TRANSCRIPTION_JOB_ROOT = path.join(DATA_DIR, "transcription-jobs");
 const MAX_TRANSCRIPTION_OUTPUT_BYTES = 2 * 1024 * 1024;
+const MAX_ACTIVE_TRANSCRIPTION_JOBS = 2;
 const TRANSCRIPTION_JOB_ID_PATTERN = /^tr_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const transcriptionJobs = new Map();
 
@@ -65,6 +66,16 @@ function transcriptionJobBelongsToPrincipal(job, principalId) {
 function publicTranscriptionJob(job) {
   const { child, owner_principal_id, ...publicJob } = job;
   return publicJob;
+}
+
+function countActiveTranscriptionJobs(jobs) {
+  return [...jobs.values()].filter(job => job.status === "queued" || job.status === "running").length;
+}
+
+function assertTranscriptionCapacity(jobs = transcriptionJobs, maximum = MAX_ACTIVE_TRANSCRIPTION_JOBS) {
+  if (countActiveTranscriptionJobs(jobs) >= maximum) {
+    throw new Error(`transcription capacity reached (${maximum} active jobs); wait for a job to finish before submitting another`);
+  }
 }
 
 function saveTranscriptionJob(job) {
@@ -192,6 +203,7 @@ function finishTranscriptionJob(job, patch) {
 }
 
 function startTranscriptionJob({ audioPath, model, language, backend, device: requestedDevice }) {
+  assertTranscriptionCapacity();
   const selected = selectTranscriptionBackend(backend);
   const device = selectTranscriptionDevice(selected.name, requestedDevice);
   const jobId = `tr_${crypto.randomUUID()}`;
@@ -202,11 +214,17 @@ function startTranscriptionJob({ audioPath, model, language, backend, device: re
   const job = { job_id: jobId, owner_principal_id: ownerPrincipalId, status: "queued", backend: selected.name, device, model, language: language || null, input: audioPath, created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
   saveTranscriptionJob(job);
 
-  const child = spawn(selected.command, transcriptionArgs(selected.name, device, audioPath, model, language, outputDir), {
-    detached: false,
-    stdio: ["ignore", "pipe", "pipe"],
-    env: childProcessEnv(),
-  });
+  let child;
+  try {
+    child = spawn(selected.command, transcriptionArgs(selected.name, device, audioPath, model, language, outputDir), {
+      detached: false,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: childProcessEnv(),
+    });
+  } catch (error) {
+    finishTranscriptionJob(job, { status: "failed", error: String(error?.message || "transcription process could not start").slice(0, 1000) });
+    throw error;
+  }
   job.child = child;
   finishTranscriptionJob(job, { status: "running" });
   child.stdout.on("data", () => {});
@@ -988,4 +1006,4 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_ocr, sidekick_media, sidekick_transcribe, sidekick_analytics, sidekick_insight_report, sidekick_download, localCudaAvailable, localVulkanAvailable, readTranscriptionText, transcriptionOutputPath, transcriptionJobPath, transcriptionJobBelongsToPrincipal, saveTranscriptionJob, MAX_TRANSCRIPTION_OUTPUT_BYTES };
+module.exports = { descriptors, sidekick_ocr, sidekick_media, sidekick_transcribe, sidekick_analytics, sidekick_insight_report, sidekick_download, localCudaAvailable, localVulkanAvailable, readTranscriptionText, transcriptionOutputPath, transcriptionJobPath, transcriptionJobBelongsToPrincipal, countActiveTranscriptionJobs, assertTranscriptionCapacity, saveTranscriptionJob, MAX_TRANSCRIPTION_OUTPUT_BYTES, MAX_ACTIVE_TRANSCRIPTION_JOBS };
