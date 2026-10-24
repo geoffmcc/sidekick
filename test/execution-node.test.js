@@ -17,6 +17,24 @@ const { descriptorIdentity } = placement;
 const configured = workspace.createWorkspace({ name: "security-research", root, permissions: { read: true, write: false, execute: false } });
 assert.strictEqual(configured.name, "security-research");
 assert.ok(workspace.discoverRepositories(configured).some(repo => repo.root.endsWith(path.join("buried", "repo"))));
+const nestedRepository = path.join(root, "buried", "repo");
+const nestedSecrets = [
+  path.join(nestedRepository, ".env"),
+  path.join(nestedRepository, ".env.local"),
+  path.join(nestedRepository, ".ssh", "id_ed25519"),
+  path.join(nestedRepository, ".config", "credentials"),
+  path.join(nestedRepository, ".sidekick", "state.json"),
+  path.join(nestedRepository, ".local", "share", "opencode", "auth.json"),
+];
+for (const secretPath of nestedSecrets) {
+  fs.mkdirSync(path.dirname(secretPath), { recursive: true });
+  fs.writeFileSync(secretPath, "synthetic nested secret");
+  assert.throws(
+    () => workspace.resolveWorkspacePath(configured, secretPath),
+    /outside the authorized workspace/,
+    `protected nested path must remain unreadable: ${path.relative(root, secretPath)}`
+  );
+}
 assert.throws(() => workspace.resolveWorkspacePath(configured, path.join(root, "..", "outside")), /outside|traversal/);
 assert.throws(() => workspace.resolveWorkspacePath(configured, outside), /outside/);
 const link = path.join(root, "escape");

@@ -6,13 +6,8 @@ const crypto = require("crypto");
 
 const MAX_DISCOVERY_DEPTH = 12;
 const MAX_DISCOVERY_RESULTS = 256;
-const PROTECTED_RELATIVE = [
-  ".ssh",
-  ".config",
-  ".local/share/opencode",
-  ".sidekick",
-  ".env",
-];
+const PROTECTED_DIRECTORY_NAMES = new Set([".ssh", ".config", ".sidekick"]);
+const PROTECTED_DIRECTORY_SEQUENCES = [[".local", "share", "opencode"]];
 
 function stableId(prefix, value) {
   return `${prefix}_${crypto.createHash("sha256").update(String(value)).digest("hex").slice(0, 24)}`;
@@ -38,8 +33,11 @@ function contains(root, target) {
 }
 
 function protectedPath(root, target) {
-  const relative = path.relative(root, target).split(path.sep).join("/");
-  return PROTECTED_RELATIVE.some(entry => relative === entry || relative.startsWith(`${entry}/`));
+  const segments = path.relative(root, target).split(path.sep).filter(Boolean).map(segment => segment.toLowerCase());
+  if (segments.some(segment => PROTECTED_DIRECTORY_NAMES.has(segment) || segment === ".env" || segment.startsWith(".env."))) return true;
+  return PROTECTED_DIRECTORY_SEQUENCES.some(sequence =>
+    segments.some((segment, index) => sequence.every((entry, offset) => segments[index + offset] === entry))
+  );
 }
 
 function createWorkspace({ name, root, permissions = {}, limits = {} }) {
