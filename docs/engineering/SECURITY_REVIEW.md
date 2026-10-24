@@ -538,3 +538,23 @@ terminal state is persisted. The focused suite passed on 2026-10-24. Residual
 limitation: cancellation is cooperative at the individual tool boundary, so
 non-cooperative in-flight operations still require idempotency and state
 verification before a retry.
+
+### Generated capability approval attribution (2026-10-24, SK-045)
+
+The Evolve approval action was authorization-gated, but it accepted an
+`approver` string from its arguments and persisted that value as the approver
+and lifecycle-history actor. An authenticated caller could therefore record a
+misleading identity in the capability itself. The dispatcher audit remained
+attributable, but the capability record did not reliably identify the actual
+principal.
+
+Approval attribution now comes from the authenticated principal in the
+canonical execution context. The approval fails closed if that principal is
+missing, and the caller-supplied `approver` field is no longer part of the tool
+schema or documentation. Dashboard and MCP approvals use the same principal
+source. A regression submits a spoofed approver label and verifies that the
+persisted approver matches the authenticated owner principal instead.
+
+This closes caller-controlled attribution for this lifecycle action. It does
+not mean all audit storage is independently tamper-resistant against a host or
+database administrator; that remains a deployment-level residual risk.

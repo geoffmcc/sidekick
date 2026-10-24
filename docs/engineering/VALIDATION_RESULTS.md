@@ -871,3 +871,14 @@ about current lockfile vulnerability status.
 - `git diff --check` passed. Cancellation remains cooperative for an
   individual in-flight tool handler; the existing dispatcher reports when a
   timed-out operation may still be running.
+
+## Generated capability approval attribution: 2026-10-24 (SK-045)
+
+- `node test/run-all.js test/evolve.test.js
+  test/security-evolve-boundary.test.js --concurrency=1
+  --overall-timeout-ms=600000 --json` passed both suites, 0 failures and
+  0 skips. The Evolve regression verifies a caller-supplied fake approver is
+  ignored and the authenticated principal is persisted; the boundary suite
+  verifies lifecycle operations still require an authenticated identity.
+- `npm.cmd run check:docs`, `npm.cmd run check:architecture`,
+  `npm.cmd run check:tests`, and `git diff --check` passed.

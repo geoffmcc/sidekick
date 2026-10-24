@@ -152,7 +152,9 @@ async function sidekick_evolve(args = {}, deps = {}) {
     if (!item) return error(`Evolve capability not found: ${args.id}`);
     if (!item.validation || !item.validation.passed || item.state !== "awaiting_approval") return error(`Cannot approve trial before validation passes and state is awaiting_approval (current state: ${item.state})`);
     if (!allowedActions(item).approve) return error("Approve Trial is not allowed for this capability state");
-    item.approver = args.approver || "user";
+    const approver = typeof deps.approverPrincipalId === "string" ? deps.approverPrincipalId.trim() : "";
+    if (!approver) return error("Approval requires an authenticated principal attribution");
+    item.approver = approver;
     transition(item, "trial", { approver: item.approver, reason: "explicit approval" });
     item.activationDate = new Date().toISOString();
     dbStore.saveGeneratedCapability(item);

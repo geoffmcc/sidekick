@@ -243,10 +243,13 @@ Use lifecycle actions instead of deleting records:
 ```javascript
 evolve({ action: "analyze" })
 evolve({ action: "validate", id: "cand_..." })
-evolve({ action: "approve", id: "cand_...", approver: "operator" })
+evolve({ action: "approve", id: "cand_..." })
 evolve({ action: "promote", id: "cand_..." })
 evolve({ action: "deprecate", id: "cand_...", reason: "unused" })
 ```
+
+Approval attribution is taken from the authenticated principal on the current
+execution context; callers cannot choose the approver label.
 
 Trial and active generated tools are discoverable as `generated_<name>` after registry sync and MCP server startup (the older `sidekick_generated_<name>` alias form also resolves). Deprecated or rejected generated tools are removed from discovery but retain audit history.
 

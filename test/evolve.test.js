@@ -20,6 +20,7 @@ const { refreshCandidates } = require('../src/evolve');
 const dynamicTools = require('../src/dynamic-tools');
 const { TOOLS: rawTools, TOOL_DEFS, callTool, setSource, loadProcedures } = require('../src/tools');
 const TOOLS = require('./helpers/authorized-context').withOwnerToolContext(rawTools, { source: 'test' });
+const expectedApproverPrincipal = require('./helpers/authorized-context').createOwnerContext({ source: 'test' }).authIdentity.principal_id;
 
 function log({ t, n, src = 'mcp', session = 's1', task = 'task1', ok = true, shape = {}, args = null, retry = false, generated = false, summary = 'ok' }) {
   dbStore.appendToolLog({
@@ -180,6 +181,7 @@ function seedServiceDiagnosis({ session = 's1', task = 'task1', src = 'mcp', sta
     const approved = await TOOLS.evolve({ action: 'approve', id, approver: 'test' });
     assert.ok(!approved.isError, approved.content[0].text);
     assert.strictEqual(dbStore.getGeneratedCapability(id).state, 'trial');
+    assert.strictEqual(dbStore.getGeneratedCapability(id).approver, expectedApproverPrincipal, 'approval attribution must come from the authenticated principal, not the caller-provided label');
     assert.strictEqual(dbStore.getGeneratedCapability(id).useCount, 0, 'approval must not execute or increment use count');
     assert.strictEqual(dbStore.listGeneratedToolExecutions({ capabilityId: id }).length, 0, 'approval must not create executions');
     const promoteBeforeUse = await TOOLS.evolve({ action: 'promote', id });
