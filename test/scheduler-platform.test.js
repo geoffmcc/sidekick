@@ -170,7 +170,11 @@ console.log('Passed\n');
     const credentialDelay = tools.loadDelays().find(delay => delay.name === 'credential scope fixture');
     assert.ok(credentialDelay);
     db.getDb().prepare("UPDATE identity_credentials SET scopes_json = '[]' WHERE credential_id = ?").run(manualCredential.credential.credential_id);
-    const credentialRunResult = await toolContext.runWithContext(credentialContext, () => TOOLS.delay({ action: 'run', id: credentialDelay.id }));
+    // The schedule was authorized by the captured credential. Use the owner
+    // identity to invoke its manual run so this test reaches scheduled-context
+    // revalidation even though the original credential has since lost the
+    // permission to call the high-risk delay tool itself.
+    const credentialRunResult = await toolContext.runWithContext(ownerContext, () => TOOLS.delay({ action: 'run', id: credentialDelay.id }));
     assert.equal(credentialRunResult.isError, true, credentialRunResult.content?.[0]?.text);
     const credentialDelayAfterRun = tools.loadDelays().find(delay => delay.id === credentialDelay.id);
     assert.equal(credentialDelayAfterRun.status, 'failed');
