@@ -41,6 +41,15 @@ function resolveContainedPath(root, relative, { label, regularFile = false } = {
   return resolved;
 }
 
+function rejectSymlinksInTree(directory, relativeRoot) {
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const relative = `${relativeRoot}/${entry.name}`;
+    if (entry.isSymbolicLink()) throw new Error(`package install surface contains a symbolic link: ${relative}`);
+    if (entry.isDirectory()) rejectSymlinksInTree(path.join(directory, entry.name), relative);
+    else if (!entry.isFile()) throw new Error(`package install surface contains a non-regular entry: ${relative}`);
+  }
+}
+
 function readChecksums(workerRoot) {
   const checksumPath = path.join(workerRoot, "SHA256SUMS");
   const lines = fs.readFileSync(checksumPath, "utf8").split(/\r?\n/).filter(Boolean);
@@ -66,7 +75,8 @@ function readInstallSurface(repoRoot, packageJson) {
   const entries = [...(packageJson.files || []), ...Object.values(packageJson.bin || {})];
   const paths = [...new Set(entries.map(safeRelative))].sort();
   for (const relative of paths) {
-    resolveContainedPath(root, relative, { label: "package install surface" });
+    const resolved = resolveContainedPath(root, relative, { label: "package install surface" });
+    if (fs.statSync(resolved).isDirectory()) rejectSymlinksInTree(resolved, relative);
   }
   return {
     files: (packageJson.files || []).map(safeRelative),

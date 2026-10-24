@@ -63,9 +63,22 @@ test("rejects symlink escapes in declared release paths", t => {
   } catch (error) {
     if (!["EPERM", "EACCES", "UNKNOWN"].includes(error.code)) throw error;
     t.skip("symlink creation is unavailable on this Windows host");
+    return;
   }
 
   fs.rmSync(path.join(root, "escaped"), { recursive: true, force: true });
+  packageJson.files = ["src"];
+  fs.writeFileSync(path.join(root, "package.json"), JSON.stringify(packageJson));
+  try {
+    fs.symlinkSync(outside, path.join(root, "src", "nested-escape"), "junction");
+    assert.throws(() => generateManifest({ repoRoot: root, workerPackage: worker }), /symbolic link/);
+  } catch (error) {
+    if (!["EPERM", "EACCES", "UNKNOWN"].includes(error.code)) throw error;
+    t.skip("symlink creation is unavailable on this Windows host");
+    return;
+  }
+  fs.rmSync(path.join(root, "src", "nested-escape"), { recursive: true, force: true });
+
   packageJson.files = ["README.md"];
   fs.writeFileSync(path.join(root, "package.json"), JSON.stringify(packageJson));
   fs.writeFileSync(path.join(worker, "SHA256SUMS"), `${hash}  escaped.txt\n`);
