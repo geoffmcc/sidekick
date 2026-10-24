@@ -892,6 +892,7 @@ async function sidekick_download({ url, output, format, audio_only }, runtime = 
       return { content: [{ type: "text", text: destination.refusal }], isError: true };
     }
     const parsedUrl = destination.url;
+    const safeSourceUrl = browserEgress.safeEvidenceTarget(parsedUrl.href, "http");
     const managedDownload = !output;
     const downloadDir = path.join(DATA_DIR, "downloads");
     if (managedDownload) fs.mkdirSync(downloadDir, { recursive: true, mode: 0o750 });
@@ -968,20 +969,22 @@ async function sidekick_download({ url, output, format, audio_only }, runtime = 
         byte_size: fileHash.bytesRead,
         content_hash: `sha256:${fileHash.hash}`,
         redaction_state: "not_required",
-        verification: { verified: true, method: "sha256", source_url: url },
-        metadata: { source_url: url, audio_only: Boolean(audio_only) },
+        verification: { verified: true, method: "sha256", source_url: safeSourceUrl },
+        metadata: { source_url: safeSourceUrl, audio_only: Boolean(audio_only) },
       });
     }
 
     return { content: [{ type: "text", text: JSON.stringify({
       status: "success",
-      url: url,
+      url: safeSourceUrl,
       output: canonicalFile,
       ...(artifact ? { artifact_id: artifact.artifact_id, storage_ref: artifact.storage_ref } : {}),
-      log: result.substring(0, 500)
+      log: browserEgress.redactDiagnosticUrls(result.substring(0, 500))
     }, null, 2) }] };
   } catch (e) {
-    const message = String(e?.message || "Download failed").replace(proxyUrl || "\u0000", "[ephemeral egress proxy]").slice(0, 2000);
+    const message = browserEgress.redactDiagnosticUrls(
+      String(e?.message || "Download failed").replace(proxyUrl || "\u0000", "[ephemeral egress proxy]")
+    ).slice(0, 2000);
     return { content: [{ type: "text", text: "Error: " + message }], isError: true };
   } finally {
     if (egressProxy) await egressProxy.close();

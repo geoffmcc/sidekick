@@ -1049,3 +1049,18 @@ about current lockfile vulnerability status.
 - After the streaming implementation, `npm.cmd test` passed all 380 unit,
   contract, integration, and security suites in 463.763 seconds, with 0
   failures and 0 skips.
+
+## Media download URL credential persistence: 2026-10-24 (SK-058)
+
+- `node test/run-all.js test/download-custody.test.js
+  test/tool-log-redaction.test.js test/security-invariants.test.js
+  test/static-code-quality.test.js --concurrency=1
+  --overall-timeout-ms=900000 --json` passed all 4 suites. A synthetic
+  credential under an unrecognized `download_ticket` query name is absent from
+  artifact metadata, verification evidence, tool-log arguments, success
+  results, and downloader failure diagnostics; origin attribution is retained.
+- `npm.cmd run check:docs`, `npm.cmd run check:architecture`,
+  `npm.cmd run check:tests`, and `git diff --check` passed.
+- After the download URL persistence fix, `npm.cmd test` passed all 380 unit,
+  contract, integration, and security suites in 460.000 seconds, with 0
+  failures and 0 skips.

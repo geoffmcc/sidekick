@@ -733,3 +733,18 @@ rejection, prove the live database remains valid after a rejected restore, and
 verify backup creation stops without publishing a partial destination. The
 limit is a byte bound, not a CPU-time limit; the setting is an administrator-
 controlled availability tradeoff.
+
+### Media download URL credential persistence (2026-10-24, SK-058)
+
+The governed downloader correctly routes all HTTP traffic through the
+per-download egress proxy, but it also persisted the caller's complete source
+URL in artifact metadata and verification evidence, returned that URL, and
+logged the original `download` argument. Signed URLs can carry credentials in
+path segments or nonstandard query names that generic key-based redaction does
+not recognize. Download artifacts, results, diagnostics, and persisted tool
+arguments now retain only the parsed origin; downloader log/error URLs are
+also reduced to their origin. Synthetic regression coverage uses an
+unrecognized `download_ticket` credential and checks both artifact rows,
+tool-log arguments, success output, and failure output. The actual URL remains
+available to the authorized downloader for the duration of the request and is
+not persisted by these paths.

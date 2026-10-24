@@ -63,7 +63,7 @@ childProcess.execFile = (_command, args, _options, callback) => {
     }
     const template = args[args.indexOf("-o") + 1];
     if (failDownloader) {
-      callback(new Error(`synthetic downloader failure: ${args[args.indexOf("--proxy") + 1]}`));
+      callback(new Error(`synthetic downloader failure: ${args[args.indexOf("--proxy") + 1]} source=${args[args.length - 1]}`));
       return;
     }
     const downloadedFile = template.replace("%(title)s", "fixture-video").replace("%(ext)s", "webm");
@@ -88,10 +88,17 @@ async function main() {
   assert.strictEqual(direct.code, "canonical_dispatch_required", "raw download handler calls must fail before starting a process");
   assert.strictEqual(capturedArgs, undefined, "direct denial must happen before invoking yt-dlp");
 
-  const result = await callMcpTool("download", { url: "https://www.youtube.com/watch?v=fixture" }, owner);
+  const syntheticUrlCredential = "synthetic-download-ticket-value";
+  const sourceUrl = `https://www.youtube.com/watch?v=fixture&download_ticket=${syntheticUrlCredential}`;
+  const result = await callMcpTool("download", { url: sourceUrl }, owner);
   assert.ok(!result.isError, result.content?.[0]?.text);
   const payload = JSON.parse(result.content[0].text);
   assert.strictEqual(payload.status, "success");
+  assert.strictEqual(payload.url, "https://www.youtube.com", "download results must expose only the source origin");
+  assert.ok(!result.content[0].text.includes(syntheticUrlCredential), "download results must not expose URL query credentials");
+  const loggedArguments = dbStore.getDb().prepare("SELECT args_summary FROM tool_logs WHERE tool_name = 'download' ORDER BY id DESC LIMIT 1").get()?.args_summary || "";
+  assert.ok(!loggedArguments.includes(syntheticUrlCredential), "download tool logs must not persist URL query credentials");
+  assert.ok(loggedArguments.includes("https://www.youtube.com"), "download logs retain the source origin for attribution");
   assert.ok(payload.artifact_id, "managed downloads must return an artifact id");
   assert.strictEqual(payload.storage_ref, "downloads/fixture-video.webm");
   assert.ok(capturedArgs.includes("--no-call-home"), "downloads must disable yt-dlp call-home behavior");
@@ -109,10 +116,11 @@ async function main() {
   assert.strictEqual(createdProxy.server.listening, false, "the per-download egress proxy must close after yt-dlp exits");
 
   failDownloader = true;
-  const failedDownload = await callMcpTool("download", { url: "https://www.youtube.com/watch?v=synthetic-failure" }, owner);
+  const failedDownload = await callMcpTool("download", { url: `https://www.youtube.com/watch?v=synthetic-failure&download_ticket=${syntheticUrlCredential}` }, owner);
   const failedText = failedDownload.content?.[0]?.text || "";
   assert.strictEqual(failedDownload.isError, true, "downloader errors must be surfaced as failures");
   assert.ok(!failedText.includes("@127.0.0.1:"), "temporary proxy credentials must not escape through downloader error messages");
+  assert.ok(!failedText.includes(syntheticUrlCredential), "downloader errors must not expose arbitrary URL query credentials");
   assert.strictEqual(createdProxy.server.listening, false, "the proxy must close after downloader failure too");
   failDownloader = false;
 
@@ -130,7 +138,7 @@ async function main() {
   const refused = await callMcpTool("download", { url: "https://media.example/video" }, owner);
   assert.strictEqual(refused.isError, true, "DNS-resolved private download targets must be refused");
 
-  const artifact = dbStore.getDb().prepare("SELECT type, storage_ref, byte_size, content_hash, content_type, producer FROM platform_artifacts WHERE artifact_id = ?").get(payload.artifact_id);
+  const artifact = dbStore.getDb().prepare("SELECT type, storage_ref, byte_size, content_hash, content_type, producer, metadata_json, verification_json FROM platform_artifacts WHERE artifact_id = ?").get(payload.artifact_id);
   assert.deepStrictEqual(artifact, {
     type: "media_download",
     storage_ref: "downloads/fixture-video.webm",
@@ -138,7 +146,10 @@ async function main() {
     content_hash: "sha256:fef970131a70d412a011d8b7c7401bd2d8efdcd39779cfc735b4cc66ceda2cc8",
     content_type: "video/webm",
     producer: "download",
+    metadata_json: JSON.stringify({ source_url: "https://www.youtube.com", audio_only: false }),
+    verification_json: JSON.stringify({ verified: true, method: "sha256", source_url: "https://www.youtube.com" }),
   });
+  assert.ok(!JSON.stringify(artifact).includes(syntheticUrlCredential), "artifact persistence must not contain URL query credentials");
 }
 
 main().then(() => {
