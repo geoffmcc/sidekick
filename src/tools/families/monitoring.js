@@ -580,11 +580,13 @@ async function sidekick_timeline({ action, since, until, sources, pattern, sever
 
   if (effectiveSources.includes("git")) {
     try {
+      const repositoryRoot = process.env.SIDEKICK_REPOSITORY_ROOT || "/home/sidekick/sidekick";
+      if (enforcePathPolicy(repositoryRoot, "read")) throw new Error("repository is outside the configured read scope");
       const sinceDate = startTime.toISOString();
       const result = safeExecFileSync("git", ["log", `--since=${sinceDate}`, "--pretty=format:%H%x09%ad%x09%s", "--date=iso", "-n", "100"], {
         encoding: "utf8",
         timeout: 10000,
-        cwd: process.env.SIDEKICK_REPOSITORY_ROOT || "/home/sidekick/sidekick",
+        cwd: repositoryRoot,
         stdio: ["pipe", "pipe", "pipe"]
       });
       const lines = result.trim().split("\n");

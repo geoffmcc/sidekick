@@ -112,11 +112,24 @@ console.log('Running Monitoring Family Tests...');
       fs.rmSync(deniedDirectory, { recursive: true, force: true });
     }
 
+    process.env.SIDEKICK_REPOSITORY_ROOT = ROOT;
+    journalArgs = null;
+    await runAuthorized('timeline', { action: 'build', since: '1d', sources: ['git'] });
+    assert.strictEqual(journalArgs.command, 'git', 'timeline continues to query an authorized Git repository');
+    assert.strictEqual(journalArgs.args[0], 'log');
+
+    process.env.SIDEKICK_REPOSITORY_ROOT = path.join(TEST_DATA_DIR, 'outside-repository');
+    journalArgs = null;
+    result = await runAuthorized('timeline', { action: 'build', since: '1d', sources: ['git'] });
+    assert.strictEqual(journalArgs, null, 'timeline must authorize its configured Git repository before starting git');
+    delete process.env.SIDEKICK_REPOSITORY_ROOT;
+
     console.log('Monitoring Family Tests passed');
   } finally {
     delete process.env.SIDEKICK_ALLOWED_PATHS;
     delete process.env.SIDEKICK_DENIED_PATHS;
     delete process.env.SIDEKICK_MCP_ALLOWED_PATHS;
+    delete process.env.SIDEKICK_REPOSITORY_ROOT;
     db.clearToolLogs();
     db.closeDatabase();
     fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
