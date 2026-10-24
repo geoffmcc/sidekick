@@ -18,6 +18,7 @@ const projectAccess = require("../../src/core/project-access");
 const platformKernel = require("../../src/platform/kernel");
 const { createMcpServer } = require("../../src/mcp/server");
 const { createModernMcpHandler } = require("../../src/mcp/streamable-http");
+const { callMcpTool } = require("../../src/tools/dispatcher");
 
 let owner;
 let writerToken;
@@ -216,6 +217,30 @@ test("MCP tool catalog uses a read-only scope without granting ordinary tool exe
   const catalogDenied = await callTool(genericExecutionToken, "tools", { action: "overview" });
   assert.equal(catalogDenied.isError, true);
   assert.match(catalogDenied.content?.[0]?.text || "", /required permission: tools\.catalog\.read/);
+});
+
+test("a revoked credential cannot keep executing from a long-lived identity snapshot", async () => {
+  const principal = identity.createPrincipal({
+    type: "service",
+    displayName: "Synthetic revocation continuity client",
+    createdByPrincipalId: owner.principal_id,
+    actorIdentity: owner,
+  });
+  identity.grantPrincipalPermission(principal.principal_id, "packs.read", owner);
+  const created = authentication.createCredential({
+    principalId: principal.principal_id,
+    displayName: "Synthetic revocable pack reader",
+    scopes: ["packs.read"],
+    createdByPrincipalId: owner.principal_id,
+    actorContext: owner,
+  });
+  const capturedIdentity = authentication.authenticateBearerIdentity(created.token);
+  assert.ok(capturedIdentity?.credential_id);
+
+  assert.equal(authentication.revokeCredential(created.credential.credential_id, owner), true);
+  const result = await callMcpTool("capability", { action: "list", limit: 1 }, { authIdentity: capturedIdentity });
+  assert.equal(result.isError, true);
+  assert.equal(result.code, "credential_invalid");
 });
 
 test("MCP pack-only credentials explain catalog and continuity denials with exact required scopes", async () => {

@@ -170,6 +170,26 @@ function getCredential(credentialId) {
   return row ? safeCredential(row) : null;
 }
 
+// Revalidate a credential-backed identity at each execution boundary. The
+// scopes on an identity are a snapshot from task creation, so intersect them
+// with the current credential instead of allowing later scope additions to
+// expand an already-running task.
+function refreshCredentialIdentity(authIdentity) {
+  if (!authIdentity || !authIdentity.credential_id || !Array.isArray(authIdentity.scopes)) return null;
+  const credential = getCredential(authIdentity.credential_id);
+  if (!credential
+      || credential.credential_id !== authIdentity.credential_id
+      || credential.principal_id !== authIdentity.principal_id
+      || credential.revoked_at
+      || (credential.expires_at && (!Number.isFinite(Date.parse(credential.expires_at)) || Date.parse(credential.expires_at) <= Date.now()))
+      || !Array.isArray(credential.scopes)) return null;
+  const principal = identity.getPrincipal(credential.principal_id);
+  if (!principal || !principal.enabled) return null;
+  const currentScopes = new Set(credential.scopes.map(String));
+  const scopes = [...new Set(authIdentity.scopes.map(String))].filter(scope => currentScopes.has("*") || currentScopes.has(scope));
+  return { ...authIdentity, scopes };
+}
+
 function listCredentials(principalId = null) {
   const rows = principalId
     ? dbStore.getDb().prepare("SELECT * FROM identity_credentials WHERE principal_id = ? ORDER BY created_at DESC").all(requiredText(principalId, "principal_id"))
@@ -292,4 +312,4 @@ function rotateCredential(credentialId, actorContext = null) {
   })();
 }
 
-module.exports = Object.freeze({ SESSION_TTL_MS, RECOVERY_TTL_MS, createSession, getSession, isSessionActive, invalidateSession, invalidatePrincipalSessions, createCredential, getCredential, listCredentials, authenticateCredential, authenticateBearerIdentity, revokeCredential, rotateCredential, createOwnerRecoveryToken, recoverOwnerPassword });
+module.exports = Object.freeze({ SESSION_TTL_MS, RECOVERY_TTL_MS, createSession, getSession, isSessionActive, invalidateSession, invalidatePrincipalSessions, createCredential, getCredential, refreshCredentialIdentity, listCredentials, authenticateCredential, authenticateBearerIdentity, revokeCredential, rotateCredential, createOwnerRecoveryToken, recoverOwnerPassword });
