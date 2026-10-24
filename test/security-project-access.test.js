@@ -1465,6 +1465,61 @@ test("Dashboard memory evidence requires access to both the memory project and l
   assert.doesNotMatch(JSON.stringify(res.body), /Synthetic private memory/);
 });
 
+test("handoff details do not include linked memories outside the handoff project scope", async () => {
+  projectAccess.grantProjectAccess({ actorPrincipalId: owner.principal_id, principalId: operator.principal_id, project: "memory_a", accessLevel: "read" });
+  const handoff = db.saveHandoff({
+    project: "memory_a", title: "Synthetic scoped handoff", source: "test",
+    content: "Synthetic handoff content for project scope test.",
+    owner_principal_id: operator.principal_id,
+    created_by_principal_id: operator.principal_id,
+  });
+  const scopedMemory = db.upsertMemory({
+    type: "fact", project: "memory_a", content: "Synthetic same-project handoff memory",
+    summary: "Synthetic same-project handoff memory", confidence: 0.8, source: "test",
+    source_ref: handoff.id, metadata: { handoff_id: handoff.id },
+  });
+  const globalMemory = db.upsertMemory({
+    type: "fact", project: null, content: "Synthetic private global memory via source reference",
+    summary: "Synthetic private global memory", confidence: 0.8, source: "test",
+    source_ref: handoff.id,
+  });
+  const metadataLinkedGlobalMemory = db.upsertMemory({
+    type: "fact", project: null, content: "Synthetic private global memory via metadata reference",
+    summary: "Synthetic private global metadata memory", confidence: 0.8, source: "test",
+    metadata: { handoff_id: handoff.id },
+  });
+  const handlers = new Map();
+  registerHandoffReadRoutes({ app: { get: (route, handler) => handlers.set(route, handler) }, dbStore: db, errorResponse: () => {} });
+  const res = {
+    statusCode: 200,
+    status(code) { this.statusCode = code; return this; },
+    json(body) { this.body = body; return this; },
+  };
+  handlers.get("/api/handoffs/:id")({
+    params: { id: handoff.id }, query: {},
+    authPrincipal: { principal_id: operator.principal_id, scopes: ["memory.read"] },
+  }, res);
+
+  assert.equal(res.statusCode, 200, "the authorized operator may still read the handoff itself");
+  assert.ok(res.body.memories.some(memory => memory.id === scopedMemory.id), "same-project linked memories remain visible");
+  assert.ok(globalMemory?.id && metadataLinkedGlobalMemory?.id, "synthetic global fixtures are persisted");
+  assert.ok(!res.body.memories.some(memory => memory.id === globalMemory.id));
+  assert.ok(!res.body.memories.some(memory => memory.id === metadataLinkedGlobalMemory.id));
+  assert.doesNotMatch(JSON.stringify(res.body.memories), /Synthetic private global memory/);
+
+  const inspected = await dispatcher.callMcpTool("handoff", { action: "inspect", id: handoff.id, project: "memory_a" }, {
+    project: "memory_a",
+    authIdentity: { principal_id: operator.principal_id, principal_type: "human" },
+  });
+  assert.equal(inspected.isError, undefined);
+  const inspectedMemories = JSON.parse(inspected.content[0].text).extracted_memories;
+  assert.ok(Array.isArray(inspectedMemories), inspected.content[0].text);
+  assert.ok(inspectedMemories.some(memory => memory.id === scopedMemory.id));
+  assert.ok(!inspectedMemories.some(memory => memory.id === globalMemory.id));
+  assert.ok(!inspectedMemories.some(memory => memory.id === metadataLinkedGlobalMemory.id));
+  assert.doesNotMatch(JSON.stringify(inspectedMemories), /Synthetic private global memory/);
+});
+
 test("handoff extraction cannot write memories into an ungranted project", async () => {
   const context = tools.context.createMcpExecutionContext({
     authIdentity: { principal_id: operator.principal_id, principal_type: "human" },

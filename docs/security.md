@@ -371,7 +371,10 @@ and, when the memory links to a handoff, separately authorizes that handoff.
 The two records must have matching project scopes. A readable handoff does not
 grant access to a memory in another project. Global memories require the
 principal's global memory-read permission. Missing or mismatched access returns
-the same not-found response used for absent memories.
+the same not-found response used for absent memories. Dashboard handoff detail
+and canonical MCP handoff inspection apply the same exact-scope rule when
+including extracted memories; compatibility queries that also return legacy
+unscoped rows do not broaden a handoff reader's scope.
 
 ## Database query safety
 

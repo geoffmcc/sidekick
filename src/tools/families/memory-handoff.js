@@ -273,7 +273,9 @@ async function sidekick_handoff({ action, id, key, project, title, content, sour
     if (!id) return { content: [{ type: "text", text: "handoff inspect requires id. To retrieve by project, use handoff list or resume check." }], isError: true };
     const handoff = scopedHandoff(id, project, authIdentity);
     if (!handoff) return { content: [{ type: "text", text: "Handoff not found" }], isError: true };
-    const memories = dbStore.searchMemories({ project: handoff.project, includeDisabled: true, limit: 200 }).filter(m => m.source_ref === handoff.id || m.metadata?.handoff_id === handoff.id);
+    const memories = dbStore.searchMemories({ project: handoff.project, includeDisabled: true, limit: 200 }).filter(m =>
+      (m.project || null) === (handoff.project || null) &&
+      (m.source_ref === handoff.id || m.metadata?.handoff_id === handoff.id));
     return jsonText({ ok: true, handoff, packet_validation: dbStore.validateHandoffPacket(handoff.packet, { requireResume: true }), extracted_memories: memories, extraction_version: HANDOFF_EXTRACTION_VERSION });
   }
   if (action === "validate") {

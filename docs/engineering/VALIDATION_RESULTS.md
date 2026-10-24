@@ -515,6 +515,22 @@ test/security-project-access.test.js test/security-dashboard-direct-routes.test.
 failed, 0 skipped). The fixture is synthetic. No production database or live
 service was accessed.
 
+### Handoff-linked memory scope
+
+A synthetic project-A handoff fixture linked both a legitimate project-A memory
+and two unscoped memories, one through `source_ref` and one through
+`metadata.handoff_id`. The pre-fix Dashboard route returned the source-linked
+unscoped record, failing the negative assertion. Both Dashboard handoff detail
+and MCP `handoff inspect` now filter to exact project equality before returning
+linked memory rows. Positive project-A linkage remains visible; both unscoped
+canaries are excluded.
+
+Validation after the fix: `node test/run-all.js
+test/security-project-access.test.js test/security-dashboard-direct-routes.test.js
+--concurrency=1 --overall-timeout-ms=300000` passed both suites (2 passed, 0
+failed, 0 skipped). The fixture is synthetic; no live service or production
+database was accessed.
+
 ### Security-focused regression suite refresh (2026-10-24)
 
 Command: `node test/run-all.js <119 root-level security*.test.js suites>

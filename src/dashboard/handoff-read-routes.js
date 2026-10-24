@@ -83,7 +83,9 @@ function registerHandoffReadRoutes({ app, dbStore, errorResponse }) {
     try {
       const handoff = requireHandoff(req, res);
       if (!handoff) return;
-      const memories = dbStore.searchMemories({ project: handoff.project, includeDisabled: true, limit: 200 }).filter(memory => memory.source_ref === handoff.id || memory.metadata?.handoff_id === handoff.id);
+      const memories = dbStore.searchMemories({ project: handoff.project, includeDisabled: true, limit: 200 }).filter(memory =>
+        (memory.project || null) === (handoff.project || null) &&
+        (memory.source_ref === handoff.id || memory.metadata?.handoff_id === handoff.id));
       res.json({ ok: true, handoff, memories });
     } catch (error) { errorResponse(req, res, error, { status: 500, code: "service_unavailable", component: "handoffs" }); }
   });

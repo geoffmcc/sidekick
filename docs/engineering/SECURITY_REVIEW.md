@@ -73,7 +73,7 @@ evidence of an external attacker or production exploit.
 
 SK-001 through SK-004 are fixed for the demonstrated cases. The final 12-case continuity suite passes; all 19 template security assertions and cleanup pass. Dispatcher behavior and cleanup pass after explicitly closing its owned database. Project context, project identity and memory data-isolation regressions pass. This does not close the untested authorization, injection, supply-chain or live-configuration items above.
 
-### Dashboard memory-evidence project scope (2026-10-24)
+### Dashboard memory-evidence project scope (2026-10-24, SK-025)
 
 Confirmed authorization defect: `GET /api/memories/:id/evidence` used the
 linked handoff's access check instead of also checking the memory's own project.
@@ -97,3 +97,21 @@ Supply-chain advisory status was checked on 2026-10-24: local npm audit found
 zero vulnerabilities in the lockfile, and GitHub Dependabot reported no open
 alerts (19 historical alerts were marked fixed). This does not replace ongoing
 CI checks or cover non-NPM assets.
+
+### Handoff-linked memory scope (2026-10-24, SK-026)
+
+Confirmed scope disclosure in the Dashboard handoff detail route: its memory
+query uses the database's compatibility semantics `(project = ? OR project IS
+NULL)`, then selects rows whose `source_ref` or `metadata.handoff_id` matches
+the handoff. A project-only reader could therefore receive an unscoped memory
+when inconsistent persisted state linked it to that project handoff. The
+synthetic regression failed before remediation because the global memory was
+included. Dashboard and canonical MCP handoff inspection now additionally
+require exact equality of memory and handoff project scopes, preserving
+same-project linked results and excluding global or foreign-scope rows. The
+condition is malformed/inconsistent persisted linkage; no public writer that
+accepts a caller-supplied `source_ref` was identified. This is verified under
+that precondition, not proof of an ordinary user route to create it.
+
+Focused validation: `test/security-project-access.test.js` and
+`test/security-dashboard-direct-routes.test.js` pass (2 suites, 0 failures).
