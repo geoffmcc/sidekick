@@ -1694,6 +1694,18 @@ test("handoff provenance verification enforces the caller filesystem path policy
       authPrincipal: { principal_id: owner.principal_id, scopes: null },
     }, response);
     assert.equal(response.statusCode, 403, "Dashboard preflight must not inspect a handoff repo outside its filesystem policy");
+
+    const sessionResult = await dispatcher.callMcpTool("session", {
+      action: "begin", goal: "Reject an out-of-scope workspace", project: "memory_a", working_directory: outsideRoot,
+    }, {
+      authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+      project: "memory_a",
+      sessionId: "synthetic-session-path-policy-session",
+    });
+    assert.equal(sessionResult.isError, true, JSON.stringify(sessionResult));
+    assert.match(sessionResult.content[0].text, /Path blocked by policy/, JSON.stringify(sessionResult));
+    assert.equal(db.listTaskSessions({ project: "memory_a", limit: 100 }).some(session => session.goal === "Reject an out-of-scope workspace"), false,
+      "a blocked workspace must not leave a durable session record");
   } finally {
     if (previousAllowed === undefined) delete process.env.SIDEKICK_MCP_ALLOWED_PATHS;
     else process.env.SIDEKICK_MCP_ALLOWED_PATHS = previousAllowed;

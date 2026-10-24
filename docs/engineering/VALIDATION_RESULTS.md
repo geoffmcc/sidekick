@@ -610,9 +610,10 @@ live vector store was used.
 `node test/run-all.js test/security-project-access.test.js --concurrency=1
 --overall-timeout-ms=300000` passed all 74 assertions. Synthetic authenticated
 MCP verification and Dashboard preflight requests pointing at a repository
-outside the configured source-specific path roots were rejected by policy.
-Direct internal Agent Bridge, session, and database-store paths remain under
-review and are not covered by this result.
+outside the configured source-specific path roots were rejected by policy. The
+session tool also rejects an out-of-scope workspace before creating a session.
+Direct internal Agent Bridge and database-store paths remain under review and
+are not covered by this result.
 
 ### Handoff claim-token dispatch boundary (2026-10-24)
 

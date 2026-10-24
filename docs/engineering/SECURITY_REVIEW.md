@@ -250,6 +250,7 @@ Validation: `test/security-project-access.test.js` passes all 74 assertions.
 The regression dispatches authenticated MCP provenance verification and a
 Dashboard preflight against a synthetic path outside each configured allow
 root and confirms both are rejected before repository evidence is returned.
-This does not yet establish enforcement for direct internal Agent Bridge,
-session, or database-store call sites; those remain under review before this
-finding can be closed platform-wide.
+The canonical session tool also checks an explicit workspace at session begin
+and rechecks persisted workspaces before checkpoint, finalization, or partial-
+session resume. Direct internal Agent Bridge and database-store call sites
+remain under review before this finding can be closed platform-wide.

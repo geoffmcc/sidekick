@@ -12,9 +12,14 @@ const { requiresMemoryConfirmation } = require("../../core/memory-trust");
 const authorization = require("../../core/authorization");
 const projectAccess = require("../../core/project-access");
 const { requireCanonicalInvocation } = require("../read-authorization");
+const { enforcePathPolicy } = require("../path-policy");
 
 function jsonText(value) {
   return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }] };
+}
+
+function sessionRepositoryPathError(repositoryPath) {
+  return repositoryPath ? enforcePathPolicy(repositoryPath, "read") : null;
 }
 
 function normalizeTags(tags) {
@@ -222,6 +227,8 @@ async function sidekick_session({ action, id, goal, project, source, working_dir
     if (!hasSessionProjectAccess(authIdentity, project, "read") || !hasSessionProjectAccess(authIdentity, project, "write")) {
       return { content: [{ type: "text", text: "session project access denied" }], isError: true, code: "project_access_denied" };
     }
+    const pathDenied = sessionRepositoryPathError(working_directory);
+    if (pathDenied) return pathDenied;
     const brief = buildScopedMemoryBrief(goal, project, { limit: 12 });
     const session = dbStore.saveTaskSession({ id, goal, project, source: source || toolContext.getExecutionSource(), client_session_id, working_directory, repository, branch, environment, tags: normalizeTags(tags), supplied_context, current_plan, blockers, next_step, state: "active", memory_brief: brief, owner_principal_id: ownerPrincipalId, created_by_principal_id: actorPrincipalId });
     const initialPlan = planFromText(session.current_plan, session.completed_steps);
@@ -262,6 +269,8 @@ async function sidekick_session({ action, id, goal, project, source, working_dir
     if (!existing) return { content: [{ type: "text", text: "Task session not found: " + id }], isError: true };
     if (!hasSessionProjectAccess(authIdentity, existing.project, "write")) return { content: [{ type: "text", text: "Task session not found: " + id }], isError: true };
     if (!canManageSession(existing, authIdentity)) return { content: [{ type: "text", text: "Task session not found: " + id }], isError: true };
+    const pathDenied = sessionRepositoryPathError(existing.working_directory);
+    if (pathDenied) return pathDenied;
     const linkedHandoff = dbStore.getHandoffByTaskId(existing.id);
     let updatedHandoff = null;
     // The session snapshot and linked handoff version are one continuity write.
@@ -290,6 +299,8 @@ async function sidekick_session({ action, id, goal, project, source, working_dir
     if (!canManageSession(existing, authIdentity)) return { content: [{ type: "text", text: "Task session not found: " + id }], isError: true };
     const state = action === "abandon" ? "abandoned" : "completed";
     const linkedHandoff = handoff_id ? dbStore.getHandoff(handoff_id) : dbStore.getHandoffByTaskId(existing.id);
+    const pathDenied = linkedHandoff && sessionRepositoryPathError(existing.working_directory || linkedHandoff.packet?.provenance?.working_directory);
+    if (pathDenied) return pathDenied;
     const effectiveHandoffId = linkedHandoff?.id || null;
     if (handoff_id && (!linkedHandoff || (existing.project && canonicalizeProjectName(linkedHandoff.project) !== canonicalizeProjectName(existing.project)))) {
       return { content: [{ type: "text", text: `handoff quality gate failed: handoff "${handoff_id}" was not found in the session project` }], isError: true };
@@ -351,6 +362,8 @@ async function sidekick_session({ action, id, goal, project, source, working_dir
     if (action === "resume" && session.state === "completed" && (session.outcome === "partial" || ["partial", "blocked"].includes(String(session.acceptance_state || "").toLowerCase()))) {
       const prior = dbStore.getHandoffByTaskId(id);
       if (prior) {
+        const pathDenied = sessionRepositoryPathError(session.working_directory || prior.packet?.provenance?.working_directory);
+        if (pathDenied) return pathDenied;
         const isResumeCheckpoint = prior.source === "session_resume"
           && ["draft", "active", "ready"].includes(prior.lifecycle_state)
           && prior.packet?.provenance?.previous_handoff_id;

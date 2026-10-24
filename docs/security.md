@@ -401,8 +401,10 @@ vector payloads are also sanitized before context recall; existing stored
 payloads are not rewritten.
 Handoff provenance verification and repository-backed checkpoint, readiness,
 and preflight operations apply the MCP or Dashboard filesystem path policy
-before Git reads a workspace named by a request or persisted handoff. Internal
-Agent Bridge, session, and direct database-store call paths remain under review.
+before Git reads a workspace named by a request or persisted handoff. Session
+workspaces are checked by the session tool before they are persisted or reused
+for Git-backed checkpoints. Direct internal Agent Bridge and database-store
+call paths remain under review.
 Handoff claim tokens are one-time bearer capabilities: dispatcher exposure is
 allowlisted for authenticated sessions, while generic results and persisted
 tool logs redact them. An integration regression covers token delivery, log
