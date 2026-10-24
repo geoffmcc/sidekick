@@ -78,6 +78,10 @@ function assertTranscriptionCapacity(jobs = transcriptionJobs, maximum = MAX_ACT
   }
 }
 
+function removeTranscriptionOutput(outputDir) {
+  try { fs.rmSync(outputDir, { recursive: true, force: true }); } catch {}
+}
+
 function saveTranscriptionJob(job) {
   fs.mkdirSync(TRANSCRIPTION_JOB_ROOT, { recursive: true, mode: 0o700 });
   const safe = { ...job };
@@ -223,6 +227,7 @@ function startTranscriptionJob({ audioPath, model, language, backend, device: re
     });
   } catch (error) {
     finishTranscriptionJob(job, { status: "failed", error: String(error?.message || "transcription process could not start").slice(0, 1000) });
+    removeTranscriptionOutput(outputDir);
     throw error;
   }
   job.child = child;
@@ -230,17 +235,24 @@ function startTranscriptionJob({ audioPath, model, language, backend, device: re
   child.stdout.on("data", () => {});
   let stderr = "";
   child.stderr.on("data", chunk => { stderr = (stderr + chunk.toString()).slice(-4096); });
-  child.on("error", error => finishTranscriptionJob(job, { status: "failed", error: error.message }));
+  child.on("error", error => {
+    finishTranscriptionJob(job, { status: "failed", error: error.message });
+    removeTranscriptionOutput(outputDir);
+  });
   child.on("close", code => {
-    if (job.status === "cancelled") return;
-    const txtPath = transcriptionOutputPath(selected.name, audioPath, outputDir);
-    if (code === 0 && fs.existsSync(txtPath)) {
-      try {
-        finishTranscriptionJob(job, { status: "completed", output: readTranscriptionText(txtPath) || "(no speech detected)" });
-      } catch (error) {
-        finishTranscriptionJob(job, { status: "failed", error: `Unable to read transcript output: ${error.message}` });
-      }
-    } else finishTranscriptionJob(job, { status: "failed", error: stderr || `transcription exited with code ${code}` });
+    try {
+      if (job.status === "cancelled") return;
+      const txtPath = transcriptionOutputPath(selected.name, audioPath, outputDir);
+      if (code === 0 && fs.existsSync(txtPath)) {
+        try {
+          finishTranscriptionJob(job, { status: "completed", output: readTranscriptionText(txtPath) || "(no speech detected)" });
+        } catch (error) {
+          finishTranscriptionJob(job, { status: "failed", error: `Unable to read transcript output: ${error.message}` });
+        }
+      } else finishTranscriptionJob(job, { status: "failed", error: stderr || `transcription exited with code ${code}` });
+    } finally {
+      removeTranscriptionOutput(outputDir);
+    }
   });
   return job;
 }
@@ -1006,4 +1018,4 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_ocr, sidekick_media, sidekick_transcribe, sidekick_analytics, sidekick_insight_report, sidekick_download, localCudaAvailable, localVulkanAvailable, readTranscriptionText, transcriptionOutputPath, transcriptionJobPath, transcriptionJobBelongsToPrincipal, countActiveTranscriptionJobs, assertTranscriptionCapacity, saveTranscriptionJob, MAX_TRANSCRIPTION_OUTPUT_BYTES, MAX_ACTIVE_TRANSCRIPTION_JOBS };
+module.exports = { descriptors, sidekick_ocr, sidekick_media, sidekick_transcribe, sidekick_analytics, sidekick_insight_report, sidekick_download, localCudaAvailable, localVulkanAvailable, readTranscriptionText, transcriptionOutputPath, transcriptionJobPath, transcriptionJobBelongsToPrincipal, countActiveTranscriptionJobs, assertTranscriptionCapacity, removeTranscriptionOutput, saveTranscriptionJob, MAX_TRANSCRIPTION_OUTPUT_BYTES, MAX_ACTIVE_TRANSCRIPTION_JOBS };

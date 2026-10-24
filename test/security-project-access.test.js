@@ -716,6 +716,10 @@ test("transcription job IDs cannot traverse paths and job records are principal-
   assert.throws(() => media.assertTranscriptionCapacity(activeJobs), /capacity reached/);
   activeJobs.delete("queued");
   assert.doesNotThrow(() => media.assertTranscriptionCapacity(activeJobs));
+  const scratchOutput = fs.mkdtempSync(path.join(dataDir, "transcription-scratch-"));
+  fs.writeFileSync(path.join(scratchOutput, "raw-transcript.txt"), "synthetic transcript");
+  media.removeTranscriptionOutput(scratchOutput);
+  assert.equal(fs.existsSync(scratchOutput), false, "completed or cancelled job scratch output is removed");
 
   const traversal = await dispatcher.callMcpTool("transcribe", { action: "status", job_id: "../../sidekick.db" }, {
     authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
