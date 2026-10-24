@@ -1,6 +1,7 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const path = require("node:path");
 const { test, before, after } = require("node:test");
 const {
   startFixture,
@@ -78,6 +79,35 @@ test("capability catalog, lifecycle, health, maturity, and workflow projections 
     await maturityButton.click();
     await page.locator("#capDetail-api-engineering").waitFor({ state: "visible" });
     await waitFor("maturity detail", async () => /"level"/.test(await page.locator("#capDetail-api-engineering").textContent()));
+
+    const refreshBundled = installedCard.getByRole("button", { name: /refresh bundled copy/i });
+    await refreshBundled.waitFor({ state: "visible" });
+    page.once("dialog", dialog => dialog.accept());
+    await refreshBundled.click();
+    await waitFor("verified bundled-copy refresh", async () => {
+      const refreshed = await fixture.request("GET", "/api/capabilities/api-engineering");
+      return refreshed.body?.ok && refreshed.body.pack?.state === "enabled";
+    });
+
+    const thirdPartyPath = path.join(__dirname, "..", "fixtures", "third-party-pack");
+    const inspectedThirdParty = await fixture.request("POST", "/api/capabilities/inspect", { path: thirdPartyPath });
+    assert.equal(inspectedThirdParty.status, 200, JSON.stringify(inspectedThirdParty.body));
+    const installedThirdParty = await fixture.request("POST", "/api/capabilities/install", {
+      path: thirdPartyPath,
+      expected_package_hash: inspectedThirdParty.body.inspection.package_hash,
+      enable: false,
+    });
+    assert.equal(installedThirdParty.status, 200, JSON.stringify(installedThirdParty.body));
+    assert.equal(installedThirdParty.body.ok, true, JSON.stringify(installedThirdParty.body));
+    const listedPacks = await fixture.request("GET", "/api/capabilities");
+    assert.ok(listedPacks.body.installed.some(pack => pack.name === "fixture-observatory"), JSON.stringify(listedPacks.body));
+    await page.locator('#page-capabilities [data-handler="loadCapabilities"]').click();
+    const thirdPartyCard = page.locator("#capInstalled .capability-card").filter({ hasText: "fixture-observatory" });
+    await thirdPartyCard.waitFor({ state: "visible" });
+    assert.equal(await thirdPartyCard.getByRole("button", { name: /refresh bundled copy/i }).count(), 0,
+      "the provenance refresh control must not be offered for a third-party pack");
+    const uninstalledThirdParty = await fixture.request("POST", "/api/capabilities/fixture-observatory/uninstall", {});
+    assert.equal(uninstalledThirdParty.status, 200, JSON.stringify(uninstalledThirdParty.body));
 
     const disabled = await fixture.request("POST", "/api/capabilities/api-engineering/disable", {});
     assert.equal(disabled.status, 200, JSON.stringify(disabled.body));

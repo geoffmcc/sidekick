@@ -5,6 +5,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const H = require("../src/agent-history");
+const { CONTINUATION_LIMITS } = require("../src/agent-continuation");
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-agent-history-"));
 function id(n) { return n.toString(16).padStart(8, "0"); }
@@ -38,6 +39,23 @@ try {
   assert.ok(!session.turns[2].steps.some(step => step.text === "private reasoning"), "hidden reasoning is excluded from session DTO");
   assert.strictEqual(H.buildSession(dir, "../bad"), null);
   assert.strictEqual(H.buildTask(dir, "badbad01"), null);
+
+  let boundedOptions;
+  const bounded = H.loadEntries("unused", {
+    readdirSync: () => ["abcdef10.json", "abcdef11.json"],
+    lstatSync(file) {
+      const symlink = file.endsWith("abcdef11.json");
+      return { size: 2, mtimeMs: 1, isFile: () => !symlink, isSymbolicLink: () => symlink };
+    },
+    readTextBounded(_file, options) {
+      boundedOptions = options;
+      return { content: "{}" };
+    },
+  });
+  assert.deepStrictEqual(bounded.entries.map(entry => entry.id), ["abcdef10"]);
+  assert.strictEqual(boundedOptions.maxBytes, CONTINUATION_LIMITS.MAX_TRANSCRIPT_BYTES);
+  assert.strictEqual(boundedOptions.requireComplete, true);
+  assert.strictEqual(boundedOptions.noFollow, true);
   console.log("Agent history tests passed.");
 } finally {
   fs.rmSync(dir, { recursive: true, force: true });

@@ -52,9 +52,17 @@ async function main() {
   assert.match(sameUser.content[0].text, /alpha-secret/, "the owner must retain legitimate access");
 
   const principalPrefix = `__sidekick_principal_v1:${encodeURIComponent(principalA.principal_id)}:alpha:`;
-  for (let index = 0; index < 1002; index++) {
-    db.setKV(`${principalPrefix}bounded_${index}`, { value: `v${index}`, project: "alpha" }, "alpha", "test");
-  }
+  const insertBoundedFixture = db.getDb().prepare(`
+    INSERT INTO kv_store (key, value_json, project, source, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `);
+  const fixtureTime = new Date().toISOString();
+  db.getDb().transaction(() => {
+    for (let index = 0; index < 1002; index++) {
+      const value = JSON.stringify({ value: `v${index}`, project: "alpha", category: null, source: "test", created: fixtureTime, updated: fixtureTime });
+      insertBoundedFixture.run(`${principalPrefix}bounded_${index}`, value, "alpha", "test", fixtureTime, fixtureTime);
+    }
+  })();
   const bounded = await asPrincipal(principalA.principal_id, "alpha", "get_by_project", { project: "alpha" });
   assert.strictEqual(JSON.parse(bounded.content[0].text).length, 1000, "project reads must cap result rows");
   const scopedPage = db.listScopedKV({ project: "alpha", keyPrefix: principalPrefix, limit: 10 });

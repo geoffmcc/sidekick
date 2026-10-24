@@ -274,46 +274,66 @@ log "Phase 6: Installing Python packages..."
 
 # Create a venv for sidekick tools so we don't pollute system Python
 TOOLS_VENV="/home/$USERNAME/.sidekick-tools"
-if [ -d "$TOOLS_VENV" ]; then
+if [ -L "$TOOLS_VENV" ]; then
+  err "Python tools venv must not be a symbolic link: $TOOLS_VENV"
+  exit 1
+elif [ -d "$TOOLS_VENV" ]; then
+  # Upgrade venvs created by older versions of this script without following
+  # symlinks while changing ownership. Package installers run as sidekick below.
+  find -P "$TOOLS_VENV" -xdev \( -type d -o -type f \) -exec chown "$USERNAME:$USERNAME" -- {} +
   skip "Python tools venv exists"
 else
   python3 -m venv "$TOOLS_VENV"
-  chown -R "$USERNAME:$USERNAME" "$TOOLS_VENV"
+  chown "$USERNAME:$USERNAME" "$TOOLS_VENV"
   pass "Created Python tools venv at $TOOLS_VENV"
 fi
 
-source "$TOOLS_VENV/bin/activate"
+TOOLS_PYTHON="$TOOLS_VENV/bin/python"
+if [ ! -x "$TOOLS_PYTHON" ]; then
+  err "Python tools venv has no safe interpreter: $TOOLS_PYTHON"
+  exit 1
+fi
 
 # yt-dlp
-if pip3 show yt-dlp &>/dev/null; then
-  skip "yt-dlp $(yt-dlp --version)"
+if sudo -H -u "$USERNAME" "$TOOLS_PYTHON" -m pip show yt-dlp &>/dev/null; then
+  skip "yt-dlp $(sudo -H -u "$USERNAME" "$TOOLS_VENV/bin/yt-dlp" --version)"
 else
-  pip3 install -q yt-dlp
+  sudo -H -u "$USERNAME" "$TOOLS_PYTHON" -m pip install -q yt-dlp
   pass "yt-dlp installed"
 fi
 
 # Whisper
-if pip3 show openai-whisper &>/dev/null; then
+if sudo -H -u "$USERNAME" "$TOOLS_PYTHON" -m pip show openai-whisper &>/dev/null; then
   skip "openai-whisper"
 else
-  pip3 install -q openai-whisper
+  sudo -H -u "$USERNAME" "$TOOLS_PYTHON" -m pip install -q openai-whisper
   pass "Whisper installed"
 fi
 
 # DuckDB
-if pip3 show duckdb &>/dev/null; then
-  skip "DuckDB $(python3 -c 'import duckdb; print(duckdb.__version__)')"
+if sudo -H -u "$USERNAME" "$TOOLS_PYTHON" -c 'import duckdb' &>/dev/null; then
+  skip "DuckDB $(sudo -H -u "$USERNAME" "$TOOLS_PYTHON" -c 'import duckdb; print(duckdb.__version__)')"
 else
-  pip3 install -q duckdb
+  sudo -H -u "$USERNAME" "$TOOLS_PYTHON" -m pip install -q duckdb
   pass "DuckDB installed"
 fi
 
 # Mermaid CLI (needs npm)
-if command -v mmdc &>/dev/null; then
+TOOLS_NPM_PREFIX="$TOOLS_VENV/npm"
+TOOLS_MMDC="$TOOLS_NPM_PREFIX/bin/mmdc"
+if [ -x "$TOOLS_MMDC" ]; then
+  skip "mermaid-cli"
+elif command -v mmdc &>/dev/null; then
   skip "mermaid-cli"
 else
-  npm install -g @mermaid-js/mermaid-cli
+  sudo -H -u "$USERNAME" env NPM_CONFIG_PREFIX="$TOOLS_NPM_PREFIX" npm install --global @mermaid-js/mermaid-cli
   pass "mermaid-cli installed"
+fi
+
+# Expose the sidekick-owned CLI to system tools without running its install
+# hooks or package code as root.
+if [ -x "$TOOLS_MMDC" ] && [ ! -e /usr/local/bin/mmdc ] && [ ! -L /usr/local/bin/mmdc ]; then
+  ln -s "$TOOLS_MMDC" /usr/local/bin/mmdc
 fi
 
 # Symlink tools venv binaries to a shared location
@@ -323,8 +343,6 @@ for bin in yt-dlp whisper duckdb; do
     pass "Linked $bin -> /usr/local/bin/sidekick-$bin"
   fi
 done
-
-deactivate
 
 echo ""
 
@@ -544,9 +562,7 @@ info "Python tools:"
 [ -d "$TOOLS_VENV" ] && pass "Tools venv at $TOOLS_VENV" || fail "Tools venv"
 [ -f "$TOOLS_VENV/bin/yt-dlp" ] && pass "yt-dlp" || fail "yt-dlp"
 [ -f "$TOOLS_VENV/bin/whisper" ] && pass "whisper" || fail "whisper"
-source "$TOOLS_VENV/bin/activate"
-python3 -c "import duckdb" 2>/dev/null && pass "DuckDB" || fail "DuckDB"
-deactivate
+sudo -H -u "$USERNAME" "$TOOLS_PYTHON" -c "import duckdb" 2>/dev/null && pass "DuckDB" || fail "DuckDB"
 
 # Mermaid
 command -v mmdc &>/dev/null && pass "mermaid-cli" || fail "mermaid-cli"

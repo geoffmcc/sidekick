@@ -18,12 +18,12 @@ test("email recipient and subject cannot inject additional headers", () => {
 
 test("SMTP destination pins DNS while allowing operator-configured private relays", async t => {
   const originalLookup = dns.promises.lookup;
-  let answers = [{ address: "203.0.113.10", family: 4 }];
+  let answers = [{ address: "93.184.216.34", family: 4 }];
   dns.promises.lookup = async () => answers;
   t.after(() => { dns.promises.lookup = originalLookup; });
 
   const publicRelay = await resolveSmtpDestination("smtp.example.test", "587");
-  assert.equal(publicRelay.address, "203.0.113.10");
+  assert.equal(publicRelay.address, "93.184.216.34");
   assert.equal(publicRelay.url.hostname, "smtp.example.test");
   assert.equal(publicRelay.url.port, "587");
 

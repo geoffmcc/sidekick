@@ -1,10 +1,14 @@
 "use strict";
 
 const crypto = require("crypto");
-const fs = require("fs");
 const { z } = require("zod");
 const { enforcePathPolicy } = require("../path-policy");
 const { requireToolExecution } = require("../read-authorization");
+const { hashFile: hashFileDetails, HASH_STREAM_HIGH_WATER_MARK, HASH_FILE_TIMEOUT_MS } = require("../../core/stream-file-hash");
+
+function hashFile(filePath, algorithm, timeoutMs = HASH_FILE_TIMEOUT_MS) {
+  return hashFileDetails(filePath, algorithm, { timeoutMs }).then(result => result.hash);
+}
 
 async function sidekick_hash({ input, algorithm, verify, path: filePath }) {
   if (filePath) {
@@ -18,25 +22,23 @@ async function sidekick_hash({ input, algorithm, verify, path: filePath }) {
     return { content: [{ type: "text", text: `Invalid algorithm. Use: ${validAlgorithms.join(", ")}` }], isError: true };
   }
 
-  let data;
+  let hash;
 
   if (filePath) {
     const policyError = enforcePathPolicy(filePath, "read");
     if (policyError) return policyError;
-    // Hash a file.
+    // Stream files through a bounded buffer rather than allocating memory in
+    // proportion to an operator-authorized file's size.
     try {
-      data = fs.readFileSync(filePath);
+      hash = await hashFile(filePath, algo);
     } catch (e) {
       return { content: [{ type: "text", text: `File read error: ${e.message}` }], isError: true };
     }
   } else if (input) {
-    // Hash input string.
-    data = Buffer.from(input, "utf-8");
+    hash = crypto.createHash(algo).update(input, "utf-8").digest("hex");
   } else {
     return { content: [{ type: "text", text: "input or path required" }], isError: true };
   }
-
-  const hash = crypto.createHash(algo).update(data).digest("hex");
 
   if (verify) {
     const matches = hash === verify.toLowerCase();
@@ -70,4 +72,4 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_hash };
+module.exports = { descriptors, sidekick_hash, hashFile, HASH_STREAM_HIGH_WATER_MARK, HASH_FILE_TIMEOUT_MS };

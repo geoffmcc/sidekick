@@ -26,6 +26,7 @@ function resetApp() {
   fs.writeFileSync(path.join(appDir, 'data', 'sidekick.db'), 'db');
   fs.writeFileSync(path.join(appDir, 'package-lock.json'), '{}');
   fs.writeFileSync(path.join(appDir, 'scripts', 'seed-knowledge.js'), '');
+  fs.writeFileSync(path.join(appDir, 'scripts', 'ensure-secret-config.sh'), '#!/usr/bin/env bash\n');
 }
 
 function makeMock(overrides = {}) {
@@ -42,6 +43,7 @@ function makeMock(overrides = {}) {
     installCalls: 0,
     installTimeouts: [],
     calls: [],
+    childEnvironments: [],
     ...overrides
   };
   // Per-service state so the mock can model sidekick-mcp staying active while
@@ -63,10 +65,16 @@ function makeMock(overrides = {}) {
 
   function execFileSyncMock(cmd, args, options = {}) {
     state.calls.push([cmd, ...args].join(' '));
+    state.childEnvironments.push(options.env || null);
     const cwd = options.cwd || '';
     if (cmd === 'df' && state.lowDisk) return 'Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/root 9999999 9999998 1 99% /\n';
     if (cmd === 'df') return 'Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/root 9999999 1 9999999 1% /\n';
     if (cmd === 'chown') return '';
+    if (cmd === 'bash' && args[0].endsWith('ensure-secret-config.sh')) {
+      state.secretPreflightCalls = (state.secretPreflightCalls || 0) + 1;
+      if (state.failSecretPreflight || (state.failSecondSecretPreflight && state.secretPreflightCalls === 2)) fail('SIDEKICK_AGENT_PROXY_KEY is missing');
+      return 'preflight ok\n';
+    }
     if (cmd === 'npm') {
       state.installCalls += 1;
       if (args[0] === 'ci' && args[1] === '--omit=dev') state.installTimeouts.push(options.timeout);
@@ -99,6 +107,8 @@ function makeMock(overrides = {}) {
         fs.mkdirSync(path.join(target, 'scripts'), { recursive: true });
         fs.writeFileSync(path.join(target, 'package-lock.json'), '{}');
         fs.writeFileSync(path.join(target, 'scripts', 'seed-knowledge.js'), '');
+        fs.writeFileSync(path.join(target, 'scripts', 'ensure-secret-config.sh'), '#!/usr/bin/env bash\n');
+        fs.writeFileSync(path.join(target, 'scripts', 'ensure-secret-config.js'), '');
         return 'cloned\n';
       }
       if (joined === 'branch --show-current') return `${state.branch}\n`;
@@ -140,9 +150,27 @@ console.log('Running Git deployment hardening tests...\n');
 try {
   resetApp();
   let state = makeMock({ head: 'bbb222', origin: 'bbb222', behind: '0' });
-  let result = gitDeploy.verify();
+  const environmentNames = ['SIDEKICK_TEST_DEPLOY_API_KEY', 'NODE_OPTIONS', 'LD_AUDIT', 'GIT_SSH_COMMAND'];
+  const previousEnvironment = new Map(environmentNames.map(name => [name, process.env[name]]));
+  process.env.SIDEKICK_TEST_DEPLOY_API_KEY = 'synthetic-deploy-token';
+  process.env.NODE_OPTIONS = '--require synthetic-hook';
+  process.env.LD_AUDIT = 'synthetic-audit-hook';
+  process.env.GIT_SSH_COMMAND = 'synthetic-ssh-wrapper';
+  let result;
+  try {
+    result = gitDeploy.verify();
+  } finally {
+    for (const [name, value] of previousEnvironment) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
   assert.strictEqual(result.status, 'ok', 'valid checkout should verify');
   assert.ok(state.calls.includes('git fetch --prune origin main'), 'verify should fetch origin main');
+  assert.ok(state.childEnvironments.length > 0, 'deployment subprocesses should receive an explicit environment');
+  for (const env of state.childEnvironments) {
+    for (const name of environmentNames) assert.strictEqual(env[name], undefined, `${name} must not reach deployment subprocesses`);
+  }
 
   resetApp();
   state = makeMock({ head: 'bbb222', origin: 'bbb222', behind: '0' });
@@ -168,12 +196,23 @@ try {
   assert.strictEqual(result.previous_commit, 'aaa111');
   assert.strictEqual(result.deployed_commit, 'bbb222');
   assert.ok(result.backup, 'changed deploy should create a pre-deploy backup');
+  assert.strictEqual(result.runtime_secret_preflight, 'ok', 'changed deploy should verify runtime credentials before stopping services');
   assert.deepStrictEqual(state.installTimeouts, [600000], 'production dependency installation should allow up to ten minutes');
   assert.ok(fs.existsSync(path.join(result.backup, '.env')), 'backup should include .env');
   assert.ok(fs.existsSync(path.join(result.backup, 'data')), 'backup should include data');
   assert.ok(fs.existsSync(path.join(result.backup, 'manifest.json')), 'backup should include a manifest');
   assert.ok(state.calls.includes('sudo systemctl stop sidekick-mcp'), 'SSH deployment should quiesce MCP through the narrow sudoers grant');
+  assert.ok(state.calls.indexOf(`bash ${path.join(appDir, 'scripts', 'ensure-secret-config.sh')} ${appDir}`) < state.calls.indexOf('sudo systemctl stop sidekick-mcp'), 'runtime secret preflight must run before service interruption');
   assert.strictEqual(gitDeploy.allowedFetchUrl('git://github.com/geoffmcc/sidekick.git'), false, 'git protocol should not be allowed for deploy origin');
+
+  resetApp();
+  state = makeMock({ failSecretPreflight: true });
+  result = gitDeploy.deploy();
+  assert.strictEqual(result.status, 'failed', 'missing runtime credentials should block deployment');
+  assert.match(result.error, /runtime secret preflight failed/);
+  assert.strictEqual(result.runtime_secret_preflight, 'failed');
+  assert.ok(!state.calls.some(command => command.includes('systemctl stop')), 'secret preflight failure must not interrupt services');
+  assert.ok(!state.calls.includes('git merge --ff-only origin/main'), 'secret preflight failure must happen before updating the checkout');
 
   for (const [name, overrides, expected] of [
     ['dirty tracked tree', { status: ' M src/tools.js' }, 'tracked working tree is not clean'],
@@ -203,9 +242,15 @@ try {
 
   resetApp();
   fs.rmSync(path.join(appDir, '.git'), { recursive: true, force: true });
-  makeMock();
+  state = makeMock();
   result = gitDeploy.convert();
   assert.strictEqual(result.status, 'ok', 'non-Git conversion should succeed');
+  assert.strictEqual(result.staging_runtime_secret_preflight, 'ok', 'conversion should validate credentials before stopping services');
+  assert.strictEqual(result.staged_runtime_secret_preflight, 'ok', 'conversion should validate staged credentials before switching installs');
+  assert.strictEqual(state.secretPreflightCalls, 2, 'conversion should validate current inputs and the prepared staged environment');
+  const conversionPreflightIndex = state.calls.findIndex(command => command.includes(path.join(result.staging, 'scripts', 'ensure-secret-config.sh')));
+  const conversionStopIndex = state.calls.findIndex(command => command.includes('systemctl stop sidekick-dashboard'));
+  assert.ok(conversionPreflightIndex >= 0 && conversionPreflightIndex < conversionStopIndex, 'conversion secret preflight must precede service interruption');
   assert.ok(fs.existsSync(result.backup), 'conversion should create durable backup');
   assert.ok(fs.existsSync(result.rollback), 'conversion should retain rollback directory');
   assert.strictEqual(result.push_url, 'DISABLED', 'conversion should disable push URL');
@@ -215,6 +260,22 @@ try {
   makeMock({ failClone: true });
   result = gitDeploy.convert();
   assert.strictEqual(result.status, 'failed', 'clone failure should fail conversion');
+
+  resetApp();
+  fs.rmSync(path.join(appDir, '.git'), { recursive: true, force: true });
+  state = makeMock({ failSecretPreflight: true });
+  result = gitDeploy.convert();
+  assert.strictEqual(result.status, 'failed', 'missing runtime credentials should block conversion');
+  assert.strictEqual(result.staging_runtime_secret_preflight, 'failed');
+  assert.ok(!state.calls.some(command => command.includes('systemctl stop')), 'conversion preflight failure must not interrupt services');
+
+  resetApp();
+  fs.rmSync(path.join(appDir, '.git'), { recursive: true, force: true });
+  state = makeMock({ failSecondSecretPreflight: true });
+  result = gitDeploy.convert();
+  assert.strictEqual(result.status, 'failed', 'staged runtime credentials must be revalidated before switching installs');
+  assert.strictEqual(result.staged_runtime_secret_preflight, 'failed');
+  assert.strictEqual(result.rollback_status, 'completed', 'failed staged preflight should restart the existing install');
 
   resetApp();
   fs.rmSync(path.join(appDir, '.git'), { recursive: true, force: true });
@@ -273,12 +334,16 @@ try {
 
   const deploySh = fs.readFileSync(path.join(root, 'deploy.sh'), 'utf8');
   const deployPs1 = fs.readFileSync(path.join(root, 'deploy.ps1'), 'utf8');
+  const gitDeployHelper = fs.readFileSync(path.join(root, 'scripts', 'git-deploy.js'), 'utf8');
   const opsFamilyJs = fs.readFileSync(path.join(root, 'src', 'tools', 'families', 'operations.js'), 'utf8');
   const schemasJs = fs.readFileSync(path.join(root, 'src', 'tools', 'schemas', 'index.js'), 'utf8');
   assert.match(deploySh, /SCP\/offline mode/, 'deploy.sh should label explicit SCP/offline mode');
   assert.match(deployPs1, /SCP\/offline mode/, 'deploy.ps1 should label explicit SCP/offline mode');
   assert.match(deploySh, /verify_git_deploy_source/, 'deploy.sh should validate local helper provenance before Git deploy');
   assert.match(deployPs1, /Assert-GitDeploySource/, 'deploy.ps1 should validate local helper provenance before Git deploy');
+  assert.match(gitDeployHelper, /\.sidekick-child-process\.js/, 'standalone git deploy helper should resolve the shipped shared child environment policy');
+  assert.match(gitDeployHelper, /refusing deployment/, 'standalone git deploy helper should fail closed when the shared policy is missing');
+  assert.doesNotMatch(gitDeployHelper, /const secretEnvKey =/, 'git deploy helper must not retain a weaker duplicate environment filter');
   assert.doesNotMatch(deploySh, /node \/tmp\/sidekick-git-deploy\.js/, 'deploy.sh should not execute helper from world-writable tmp');
   assert.doesNotMatch(deployPs1, /node \/tmp\/sidekick-git-deploy\.js/, 'deploy.ps1 should not execute helper from world-writable tmp');
   assert.match(deploySh, /Syncing \.env before first Git conversion/, 'deploy.sh should copy first-deploy .env before conversion backup');

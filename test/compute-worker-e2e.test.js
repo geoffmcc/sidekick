@@ -52,10 +52,11 @@ function reserveAvailablePort() {
 function req(method, p, body) {
   return new Promise((resolve, reject) => {
     const data = body ? JSON.stringify(body) : null;
-    const r = http.request({ hostname: '127.0.0.1', port: PORT, path: p, method,
+    const r = http.request({ hostname: '127.0.0.1', port: PORT, path: p, method, agent: false,
       headers: { 'Content-Type': 'application/json', ...admin, ...(data ? { 'Content-Length': Buffer.byteLength(data) } : {}) } },
       res => { let t = ''; res.on('data', c => t += c); res.on('end', () => resolve({ status: res.statusCode, data: t ? JSON.parse(t) : {} })); });
-    r.on('error', reject); r.setTimeout(5000, () => r.destroy(new Error('timeout')));
+    r.on('error', error => reject(new Error(`${method} ${p} failed: ${error.message}${serverOutput ? `; server output: ${serverOutput.trim()}` : ''}`, { cause: error })));
+    r.setTimeout(5000, () => r.destroy(new Error('timeout')));
     if (data) r.write(data); r.end();
   });
 }
@@ -65,7 +66,10 @@ function writeEnrollmentToken(token) {
 }
 function cli(args, expectFail = false) {
   try { return execFileSync('node', [AGENT, ...args], { encoding: 'utf8', env: cliEnv }); }
-  catch (e) { if (expectFail) return (e.stdout || '') + (e.stderr || ''); throw e; }
+  catch (e) {
+    if (expectFail) return (e.stdout || '') + (e.stderr || '');
+    throw new Error(`${e.message}${serverOutput ? `; server output: ${serverOutput.trim()}` : ''}`, { cause: e });
+  }
 }
 
 function waitForExit(child, timeoutMs = 5000) {

@@ -5,6 +5,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
+const { childProcessEnv } = require("../src/security/child-process");
 
 const root = path.resolve(__dirname, "..");
 const policyPath = path.join(root, "docs", "coverage-policy.json");
@@ -110,7 +111,7 @@ function main() {
   // coverage is running. Capturing c8 with spawnSync makes a multi-minute run
   // look idle and hides all progress until the process exits.
   const invocation = coverageInvocation(args);
-  const result = spawnSync(invocation.command, invocation.args, { cwd: root, stdio: "inherit", timeout: 45 * 60 * 1000, env: { ...process.env, NODE_ENV: "test" } });
+  const result = spawnSync(invocation.command, invocation.args, { cwd: root, stdio: "inherit", timeout: 45 * 60 * 1000, env: childProcessEnv({ NODE_ENV: "test" }) });
   let summary = null;
   try { summary = JSON.parse(fs.readFileSync(path.join(reportsDir, "coverage-summary.json"), "utf8")); } catch {}
   try { fs.rmSync(reportsDir, { recursive: true, force: true }); } catch (error) { console.error(`Could not remove this run's temporary coverage directory: ${error.message}`); }

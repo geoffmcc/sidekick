@@ -11,6 +11,9 @@ const { z } = require("zod");
 const { detectFormat, parseCSV } = require("../../core/format");
 const { redactSensitive } = require("../../redact");
 const { BoundedRegex } = require("../../core/bounded-regex");
+const { readTextBounded } = require("../../core/bounded-file-read");
+
+const MAX_EXTRACT_FILE_BYTES = 10 * 1024 * 1024;
 const { enforcePathPolicy } = require("../path-policy");
 
 const ajv = new Ajv({ allErrors: true, verbose: true });
@@ -70,7 +73,14 @@ async function sidekick_extract({ path: filePath, fields }) {
   if (!fs.existsSync(filePath)) {
     return { content: [{ type: "text", text: redactSensitive("File not found: " + filePath) }], isError: true };
   }
-  const content = fs.readFileSync(filePath, "utf-8");
+  let content;
+  try { content = readTextBounded(filePath, { maxBytes: MAX_EXTRACT_FILE_BYTES, requireComplete: true, noFollow: true }).content; }
+  catch (error) {
+    const message = error.code === "FILE_READ_TOO_LARGE"
+      ? `File exceeds the ${MAX_EXTRACT_FILE_BYTES}-byte extraction limit`
+      : `Unable to read file: ${error.message}`;
+    return { content: [{ type: "text", text: redactSensitive(message) }], isError: true };
+  }
   let data;
   const ext = path.extname(filePath).toLowerCase();
   try {

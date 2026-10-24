@@ -110,7 +110,9 @@ Place these files there: `sidekick_api_key`, `sidekick_agent_proxy_key`,
 `discord_webhook_url`, `slack_webhook_url`, `smtp_user`, `smtp_pass`,
 `sidekick_enroll_token`, `compute_token`, and
 `sidekick_compute_live_api_key`. The loader rejects missing, non-regular,
-oversized, symlinked, or group/world-writable files. Explicit
+oversized, symlinked, world-readable, or group/world-writable files. A
+group-readable file is accepted for deployments using a dedicated service
+group. Explicit
 `<SECRET_NAME>_FILE` paths are also supported. Raw secret values in environment
 variables are rejected; production and development runtimes require a
 configured file. The test harness may inject synthetic fixtures only for

@@ -22,6 +22,7 @@ const { z } = require("zod");
 const { requireToolExecution } = require("../read-authorization");
 const platformKernel = require("../../platform/kernel");
 const { getExecutionContext, getExecutionSource } = require("../context");
+const projectAccess = require("../../core/project-access");
 
 function canonicalProject(value) {
   return String(value || "").trim().toLowerCase().replace(/[^a-z0-9_]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 120);
@@ -40,12 +41,39 @@ function identityDetails() {
   };
 }
 
-function assertProjectAccess(row, requestedProject) {
+function assertProjectAccess(row, requestedProject, access = "read") {
+  const context = getExecutionContext();
   const current = scopedProject();
   const requested = requestedProject ? canonicalProject(requestedProject) : null;
-  if (current && requested && requested !== current) throw new Error(`Workspace project ${requested} is outside the execution project ${current}`);
-  if (current && row && row.project_id !== current) throw new Error(`Workspace project ${row.project_id} is outside the execution project ${current}`);
-  return current;
+  const rowProject = row?.project_id ? canonicalProject(row.project_id) : null;
+  if ((current && requested && requested !== current)
+    || (current && rowProject && rowProject !== current)
+    || (requested && rowProject && requested !== rowProject)) {
+    throw new Error("workspace_access_denied");
+  }
+  const target = current || requested || rowProject;
+  if (!target) throw new Error("workspace_project_scope_required");
+  const identity = context.authIdentity;
+  const permission = access === "write" ? "memory.write" : "memory.read";
+  if (!projectAccess.hasProjectPermission(
+    identity?.principal_id,
+    target,
+    permission,
+    access,
+    identity?.scopes,
+    identity?.delegation_id || identity?.delegationId || null,
+  )) throw new Error("workspace_access_denied");
+  return target;
+}
+
+function assertGlobalWorkspaceAccess(access = "read") {
+  const identity = getExecutionContext().authIdentity;
+  if (!projectAccess.hasGlobalMemoryAccess(
+    identity?.principal_id,
+    access,
+    identity?.scopes,
+    identity?.delegation_id || identity?.delegationId || null,
+  )) throw new Error("workspace_global_access_denied");
 }
 
 function textResult(text) {
@@ -62,8 +90,28 @@ async function sidekick_workspace({ action, workspace_id, project, name, config,
   try {
     switch (action) {
       case "list": {
-        const current = assertProjectAccess(null, project);
-        const workspaces = platformKernel.listProjectWorkspaces({ state, project_id: current || project, limit });
+        let workspaces;
+        if (scopedProject() || project) {
+          const target = assertProjectAccess(null, project, "read");
+          workspaces = platformKernel.listProjectWorkspaces({ state, project_id: target, limit });
+        } else {
+          const identity = getExecutionContext().authIdentity;
+          if (projectAccess.hasGlobalMemoryAccess(identity?.principal_id, "read", identity?.scopes, identity?.delegation_id || identity?.delegationId || null)) {
+            workspaces = platformKernel.listProjectWorkspaces({ state, limit });
+          } else {
+            const accessible = projectAccess.listAccessibleProjectsForPermission(identity?.principal_id, "memory.read", identity?.scopes, identity?.delegation_id || identity?.delegationId || null);
+            const remaining = limit || 200;
+            workspaces = [];
+            for (const item of accessible) {
+              if (workspaces.length >= remaining) break;
+              workspaces.push(...platformKernel.listProjectWorkspaces({
+                state,
+                project_id: item.project_id,
+                limit: remaining - workspaces.length,
+              }));
+            }
+          }
+        }
         return textResult(JSON.stringify({ count: workspaces.length, workspaces }, null, 2));
       }
       case "get": {
@@ -72,14 +120,15 @@ async function sidekick_workspace({ action, workspace_id, project, name, config,
           ? platformKernel.getProjectWorkspace(workspace_id)
           : platformKernel.getWorkspaceByProject(scopedProject() || project);
         if (!row) return errorResult(`Workspace not found: ${workspace_id || project}`);
-        assertProjectAccess(row, project);
+        try { assertProjectAccess(row, project, "read"); }
+        catch { return errorResult("Workspace not found"); }
         // row carries secret NAMES only (secret_names); values are not
         // retrievable through this tool.
         return textResult(JSON.stringify(row, null, 2));
       }
       case "create": {
         if (!project) return errorResult("project required for create");
-        assertProjectAccess(null, project);
+        assertProjectAccess(null, project, "write");
         const { ownerId, actorId } = identityDetails();
         const row = platformKernel.createProjectWorkspace({
           project_id: project,
@@ -98,7 +147,8 @@ async function sidekick_workspace({ action, workspace_id, project, name, config,
         if (!workspace_id) return errorResult("workspace_id required for update");
         const existing = platformKernel.getProjectWorkspace(workspace_id);
         if (!existing) return errorResult(`Workspace not found: ${workspace_id}`);
-        assertProjectAccess(existing);
+        try { assertProjectAccess(existing, null, "write"); }
+        catch { return errorResult("Workspace not found"); }
         const { actorId } = identityDetails();
         const updates = { source: getExecutionSource() };
         if (actorId) updates.actor_id = actorId;
@@ -113,7 +163,8 @@ async function sidekick_workspace({ action, workspace_id, project, name, config,
         if (!workspace_id) return errorResult("workspace_id required for set_secret");
         const existing = platformKernel.getProjectWorkspace(workspace_id);
         if (!existing) return errorResult(`Workspace not found: ${workspace_id}`);
-        assertProjectAccess(existing);
+        try { assertProjectAccess(existing, null, "write"); }
+        catch { return errorResult("Workspace not found"); }
         if (!secret_name) return errorResult("secret_name required for set_secret");
         if (secret_value == null || secret_value === "") return errorResult("secret_value required for set_secret");
         const { actorId } = identityDetails();
@@ -127,7 +178,8 @@ async function sidekick_workspace({ action, workspace_id, project, name, config,
         if (!secret_name) return errorResult("secret_name required for delete_secret");
         const existing = platformKernel.getProjectWorkspace(workspace_id);
         if (!existing) return errorResult(`Workspace not found: ${workspace_id}`);
-        assertProjectAccess(existing);
+        try { assertProjectAccess(existing, null, "write"); }
+        catch { return errorResult("Workspace not found"); }
         const { actorId } = identityDetails();
         const result = platformKernel.deleteWorkspaceSecret(workspace_id, secret_name, { source: getExecutionSource(), actor_id: actorId });
         if (!result.deleted) return errorResult(`Secret not found on workspace ${workspace_id}: ${secret_name}`);
@@ -140,6 +192,7 @@ async function sidekick_workspace({ action, workspace_id, project, name, config,
         // legacy plaintext. confirm attests to the operation, not to a
         // specific reviewed row set — the real run re-scans the workspaces.
         const dryRun = dry_run !== false;
+        assertGlobalWorkspaceAccess(dryRun ? "read" : "write");
         if (!dryRun && confirm !== true) {
           return errorResult("backfill_secrets with dry_run=false requires confirm:true (run the default dry_run first and review the counts)");
         }

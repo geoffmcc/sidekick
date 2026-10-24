@@ -9,6 +9,7 @@ const os = require("node:os");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { spawnSync } = require("node:child_process");
+const { childProcessEnv } = require("../src/security/child-process");
 const Parser = require("tree-sitter");
 const JavaScript = require("tree-sitter-javascript");
 
@@ -30,7 +31,7 @@ const targetedSpecs = [
   ] },
   { id: "result-contract", group: "result-contract", file: "src/tools/result.js", tests: ["test/tool-result-structure.test.js", "test/sensitive-result-boundary.test.js"], pattern: [
     { id: "partial-status-removal", name: "partial-status-removal", category: "boolean", kind: "operator", expression: "status === \"succeeded\" || status === \"partial\"", operator: "||", replacement: "&&", security: true },
-    { id: "result-bound-change", name: "result-bound-change", category: "collection-bound", kind: "literal", expression: "50", parent: "value.warnings.slice(0, 50)", replacement: "51", security: true },
+    { id: "result-bound-change", name: "result-bound-change", category: "collection-bound", kind: "literal", expression: "50", parent: "safeMetadata.warnings.slice(0, 50)", replacement: "51", security: true },
   ] },
   { id: "pack-maturity", group: "maturity", file: "src/packs/maturity.js", tests: ["test/pack-maturity.test.js"], pattern: [
     { id: "freshness-negation", name: "freshness-negation", category: "comparison", kind: "operator", expression: "now - observed > MAX_EVIDENCE_AGE_MS", operator: ">", replacement: "<=", security: false },
@@ -150,10 +151,17 @@ function applyMutation(source, mutation) {
   return { status: "applied", source: edit.source, line: source.slice(0, edit.start).split("\n").length };
 }
 
+function shouldIncludeMutationSource(relativePath) {
+  // fs.cp supplies native separators. Normalize both forms so the exclusions
+  // keep working on Windows as well as POSIX hosts.
+  const relative = String(relativePath || "").replace(/\\/g, "/");
+  return relative !== ".git" && relative !== "node_modules" && !relative.startsWith("artifacts") && !relative.startsWith("data") && !relative.startsWith("test/test-") && !relative.startsWith("test/spike-openvino-python");
+}
+
 function copySource(destination) {
   fs.cpSync(root, destination, { recursive: true, filter(source) {
     const relative = path.relative(root, source);
-    return relative !== ".git" && relative !== "node_modules" && !relative.startsWith("artifacts") && !relative.startsWith("data") && !relative.startsWith("test/test-") && !relative.startsWith("test/spike-openvino-python");
+    return shouldIncludeMutationSource(relative);
   } });
 }
 
@@ -163,7 +171,7 @@ function bounded(text, limit) { return String(text || "").slice(0, limit); }
 function executeTests(tests, cwd, policy) {
   const result = spawnSync(process.execPath, ["test/run-all.js", ...tests], {
     cwd,
-    env: { ...process.env, NODE_PATH: path.join(root, "node_modules"), NODE_ENV: "test", SIDEKICK_TEST_OVERALL_TIMEOUT_MS: String(policy.execution.overall_timeout_ms) },
+    env: childProcessEnv({ SIDEKICK_TEST_MUTATION_NODE_PATH: path.join(root, "node_modules"), NODE_ENV: "test", SIDEKICK_TEST_OVERALL_TIMEOUT_MS: String(policy.execution.overall_timeout_ms) }),
     encoding: "utf8",
     timeout: policy.execution.process_timeout_ms,
     maxBuffer: policy.output.max_bytes,
@@ -261,4 +269,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { applyMutation, buildReport, getSpecs, loadPolicy, shouldFail };
+module.exports = { applyMutation, buildReport, getSpecs, loadPolicy, shouldFail, shouldIncludeMutationSource };

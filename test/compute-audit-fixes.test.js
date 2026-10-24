@@ -154,7 +154,7 @@ async function test(name, fn) {
   console.log("\nAF.4: device-aware placement for requested_device");
 
   function enrollOpenVinoWorker(devices) {
-    const token = workerManager.createEnrollmentToken({ displayName: "device-aware", trustLevel: "trusted", maxConcurrentJobs: 1 });
+    const token = workerManager.createEnrollmentToken({ displayName: "device-aware", trustLevel: "trusted", maxConcurrentJobs: 1, allowedDataClassifications: ["public", "internal", "private"] });
     const enrolled = workerManager.enrollWorker({
       nodeId: "device-node-" + Math.random().toString(36).slice(2, 8),
       displayName: "device-aware", platform: "win32", enrollmentToken: token.token,
@@ -200,7 +200,7 @@ async function test(name, fn) {
   await test("a worker without per-model capability strings keeps legacy behaviour", async () => {
     // Bare executor declarations (legacy workers, minimal fixtures) advertise
     // no per-device strings; absence of data must not become a rejection.
-    const token = workerManager.createEnrollmentToken({ displayName: "bare", trustLevel: "trusted", maxConcurrentJobs: 1 });
+    const token = workerManager.createEnrollmentToken({ displayName: "bare", trustLevel: "trusted", maxConcurrentJobs: 1, allowedDataClassifications: ["public", "internal", "private"] });
     const enrolled = workerManager.enrollWorker({
       nodeId: "bare-node-" + Math.random().toString(36).slice(2, 8),
       displayName: "bare", platform: "win32", enrollmentToken: token.token,

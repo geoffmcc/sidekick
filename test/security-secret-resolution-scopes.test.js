@@ -14,6 +14,7 @@ process.env.NODE_ENV = "test";
 const db = require("../src/db");
 db.runPendingMigrations();
 const identity = require("../src/core/identity");
+const authentication = require("../src/core/authentication");
 const authorization = require("../src/core/authorization");
 const { encryptSecret } = require("../src/core/secret-cipher");
 const { loadSecrets, saveSecrets } = require("../src/core/secrets-store");
@@ -104,6 +105,33 @@ test("provider credential resolution preserves delegated permission limits", () 
   assert.throws(
     () => runWithContext(context, () => resolveProviderApiKey(provider)),
     error => error.code === "forbidden",
+  );
+});
+
+test("provider and connector secret use revalidate a long-lived credential after scope reduction", () => {
+  const principal = identity.createPrincipal({
+    type: "service",
+    displayName: "Synthetic provider secret client",
+    createdByPrincipalId: owner.principal_id,
+    actorIdentity: owner,
+  });
+  identity.grantPrincipalPermission(principal.principal_id, "secrets.use", owner);
+  const credential = authentication.createCredential({
+    principalId: principal.principal_id,
+    displayName: "Synthetic provider secret credential",
+    scopes: ["secrets.use"],
+    createdByPrincipalId: owner.principal_id,
+    actorContext: owner,
+  });
+  const capturedIdentity = authentication.authenticateBearerIdentity(credential.token);
+
+  db.getDb().prepare("UPDATE identity_credentials SET scopes_json = ? WHERE credential_id = ?")
+    .run(JSON.stringify([]), credential.credential.credential_id);
+  const context = executionContext(capturedIdentity);
+  assert.throws(() => runWithContext(context, () => resolveProviderApiKey(provider)), error => error.code === "forbidden");
+  assert.throws(
+    () => resolveSecretRef("secret:synthetic_provider_credential", { context }),
+    error => error.code === "credential_invalid" || error.code === "forbidden",
   );
 });
 

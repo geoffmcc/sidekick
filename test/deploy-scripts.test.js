@@ -708,6 +708,10 @@ console.log('Test 5.3: deploy.sh has git deploy logic');
     'deploy.sh should run the uploaded Git deployment helper'
   );
   assert.ok(
+    deployShContent.includes('sidekick-child-process.js') && deployShContent.includes('src/security/child-process.js'),
+    'deploy.sh should ship the shared child process policy with the standalone helper'
+  );
+  assert.ok(
     deployShContent.includes('git_mode="convert"'),
     'deploy.sh should explicitly select conversion mode for non-Git deployments'
   );
@@ -728,6 +732,10 @@ console.log('Test 5.4: deploy.ps1 has git deploy logic');
   assert.ok(
     deployPs1Content.includes('sidekick-git-deploy.js'),
     'deploy.ps1 should run the uploaded Git deployment helper'
+  );
+  assert.ok(
+    deployPs1Content.includes('sidekick-child-process.js') && deployPs1Content.includes('src\\security\\child-process.js'),
+    'deploy.ps1 should ship the shared child process policy with the standalone helper'
   );
   assert.ok(
     deployPs1Content.includes('$gitMode = "convert"'),
@@ -884,8 +892,11 @@ assert.ok(deployShContent.includes('ensure_secret_config'), 'deploy.sh should co
 assert.ok(deployPs1Content.includes('Ensure-SecretConfig'), 'deploy.ps1 should configure protected secret settings');
 assert.ok(deployShContent.includes('ensure-secret-config.sh'), 'deploy.sh should sync the secret config helper');
 assert.ok(deployPs1Content.includes('ensure-secret-config.sh'), 'deploy.ps1 should sync the secret config helper');
-assert.ok(fs.readFileSync(path.join(__dirname, '..', 'scripts', 'ensure-secret-config.sh'), 'utf8').includes('verify-runtime-secrets.js'), 'deploy secret setup must validate runtime credentials before service restart');
+assert.ok(fs.readFileSync(path.join(__dirname, '..', 'scripts', 'ensure-secret-config.sh'), 'utf8').includes('ensure-secret-config.js'), 'deploy secret setup must use the no-follow config helper');
+assert.ok(fs.readFileSync(path.join(__dirname, '..', 'scripts', 'ensure-secret-config.js'), 'utf8').includes('verify-runtime-secrets'), 'deploy secret setup must validate runtime credentials before service restart');
 assert.ok(fs.existsSync(path.join(__dirname, '..', 'scripts', 'verify-runtime-secrets.js')), 'deployment must include the required runtime-secret preflight');
+assert.ok(deployShContent.includes('scripts/ensure-secret-config.js'), 'deploy.sh SCP mode must copy the no-follow secret config helper');
+assert.ok(deployPs1Content.includes('scripts\\ensure-secret-config.js'), 'deploy.ps1 SCP mode must copy the no-follow secret config helper');
 assert.ok(deployShContent.includes('scripts/verify-runtime-secrets.js'), 'deploy.sh SCP mode must copy the runtime-secret preflight');
 assert.ok(deployPs1Content.includes('scripts\\verify-runtime-secrets.js'), 'deploy.ps1 SCP mode must copy the runtime-secret preflight');
 assert.ok(deployShContent.includes('wait_sidekick_services || exit 1'), 'deploy.sh must fail unless required services become active');
@@ -901,8 +912,8 @@ assert.ok(deployPs1Content.includes('$status.Trim() -eq "active"'), 'deploy.ps1 
 assert.ok(deployShContent.lastIndexOf('wait_sidekick_services || exit 1') < deployShContent.indexOf('=== Deploy complete ==='), 'deploy.sh must report completion only after service readiness');
 assert.ok(deployPs1Content.lastIndexOf('Wait-SidekickServices') < deployPs1Content.indexOf('=== Deploy complete ==='), 'deploy.ps1 must report completion only after service readiness');
 assert.ok(bootstrapShContent.includes('/etc/sidekick/secrets'), 'bootstrap.sh should create the protected secret directory');
-assert.ok(bootstrapShContent.includes('generate_secret_file'), 'bootstrap.sh should generate missing core secret files');
-assert.ok(bootstrapShContent.includes('chmod 600'), 'bootstrap.sh should protect generated secret files');
+assert.ok(bootstrapShContent.includes('provision-runtime-secrets.js'), 'bootstrap.sh should provision core secrets through the no-follow helper');
+assert.ok(fs.readFileSync(path.join(__dirname, '..', 'scripts', 'provision-runtime-secrets.js'), 'utf8').includes('O_NOFOLLOW'), 'runtime secret provisioning must open files without following symlinks');
 console.log('✓ both deploy routes and bootstrap configure protected secrets\n');
 
 // SUMMARY

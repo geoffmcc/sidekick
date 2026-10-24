@@ -196,6 +196,33 @@ function pathPolicyEntries(source, suffix) {
   ];
 }
 
+function hasConfiguredDeniedPaths(source = toolContext.getExecutionSource() || "unknown") {
+  return pathPolicyEntries(source, "DENIED_PATHS").length > 0;
+}
+
+function pathsOverlap(first, second) {
+  return pathContainedLexically(first, second) || pathContainedLexically(second, first);
+}
+
+// Recursive operations such as directory archiving must account for deny
+// roots anywhere in the tree before handing the directory to an external
+// utility. Check both lexical and canonical names so symlink aliases cannot
+// hide a configured deny root. An unresolvable target or policy root fails
+// closed.
+function hasDeniedPathOverlap(filePath, source = toolContext.getExecutionSource() || "unknown") {
+  const lexicalTarget = normalizePolicyPath(filePath);
+  const canonicalTarget = canonicalizePath(filePath);
+  if (canonicalTarget.error) return true;
+
+  for (const entry of pathPolicyEntries(source, "DENIED_PATHS")) {
+    const lexicalEntry = normalizePolicyPath(entry);
+    if (pathsOverlap(lexicalTarget, lexicalEntry)) return true;
+    const canonicalEntry = canonicalizePath(entry);
+    if (canonicalEntry.error || pathsOverlap(canonicalTarget.path, canonicalEntry.path)) return true;
+  }
+  return false;
+}
+
 // Containment test for a single entry. This is not an authorization check on
 // its own: it knows nothing about deny-list precedence. Call
 // getPathPolicyDecision or enforcePathPolicy to make a policy decision.
@@ -341,6 +368,8 @@ function enforcePathPolicy(filePath, operation = "access") {
 module.exports = {
   normalizePolicyPath,
   pathMatchesPolicyEntry,
+  hasConfiguredDeniedPaths,
+  hasDeniedPathOverlap,
   getPathPolicyDecision,
   enforcePathPolicy,
 };

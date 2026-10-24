@@ -5,42 +5,21 @@ const childProcess = require('child_process');
 
 const APP_DIR = process.env.SIDEKICK_DEPLOY_APP_DIR || '/home/sidekick/sidekick';
 const HOME_DIR = process.env.SIDEKICK_DEPLOY_HOME_DIR || '/home/sidekick';
-// deploy.ps1/deploy.sh copy this helper outside the repository before running
-// it. Resolve the security helper from the deployment checkout in that mode,
-// while retaining the repository-relative path for local tests and direct use.
-// During first-host conversion the checkout does not exist yet, so retain the
-// same fail-closed environment policy locally for the initial clone.
+// Deploy scripts copy this helper outside the repository before running it.
+// Resolve the shared environment policy from the deployment checkout, local
+// checkout, or the sibling file shipped with the standalone helper.
 const childProcessEnvPath = path.join(APP_DIR, 'src', 'security', 'child-process.js');
+const localChildProcessEnvPath = path.join(__dirname, '..', 'src', 'security', 'child-process.js');
+const standaloneChildProcessEnvPath = path.join(__dirname, '.sidekick-child-process.js');
 let childProcessEnv;
 if (fs.existsSync(childProcessEnvPath)) {
   childProcessEnv = require(childProcessEnvPath).childProcessEnv;
+} else if (fs.existsSync(localChildProcessEnvPath)) {
+  childProcessEnv = require(localChildProcessEnvPath).childProcessEnv;
+} else if (fs.existsSync(standaloneChildProcessEnvPath)) {
+  childProcessEnv = require(standaloneChildProcessEnvPath).childProcessEnv;
 } else {
-  const localChildProcessEnvPath = path.join(__dirname, '..', 'src', 'security', 'child-process.js');
-  if (fs.existsSync(localChildProcessEnvPath)) {
-    childProcessEnv = require(localChildProcessEnvPath).childProcessEnv;
-  } else {
-    const secretEnvKey = /(?:API[_-]?KEY|TOKEN|PASSWORD|PASSWD|PASSPHRASE|SECRET|CREDENTIAL)/i;
-    const loaderEnvKeys = new Set([
-      'BASH_ENV', 'ENV', 'NODE_OPTIONS', 'LD_PRELOAD', 'LD_LIBRARY_PATH',
-      'DYLD_INSERT_LIBRARIES', 'DYLD_LIBRARY_PATH', 'PYTHONPATH', 'PYTHONHOME',
-      'RUBYLIB', 'PERL5LIB', 'PERL5OPT', 'GIT_ASKPASS', 'GIT_PAGER',
-      'GIT_EDITOR', 'GIT_SEQUENCE_EDITOR', 'GIT_SSH_COMMAND', 'GIT_EXEC_PATH',
-      'GIT_EXTERNAL_DIFF', 'GIT_CONFIG', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM',
-      'GIT_CONFIG_NOSYSTEM', 'GIT_CONFIG_COUNT', 'PAGER', 'EDITOR', 'VISUAL'
-    ]);
-    childProcessEnv = (overrides = {}) => {
-      const env = {};
-      for (const [key, value] of Object.entries(process.env)) {
-        if (secretEnvKey.test(key) || loaderEnvKeys.has(String(key).toUpperCase()) || /(?:_FILE|_PATH)$/i.test(key) && secretEnvKey.test(key)) continue;
-        env[key] = value;
-      }
-      for (const [key, value] of Object.entries(overrides || {})) {
-        if (value == null) delete env[key];
-        else if (!secretEnvKey.test(key) && !loaderEnvKeys.has(String(key).toUpperCase())) env[key] = String(value);
-      }
-      return env;
-    };
-  }
+  throw new Error('secure child process environment helper is unavailable; refusing deployment');
 }
 const REPO_URL = 'https://github.com/geoffmcc/sidekick.git';
 const PUSH_URL = 'DISABLED';
@@ -295,6 +274,21 @@ function stopServices(result) {
   return servicesStopped(serviceStates(deploymentServices()));
 }
 
+function preflightRuntimeSecrets(result, appDir = APP_DIR, field = 'runtime_secret_preflight') {
+  const helper = path.join(appDir, 'scripts', 'ensure-secret-config.sh');
+  if (!fs.existsSync(helper)) {
+    fail(result, 'runtime secret preflight is unavailable; refusing to stop services');
+    return false;
+  }
+  const check = run('bash', [helper, appDir], { cwd: appDir });
+  result[field] = check.ok ? 'ok' : 'failed';
+  if (!check.ok) {
+    fail(result, 'runtime secret preflight failed; services were not stopped', { stderr: check.stderr });
+    return false;
+  }
+  return true;
+}
+
 function pruneDeployBackups() {
   if (!fs.existsSync(BACKUP_ROOT)) return;
   const backups = fs.readdirSync(BACKUP_ROOT, { withFileTypes: true })
@@ -372,6 +366,7 @@ function deploy() {
 
     const oldHead = result.previous_commit;
     if (result.behind > 0) {
+      if (!preflightRuntimeSecrets(result)) return result;
       servicesStoppedForBackup = true;
       if (!stopServices(result)) return fail(result, 'service stop verification failed', { services: result.stopped_services });
       try {
@@ -482,6 +477,9 @@ function convert() {
     result.dependency_install = install.ok ? 'ok' : 'failed';
     if (!install.ok) return fail(result, 'staging dependency installation failed', { stderr: install.stderr });
 
+    copyIfExists(path.join(APP_DIR, '.env'), path.join(staging, '.env'));
+    if (!preflightRuntimeSecrets(result, staging, 'staging_runtime_secret_preflight')) return result;
+
     for (const svc of SERVICES) {
       const stop = service('stop', svc);
       result.restarted_services.push({ service: svc, status: stop.ok ? 'stopped' : 'stop_failed' });
@@ -500,6 +498,9 @@ function convert() {
 
     copyIfExists(path.join(backup, '.env'), path.join(staging, '.env'));
     copyIfExists(path.join(backup, 'data'), path.join(staging, 'data'));
+    if (!preflightRuntimeSecrets(result, staging, 'staged_runtime_secret_preflight')) {
+      throw new Error('staged runtime secret preflight failed; restoring the existing installation');
+    }
     fs.chmodSync(path.join(staging, '.env'), 0o600);
     ensureComposeIdentity(path.join(staging, '.env'));
     const chown = run('chown', ['-R', 'sidekick:sidekick', staging]);

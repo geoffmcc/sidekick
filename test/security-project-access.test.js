@@ -68,6 +68,18 @@ test("project grants attenuate access and revoke immediately", () => {
   assert.match(agentSource, /taskProject && authIdentity && !projectAccess\.hasProjectPermission\(authIdentity\.principal_id, taskProject, "agent\.tasks\.read"/);
 });
 
+test("principal disablement immediately revokes access to an owned unscoped task", () => {
+  const subject = require('./helpers/authorized-identity').createHumanUser(identity, {
+    username: "disabled_task_owner",
+    password: "a sufficiently long disabled owner password",
+  });
+  const task = { actor_principal_id: subject.principal_id, project_id: null };
+  assert.equal(taskBelongsToIdentity({ principal_id: subject.principal_id, scopes: null }, task), true);
+
+  identity.setPrincipalEnabled(subject.principal_id, false, owner);
+  assert.equal(taskBelongsToIdentity({ principal_id: subject.principal_id, scopes: null }, task), false);
+});
+
 test("project access changes roll back when their authoritative audit event cannot be written", () => {
   const target = require('./helpers/authorized-identity').createHumanUser(identity, { username: "audit_atomic_target", password: "a sufficiently long target password" });
   platformKernel.registerProject({ project_id: "audit_atomic_project", owner_actor_id: owner.principal_id });
@@ -295,6 +307,44 @@ test("filesystem directory and content reads reject identityless callers before 
   assert.equal(insufficient.isError, true);
   assert.equal(insufficient.code, "forbidden", "ordinary execution scope cannot authorize a critical direct handler");
   assert.equal(fs.existsSync(writeTarget), false, "insufficient authority must be rejected before mutation");
+
+  const priorAllowedPaths = process.env.SIDEKICK_MCP_ALLOWED_PATHS;
+  process.env.SIDEKICK_MCP_ALLOWED_PATHS = dataDir;
+  try {
+    fs.writeFileSync(writeTarget, "old content", { mode: 0o640 });
+    const authorizedWrite = await dispatcher.callMcpTool("write", { path: writeTarget, content: "complete replacement" }, {
+      authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+    });
+    assert.equal(authorizedWrite.isError, undefined, "authorized writes remain available");
+    assert.equal(fs.readFileSync(writeTarget, "utf8"), "complete replacement", "the target is atomically replaced with complete content");
+    if (process.platform !== "win32") assert.equal(fs.statSync(writeTarget).mode & 0o777, 0o640, "replacement preserves the existing mode");
+
+    const symlinkTarget = path.join(dataDir, "filesystem-write-symlink-target.txt");
+    const symlink = path.join(dataDir, "filesystem-write-symlink.txt");
+    fs.writeFileSync(symlinkTarget, "target must remain unchanged");
+    let symlinkCreated = false;
+    try {
+      fs.symlinkSync(symlinkTarget, symlink, "file");
+      symlinkCreated = true;
+    } catch (error) {
+      if (!/[Pp]ermission|privilege|not supported/i.test(String(error && error.message))) throw error;
+    }
+    if (symlinkCreated) {
+      const symlinkWrite = await dispatcher.callMcpTool("write", { path: symlink, content: "must not follow link" }, {
+        authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+      });
+      assert.equal(symlinkWrite.code, "invalid_path");
+      assert.equal(fs.readFileSync(symlinkTarget, "utf8"), "target must remain unchanged");
+      const symlinkRead = await dispatcher.callMcpTool("read", { path: symlink }, {
+        authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+      });
+      assert.equal(symlinkRead.isError, true, "filesystem reads reject even allowed-root symlinks at the file-open boundary");
+      assert.doesNotMatch(JSON.stringify(symlinkRead), /target must remain unchanged/, "a path swap cannot expose the linked file contents");
+    }
+  } finally {
+    if (priorAllowedPaths === undefined) delete process.env.SIDEKICK_MCP_ALLOWED_PATHS;
+    else process.env.SIDEKICK_MCP_ALLOWED_PATHS = priorAllowedPaths;
+  }
 });
 
 test("database metadata, host scanning, and file hashing reject identityless callers", async () => {
@@ -340,6 +390,41 @@ test("direct Git handler calls require canonical dispatch even for an authorized
   assert.equal(result.code, "canonical_dispatch_required", "direct Git mutation must fail before invoking Git");
 });
 
+test("changelog refs are resolved past Git option parsing and saves reject symlinks", () => {
+  const development = require("../src/tools/families/development");
+  const descriptor = development.descriptors.find(item => item.name === "changelog");
+  assert.equal(descriptor.schema.safeParse({ action: "preview", from: "HEAD" }).success, true);
+  assert.equal(descriptor.schema.safeParse({ action: "preview", from: "x".repeat(development.MAX_CHANGELOG_REVISION_LENGTH + 1) }).success, false);
+  assert.match(development.resolveChangelogRevision(process.cwd(), "HEAD"), /^[0-9a-f]{40,64}$/i);
+
+  let revParseArgs = null;
+  const fakeHash = "a".repeat(40);
+  const resolved = development.resolveChangelogRevision(process.cwd(), "--output=/tmp/untrusted-log-output", (_program, args) => {
+    revParseArgs = args;
+    return fakeHash;
+  });
+  assert.equal(resolved, fakeHash);
+  assert.ok(revParseArgs.includes("--end-of-options"), "untrusted refs are parsed as revision data after the option boundary");
+
+  const outputPath = path.join(dataDir, "CHANGELOG.md");
+  const linkedTargetPath = path.join(dataDir, "changelog-target.md");
+  const regularPath = path.join(dataDir, "ordinary-CHANGELOG.md");
+  fs.writeFileSync(linkedTargetPath, "keep changelog target unchanged");
+  fs.symlinkSync(linkedTargetPath, outputPath);
+  const priorAllowedPaths = process.env.SIDEKICK_MCP_ALLOWED_PATHS;
+  process.env.SIDEKICK_MCP_ALLOWED_PATHS = dataDir;
+  try {
+    development.writeChangelogFile(regularPath, "authorized changelog");
+    assert.equal(fs.readFileSync(regularPath, "utf8"), "authorized changelog", "ordinary authorized changelog writes remain supported");
+    assert.throws(() => development.readChangelogFile(outputPath), /symlink/);
+    assert.throws(() => development.writeChangelogFile(outputPath, "untrusted replacement"), /symlink/);
+    assert.equal(fs.readFileSync(linkedTargetPath, "utf8"), "keep changelog target unchanged");
+  } finally {
+    if (priorAllowedPaths === undefined) delete process.env.SIDEKICK_MCP_ALLOWED_PATHS;
+    else process.env.SIDEKICK_MCP_ALLOWED_PATHS = priorAllowedPaths;
+  }
+});
+
 test("direct dependency inspection requires canonical dispatch before process inspection", async () => {
   const context = toolContext.createAgentExecutionContext({
     authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
@@ -347,6 +432,50 @@ test("direct dependency inspection requires canonical dispatch before process in
   const result = await toolContext.runWithContext(context, () => require("../src/tools/families/development").sidekick_depend({ action: "tree", type: "process", target: "1" }));
   assert.equal(result.isError, true);
   assert.equal(result.code, "canonical_dispatch_required");
+});
+
+test("dependency inspection scopes npm project paths and strips credentials from child processes", async () => {
+  const development = require("../src/tools/families/development");
+  const descriptor = development.descriptors.find(item => item.name === "depend");
+  assert.equal(descriptor.schema.safeParse({ action: "tree", type: "npm", depth: -1 }).success, false);
+  assert.equal(descriptor.schema.safeParse({ action: "tree", type: "npm", depth: 11 }).success, false);
+  assert.equal(descriptor.schema.safeParse({ action: "tree", type: "npm", target: "x".repeat(4097) }).success, false);
+  const priorAllowedPaths = process.env.SIDEKICK_MCP_ALLOWED_PATHS;
+  const priorDeniedPaths = process.env.SIDEKICK_MCP_DENIED_PATHS;
+  const priorSecret = process.env.SIDEKICK_TEST_DEPENDENCY_SECRET;
+  process.env.SIDEKICK_MCP_ALLOWED_PATHS = dataDir;
+  const blockedProjectPath = path.join(dataDir, "blocked-dependency-project");
+  process.env.SIDEKICK_MCP_DENIED_PATHS = blockedProjectPath;
+  process.env.SIDEKICK_TEST_DEPENDENCY_SECRET = "synthetic-dependency-secret";
+  try {
+    const projectPath = path.join(dataDir, "dependency-project");
+    fs.mkdirSync(projectPath, { recursive: true });
+    const resolved = toolContext.runWithContext({ source: "mcp" }, () => development.resolveNpmProjectDirectory(projectPath));
+    assert.equal(resolved, fs.realpathSync(projectPath));
+
+    let captured = null;
+    const output = development.runDependencyCommand("npm", ["ls"], { cwd: resolved }, (program, args, options) => {
+      captured = { program, args, options };
+      return "ok";
+    });
+    assert.equal(output, "ok");
+    assert.equal(captured.program, "npm");
+    assert.equal(captured.options.env.SIDEKICK_TEST_DEPENDENCY_SECRET, undefined);
+    assert.equal(captured.options.env.SIDEKICK_SECRET_KEY, undefined);
+
+    const outside = await dispatcher.callMcpTool("depend", { action: "tree", type: "npm", target: blockedProjectPath }, {
+      authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+    });
+    assert.equal(outside.isError, true, "npm cannot inspect a project outside the configured path scope");
+    assert.match(outside.content[0].text, /outside the configured read scope/);
+  } finally {
+    if (priorAllowedPaths === undefined) delete process.env.SIDEKICK_MCP_ALLOWED_PATHS;
+    else process.env.SIDEKICK_MCP_ALLOWED_PATHS = priorAllowedPaths;
+    if (priorDeniedPaths === undefined) delete process.env.SIDEKICK_MCP_DENIED_PATHS;
+    else process.env.SIDEKICK_MCP_DENIED_PATHS = priorDeniedPaths;
+    if (priorSecret === undefined) delete process.env.SIDEKICK_TEST_DEPENDENCY_SECRET;
+    else process.env.SIDEKICK_TEST_DEPENDENCY_SECRET = priorSecret;
+  }
 });
 
 test("direct runbook creation requires canonical dispatch before persistence", async () => {
@@ -670,6 +799,172 @@ test("direct media and analytics handlers require canonical dispatch", async () 
   }
 });
 
+test("DuckDB analytics disables external access before caller SQL and bounds file input", async () => {
+  const media = require("../src/tools/families/media");
+  const attackerQuery = "SELECT 1; SET enable_external_access=true";
+  const script = media.buildAnalyticsScript({ file: "private-input.csv", format: "csv", query: attackerQuery });
+  const loadIndex = script.indexOf("CREATE TABLE data");
+  const externalAccessIndex = script.indexOf('SET enable_external_access=false');
+  const lockIndex = script.indexOf('SET lock_configuration=true');
+  const callerQueryIndex = script.indexOf("cursor = con.execute(params[\"query\"])");
+  assert.ok(loadIndex >= 0 && loadIndex < externalAccessIndex, "only the explicitly selected file is loaded before external access is disabled");
+  assert.ok(externalAccessIndex < lockIndex && lockIndex < callerQueryIndex, "the external-access denial is locked before caller SQL runs");
+  assert.equal(script.includes(attackerQuery), false, "untrusted SQL is carried as base64 data, not embedded as Python source");
+
+  const descriptor = media.descriptors.find(item => item.name === "analytics");
+  assert.equal(descriptor.schema.safeParse({ query: "x".repeat(media.MAX_ANALYTICS_QUERY_CHARS + 1) }).success, false);
+  assert.equal(descriptor.schema.safeParse({ query: "SELECT 1", format: "remote" }).success, false);
+
+  const sourcePath = path.join(dataDir, "analytics-source.csv");
+  const copiedPath = path.join(dataDir, "analytics-copy.csv");
+  fs.writeFileSync(sourcePath, "value\n1\n");
+  const priorAllowedPaths = process.env.SIDEKICK_MCP_ALLOWED_PATHS;
+  process.env.SIDEKICK_MCP_ALLOWED_PATHS = dataDir;
+  try {
+    toolContext.runWithContext({ source: "mcp" }, () => media.copyAnalyticsInput(sourcePath, copiedPath));
+    assert.equal(fs.readFileSync(copiedPath, "utf8"), "value\n1\n");
+
+    const linkedInputPath = path.join(dataDir, "analytics-linked-input.csv");
+    try { fs.symlinkSync(sourcePath, linkedInputPath, "file"); }
+    catch (error) {
+      if (!["EPERM", "EACCES", "ENOTSUP"].includes(error.code)) throw error;
+    }
+    if (fs.existsSync(linkedInputPath)) {
+      const linkedCopyPath = path.join(dataDir, "analytics-linked-copy.csv");
+      toolContext.runWithContext({ source: "mcp" }, () => media.copyAnalyticsInput(linkedInputPath, linkedCopyPath));
+      assert.equal(fs.readFileSync(linkedCopyPath, "utf8"), "value\n1\n", "in-scope symlinks keep their supported behavior");
+    }
+
+    const oversizedPath = path.join(dataDir, "analytics-oversized.csv");
+    fs.closeSync(fs.openSync(oversizedPath, "w"));
+    fs.truncateSync(oversizedPath, media.MAX_ANALYTICS_FILE_BYTES + 1);
+    const oversizedCopyPath = path.join(dataDir, "analytics-oversized-copy.csv");
+    assert.throws(() => toolContext.runWithContext({ source: "mcp" }, () => media.copyAnalyticsInput(oversizedPath, oversizedCopyPath)), /exceeds/);
+  } finally {
+    if (priorAllowedPaths === undefined) delete process.env.SIDEKICK_MCP_ALLOWED_PATHS;
+    else process.env.SIDEKICK_MCP_ALLOWED_PATHS = priorAllowedPaths;
+  }
+});
+
+test("media tools reject protocol URLs and resolve only scoped regular file paths", async () => {
+  const media = require("../src/tools/families/media");
+  for (const url of ["http://127.0.0.1/latest/meta-data/", "file:///etc/passwd", "concat:/etc/passwd", "pipe:1", "data:text/plain,secret"]) {
+    assert.throws(() => media.assertLocalMediaPath(url), /local filesystem path/);
+  }
+
+  const inputPath = path.join(dataDir, "local-media-input.mp4");
+  const outputPath = path.join(dataDir, "local-media-output.mp4");
+  const outputTargetPath = path.join(dataDir, "local-media-output-target.mp4");
+  const symlinkOutputPath = path.join(dataDir, "local-media-output-link.mp4");
+  fs.writeFileSync(inputPath, "synthetic local media");
+  fs.writeFileSync(outputTargetPath, "preserve output target");
+  fs.symlinkSync(outputTargetPath, symlinkOutputPath);
+  const priorAllowedPaths = process.env.SIDEKICK_MCP_ALLOWED_PATHS;
+  process.env.SIDEKICK_MCP_ALLOWED_PATHS = dataDir;
+  try {
+    const resolvedInput = toolContext.runWithContext({ source: "mcp" }, () => media.resolveMediaInputPath(inputPath));
+    assert.equal(resolvedInput, fs.realpathSync(inputPath));
+    const resolvedOutput = toolContext.runWithContext({ source: "mcp" }, () => media.resolveMediaOutputPath(outputPath));
+    assert.equal(resolvedOutput, outputPath);
+    assert.throws(() => toolContext.runWithContext({ source: "mcp" }, () => media.resolveMediaOutputPath(symlinkOutputPath)), /symlink/);
+    assert.equal(fs.readFileSync(outputTargetPath, "utf8"), "preserve output target");
+
+    const remoteInput = await dispatcher.callMcpTool("media", { action: "info", input: "http://127.0.0.1/latest/meta-data/" }, {
+      authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+    });
+    assert.equal(remoteInput.isError, true);
+    assert.match(remoteInput.content[0].text, /URL and device protocols are not accepted/);
+    const remoteOutput = await dispatcher.callMcpTool("media", { action: "convert", input: inputPath, output: "http://attacker.invalid/upload" }, {
+      authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+    });
+    assert.equal(remoteOutput.isError, true);
+    assert.match(remoteOutput.content[0].text, /URL and device protocols are not accepted/);
+  } finally {
+    if (priorAllowedPaths === undefined) delete process.env.SIDEKICK_MCP_ALLOWED_PATHS;
+    else process.env.SIDEKICK_MCP_ALLOWED_PATHS = priorAllowedPaths;
+  }
+});
+
+test("database exports atomically replace the output leaf instead of following symlinks", () => {
+  const databaseAdmin = require("../src/tools/families/database-admin");
+  const outputPath = path.join(dataDir, "database-export.json");
+  const linkedTargetPath = path.join(dataDir, "database-export-target.json");
+  fs.writeFileSync(linkedTargetPath, "keep target unchanged");
+  fs.symlinkSync(linkedTargetPath, outputPath);
+  const priorAllowedPaths = process.env.SIDEKICK_MCP_ALLOWED_PATHS;
+  process.env.SIDEKICK_MCP_ALLOWED_PATHS = dataDir;
+  try {
+    toolContext.runWithContext({ source: "mcp" }, () => databaseAdmin.writeDatabaseExport(outputPath, "export contents"));
+    assert.equal(fs.readFileSync(linkedTargetPath, "utf8"), "keep target unchanged");
+    assert.equal(fs.readFileSync(outputPath, "utf8"), "export contents");
+    assert.equal(fs.lstatSync(outputPath).isSymbolicLink(), false);
+
+    assert.throws(
+      () => databaseAdmin.writeDatabaseExport(outputPath, "x".repeat(databaseAdmin.MAX_DATABASE_EXPORT_BYTES + 1)),
+      /exceeds/,
+    );
+  } finally {
+    if (priorAllowedPaths === undefined) delete process.env.SIDEKICK_MCP_ALLOWED_PATHS;
+    else process.env.SIDEKICK_MCP_ALLOWED_PATHS = priorAllowedPaths;
+  }
+});
+
+test("transcription job IDs cannot traverse paths and job records are principal-scoped", async () => {
+  const media = require("../src/tools/families/media");
+  const jobId = "tr_00000000-0000-4000-8000-000000000001";
+  assert.throws(() => media.transcriptionJobPath("../../sidekick.db"), /invalid transcription job ID/);
+  const activeJobs = new Map([
+    ["running", { status: "running" }],
+    ["queued", { status: "queued" }],
+    ["completed", { status: "completed" }],
+  ]);
+  assert.equal(media.countActiveTranscriptionJobs(activeJobs), media.MAX_ACTIVE_TRANSCRIPTION_JOBS);
+  assert.throws(() => media.assertTranscriptionCapacity(activeJobs), /capacity reached/);
+  activeJobs.delete("queued");
+  assert.doesNotThrow(() => media.assertTranscriptionCapacity(activeJobs));
+  const scratchOutput = fs.mkdtempSync(path.join(dataDir, "transcription-scratch-"));
+  fs.writeFileSync(path.join(scratchOutput, "raw-transcript.txt"), "synthetic transcript");
+  media.removeTranscriptionOutput(scratchOutput);
+  assert.equal(fs.existsSync(scratchOutput), false, "completed or cancelled job scratch output is removed");
+
+  const traversal = await dispatcher.callMcpTool("transcribe", { action: "status", job_id: "../../sidekick.db" }, {
+    authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+  });
+  assert.equal(traversal.isError, true);
+  assert.equal(traversal.code, "validation_failed", "untrusted job IDs must be rejected before file lookup");
+
+  media.saveTranscriptionJob({
+    job_id: jobId,
+    owner_principal_id: owner.principal_id,
+    status: "completed",
+    output: "private synthetic transcript",
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  });
+  const ownStatus = await dispatcher.callMcpTool("transcribe", { action: "status", job_id: jobId }, {
+    authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+  });
+  assert.equal(ownStatus.isError, undefined, JSON.stringify(ownStatus));
+  assert.match(ownStatus.content[0].text, /private synthetic transcript/);
+  assert.doesNotMatch(ownStatus.content[0].text, /owner_principal_id/);
+
+  const otherStatus = await dispatcher.callMcpTool("transcribe", { action: "status", job_id: jobId }, {
+    authIdentity: { principal_id: operator.principal_id, principal_type: "human" },
+  });
+  assert.equal(otherStatus.isError, true);
+  assert.equal(otherStatus.code, undefined);
+  assert.doesNotMatch(otherStatus.content[0].text, /private synthetic transcript/);
+
+  const otherCancel = await dispatcher.callMcpTool("transcribe", { action: "cancel", job_id: jobId }, {
+    authIdentity: { principal_id: operator.principal_id, principal_type: "human" },
+  });
+  assert.equal(otherCancel.isError, true);
+  const ownerAfterDeniedCancel = await dispatcher.callMcpTool("transcribe", { action: "status", job_id: jobId }, {
+    authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+  });
+  assert.match(ownerAfterDeniedCancel.content[0].text, /"status":\s*"completed"/);
+});
+
 test("database metadata inspection uses its dedicated scoped permission", async () => {
   for (const name of ["db_schema", "db_stats"]) {
     const descriptor = tools.getBuiltinRegistry().get(name);
@@ -983,6 +1278,29 @@ test("dispatcher requires an attributable principal for every non-low-risk opera
   });
   assert.equal(authorized.isError, undefined, "the authenticated owner reaches the authorized handler");
   assert.match(authorized.content[0].text, /identity_ok/);
+});
+
+test("project registry reads require memory authority and filter by current project membership", async () => {
+  const anonymous = await dispatcher.callMcpTool("project_registry", { action: "list" });
+  assert.equal(anonymous.isError, true);
+  assert.equal(anonymous.code, "unauthenticated");
+
+  const operatorContext = { authIdentity: { principal_id: operator.principal_id, principal_type: "human" } };
+  const listing = await dispatcher.callMcpTool("project_registry", { action: "list" }, operatorContext);
+  assert.equal(listing.isError, undefined);
+  const listedProjects = JSON.parse(listing.content[0].text).projects;
+  assert.deepEqual(listedProjects.map(project => project.project_id), ["memory_a"]);
+  assert.doesNotMatch(listing.content[0].text, /Project B private/);
+
+  const ownProject = await dispatcher.callMcpTool("project_registry", { action: "get", project: "memory_a" }, operatorContext);
+  assert.equal(ownProject.isError, undefined);
+  const foreignProject = await dispatcher.callMcpTool("project_registry", { action: "get", project: "memory_b" }, operatorContext);
+  assert.equal(foreignProject.isError, true);
+  assert.equal(foreignProject.code, "project_access_denied");
+  assert.doesNotMatch(foreignProject.content?.[0]?.text || "", /Project B private/);
+  const foreignSources = await dispatcher.callMcpTool("project_registry", { action: "sources", project: "memory_b" }, operatorContext);
+  assert.equal(foreignSources.isError, true);
+  assert.equal(foreignSources.code, "project_access_denied");
 });
 
 test("canonical memory dispatcher blocks cross-project reads before returning content", async () => {

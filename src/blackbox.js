@@ -10,6 +10,7 @@ const dbStore = require("./db");
 const platformKernel = require("./platform/kernel");
 const { createBlackboxStorage } = require("./blackbox/storage");
 const { createBlackboxQuery } = require("./blackbox/query");
+const { readTextBounded, MAX_BOUNDED_FILE_READ_BYTES } = require("./core/bounded-file-read");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const LEGACY_BLACKBOX_FILE = path.join(DATA_DIR, "blackbox.json");
@@ -22,6 +23,7 @@ const DEFAULT_DAILY_LIMIT = Number(process.env.SIDEKICK_BLACKBOX_DAILY_LIMIT || 
 const DEFAULT_MAX_INCIDENTS = Number(process.env.SIDEKICK_BLACKBOX_MAX_INCIDENTS || 500);
 const DEFAULT_MAX_BYTES = Number(process.env.SIDEKICK_BLACKBOX_MAX_BYTES || 512 * 1024 * 1024);
 const SCHEMA_VERSION = 11;
+const MAX_LEGACY_METADATA_BYTES = 10 * 1024 * 1024;
 const CAPTURE_STATES = ["queued", "capturing", "completed", "partial", "cancelled", "timed_out", "failed_preflight", "blocked", "no_evidence"];
 
 fs.mkdirSync(BLACKBOX_DIR, { recursive: true, mode: 0o750 });
@@ -477,8 +479,16 @@ function migrateLegacy() {
   const migrationFlag = db.prepare("SELECT value FROM meta WHERE key = 'blackbox_legacy_migrated'").get();
   const errors = [];
   let legacy;
+  let legacyContent;
   try {
-    legacy = JSON.parse(fs.readFileSync(LEGACY_BLACKBOX_FILE, "utf8"));
+    const metadataStat = fs.lstatSync(LEGACY_BLACKBOX_FILE);
+    if (metadataStat.isSymbolicLink() || !metadataStat.isFile()) throw new Error("Legacy metadata must be a regular file");
+    legacyContent = readTextBounded(LEGACY_BLACKBOX_FILE, {
+      maxBytes: MAX_LEGACY_METADATA_BYTES,
+      requireComplete: true,
+      noFollow: true,
+    }).content;
+    legacy = JSON.parse(legacyContent);
   } catch (error) {
     errors.push(`Failed to parse legacy metadata: ${error.message}`);
     db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('blackbox_legacy_migration_errors', ?)").run(json(errors));
@@ -487,13 +497,24 @@ function migrateLegacy() {
   if (!migrationFlag) {
     try {
       const backupPath = `${LEGACY_BLACKBOX_FILE}.bak-${Date.now()}`;
-      fs.copyFileSync(LEGACY_BLACKBOX_FILE, backupPath);
+      fs.writeFileSync(backupPath, legacyContent, { encoding: "utf8", mode: 0o600, flag: "wx" });
       db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('blackbox_legacy_backup', ?)").run(backupPath);
     } catch (error) {
       errors.push(`Failed to back up legacy metadata: ${error.message}`);
     }
   }
   const incidents = legacy && typeof legacy === "object" ? legacy.incidents || {} : {};
+  let legacyPayloadRoot = null;
+  try {
+    const candidateRoot = fs.realpathSync(LEGACY_BLACKBOX_DIR);
+    const dataRoot = fs.realpathSync(DATA_DIR);
+    if (candidateRoot !== dataRoot && !candidateRoot.startsWith(dataRoot + path.sep)) {
+      throw new Error("Legacy payload directory resolves outside the data directory");
+    }
+    legacyPayloadRoot = candidateRoot;
+  } catch (error) {
+    if (error.code !== "ENOENT") errors.push(`Legacy payload directory is unavailable: ${error.message}`);
+  }
   let imported = 0;
   const ts = nowIso();
   const insertIncident = db.prepare(`
@@ -519,16 +540,40 @@ function migrateLegacy() {
       errors.push(`Malformed legacy incident entry: ${id}`);
       continue;
     }
+    try {
+      safeId(id, "legacy incident id");
+      if (!/^[A-Za-z0-9_.-]{1,128}$/.test(id) || id === "." || id === "..") throw new Error("Invalid legacy incident id");
+    } catch {
+      errors.push("Rejected legacy incident with an unsafe id");
+      continue;
+    }
     const capturedAt = incident.captured ? new Date(incident.captured).toISOString() : ts;
     const expiresAt = expiresFor("standard", capturedAt, false, "closed");
-    const payloadPath = path.join(LEGACY_BLACKBOX_DIR, id);
+    const payloadPath = path.resolve(LEGACY_BLACKBOX_DIR, id);
+    const lexicalPayloadRoot = path.resolve(LEGACY_BLACKBOX_DIR);
+    if (payloadPath === lexicalPayloadRoot || !payloadPath.startsWith(lexicalPayloadRoot + path.sep)) {
+      errors.push(`Rejected legacy payload path for incident ${id}`);
+      state = "partial";
+      failedCount = 1;
+      continue;
+    }
     let payload = "";
     let artifact = null;
     let state = "completed";
     let failedCount = 0;
-    if (fs.existsSync(payloadPath)) {
+    if (legacyPayloadRoot && fs.existsSync(payloadPath)) {
       try {
-        payload = fs.readFileSync(payloadPath, "utf8");
+        const payloadStat = fs.lstatSync(payloadPath);
+        if (payloadStat.isSymbolicLink() || !payloadStat.isFile()) throw new Error("Legacy payload must be a regular file");
+        const resolvedPayload = fs.realpathSync(payloadPath);
+        if (resolvedPayload !== legacyPayloadRoot && !resolvedPayload.startsWith(legacyPayloadRoot + path.sep)) {
+          throw new Error("Legacy payload escaped its storage directory");
+        }
+        payload = readTextBounded(payloadPath, {
+          maxBytes: MAX_BOUNDED_FILE_READ_BYTES,
+          requireComplete: true,
+          noFollow: true,
+        }).content;
         artifact = writeArtifact(id, `${id}_legacy_capture`, "legacy_bundle", "stdout", payload);
       } catch (error) {
         errors.push(`Failed to import legacy payload ${id}: ${error.message}`);

@@ -5,7 +5,7 @@ const test = require("node:test");
 const { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } = require("node:fs");
 const { tmpdir } = require("node:os");
 const path = require("node:path");
-const { applyMutation, buildReport, getSpecs, loadPolicy, shouldFail } = require("../scripts/test-mutation");
+const { applyMutation, buildReport, getSpecs, loadPolicy, shouldFail, shouldIncludeMutationSource } = require("../scripts/test-mutation");
 const { coverageInvocation, coveragePaths, evaluatePolicy, loadPolicy: loadCoveragePolicy } = require("../scripts/test-coverage");
 const { testResultPath, writeTestResult } = require("../scripts/run-tests");
 const { classifyPath, importSpecifiers, runChangedTests, selectChangedTests } = require("../scripts/test-changed");
@@ -39,6 +39,12 @@ test("mutation inventory uses structured AST regions and covers policy categorie
   assert.ok(mutations.every(mutation => mutation.kind && mutation.expression && Object.hasOwn(mutation, "replacement")));
   for (const category of policy.required_categories) assert.ok(mutations.some(mutation => mutation.category === category), `missing category ${category}`);
   assert.equal(applyMutation("const value = left && right;", { kind: "operator", expression: "left && right", operator: "&&", replacement: "||" }).status, "applied");
+});
+
+test("mutation scratch copies normalize Windows fixture paths before applying exclusions", () => {
+  assert.equal(shouldIncludeMutationSource(String.raw`test\test-data-compute-protocol\agent-worker-credential.json`), false);
+  assert.equal(shouldIncludeMutationSource(String.raw`src\tools\result.js`), true);
+  assert.equal(shouldIncludeMutationSource("test/security/fixture.test.js"), true);
 });
 
 test("false-positive mutation outcomes are not assertion kills", () => {

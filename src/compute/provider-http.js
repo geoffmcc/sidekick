@@ -37,6 +37,19 @@ async function requestJson({ endpoint, path, method = "POST", headers = {}, body
       headers: requestHeaders,
       ...(isHttps ? { servername: target.hostname } : {}),
     }, (res) => {
+      if (res.statusCode >= 400) {
+        const status = Number.isInteger(res.statusCode) ? res.statusCode : 500;
+        const message = status === 429 && rateLimitError
+          ? rateLimitError
+          : `${errorPrefix} request failed (HTTP ${status})`;
+        const error = Object.assign(new Error(message), { code: `HTTP_${status}` });
+        // Provider response bodies are untrusted and can echo credentials or
+        // include arbitrary diagnostics. Drain without retaining or exposing
+        // the body, and keep only the protocol status in the error.
+        res.resume();
+        reject(error);
+        return;
+      }
       let data = "";
       let bytes = 0;
       res.on("data", chunk => {
@@ -49,15 +62,6 @@ async function requestJson({ endpoint, path, method = "POST", headers = {}, body
       });
       res.on("end", () => {
         if (bytes > MAX_RESPONSE_BYTES) return;
-        if (res.statusCode === 429 && rateLimitError) return reject(new Error(rateLimitError));
-        if (res.statusCode >= 400) {
-          let detail = data.substring(0, 200);
-          try {
-            const parsed = JSON.parse(data);
-            detail = parsed.error?.message || parsed.error || parsed.message || detail;
-          } catch {}
-          return reject(new Error(`${errorPrefix} ${res.statusCode}: ${detail}`));
-        }
         try { resolve(JSON.parse(data)); }
         catch { reject(new Error(`${errorPrefix} parse error`)); }
       });

@@ -26,6 +26,14 @@ async function main() {
     assert.strictEqual(pinned.address, "93.184.216.34", "caller must receive the validated address to pin");
     assert.strictEqual(pinned.url.hostname, "example.com", "original hostname must remain available for Host/SNI");
 
+    dns.promises.lookup = async () => [{ address: "2001:db8::1", family: 6 }];
+    const documentationRange = await outbound.resolveOutboundUrl("https://special-purpose-fixture.example/", "url");
+    assert.equal(documentationRange.code, "network_scope_required", "DNS-resolved non-global special-purpose destinations must require an explicit network scope");
+
+    dns.promises.lookup = async () => [{ address: "224.0.0.1", family: 4 }];
+    const multicast = await outbound.resolveOutboundUrl("https://multicast-fixture.example/", "url", { allowPrivate: true });
+    assert.match(multicast.refusal, /non-unicast/i, "DNS-resolved multicast must be refused even with private access enabled");
+
     process.env.SIDEKICK_ALLOW_PRIVATE_FETCH = "true";
     dns.promises.lookup = async () => [{ address: "169.254.169.254", family: 4 }];
     const metadata = await outbound.resolveOutboundUrl("https://metadata.example/", "url");

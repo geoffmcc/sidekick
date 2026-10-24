@@ -3,6 +3,9 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const childProcess = require("node:child_process");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 const originalExecFileSync = childProcess.execFileSync;
 const calls = [];
 let failProbe = false;
@@ -41,4 +44,24 @@ test("media hardware probes receive the filtered child environment", () => {
     if (previous === undefined) delete process.env[key];
     else process.env[key] = previous;
   }
+});
+
+test("transcription output reads are bounded and report truncation", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-transcript-read-"));
+  const file = path.join(root, "transcript.txt");
+  try {
+    fs.writeFileSync(file, "x".repeat(128));
+    assert.equal(media.readTranscriptionText(file, 16), `${"x".repeat(16)}\n[transcript truncated at 16 bytes]`);
+    fs.writeFileSync(file, "small transcript");
+    assert.equal(media.readTranscriptionText(file, 32), "small transcript");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("transcription outputs are confined to each invocation's private directory", () => {
+  const root = path.join(os.tmpdir(), "sidekick-private-transcription-fixture");
+  assert.equal(media.transcriptionOutputPath("whisper.cpp", "recording.wav", root), path.join(root, "transcript.txt"));
+  assert.equal(media.transcriptionOutputPath("faster-whisper", "recording.wav", root), path.join(root, "recording.txt"));
+  assert.equal(path.dirname(media.transcriptionOutputPath("whisper", "..\\outside.wav", root)), root);
 });

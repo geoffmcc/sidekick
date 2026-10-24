@@ -136,7 +136,7 @@ async function captureDownload(session, download, { downloadPathTimeoutMs = DOWN
   const config = browserConfig();
   const entry = {
     at: new Date().toISOString(),
-    url: String(download.url() || "").slice(0, 500),
+    url: egress.safeEvidenceTarget(String(download.url() || ""), "http"),
     suggested_filename: safeDownloadFilename(download.suggestedFilename()),
     status: "pending",
   };
@@ -150,10 +150,10 @@ async function captureDownload(session, download, { downloadPathTimeoutMs = DOWN
         await download.cancel();
         cancellation = "completed";
       } catch (error) {
-        cancellation = `failed: ${String(error.message || error).slice(0, 200)}`;
+        cancellation = `failed: ${egress.redactDiagnosticUrls(String(error.message || error)).slice(0, 200)}`;
       }
       const failure = await diagnosticDownloadFailure(download);
-      const failureText = failure.timeout ? "unavailable (failure() did not answer)" : JSON.stringify(failure.value);
+      const failureText = failure.timeout ? "unavailable (failure() did not answer)" : egress.redactDiagnosticUrls(JSON.stringify(failure.value));
       entry.status = "failed";
       entry.error = `download did not produce a file within ${downloadPathTimeoutMs}ms diagnostic bound; cancellation=${cancellation}; failure=${failureText}; url=${entry.url}; suggested_filename=${entry.suggested_filename}; session_warnings=${JSON.stringify(session.warnings.slice(-5))}`;
       return;
@@ -161,7 +161,7 @@ async function captureDownload(session, download, { downloadPathTimeoutMs = DOWN
     const tempPath = result.path;
     if (!tempPath) {
       entry.status = "failed";
-      entry.error = String(await download.failure() || "download produced no file");
+      entry.error = egress.redactDiagnosticUrls(String(await download.failure() || "download produced no file"));
       return;
     }
     // Size is enforced post-write: Chromium exposes no pre-download byte cap
@@ -194,7 +194,7 @@ async function captureDownload(session, download, { downloadPathTimeoutMs = DOWN
     try { await download.delete(); } catch { /* temp cleanup */ }
   } catch (error) {
     entry.status = "failed";
-    entry.error = String(error.message || error).slice(0, 300);
+    entry.error = egress.redactDiagnosticUrls(String(error.message || error)).slice(0, 300);
   }
 }
 
@@ -240,6 +240,7 @@ async function openSession(options = {}, executionContext = null) {
     id,
     label: options.label ? String(options.label).slice(0, 120) : null,
     project: executionContext?.project || options.project || null,
+    principalId: executionContext?.authIdentity?.principal_id || null,
     createdAt: Date.now(),
     lastUsedAt: Date.now(),
     expiresAt: Date.now() + config.sessionTtlMs,
@@ -306,7 +307,7 @@ async function openSession(options = {}, executionContext = null) {
       if (refusal) {
         record(session.blockedRequests, {
           kind: "route",
-          target: String(url).slice(0, 500),
+          target: egress.safeEvidenceTarget(url, "http"),
           reason: refusal,
           at: new Date().toISOString(),
         });
@@ -321,7 +322,7 @@ async function openSession(options = {}, executionContext = null) {
         if (refusal) {
           record(session.blockedRequests, {
             kind: "websocket",
-            target: String(ws.url()).slice(0, 500),
+            target: egress.safeEvidenceTarget(ws.url(), "http"),
             reason: refusal,
             at: new Date().toISOString(),
           });
@@ -348,9 +349,17 @@ async function openSession(options = {}, executionContext = null) {
   }
 }
 
-function getSession(id, { project = null } = {}) {
+function getSession(id, { project = null, principalId = null } = {}) {
   const session = sessions.get(String(id || ""));
   if (!session || session.closed) {
+    const error = new Error(`No open browser session "${id}". Use action="open" first, or action="list" to see sessions.`);
+    error.code = "browser_session_not_found";
+    throw error;
+  }
+  // Browser contexts hold remote authentication state. Bind them to the
+  // authenticated principal that opened them; project labels alone are
+  // caller-controlled and cannot authorize another principal to reuse a tab.
+  if (session.principalId !== (principalId || null)) {
     const error = new Error(`No open browser session "${id}". Use action="open" first, or action="list" to see sessions.`);
     error.code = "browser_session_not_found";
     throw error;
@@ -436,14 +445,16 @@ async function closeAllSessions({ reason = "shutdown" } = {}) {
 // own project's sessions plus unscoped ones; an unscoped caller sees only
 // unscoped sessions. This prevents cross-tenant session-id/metadata disclosure
 // (session ids are otherwise unguessable, and `list` must not defeat that).
-function listSessions({ project = null } = {}) {
+function listSessions({ project = null, principalId = null } = {}) {
   return [...sessions.values()]
+    .filter((session) => session.principalId === (principalId || null))
     .filter((session) => !session.project || session.project === project)
     .map(sessionSummary);
 }
 
-function sessionCount() {
-  return sessions.size;
+function sessionCount({ project = null, principalId = null } = {}) {
+  return [...sessions.values()].filter(session => session.principalId === (principalId || null))
+    .filter(session => !session.project || session.project === project).length;
 }
 
 /** Track a secret used in this session so outputs can be scrubbed. */

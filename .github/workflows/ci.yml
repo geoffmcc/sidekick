@@ -233,7 +233,8 @@ jobs:
         run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
       - name: Require a stable package lock
         run: git diff --exit-code -- package-lock.json
-      - run: npm audit --omit=dev --audit-level=moderate
+      - name: Audit production and CI dependencies
+        run: npm audit --audit-level=moderate
       - name: Generate CycloneDX software bill of materials
         run: npm sbom --package-lock-only --sbom-format=cyclonedx --sbom-type=application > sidekick.cdx.json
       - name: Validate generated software bill of materials

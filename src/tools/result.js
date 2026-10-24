@@ -31,10 +31,16 @@ function sanitizeText(value) {
 }
 
 function redactResultValue(value, key = "") {
-  // Status metadata such as credentialState and hasCredential is not secret;
-  // only redact fields that carry the credential itself.
-  const metadataKey = /(?:state|status|type|id|at)$/i.test(key) || /^has[A-Z]/.test(key);
-  if (isSensitiveKey(key) && !metadataKey) return "[REDACTED]";
+  // Preserve only known non-secret credential metadata. A broad suffix rule
+  // (e.g. every key ending in `state` or `id`) lets attacker-controlled result
+  // fields such as secretStatus/privateKeyId bypass sensitive-key redaction.
+  const normalizedKey = String(key || "").normalize("NFKC").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const safeCredentialState = normalizedKey === "credentialstate"
+    && ["active", "revoked", "pending", "expired", "missing", "unknown", "unavailable", "invalid", "configured"].includes(String(value).toLowerCase());
+  const safeCredentialTimestamp = ["credentialrotatedat", "credentialrevokedat"].includes(normalizedKey)
+    && (value === null || (typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:?\d{2})$/.test(value)));
+  const safePresenceFlag = normalizedKey.startsWith("has") && typeof value === "boolean";
+  if (isSensitiveKey(key) && !safeCredentialState && !safeCredentialTimestamp && !safePresenceFlag) return "[REDACTED]";
   if (Array.isArray(value)) return value.map(item => redactResultValue(item));
   if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([childKey, childValue]) => [childKey, redactResultValue(childValue, childKey)]));
   return typeof value === "string" ? redactSensitive(value) : value;
@@ -55,67 +61,70 @@ function textResult(text, metadata = {}) {
 
 function errorResult(error, code = "handler_error", metadata = {}) {
   const safeMessage = sanitizeText(error && error.message ? error.message : String(error || "Unknown error"));
+  const safeMetadata = redactResultValue(metadata);
+  const safeCode = typeof code === "string" ? redactSensitive(code) : code;
   const definition = DEFINITIONS[code];
-  const status = canonicalStatus(metadata.status || STATUS_BY_CODE[code], code === "approval_required" ? "approval_required" : "failed");
+  const status = canonicalStatus(safeMetadata.status || STATUS_BY_CODE[code], code === "approval_required" ? "approval_required" : "failed");
   return {
     content: [{ type: "text", text: code === "handler_error" ? "Error: " + safeMessage : safeMessage }],
     isError: true,
-    code,
+    code: safeCode,
     status,
     result_status: status,
-    httpStatus: metadata.httpStatus || definition?.[0],
-    retryable: metadata.retryable ?? definition?.[1] ?? false,
-    retry_safe: metadata.retry_safe ?? metadata.retryable ?? definition?.[1] ?? false,
-    subsystem: metadata.subsystem || "platform",
-    correlationId: metadata.correlationId || null,
-    details: metadata.details && typeof metadata.details === "object" ? metadata.details : {},
-    approvalRequired: metadata.approvalRequired,
-    approvalId: metadata.approvalId,
-    timedOut: metadata.timedOut,
-    cancelled: metadata.cancelled,
-    operationMayContinue: metadata.operationMayContinue,
-    operationId: metadata.operationId,
-    idempotencyKey: metadata.idempotencyKey,
-    evidence_refs: Array.isArray(metadata.evidence_refs) ? metadata.evidence_refs.slice(0, 100) : [],
-    warnings: Array.isArray(metadata.warnings) ? metadata.warnings.slice(0, 50) : [],
-    limitations: Array.isArray(metadata.limitations) ? metadata.limitations.slice(0, 50) : [],
-    dependency_results: Array.isArray(metadata.dependency_results) ? metadata.dependency_results.slice(0, 50) : [],
-    approval_state: metadata.approval_state || (status === "approval_required" ? "required" : "not_required"),
-    partial_completion: metadata.partial_completion || null,
-    recovery: metadata.recovery || null,
-    auditFailed: metadata.auditFailed,
+    httpStatus: safeMetadata.httpStatus || definition?.[0],
+    retryable: safeMetadata.retryable ?? definition?.[1] ?? false,
+    retry_safe: safeMetadata.retry_safe ?? safeMetadata.retryable ?? definition?.[1] ?? false,
+    subsystem: safeMetadata.subsystem || "platform",
+    correlationId: safeMetadata.correlationId || null,
+    details: safeMetadata.details && typeof safeMetadata.details === "object" ? safeMetadata.details : {},
+    approvalRequired: safeMetadata.approvalRequired,
+    approvalId: safeMetadata.approvalId,
+    timedOut: safeMetadata.timedOut,
+    cancelled: safeMetadata.cancelled,
+    operationMayContinue: safeMetadata.operationMayContinue,
+    operationId: safeMetadata.operationId,
+    idempotencyKey: safeMetadata.idempotencyKey,
+    evidence_refs: Array.isArray(safeMetadata.evidence_refs) ? safeMetadata.evidence_refs.slice(0, 100) : [],
+    warnings: Array.isArray(safeMetadata.warnings) ? safeMetadata.warnings.slice(0, 50) : [],
+    limitations: Array.isArray(safeMetadata.limitations) ? safeMetadata.limitations.slice(0, 50) : [],
+    dependency_results: Array.isArray(safeMetadata.dependency_results) ? safeMetadata.dependency_results.slice(0, 50) : [],
+    approval_state: safeMetadata.approval_state || (status === "approval_required" ? "required" : "not_required"),
+    partial_completion: safeMetadata.partial_completion || null,
+    recovery: safeMetadata.recovery || null,
+    auditFailed: safeMetadata.auditFailed,
   };
 }
 
 function structuredResult(payload, metadata = {}) {
   const value = payload && typeof payload === "object" && !Array.isArray(payload) ? payload : {};
-  const explicitStatus = value.result_status || value.status || value.state;
-  const status = canonicalStatus(explicitStatus, value.ok === false ? "failed" : "succeeded");
+  const safeValue = redactResultValue(value);
+  const explicitStatus = safeValue.result_status || safeValue.status || safeValue.state;
+  const status = canonicalStatus(explicitStatus, safeValue.ok === false ? "failed" : "succeeded");
   // Preserve an established domain lifecycle label (for example
   // `task_runnable`) on `status`; `result_status` is the stable execution
   // classification consumed by generic callers.
-  const exposedStatus = explicitStatus && !RESULT_STATUSES.includes(String(explicitStatus).toLowerCase()) && value.ok !== false
-    ? explicitStatus
+  const exposedStatus = explicitStatus && !RESULT_STATUSES.includes(String(explicitStatus).toLowerCase()) && safeValue.ok !== false
+    ? redactSensitive(String(explicitStatus))
     : status;
   const ok = status === "succeeded" || status === "partial";
   return {
-    ...value,
+    ...safeValue,
     // `ok` is execution success. A domain assertion may be false while the
     // assertion operation itself succeeded; callers should inspect
     // `finding_ok` in that explicit-success shape.
     ok: explicitStatus && ok ? true : value.ok === undefined ? ok : value.ok === true && ok,
-    ...(explicitStatus && ok && value.ok === false ? { finding_ok: false } : {}),
+    ...(explicitStatus && ok && safeValue.ok === false ? { finding_ok: false } : {}),
     status: exposedStatus,
     result_status: status,
-    code: value.code || metadata.code || (status === "succeeded" ? null : `result_${status}`),
-    retry_safe: value.retry_safe ?? value.retryable ?? metadata.retry_safe ?? false,
-    evidence_refs: Array.isArray(value.evidence_refs) ? value.evidence_refs.slice(0, 100) : [],
-    warnings: Array.isArray(value.warnings) ? value.warnings.slice(0, 50) : [],
-    limitations: Array.isArray(value.limitations) ? value.limitations.slice(0, 50) : [],
-    dependency_results: Array.isArray(value.dependency_results) ? value.dependency_results.slice(0, 50) : [],
-    approval_state: value.approval_state || (status === "approval_required" ? "required" : "not_required"),
-    partial_completion: value.partial_completion || (status === "partial" ? { completed: true } : null),
-    recovery: value.recovery || value.next_action || null,
+    code: redactSensitive(String(value.code || metadata.code || (status === "succeeded" ? "" : `result_${status}`))) || null,
+    retry_safe: safeValue.retry_safe ?? safeValue.retryable ?? metadata.retry_safe ?? false,
+    evidence_refs: Array.isArray(safeValue.evidence_refs) ? safeValue.evidence_refs.slice(0, 100) : [],
+    warnings: Array.isArray(safeValue.warnings) ? safeValue.warnings.slice(0, 50) : [],
+    limitations: Array.isArray(safeValue.limitations) ? safeValue.limitations.slice(0, 50) : [],
+    dependency_results: Array.isArray(safeValue.dependency_results) ? safeValue.dependency_results.slice(0, 50) : [],
+    approval_state: safeValue.approval_state || (status === "approval_required" ? "required" : "not_required"),
+    partial_completion: safeValue.partial_completion || (status === "partial" ? { completed: true } : null),
+    recovery: safeValue.recovery || safeValue.next_action || null,
   };
 }
 
@@ -135,13 +144,13 @@ function normalizeResult(result, { allowSensitiveOnce = false } = {}) {
     const payload = decodeStructuredContent(result);
     if (payload) {
       const normalized = structuredResult(payload, result);
-      return { ...result, ...normalized, ...(result.isError || !normalized.ok ? { isError: true } : {}), content: sanitizeContent(result.content) };
+      return { ...redactResultValue(result), ...normalized, ...(result.isError || !normalized.ok ? { isError: true } : {}), content: sanitizeContent(result.content) };
     }
     const canonical = result.isError ? canonicalStatus(result.status, "failed") : "succeeded";
     const exposedStatus = !result.isError && result.status && !RESULT_STATUSES.includes(String(result.status).toLowerCase())
-      ? result.status
+      ? redactSensitive(String(result.status))
       : canonical;
-    return { ...result, ok: !result.isError, status: exposedStatus, result_status: canonical, retry_safe: result.retry_safe ?? result.retryable ?? false, content: sanitizeContent(result.content) };
+    return { ...redactResultValue(result), ok: !result.isError, status: exposedStatus, result_status: canonical, retry_safe: result.retry_safe ?? result.retryable ?? false, content: sanitizeContent(result.content) };
   }
   if (result && result.isError) return { ...result, ...structuredResult(result, result), isError: true, content: sanitizeContent(result.content) };
   const serialized = typeof result === "string" ? result : JSON.stringify(result);

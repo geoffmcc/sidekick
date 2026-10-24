@@ -140,7 +140,15 @@ test('credential ACL grants LocalSystem read so the service can start', () => {
   assert.ok(/\/inheritance:r/.test(body), 'must still drop inherited ACEs');
   assert.ok(/WHOAMI/.test(body) && /\/user/.test(body) && /\*\$\{sid\}:F/.test(body), 'must grant the effective process token SID full control');
   assert.ok(/sid !== "S-1-5-18"/.test(body), 'must not replace LocalSystem full control with a later read-only ACE');
-  assert.ok(/Unable to apply the current process ACL/.test(body), 'must fail closed when the credential ACL cannot be secured');
+  assert.ok(/Unable to secure the worker credential file/.test(body), 'must fail closed when the credential ACL cannot be secured');
+  assert.ok(/verifyWindowsAcl\(credPath\)/.test(body) && /lstatSync\(credPath\)/.test(body),
+    'must reject reparse points and verify Windows ACLs before loading a credential');
+  assert.ok(/MAX_CREDENTIAL_BYTES = 16 \* 1024/.test(body) && /fstatSync\(fd\)/.test(body) && /bytesRead > MAX_CREDENTIAL_BYTES/.test(body),
+    'credential loading must use a bounded read and verify the opened file identity');
+  assert.ok(/applyWindowsDirectoryAcl\(dir\)/.test(body) && /lstatSync\(directoryPath\)/.test(body),
+    'must secure the dedicated credential directory and reject reparse-point directories');
+  assert.ok(/applyWindowsAcl\(tempPath\)/.test(body) && body.indexOf('applyWindowsAcl(tempPath)') < body.indexOf('JSON.stringify(payload'),
+    'must secure the temporary file before writing secret bytes');
 });
 test('enroll verifies an existing credential instead of silently keeping it', () => {
   const body = read(path.join(ROOT, 'src', 'compute', 'worker-agent.js'));
@@ -161,6 +169,27 @@ test('windows installer refuses a non-admin-writable node.exe', () => {
     'read/execute rights must not be flagged as unsafe (every ACL grants them)');
   assert.ok(/ChangePermissions/.test(rights[1]) && /TakeOwnership/.test(rights[1]),
     'must catch ACL-rewrite rights, not just direct writes');
+});
+test('windows installer protects the complete LocalSystem executable and config trees', () => {
+  const body = read(path.join(PKG, 'install-windows.ps1'));
+  assert.ok(/Get-NonAdminWriters -Path \$InstallDir -IncludeDescendants/.test(body),
+    'must inspect every executable and directory under the service install root');
+  assert.ok(/non-administrator \$\(\$acl\.Owner\)/.test(body),
+    'must reject files or directories owned by an untrusted principal');
+  assert.ok(/UnsafeAncestorRights/.test(body) && /Refusing to create InstallDir beneath an unsafe parent/.test(body) &&
+    /Refusing to create ConfigDir beneath an unsafe parent/.test(body),
+  'must reject ancestors that let an untrusted user replace an installation or config directory');
+  assert.ok(/Set-SidekickPrivateAclTree -Path \$ConfigDir/.test(body) &&
+    /Refusing to secure a reparse point inside Sidekick configuration/.test(body),
+  'must reset config ownership and ACLs throughout the tree and reject reparse points');
+  assert.ok(/SetAccessRuleProtection\(\$true, \$false\)/.test(body) &&
+    /S-1-5-18/.test(body) && /S-1-5-32-544/.test(body),
+  'config ACLs must be protected and limited to LocalSystem and Administrators');
+  assert.ok(/\.config\.\$\(\[Guid\]::NewGuid\(\)\.ToString\('N'\)\)\.tmp/.test(body) &&
+    /Move-Item -LiteralPath \$ConfigTempPath -Destination \$ConfigPath/.test(body),
+  'config must be written through a unique temporary file in its secured directory');
+  assert.ok(body.indexOf('Set-SidekickPrivateAclTree -Path $ConfigDir') < body.indexOf('$Config | ConvertTo-Json'),
+    'config ACLs must be secured before writing configuration');
 });
 test('elevated installer paths do not resolve system binaries by bare name', () => {
   const ps = read(path.join(PKG, 'install-windows.ps1'));

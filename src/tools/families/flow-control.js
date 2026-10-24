@@ -15,6 +15,7 @@ const { z } = require("zod");
 const { callTool } = require("../dispatch-seam");
 const { stripSidekickPrefix } = require("../../core/tool-name");
 const { requireToolExecution, requireCanonicalInvocation } = require("../read-authorization");
+const { readJsonFile, writeJsonFile } = require("../../core/json-file-store");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "..", "..", "data");
 fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -41,14 +42,15 @@ const RETRY_MAX_DELAY_MS = 60000;
 function loadQueue() {
   if (!fs.existsSync(QUEUE_FILE)) return { tasks: [], nextId: 1 };
   try {
-    return JSON.parse(fs.readFileSync(QUEUE_FILE, "utf-8"));
+    const value = readJsonFile(QUEUE_FILE);
+    return value && Array.isArray(value.tasks) && Number.isSafeInteger(value.nextId) ? value : { tasks: [], nextId: 1 };
   } catch {
     return { tasks: [], nextId: 1 };
   }
 }
 
 function saveQueue(queue) {
-  fs.writeFileSync(QUEUE_FILE, JSON.stringify(queue, null, 2));
+  writeJsonFile(QUEUE_FILE, queue);
 }
 
 const QUEUE_STUCK_MINUTES_DEFAULT = 10;
@@ -277,14 +279,15 @@ const ORCHESTRATE_FILE = path.join(DATA_DIR, "orchestrate.json");
 function loadOrchestrate() {
   if (!fs.existsSync(ORCHESTRATE_FILE)) return { tasks: [], nextId: 1 };
   try {
-    return JSON.parse(fs.readFileSync(ORCHESTRATE_FILE, "utf-8"));
+    const value = readJsonFile(ORCHESTRATE_FILE);
+    return value && Array.isArray(value.tasks) && Number.isSafeInteger(value.nextId) ? value : { tasks: [], nextId: 1 };
   } catch {
     return { tasks: [], nextId: 1 };
   }
 }
 
 function saveOrchestrate(orchestrate) {
-  fs.writeFileSync(ORCHESTRATE_FILE, JSON.stringify(orchestrate, null, 2));
+  writeJsonFile(ORCHESTRATE_FILE, orchestrate);
 }
 
 async function sidekick_orchestrate({ action, id, task_name, subtasks, dependencies, timeout }) {
@@ -479,14 +482,15 @@ const CIRCUIT_IDLE_RESET_HOURS = 1;
 function loadCircuits() {
   try {
     if (fs.existsSync(CIRCUIT_FILE)) {
-      return JSON.parse(fs.readFileSync(CIRCUIT_FILE, "utf8"));
+      const value = readJsonFile(CIRCUIT_FILE, { maxBytes: 1024 * 1024 });
+      if (value && value.circuits && typeof value.circuits === "object" && !Array.isArray(value.circuits)) return value;
     }
   } catch {}
   return { circuits: {} };
 }
 
 function saveCircuits(data) {
-  fs.writeFileSync(CIRCUIT_FILE, JSON.stringify(data, null, 2));
+  writeJsonFile(CIRCUIT_FILE, data, { maxBytes: 1024 * 1024 });
 }
 
 function cleanupIdleCircuits(data) {

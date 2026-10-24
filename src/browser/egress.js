@@ -36,6 +36,7 @@ const http = require("http");
 const dns = require("dns");
 const { METADATA_HOSTS } = require("../compute/endpoint-guard");
 const { isPrivateAddress, isLinkLocal } = require("../security/outbound-url");
+const { isNonUnicastAddress, isIPv4MappedAddress, isNonGloballyReachableAddress } = require("../security/ip-address-policy");
 const networkScope = require("../security/network-scope");
 
 const DNS_CACHE_TTL_MS = 30 * 1000;
@@ -111,6 +112,8 @@ function evaluateHost(host, policy) {
   if (policy.scope && !currentScope(policy)) return "named network scope is stale or disabled";
   if (METADATA_HOSTS.has(h)) return `host "${h}" is a cloud metadata endpoint and is never reachable from a browser session`;
   if (isLinkLocal(h)) return `host "${h}" is link-local and is never reachable from a browser session`;
+  if (isNonUnicastAddress(h)) return `host "${h}" is a non-unicast address and is never reachable from a browser session`;
+  if (isIPv4MappedAddress(h)) return `host "${h}" is an IPv4-mapped IPv6 address and is never reachable from a browser session`;
   if (policy.scopeError) return policy.scopeError;
   if (policy.scope) {
     const decision = networkScope.decision(policy.scope, { host: h, allowedHosts: policy.allowedHosts });
@@ -120,8 +123,8 @@ function evaluateHost(host, policy) {
     return null;
   }
   if (!hostAllowedByList(h, policy)) return `host "${h}" is not in this session's allowed_hosts`;
-  if ((isPrivateAddress(h) || isLocalhostName(h)) && !policy.allowPrivate) {
-    return `host "${h}" is private/loopback; this session does not permit private-network targets`;
+  if ((isNonGloballyReachableAddress(h) || isLocalhostName(h)) && !policy.allowPrivate) {
+    return `host "${h}" is non-global/private; this session requires an operator-created network scope for this target`;
   }
   return null;
 }
@@ -192,8 +195,10 @@ async function resolveAndValidate(host, policy, { protocol = "https", port = 443
       continue;
     }
     if (isLinkLocal(record.address)) return { refusal: `"${h}" resolves to link-local address ${record.address}` };
-    if (isPrivateAddress(record.address) && !policy.allowPrivate) {
-      return { refusal: `"${h}" resolves to private address ${record.address}; this session does not permit private-network targets` };
+    if (isNonUnicastAddress(record.address)) return { refusal: `"${h}" resolves to non-unicast address ${record.address}` };
+    if (isIPv4MappedAddress(record.address)) return { refusal: `"${h}" resolves to invalid IPv4-mapped IPv6 destination ${record.address}` };
+    if (isNonGloballyReachableAddress(record.address) && !policy.allowPrivate) {
+      return { refusal: `"${h}" resolves to non-global address ${record.address}; this session requires an operator-created network scope for this target` };
     }
   }
   return { address: records[0].address, family: records[0].family };
@@ -207,7 +212,45 @@ async function resolveAndValidate(host, policy, { protocol = "https", port = 443
  *
  * `onBlocked(record)` and `onRequest(record)` receive bounded evidence records.
  */
+function safeEvidenceTarget(target, kind) {
+  const value = String(target);
+  // CONNECT evidence is already a bounded host:port, not a URL.
+  if (kind !== "http") return value.slice(0, 500);
+  try {
+    const url = new URL(value);
+    if (url.protocol) {
+      // URLs can contain credentials in userinfo, paths, or query values.
+      // Evidence only needs the destination authority; never persist the raw URL.
+      if (url.href === "about:blank") return "about:blank";
+      return (url.host ? `${url.protocol}//${url.host}` : url.protocol).slice(0, 500);
+    }
+  } catch { /* host:port evidence (for CONNECT) is not a URL */ }
+  return value.slice(0, 500);
+}
+
+function redactDiagnosticUrls(value) {
+  return String(value).replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+/gi, (raw) => {
+    let candidate = raw;
+    let suffix = "";
+    while (/[.,;:!?)}\]]$/.test(candidate)) {
+      suffix = candidate.slice(-1) + suffix;
+      candidate = candidate.slice(0, -1);
+    }
+    try {
+      const url = new URL(candidate);
+      return `${url.protocol}${url.host ? `//${url.host}` : ""}${suffix}`;
+    } catch {
+      return `[URL redacted]${suffix}`;
+    }
+  });
+}
+
 async function createSessionProxy(policy, { onBlocked = () => {}, onRequest = () => {}, credential = null } = {}) {
+  if (!credential || typeof credential.username !== "string" || typeof credential.password !== "string" ||
+      credential.username.length < 12 || credential.password.length < 24 ||
+      !/^[A-Za-z0-9_-]+$/.test(credential.username) || !/^[A-Za-z0-9_-]+$/.test(credential.password)) {
+    throw new Error("Browser egress proxy requires a strong per-session credential");
+  }
   let connections = 0;
   let selfPort = 0;
 
@@ -215,12 +258,9 @@ async function createSessionProxy(policy, { onBlocked = () => {}, onRequest = ()
   // could otherwise use it as an open forward proxy egressing with Sidekick's
   // identity. Require a per-session Proxy-Authorization credential; only the
   // browser (configured with it) can drive the proxy.
-  const expectedAuth = credential
-    ? "Basic " + Buffer.from(`${credential.username}:${credential.password}`).toString("base64")
-    : null;
+  const expectedAuth = "Basic " + Buffer.from(`${credential.username}:${credential.password}`).toString("base64");
 
   function authorized(req) {
-    if (!expectedAuth) return true;
     const provided = req.headers["proxy-authorization"] || "";
     if (provided.length !== expectedAuth.length) return false;
     try {
@@ -231,7 +271,7 @@ async function createSessionProxy(policy, { onBlocked = () => {}, onRequest = ()
   }
 
   function blocked(kind, target, reason) {
-    try { onBlocked({ kind, target: String(target).slice(0, 500), reason, at: new Date().toISOString() }); } catch { /* evidence only */ }
+    try { onBlocked({ kind, target: safeEvidenceTarget(target, kind), reason, at: new Date().toISOString() }); } catch { /* evidence only */ }
   }
 
   function isSelfTarget(host, port) {
@@ -283,7 +323,7 @@ async function createSessionProxy(policy, { onBlocked = () => {}, onRequest = ()
       res.end("Sidekick browser egress policy: request targets the session proxy itself");
       return;
     }
-    try { onRequest({ kind: "http", target: url.href.slice(0, 500) }); } catch { /* evidence only */ }
+    try { onRequest({ kind: "http", target: safeEvidenceTarget(url.href, "http") }); } catch { /* evidence only */ }
 
     const headers = { ...req.headers };
     delete headers["proxy-authorization"];
@@ -428,5 +468,7 @@ module.exports = {
   resolveAndValidate,
   createSessionProxy,
   matchHostPattern,
+  safeEvidenceTarget,
+  redactDiagnosticUrls,
   clearDnsCache,
 };

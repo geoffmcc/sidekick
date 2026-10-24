@@ -17,10 +17,13 @@ const scopes = require("../src/security/network-scopes");
 function test(name, fn) { try { fn(); console.log(`Passed: ${name}`); } catch (error) { console.error(`FAILED: ${name}\n${error.stack}`); process.exitCode = 1; } }
 
 test("normalizes equivalent CIDRs, hosts, protocols and ranges deterministically", () => {
-  const a = policy.normalizeScope({ name: "lab_scope", allowed_cidrs: ["10.47.90.11/24"], allowed_hosts: ["*.Example.Test."], allowed_protocols: ["HTTPS", "http", "https"], allowed_ports: [443, "80-81", 80], allow_private_addresses: true });
-  const b = policy.normalizeScope({ name: "lab_scope", allowed_cidrs: ["10.47.90.0/24"], allowed_hosts: ["*.example.test"], allowed_protocols: ["http", "https"], allowed_ports: ["80-81", 443], allow_private_addresses: true });
+  const a = policy.normalizeScope({ name: "lab_scope", allowed_cidrs: ["10.47.90.11/24", "2001:db8:1234:abcd::1/48"], allowed_hosts: ["*.Example.Test."], allowed_protocols: ["HTTPS", "http", "https"], allowed_ports: [443, "80-81", 80], allow_private_addresses: true });
+  const b = policy.normalizeScope({ name: "lab_scope", allowed_cidrs: ["10.47.90.0/24", "2001:db8:1234::/48"], allowed_hosts: ["*.example.test"], allowed_protocols: ["http", "https"], allowed_ports: ["80-81", 443], allow_private_addresses: true });
   assert.deepStrictEqual(a, b);
+  assert.deepStrictEqual(a.allowed_cidrs, ["10.47.90.0/24", "2001:db8:1234::/48"]);
   assert.strictEqual(a.digest.length, 64);
+  assert.strictEqual(policy.cidrContains("2001:db8:1234::/48", policy.parseAddress("2001:db8:1234::1")), true);
+  assert.strictEqual(policy.cidrContains("2001:db8:1234::/48", policy.parseAddress("2001:db8:1235::1")), false);
 });
 
 test("rejects ambiguous wildcard, credentials-shaped fields, and unbounded input", () => {
@@ -34,10 +37,15 @@ test("permanent denials and explicit denials override allows", () => {
   const scope = policy.normalizeScope({ name: "denial_scope", allowed_cidrs: ["0.0.0.0/0", "::/0"], allowed_hosts: ["*.example.test"], allowed_protocols: ["http"], denied_cidrs: ["10.47.20.0/24"], allow_private_addresses: true });
   assert.strictEqual(policy.decision(scope, { address: "10.47.20.5", protocol: "http", port: 80 }).reason, "explicit_address_denial");
   assert.strictEqual(policy.decision(scope, { address: "169.254.169.254", protocol: "http", port: 80 }).reason, "permanent_denial");
+  assert.strictEqual(policy.decision(scope, { address: "224.0.0.1", protocol: "http", port: 80 }).reason, "permanent_denial");
+  assert.strictEqual(policy.decision(scope, { address: "::ffff:224.0.0.1", protocol: "http", port: 80 }).reason, "permanent_denial");
+  assert.strictEqual(policy.decision(scope, { address: "::ffff:8.8.8.8", protocol: "http", port: 80 }).reason, "permanent_denial", "IPv4-mapped IPv6 is never a valid packet destination, even for a globally reachable embedded IPv4");
   assert.strictEqual(policy.decision(scope, { address: "::ffff:10.47.20.5", protocol: "http", port: 80 }).ok, false);
   assert.strictEqual(policy.decision(scope, { host: "api.example.test", address: "192.0.2.10", protocol: "http", port: 80 }).ok, true);
   assert.strictEqual(policy.decision(scope, { host: "api.example.test", address: "192.0.2.10", protocol: "https", port: 443 }).reason, "protocol_not_allowed");
   assert.strictEqual(policy.decision(scope, { address: "fe80::1", protocol: "http", port: 80 }).reason, "permanent_denial");
+  assert.strictEqual(policy.decision(scope, { host: "metadata.google.internal", address: "93.184.216.34", protocol: "http", port: 80 }).reason, "permanent_denial", "a protected hostname remains denied when paired with a public resolved address");
+  assert.strictEqual(policy.decision(scope, { host: "localhost", address: "93.184.216.34", protocol: "http", port: 80 }).reason, "permanent_denial", "localhost remains denied when paired with a public resolved address");
 });
 
 test("private address decisions cover IPv4 and IPv6 policy branches", () => {
@@ -48,9 +56,22 @@ test("private address decisions cover IPv4 and IPv6 policy branches", () => {
   assert.strictEqual(policy.isPrivate("not-an-address"), false, "malformed address parsing fails closed without throwing");
   assert.strictEqual(policy.decision(disabled, { address: "fd00::2", protocol: "https", port: 443 }).reason, "private_address_not_enabled");
   assert.strictEqual(policy.decision(disabled, { address: "::1", protocol: "https", port: 443 }).reason, "private_address_not_enabled");
+  for (const address of ["64:ff9b::a0a:401", "64:ff9b:1:a0a:4:100::", "2002:0a0a:0401::"]) {
+    assert.strictEqual(policy.isPrivate(address), true, `${address} must inherit its embedded private IPv4 classification`);
+    assert.strictEqual(policy.decision(disabled, { address, protocol: "https", port: 443 }).reason, "private_address_not_enabled");
+  }
 
   const enabled = policy.normalizeScope({ name: "private_enabled", allowed_cidrs: ["10.0.0.0/8"], allowed_protocols: ["https"], allow_private_addresses: true });
   assert.strictEqual(policy.decision(enabled, { address: "10.4.0.2", protocol: "https", port: 443 }).ok, true);
+  const localNat64 = policy.normalizeScope({ name: "local_nat64_enabled", allowed_cidrs: ["64:ff9b:1::/48"], allowed_protocols: ["https"], allow_private_addresses: true });
+  assert.strictEqual(policy.decision(localNat64, { address: "64:ff9b:1:5db8:d8:2200::", protocol: "https", port: 443 }).ok, true, "an operator can explicitly scope local-use NAT64 egress");
+});
+
+test("translated link-local and metadata endpoints remain permanently denied", () => {
+  const scope = policy.normalizeScope({ name: "translated_permanent_denial", allowed_cidrs: ["::/0"], allowed_protocols: ["https"], allow_private_addresses: true });
+  for (const address of ["64:ff9b::a9fe:a9fe", "64:ff9b:1:a9fe:a9:fe00::", "2002:a9fe:a9fe::", "64:ff9b::a9fe:0101"]) {
+    assert.strictEqual(policy.decision(scope, { address, protocol: "https", port: 443 }).reason, "permanent_denial", `${address} must remain permanently denied`);
+  }
 });
 
 test("named scopes persist immutable revisions and disable live authority", () => {

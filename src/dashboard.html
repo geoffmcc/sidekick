@@ -682,7 +682,7 @@
   <div class="dashboard-toolbar">
     <div>
       <div class="section-title">Capability Packs (<span id="capCount">0</span>)</div>
-      <div class="page-note">A capability pack is an installable area of competence: modules, workflows, knowledge and configuration. Installing or enabling a pack activates executable module code inside Sidekick — there is no process sandbox, only integrity and lifecycle controls. Maturity is evidence-bound: foundation, operational, integrated, then certified.</div>
+      <div class="page-note">A capability pack contains modules, workflows, knowledge and configuration. Installation alone does not execute its modules. Bundled first-party modules run inside Sidekick Core; third-party executable modules stay unavailable until OS-enforced isolation is configured. Maturity is evidence-bound: foundation, operational, integrated, then certified.</div>
     </div>
     <button class="btn btn-sm" data-dashboard-action="refresh" data-handler="loadCapabilities"><i class="fas fa-sync"></i> Refresh</button>
   </div>
@@ -754,10 +754,19 @@
       <fieldset>
         <legend>Allow this client to</legend>
         <label><input id="mcpGrantTools" type="checkbox" checked> Use standard tools (low and medium risk)</label>
+        <label><input id="mcpGrantMemoryRead" type="checkbox"> Read memory and handoffs</label>
+        <label><input id="mcpGrantMemoryWrite" type="checkbox"> Save memory and handoffs</label>
+        <label><input id="mcpGrantKnowledgeRead" type="checkbox"> Search Sidekick knowledge</label>
+        <label><input id="mcpGrantCatalogRead" type="checkbox"> Discover available tools</label>
+        <label><input id="mcpGrantWorkflows" type="checkbox"> Run workflows</label>
         <label><input id="mcpGrantPacks" type="checkbox"> View and manage Capability Packs</label>
         <label><input id="mcpGrantHigh" type="checkbox"> Use high-risk tools</label>
         <label><input id="mcpGrantCritical" type="checkbox"> Request critical-risk tools</label>
       </fieldset>
+      <label>Projects this client may access (optional)<select id="mcpProjectAccess" multiple size="5" aria-describedby="mcpProjectAccessHelp"></select></label>
+      <label>Selected project access<select id="mcpProjectAccessLevel"><option value="read">Read only</option><option value="write">Read and write</option></select></label>
+      <div class="sub" id="mcpProjectAccessHelp">Memory read/write permissions and project membership are both required. Project grants are optional and require project access administration authority.</div>
+      <div class="sub">Pack access is separate from standard tool execution. Enable standard tools if this client should run routine tools such as Jellyfin playback queries; pack permissions alone do not grant that access.</div>
       <div class="sub">Critical actions still follow Sidekick policy and approval checks. Only grant permissions this agent needs.</div>
       <button class="btn btn-sm" type="button" data-dashboard-action="identity" data-handler="createMcpServiceCredential">Create client credential</button>
     </div>
@@ -801,11 +810,21 @@
       </div>
       <div class="compute-form-grid">
         <label>Display name<input id="computeEnrollName" type="text" placeholder="windows-rtx-5070"></label>
-        <label>Trust level<select id="computeEnrollTrust"><option value="trusted">Trusted</option><option value="known">Known</option><option value="community">Community</option></select></label>
+        <label>Trust level<select id="computeEnrollTrust"><option value="trusted">Trusted</option><option value="limited">Limited</option><option value="untrusted">Untrusted</option><option value="privileged">Privileged</option></select></label>
         <label>Max jobs<input id="computeEnrollJobs" type="number" min="1" max="16" value="2"></label>
         <label>Expires in<select id="computeEnrollTtl"><option value="3600000">1 hour</option><option value="21600000">6 hours</option><option value="86400000">24 hours</option></select></label>
         <label>Re-enroll node (optional)<input id="computeEnrollReEnroll" type="text" placeholder="node_… to recover a lost credential"></label>
       </div>
+      <fieldset class="compute-enrollment-classifications">
+        <legend>Data this worker may process</legend>
+        <label><input type="checkbox" name="computeEnrollDataClass" value="public" checked> Public</label>
+        <label><input type="checkbox" name="computeEnrollDataClass" value="internal"> Internal</label>
+        <label><input type="checkbox" name="computeEnrollDataClass" value="private"> Private</label>
+        <label><input type="checkbox" name="computeEnrollDataClass" value="sensitive"> Sensitive</label>
+        <label><input type="checkbox" name="computeEnrollDataClass" value="restricted"> Restricted</label>
+      </fieldset>
+      <div class="sub">Trust levels are enforced by placement. Use one of the defined levels; unrecognized labels are rejected.</div>
+      <div class="sub">Only selected data classes may be routed to this worker. New workers default to public data; expand this only for a worker you trust with those data classes.</div>
       <div id="computeEnrollmentResult" class="compute-token-box"><div class="empty">Create a token to see installer commands.</div></div>
     </div>
     <div class="card compute-panel">

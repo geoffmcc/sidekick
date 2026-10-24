@@ -81,28 +81,139 @@ $TrustedSids = @(
 # Only rights that permit replacing the binary or rewriting its ACL. Read and
 # ReadAndExecute deliberately excluded so ordinary read ACEs are not flagged.
 $UnsafeRights = [System.Security.AccessControl.FileSystemRights]"WriteData, AppendData, Delete, DeleteSubdirectoriesAndFiles, ChangePermissions, TakeOwnership"
+$UnsafeAncestorRights = [System.Security.AccessControl.FileSystemRights]"Delete, DeleteSubdirectoriesAndFiles, ChangePermissions, TakeOwnership"
 
 function Get-NonAdminWriters {
-  param([Parameter(Mandatory = $true)][string]$Path)
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [switch]$IncludeDescendants
+  )
   $offenders = @()
-  $current = $Path
-  while ($current) {
-    try { $acl = Get-Acl -LiteralPath $current } catch { break }
-    foreach ($ace in $acl.Access) {
-      if ($ace.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow) { continue }
-      # Inherit-only ACEs do not apply to this object; the child we already
-      # walked shows the effective result.
-      if ($ace.PropagationFlags -band [System.Security.AccessControl.PropagationFlags]::InheritOnly) { continue }
-      if (($ace.FileSystemRights -band $UnsafeRights) -eq 0) { continue }
-      try { $sid = $ace.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value }
-      catch { $sid = $ace.IdentityReference.Value }
-      if ($TrustedSids -notcontains $sid) { $offenders += "$current is writable by $($ace.IdentityReference.Value)" }
+  $targets = @()
+  $pathExists = Test-Path -LiteralPath $Path
+  if ($pathExists) {
+    $resolvedPath = (Resolve-Path -LiteralPath $Path).ProviderPath
+    $targets += $resolvedPath
+    if ($IncludeDescendants -and (Get-Item -LiteralPath $resolvedPath -Force).PSIsContainer) {
+      $pendingDirectories = New-Object 'System.Collections.Generic.Stack[string]'
+      $pendingDirectories.Push($resolvedPath)
+      while ($pendingDirectories.Count -gt 0) {
+        $directory = $pendingDirectories.Pop()
+        foreach ($entry in [System.IO.Directory]::EnumerateFileSystemEntries($directory)) {
+          $attributes = [System.IO.File]::GetAttributes($entry)
+          if ($attributes.ToString() -match '(^|,\s*)ReparsePoint(,|$)') {
+            $offenders += "$entry is a reparse point in a LocalSystem executable directory"
+            continue
+          }
+          $targets += $entry
+          if (($attributes -band [System.IO.FileAttributes]::Directory) -ne 0) {
+            $pendingDirectories.Push($entry)
+          }
+        }
+      }
     }
-    $parent = Split-Path -Parent $current
-    if (-not $parent -or $parent -eq $current) { break }
-    $current = $parent
+  } else {
+    # A writable existing parent lets a non-admin precreate a future service
+    # directory. Check the nearest existing ancestor as the target in that case.
+    $nearestExisting = Split-Path -Parent $Path
+    while ($nearestExisting -and -not (Test-Path -LiteralPath $nearestExisting)) {
+      $parent = Split-Path -Parent $nearestExisting
+      if (-not $parent -or $parent -eq $nearestExisting) { break }
+      $nearestExisting = $parent
+    }
+    if (-not $nearestExisting -or -not (Test-Path -LiteralPath $nearestExisting)) {
+      return @("No existing parent could be checked for $Path")
+    }
+    $targets += (Resolve-Path -LiteralPath $nearestExisting).ProviderPath
+  }
+
+  foreach ($target in $targets) {
+    $current = $target
+    # If the requested leaf does not exist, the nearest existing object is an
+    # ancestor: create-child rights alone do not let an attacker replace it.
+    $isTarget = $pathExists
+    while ($current) {
+      try { $acl = Get-Acl -LiteralPath $current }
+      catch {
+        $offenders += "$current ACL could not be verified: $($_.Exception.Message)"
+        break
+      }
+      $rightsToCheck = if ($isTarget) { $UnsafeRights } else { $UnsafeAncestorRights }
+      try { $ownerSid = ([System.Security.Principal.NTAccount]::new($acl.Owner)).Translate([System.Security.Principal.SecurityIdentifier]).Value }
+      catch { $ownerSid = $acl.Owner }
+      if ($TrustedSids -notcontains $ownerSid) {
+        $offenders += "$current is owned by non-administrator $($acl.Owner)"
+      }
+      foreach ($ace in $acl.Access) {
+        if ($ace.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow) { continue }
+        if ($ace.PropagationFlags -band [System.Security.AccessControl.PropagationFlags]::InheritOnly) { continue }
+        if (($ace.FileSystemRights -band $rightsToCheck) -eq 0) { continue }
+        try { $sid = $ace.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value }
+        catch { $sid = $ace.IdentityReference.Value }
+        if ($TrustedSids -notcontains $sid) { $offenders += "$current is writable by $($ace.IdentityReference.Value)" }
+      }
+      $parent = Split-Path -Parent $current
+      if (-not $parent -or $parent -eq $current) { break }
+      $current = $parent
+      $isTarget = $false
+    }
   }
   return $offenders
+}
+
+function Set-SidekickPrivateAclTree {
+  param([Parameter(Mandatory = $true)][string]$Path)
+  $resolvedPath = (Resolve-Path -LiteralPath $Path).ProviderPath
+  $rootAttributes = [System.IO.File]::GetAttributes($resolvedPath)
+  if ($rootAttributes.ToString() -match '(^|,\s*)ReparsePoint(,|$)') {
+    throw "Refusing to secure a reparse-point configuration directory: $resolvedPath"
+  }
+
+  $targets = @($resolvedPath)
+  $pendingDirectories = New-Object 'System.Collections.Generic.Stack[string]'
+  if (($rootAttributes -band [System.IO.FileAttributes]::Directory) -ne 0) {
+    $pendingDirectories.Push($resolvedPath)
+  }
+  while ($pendingDirectories.Count -gt 0) {
+    $directory = $pendingDirectories.Pop()
+    foreach ($entry in [System.IO.Directory]::EnumerateFileSystemEntries($directory)) {
+      $attributes = [System.IO.File]::GetAttributes($entry)
+      if ($attributes.ToString() -match '(^|,\s*)ReparsePoint(,|$)') {
+        throw "Refusing to secure a reparse point inside Sidekick configuration: $entry"
+      }
+      $targets += $entry
+      if (($attributes -band [System.IO.FileAttributes]::Directory) -ne 0) {
+        $pendingDirectories.Push($entry)
+      }
+    }
+  }
+
+  $systemSid = [System.Security.Principal.SecurityIdentifier]::new("S-1-5-18")
+  $administratorsSid = [System.Security.Principal.SecurityIdentifier]::new("S-1-5-32-544")
+  foreach ($target in $targets) {
+    $attributes = [System.IO.File]::GetAttributes($target)
+    $isDirectory = ($attributes -band [System.IO.FileAttributes]::Directory) -ne 0
+    $acl = Get-Acl -LiteralPath $target
+    $acl.SetAccessRuleProtection($true, $false)
+    foreach ($existingRule in @($acl.Access)) { $acl.RemoveAccessRuleAll($existingRule) }
+    $acl.SetOwner($administratorsSid)
+    $inheritance = if ($isDirectory) {
+      [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+    } else {
+      [System.Security.AccessControl.InheritanceFlags]::None
+    }
+    foreach ($sid in @($systemSid, $administratorsSid)) {
+      $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
+        $sid,
+        [System.Security.AccessControl.FileSystemRights]::FullControl,
+        $inheritance,
+        [System.Security.AccessControl.PropagationFlags]::None,
+        [System.Security.AccessControl.AccessControlType]::Allow
+      )
+      $acl.AddAccessRule($rule)
+    }
+    Set-Acl -LiteralPath $target -AclObject $acl
+  }
 }
 
 $NodeWriters = @(Get-NonAdminWriters -Path $NodeExe)
@@ -126,6 +237,15 @@ Override only if you accept that risk: -AllowUserWritableNode
   Write-Warning $detail
 }
 Write-Host "==> Using node at $NodeExe"
+
+# WinSW, worker-agent.js, and every transitive worker module execute as
+# LocalSystem. The complete installation tree must be unwritable by
+# non-administrators, including when a custom InstallDir is supplied.
+$InstallDirWriters = @(Get-NonAdminWriters -Path $InstallDir -IncludeDescendants)
+if ($InstallDirWriters.Count -gt 0) {
+  $detail = ($InstallDirWriters | Select-Object -Unique) -join "`n  "
+  throw "Refusing to install: InstallDir or one of its ancestors/files is writable by a non-administrator.`n`n  $InstallDir`n`n  $detail"
+}
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $PkgRoot   = Resolve-Path (Join-Path $ScriptDir "..\..")
@@ -159,7 +279,36 @@ if ($Existing) {
 }
 
 Write-Host "==> Creating directories"
+# Check the nearest existing ancestors before creating either service path. A
+# non-admin owner or a parent that can delete/replace a child could race this
+# elevated install. Create-child rights alone are allowed: the installer will
+# secure and verify the newly created leaf before using it.
+$InstallParentWriters = @(Get-NonAdminWriters -Path $InstallDir)
+if ($InstallParentWriters.Count -gt 0) {
+  $detail = ($InstallParentWriters | Select-Object -Unique) -join "`n  "
+  throw "Refusing to create InstallDir beneath an unsafe parent.`n`n  $InstallDir`n`n  $detail"
+}
+$ConfigParentWriters = @(Get-NonAdminWriters -Path $ConfigDir)
+if ($ConfigParentWriters.Count -gt 0) {
+  $detail = ($ConfigParentWriters | Select-Object -Unique) -join "`n  "
+  throw "Refusing to create ConfigDir beneath an unsafe parent.`n`n  $ConfigDir`n`n  $detail"
+}
 New-Item -ItemType Directory -Force -Path $InstallDir, $ConfigDir | Out-Null
+$configDirectoryAttributes = [System.IO.File]::GetAttributes((Resolve-Path -LiteralPath $ConfigDir).ProviderPath)
+if ($configDirectoryAttributes.ToString() -match '(^|,\s*)ReparsePoint(,|$)') {
+  throw "Refusing to use a reparse-point ConfigDir: $ConfigDir"
+}
+Set-SidekickPrivateAclTree -Path $ConfigDir
+$ConfigDirWriters = @(Get-NonAdminWriters -Path $ConfigDir)
+if ($ConfigDirWriters.Count -gt 0) {
+  $detail = ($ConfigDirWriters | Select-Object -Unique) -join "`n  "
+  throw "Refusing to use a ConfigDir that can be replaced or modified by a non-administrator.`n`n  $ConfigDir`n`n  $detail"
+}
+$InstallDirWriters = @(Get-NonAdminWriters -Path $InstallDir -IncludeDescendants)
+if ($InstallDirWriters.Count -gt 0) {
+  $detail = ($InstallDirWriters | Select-Object -Unique) -join "`n  "
+  throw "Refusing to install into a writable InstallDir.`n`n  $InstallDir`n`n  $detail"
+}
 
 Write-Host "==> Installing worker files to $InstallDir"
 Copy-Item -Path (Join-Path $WorkerSrc "*") -Destination $InstallDir -Recurse -Force
@@ -172,7 +321,12 @@ if ($OllamaUrl -ne "") {
   $Config.ollama = [ordered]@{ enabled = $true; url = $OllamaUrl; timeoutMs = $OllamaTimeoutMs }
   $Config.ollama.model = $OllamaModel
 }
-$Config | ConvertTo-Json -Depth 5 | Set-Content -Path (Join-Path $ConfigDir "config.json") -Encoding UTF8
+$ConfigPath = Join-Path $ConfigDir "config.json"
+$ConfigTempPath = Join-Path $ConfigDir ".config.$([Guid]::NewGuid().ToString('N')).tmp"
+$ConfigJson = $Config | ConvertTo-Json -Depth 5
+[System.IO.File]::WriteAllText($ConfigTempPath, $ConfigJson, [System.Text.UTF8Encoding]::new($false))
+if (Test-Path -LiteralPath $ConfigPath) { Remove-Item -LiteralPath $ConfigPath -Force }
+Move-Item -LiteralPath $ConfigTempPath -Destination $ConfigPath
 
 Write-Host "==> Placing winsw service definition"
 $XmlDest = Join-Path $InstallDir "sidekick-compute-worker.xml"
@@ -198,6 +352,11 @@ if ($WinswUrl -ne "") {
   }
 } elseif (-not (Test-Path $WinswExe)) {
   throw "winsw binary not found at $WinswExe. Pass -WinswUrl <winsw release exe url> (with -WinswSha256) or place it manually."
+}
+$InstallDirWriters = @(Get-NonAdminWriters -Path $InstallDir -IncludeDescendants)
+if ($InstallDirWriters.Count -gt 0) {
+  $detail = ($InstallDirWriters | Select-Object -Unique) -join "`n  "
+  throw "Refusing to register a LocalSystem service from a writable InstallDir.`n`n  $InstallDir`n`n  $detail"
 }
 
 Write-Host "==> Enrolling (writes credential; token not persisted)"

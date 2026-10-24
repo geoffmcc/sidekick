@@ -7,9 +7,41 @@ const { childProcessEnv } = require("../../security/child-process");
 const { resolveCommandOnPath } = require("../../security/command-lookup");
 const { z } = require("zod");
 const { redactSensitive } = require("../../redact");
-const { enforcePathPolicy } = require("../path-policy");
+const pathPolicy = require("../path-policy");
+const { enforcePathPolicy } = pathPolicy;
 const { requireToolExecution } = require("../read-authorization");
 const { BoundedRegex } = require("../../core/bounded-regex");
+const { readTextBounded, DEFAULT_FILE_READ_BYTES } = require("../../core/bounded-file-read");
+const { writeTextFile } = require("../../core/json-file-store");
+
+const MAX_FILE_CONTENT_BYTES = 50 * 1024 * 1024;
+const MAX_READ_OUTPUT_BYTES = 1024 * 1024;
+const MAX_DIRECTORY_LIST_ENTRIES = 500;
+const MAX_SEARCH_SCAN_ENTRIES = 10000;
+const MAX_FIND_RESULTS = 500;
+const MAX_FIND_SCAN_ENTRIES = 10000;
+const MAX_FILTER_RESULTS = 500;
+const MAX_FILTER_SCAN_ENTRIES = 10000;
+const MAX_SUMMARY_LINES = 500;
+
+function boundedResultLimit(value, max = MAX_FIND_RESULTS) {
+  return Number.isSafeInteger(value) && value > 0 ? Math.min(value, max) : 50;
+}
+
+function* iterateTextLines(content) {
+  let offset = 0;
+  let line = 1;
+  while (offset <= content.length) {
+    const newline = content.indexOf("\n", offset);
+    const end = newline < 0 ? content.length : newline;
+    yield { number: line, text: content.slice(offset, end) };
+    if (newline < 0) return;
+    offset = newline + 1;
+    line++;
+  }
+}
+
+function displayLine(line) { return String(line || "").slice(0, 200); }
 
 function globToRegexSource(glob) {
   return Array.from(String(glob), character => {
@@ -19,7 +51,7 @@ function globToRegexSource(glob) {
   }).join("");
 }
 
-async function sidekick_read({ path: filePath }) {
+async function sidekick_read({ path: filePath, offset = 0 }) {
   const authError = requireToolExecution({ tool: "filesystem.read" }, "tools.execute", "read");
   if (authError) return authError;
   const policyError = enforcePathPolicy(filePath, "read");
@@ -27,8 +59,18 @@ async function sidekick_read({ path: filePath }) {
   if (!fs.existsSync(filePath)) {
     return { content: [{ type: "text", text: "File not found: " + filePath }], isError: true };
   }
-  const content = fs.readFileSync(filePath, "utf-8");
-  return { content: [{ type: "text", text: redactSensitive(content) }] };
+  try {
+    const read = readTextBounded(filePath, { maxBytes: MAX_READ_OUTPUT_BYTES, offset, noFollow: true });
+    const truncationNotice = read.truncated
+      ? `\n\n[truncated: returned ${read.bytesRead} bytes at offset ${offset} of ${read.size}; continue with offset ${offset + read.bytesRead}]`
+      : "";
+    return { content: [{ type: "text", text: redactSensitive(read.content + truncationNotice) }] };
+  } catch (error) {
+    const message = error.code === "FILE_READ_NOT_REGULAR"
+      ? "Path does not refer to a regular file"
+      : `Unable to read file: ${error.message}`;
+    return { content: [{ type: "text", text: message }], isError: true };
+  }
 }
 
 async function sidekick_list({ path: dirPath }) {
@@ -39,19 +81,37 @@ async function sidekick_list({ path: dirPath }) {
   if (!fs.existsSync(dirPath)) {
     return { content: [{ type: "text", text: "Path not found: " + dirPath }], isError: true };
   }
-  const items = fs.readdirSync(dirPath, { withFileTypes: true });
+  const items = [];
+  let truncated = false;
+  const checkDescendantPolicy = pathPolicy.hasConfiguredDeniedPaths();
+  try {
+    const directory = await fs.promises.opendir(dirPath);
+    for await (const item of directory) {
+      // A permitted parent does not grant access to a denied descendant.
+      // Filter denied names before any metadata lookup or response formatting.
+      if (checkDescendantPolicy && enforcePathPolicy(path.join(dirPath, item.name), "read")) continue;
+      if (items.length >= MAX_DIRECTORY_LIST_ENTRIES) {
+        truncated = true;
+        break;
+      }
+      items.push(item);
+    }
+  } catch (error) {
+    return { content: [{ type: "text", text: `Unable to list directory: ${error.message}` }], isError: true };
+  }
   const lines = items.map(i => {
     const type = i.isDirectory() ? "DIR" : i.isFile() ? "FILE" : "OTHER";
     let stat = null;
-    try { stat = fs.statSync(path.join(dirPath, i.name)); } catch (e) {}
+    try { stat = fs.lstatSync(path.join(dirPath, i.name)); } catch (e) {}
     const size = stat ? stat.size : 0;
     const date = stat ? stat.mtime.toISOString().slice(0, 19).replace("T", " ") : "";
     return type.padEnd(5) + " " + String(size).padStart(10) + " " + date + " " + i.name;
   });
-  return { content: [{ type: "text", text: redactSensitive(lines.join("\n") || "(empty directory)") }] };
+  const notice = truncated ? `\n[truncated: showing the first ${MAX_DIRECTORY_LIST_ENTRIES} entries]` : "";
+  return { content: [{ type: "text", text: redactSensitive((lines.join("\n") || "(empty directory)") + notice) }] };
 }
 
-function nodeSearch(pattern, targetPath, include) {
+async function nodeSearch(pattern, targetPath, include, checkDescendantPolicy = false) {
   let matcher;
   try {
     matcher = new BoundedRegex(pattern);
@@ -64,35 +124,70 @@ function nodeSearch(pattern, targetPath, include) {
     : null;
   const results = [];
   const maxResults = 100;
+  let truncatedFiles = 0;
+  let scannedEntries = 0;
+  let scanLimited = false;
+  let resultLimited = false;
 
-  function visit(current, depth) {
+  async function visit(current, depth) {
     if (results.length >= maxResults || depth > 20) return;
+    if (scannedEntries >= MAX_SEARCH_SCAN_ENTRIES) { scanLimited = true; return; }
+    if (checkDescendantPolicy && enforcePathPolicy(current, "read")) return;
     let stat;
     try { stat = fs.lstatSync(current); } catch { return; }
     if (stat.isSymbolicLink()) return;
     if (stat.isFile()) {
       if (includeMatcher && !includeMatcher.test(path.basename(current))) return;
       let content;
-      try { content = fs.readFileSync(current, "utf-8"); } catch { return; }
-      for (const [index, line] of content.split(/\r?\n/).entries()) {
-        if (matcher.test(line)) {
-          results.push(`${current}:${index + 1}:${line}`);
-          if (results.length >= maxResults) return;
+      try {
+        const read = readTextBounded(current, { maxBytes: MAX_READ_OUTPUT_BYTES, noFollow: true });
+        content = read.content;
+        if (read.truncated) truncatedFiles++;
+      } catch { return; }
+      for (const line of iterateTextLines(content)) {
+        const text = line.text.endsWith("\r") ? line.text.slice(0, -1) : line.text;
+        if (matcher.test(text)) {
+          results.push(`${current}:${line.number}:${text.slice(0, 200)}`);
+          if (results.length >= maxResults) { resultLimited = true; return; }
         }
       }
       return;
     }
     if (!stat.isDirectory()) return;
-    let entries;
-    try { entries = fs.readdirSync(current, { withFileTypes: true }); } catch { return; }
-    for (const entry of entries) {
+    let directory;
+    try { directory = await fs.promises.opendir(current); } catch { return; }
+    for await (const entry of directory) {
       if (results.length >= maxResults) return;
-      visit(path.join(current, entry.name), depth + 1);
+      if (scannedEntries >= MAX_SEARCH_SCAN_ENTRIES) { scanLimited = true; return; }
+      scannedEntries++;
+      await visit(path.join(current, entry.name), depth + 1);
     }
   }
 
-  visit(targetPath, 0);
-  return { content: [{ type: "text", text: redactSensitive(results.join("\n") || "(no matches)") }] };
+  try { await visit(targetPath, 0); }
+  catch (error) { return { content: [{ type: "text", text: "Search error: " + error.message }], isError: true }; }
+  const text = results.join("\n") || "(no matches)";
+  const notices = [];
+  if (resultLimited) notices.push(`[partial search: result limit of ${maxResults} reached]`);
+  if (truncatedFiles) notices.push(`[partial search: scanned the first ${MAX_READ_OUTPUT_BYTES} bytes of ${truncatedFiles} oversized file(s)]`);
+  if (scanLimited) notices.push(`[partial search: stopped after ${MAX_SEARCH_SCAN_ENTRIES} entries]`);
+  return { content: [{ type: "text", text: redactSensitive([text, ...notices].join("\n")) }] };
+}
+
+function buildSearchArgs(searchCommand, pattern, targetPath, include) {
+  if (path.basename(searchCommand).toLowerCase().startsWith("rg")) {
+    const args = ["--json", "--max-count", "100"];
+    if (include) args.push("-g", include);
+    // Without `--`, an attacker-controlled pattern such as `--pre=...` is
+    // parsed as a ripgrep option and can execute a preprocessor command.
+    args.push("--", pattern, targetPath);
+    return args;
+  }
+
+  const args = ["-rn", "--max-count=100"];
+  if (include) args.push("--include=" + include);
+  args.push("--", pattern, targetPath);
+  return args;
 }
 
 async function sidekick_search({ pattern, path: searchPath, include }) {
@@ -106,19 +201,19 @@ async function sidekick_search({ pattern, path: searchPath, include }) {
   }
 
   const searchCommand = resolveCommandOnPath("rg") || resolveCommandOnPath("grep");
-  if (!searchCommand) return nodeSearch(pattern, targetPath, include);
+  const checkDescendantPolicy = pathPolicy.hasConfiguredDeniedPaths();
+  // rg/grep cannot apply Sidekick's canonical path policy to every visited
+  // descendant. Use the bounded in-process walker whenever denies are
+  // configured so nested denied roots are checked before reading each file.
+  if (!searchCommand || checkDescendantPolicy) return nodeSearch(pattern, targetPath, include, checkDescendantPolicy);
 
   try {
     let stdout;
     if (path.basename(searchCommand).toLowerCase().startsWith("rg")) {
-      const args = ["--json", "--max-count", "100"];
-      if (include) args.push("-g", include);
-      args.push(pattern, targetPath);
+      const args = buildSearchArgs(searchCommand, pattern, targetPath, include);
       stdout = execFileSync(searchCommand, args, { timeout: 30000, encoding: "utf-8", maxBuffer: 5 * 1024 * 1024, env: childProcessEnv() });
     } else {
-      const args = ["-rn", "--max-count=100"];
-      if (include) args.push("--include=" + include);
-      args.push(pattern, targetPath);
+      const args = buildSearchArgs(searchCommand, pattern, targetPath, include);
       stdout = execFileSync(searchCommand, args, { timeout: 30000, encoding: "utf-8", maxBuffer: 5 * 1024 * 1024, env: childProcessEnv() });
     }
     return { content: [{ type: "text", text: redactSensitive(stdout || "(no matches)") }] };
@@ -131,59 +226,81 @@ async function sidekick_search({ pattern, path: searchPath, include }) {
 async function sidekick_summarize({ path: filePath, max_lines, strategy, pattern }) {
   const authError = requireToolExecution({ tool: "filesystem.read" }, "tools.execute", "summarize");
   if (authError) return authError;
-  const maxLines = max_lines || 50;
+  const maxLines = boundedResultLimit(max_lines, MAX_SUMMARY_LINES);
   const strat = strategy || "head";
+  if (!["head", "tail", "grep", "stats"].includes(strat)) {
+    return { content: [{ type: "text", text: "Invalid strategy. Use: head, tail, grep, stats" }], isError: true };
+  }
+  if (strat === "grep" && !pattern) return { content: [{ type: "text", text: "pattern required for grep strategy" }], isError: true };
+  let re = null;
+  try { if (strat === "grep") re = new BoundedRegex(pattern, "i"); }
+  catch (error) { return { content: [{ type: "text", text: `Invalid pattern: ${error.message}` }], isError: true }; }
   const policyError = enforcePathPolicy(filePath, "read");
   if (policyError) return policyError;
   if (!fs.existsSync(filePath)) {
     return { content: [{ type: "text", text: "File not found: " + filePath }], isError: true };
   }
-  const stat = fs.statSync(filePath);
-  if (stat.size > 50 * 1024 * 1024) {
-    return { content: [{ type: "text", text: "File too large to summarize (>50MB): " + filePath }], isError: true };
+  let read;
+  try { read = readTextBounded(filePath, { maxBytes: MAX_FILE_CONTENT_BYTES, requireComplete: true, noFollow: true }); }
+  catch (error) {
+      return { content: [{ type: "text", text: error.code === "FILE_READ_TOO_LARGE" ? `File too large to summarize (>50MB): ${filePath}` : `Unable to read file: ${error.message}` }], isError: true };
   }
-  const content = fs.readFileSync(filePath, "utf-8");
-  const lines = content.split("\n");
-  let summary;
-  if (strat === "head") {
-    summary = lines.slice(0, maxLines).join("\n");
-  } else if (strat === "tail") {
-    summary = lines.slice(-maxLines).join("\n");
-  } else if (strat === "grep") {
-    if (!pattern) return { content: [{ type: "text", text: "pattern required for grep strategy" }], isError: true };
-    const re = new BoundedRegex(pattern, "i");
-    const matched = [];
-    for (let i = 0; i < lines.length && matched.length < maxLines; i++) {
-      if (re.test(lines[i])) {
-        const start = Math.max(0, i - 1);
-        const end = Math.min(lines.length, i + 2);
-        for (let j = start; j < end; j++) {
-          if (!matched.includes(lines[j])) matched.push(lines[j]);
-        }
-      }
+  const stat = { size: read.size };
+  const content = read.content;
+  const selected = [];
+  const includedLines = new Set();
+  let totalLines = 0;
+  let nonEmptyLines = 0;
+  let firstLine = null;
+  let lastLine = null;
+  let previousLine = null;
+  let includeFollowingLine = false;
+  let matches = 0;
+  const addGrepLine = line => {
+    if (!line || includedLines.has(line.number)) return;
+    includedLines.add(line.number);
+    selected.push(displayLine(line.text));
+  };
+  for (const line of iterateTextLines(content)) {
+    totalLines++;
+    if (line.text.trim()) nonEmptyLines++;
+    if (firstLine === null) firstLine = line.text;
+    lastLine = line.text;
+    if (strat === "head" && selected.length < maxLines) selected.push(displayLine(line.text));
+    else if (strat === "tail") {
+      selected.push(displayLine(line.text));
+      if (selected.length > maxLines) selected.shift();
+    } else if (strat === "grep") {
+      if (includeFollowingLine) addGrepLine(line);
+      if (matches < maxLines && re.test(line.text)) {
+        matches++;
+        addGrepLine(previousLine);
+        addGrepLine(line);
+        includeFollowingLine = true;
+      } else includeFollowingLine = false;
     }
-    summary = matched.join("\n");
-  } else if (strat === "stats") {
-    const nonEmpty = lines.filter(l => l.trim().length > 0);
+    previousLine = line;
+  }
+
+  let summary;
+  if (strat === "stats") {
     summary = [
       "File: " + filePath,
       "Size: " + stat.size + " bytes",
-      "Total lines: " + lines.length,
-      "Non-empty lines: " + nonEmpty.length,
-      "First line: " + (lines[0] || "(empty)"),
-      "Last line: " + (lines[lines.length - 1] || "(empty)")
+      "Total lines: " + totalLines,
+      "Non-empty lines: " + nonEmptyLines,
+      "First line: " + (displayLine(firstLine) || "(empty)"),
+      "Last line: " + (displayLine(lastLine) || "(empty)")
     ].join("\n");
-  } else {
-    return { content: [{ type: "text", text: "Invalid strategy. Use: head, tail, grep, stats" }], isError: true };
-  }
-  const header = "[Summary: " + lines.length + " lines, strategy=" + strat + (strat === "grep" ? ", pattern=" + pattern : "") + "]\n";
+  } else summary = selected.join("\n");
+  const header = "[Summary: " + totalLines + " lines, strategy=" + strat + (strat === "grep" ? ", pattern=" + pattern : "") + "]\n";
   return { content: [{ type: "text", text: redactSensitive(header + summary) }] };
 }
 
 async function sidekick_filter({ path: targetPath, pattern, after, before, max_results }) {
   const authError = requireToolExecution({ tool: "filesystem.read" }, "tools.execute", "filter");
   if (authError) return authError;
-  const maxResults = max_results || 50;
+  const maxResults = boundedResultLimit(max_results, MAX_FILTER_RESULTS);
   const policyError = enforcePathPolicy(targetPath, "read");
   if (policyError) return policyError;
   if (!fs.existsSync(targetPath)) {
@@ -192,34 +309,65 @@ async function sidekick_filter({ path: targetPath, pattern, after, before, max_r
   const stat = fs.statSync(targetPath);
   const results = [];
   if (stat.isFile()) {
-    const content = fs.readFileSync(targetPath, "utf-8");
-    const lines = content.split("\n");
-    const re = pattern ? new BoundedRegex(pattern, "i") : null;
-    for (let i = 0; i < lines.length && results.length < maxResults; i++) {
-      if (!re || re.test(lines[i])) results.push({ line: i + 1, text: lines[i].substring(0, 200) });
+    let content;
+    try { content = readTextBounded(targetPath, { maxBytes: MAX_FILE_CONTENT_BYTES, requireComplete: true, noFollow: true }).content; }
+    catch (error) {
+      return { content: [{ type: "text", text: error.code === "FILE_READ_TOO_LARGE" ? `File exceeds the ${MAX_FILE_CONTENT_BYTES}-byte filter limit` : `Unable to read file: ${error.message}` }], isError: true };
     }
+    const re = pattern ? new BoundedRegex(pattern, "i") : null;
+    let offset = 0;
+    let lineNumber = 1;
+    let resultLimited = false;
+    while (offset <= content.length && results.length < maxResults) {
+      const newline = content.indexOf("\n", offset);
+      const end = newline < 0 ? content.length : newline;
+      const line = content.slice(offset, end);
+      if (!re || re.test(line)) results.push({ line: lineNumber, text: line.substring(0, 200) });
+      if (newline < 0) break;
+      offset = newline + 1;
+      lineNumber++;
+    }
+    resultLimited = results.length >= maxResults && offset < content.length;
+    const response = [{ type: "text", text: redactSensitive(JSON.stringify(results, null, 2)) }];
+    if (resultLimited) response.push({ type: "text", text: `[partial filter: result limit of ${maxResults} reached]` });
+    return { content: response };
   } else if (stat.isDirectory()) {
     const afterDate = after ? new Date(after).getTime() : 0;
     const beforeDate = before ? new Date(before).getTime() : Infinity;
     const re = pattern ? new BoundedRegex(pattern, "i") : null;
-    function walkDir(dir, depth) {
-      if (depth > 5 || results.length >= maxResults) return;
-      let entries;
-      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
-      for (const entry of entries) {
-        if (results.length >= maxResults) break;
+    let scannedEntries = 0;
+    let resultLimited = false;
+    let scanLimited = false;
+    const checkDescendantPolicy = pathPolicy.hasConfiguredDeniedPaths();
+    async function walkDir(dir, depth) {
+      if (depth > 5) return;
+      if (results.length >= maxResults) { resultLimited = true; return; }
+      if (scannedEntries >= MAX_FILTER_SCAN_ENTRIES) { scanLimited = true; return; }
+      if (checkDescendantPolicy && enforcePathPolicy(dir, "read")) return;
+      let directory;
+      try { directory = await fs.promises.opendir(dir); } catch { return; }
+      for await (const entry of directory) {
+        if (results.length >= maxResults) { resultLimited = true; break; }
+        if (scannedEntries >= MAX_FILTER_SCAN_ENTRIES) { scanLimited = true; break; }
+        scannedEntries++;
         const fullPath = path.join(dir, entry.name);
+        if (checkDescendantPolicy && enforcePathPolicy(fullPath, "read")) continue;
         try {
-          const s = fs.statSync(fullPath);
+          const s = fs.lstatSync(fullPath);
+          if (s.isSymbolicLink()) continue;
           if (entry.isDirectory()) {
-            if (!entry.name.startsWith(".") && entry.name !== "node_modules") walkDir(fullPath, depth + 1);
+            if (!entry.name.startsWith(".") && entry.name !== "node_modules") await walkDir(fullPath, depth + 1);
           } else if (entry.isFile() && s.mtimeMs >= afterDate && s.mtimeMs <= beforeDate && (!re || re.test(entry.name))) {
             results.push({ path: fullPath, size: s.size, modified: s.mtime.toISOString().slice(0, 19) });
           }
         } catch (e) {}
       }
     }
-    walkDir(targetPath, 0);
+    await walkDir(targetPath, 0);
+    const response = [{ type: "text", text: redactSensitive(JSON.stringify(results, null, 2)) }];
+    if (resultLimited) response.push({ type: "text", text: `[partial filter: result limit of ${maxResults} reached]` });
+    if (scanLimited) response.push({ type: "text", text: `[partial filter: stopped after ${MAX_FILTER_SCAN_ENTRIES} entries]` });
+    return { content: response };
   }
   return { content: [{ type: "text", text: redactSensitive(JSON.stringify(results, null, 2)) }] };
 }
@@ -233,8 +381,14 @@ async function sidekick_diff_files({ path_a, path_b, format }) {
   if (policyErrorB) return policyErrorB;
   if (!fs.existsSync(path_a)) return { content: [{ type: "text", text: "File not found: " + path_a }], isError: true };
   if (!fs.existsSync(path_b)) return { content: [{ type: "text", text: "File not found: " + path_b }], isError: true };
-  const contentA = fs.readFileSync(path_a, "utf-8");
-  const contentB = fs.readFileSync(path_b, "utf-8");
+  let contentA;
+  let contentB;
+  try {
+    contentA = readTextBounded(path_a, { maxBytes: MAX_FILE_CONTENT_BYTES, requireComplete: true, noFollow: true }).content;
+    contentB = readTextBounded(path_b, { maxBytes: MAX_FILE_CONTENT_BYTES, requireComplete: true, noFollow: true }).content;
+  } catch (error) {
+    return { content: [{ type: "text", text: error.code === "FILE_READ_TOO_LARGE" ? `Files exceed the ${MAX_FILE_CONTENT_BYTES}-byte per-file diff limit` : `Unable to read files: ${error.message}` }], isError: true };
+  }
   if (format === "summary") {
     const linesA = contentA.split("\n");
     const linesB = contentB.split("\n");
@@ -273,16 +427,45 @@ async function sidekick_write({ path: filePath, content }) {
   if (authError) return authError;
   const policyError = enforcePathPolicy(filePath, "write");
   if (policyError) return policyError;
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, content, "utf-8");
-  const stat = fs.statSync(filePath);
-  return { content: [{ type: "text", text: "Written " + stat.size + " bytes to " + filePath }] };
+  if (typeof content !== "string") {
+    return { content: [{ type: "text", text: "File content must be text" }], isError: true, code: "invalid_argument" };
+  }
+  const byteSize = Buffer.byteLength(content, "utf8");
+  if (byteSize > MAX_FILE_CONTENT_BYTES) {
+    return { content: [{ type: "text", text: `File content exceeds the ${MAX_FILE_CONTENT_BYTES}-byte write limit` }], isError: true, code: "size_limit_exceeded" };
+  }
+
+  let mode = 0o666;
+  try {
+    const existing = fs.lstatSync(filePath);
+    if (existing.isSymbolicLink() || !existing.isFile()) {
+      return { content: [{ type: "text", text: "Write target must be a regular, non-symlink file" }], isError: true, code: "invalid_path" };
+    }
+    mode = existing.mode & 0o777;
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      return { content: [{ type: "text", text: `Unable to inspect write target: ${error.message}` }], isError: true, code: "write_failed" };
+    }
+  }
+
+  try {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    const recheckedPolicyError = enforcePathPolicy(filePath, "write");
+    if (recheckedPolicyError) return recheckedPolicyError;
+    // Atomic replacement prevents readers from observing a truncated or
+    // partially-written file. The helper creates a unique exclusive temp file,
+    // enforces the byte cap again, and publishes with rename.
+    writeTextFile(filePath, content, { maxBytes: MAX_FILE_CONTENT_BYTES, mode });
+    return { content: [{ type: "text", text: `Written ${byteSize} bytes to ${filePath}` }] };
+  } catch (error) {
+    return { content: [{ type: "text", text: `Unable to write file: ${error.message}` }], isError: true, code: "write_failed" };
+  }
 }
 
 async function sidekick_find({ path: searchPath, name, modified_after, modified_before, size_min, size_max, content, max_results }) {
   const authError = requireToolExecution({ tool: "filesystem.read" }, "tools.execute", "find");
   if (authError) return authError;
-  const maxResults = max_results || 50;
+  const maxResults = boundedResultLimit(max_results, MAX_FIND_RESULTS);
   const policyError = enforcePathPolicy(searchPath, "read");
   if (policyError) return policyError;
   if (!fs.existsSync(searchPath)) return { content: [{ type: "text", text: "Path not found: " + searchPath }], isError: true };
@@ -294,24 +477,35 @@ async function sidekick_find({ path: searchPath, name, modified_after, modified_
   const nameRe = namePattern ? new BoundedRegex(namePattern, "i") : null;
   const contentRe = content ? new BoundedRegex(content, "i") : null;
   const results = [];
-  function walk(dir, depth) {
-    if (depth > 8 || results.length >= maxResults) return;
-    let entries;
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
-    for (const entry of entries) {
-      if (results.length >= maxResults) break;
+  let scannedEntries = 0;
+  let resultLimited = false;
+  let scanLimited = false;
+  const checkDescendantPolicy = pathPolicy.hasConfiguredDeniedPaths();
+  async function walk(dir, depth) {
+    if (depth > 8) return;
+    if (results.length >= maxResults) { resultLimited = true; return; }
+    if (scannedEntries >= MAX_FIND_SCAN_ENTRIES) { scanLimited = true; return; }
+    if (checkDescendantPolicy && enforcePathPolicy(dir, "read")) return;
+    let directory;
+    try { directory = await fs.promises.opendir(dir); } catch { return; }
+    for await (const entry of directory) {
+      if (results.length >= maxResults) { resultLimited = true; break; }
+      if (scannedEntries >= MAX_FIND_SCAN_ENTRIES) { scanLimited = true; break; }
+      scannedEntries++;
       if (entry.name.startsWith(".") || entry.name === "node_modules" || entry.name === "__pycache__") continue;
       const fullPath = path.join(dir, entry.name);
+      if (checkDescendantPolicy && enforcePathPolicy(fullPath, "read")) continue;
       try {
-        const s = fs.statSync(fullPath);
-        if (entry.isDirectory()) walk(fullPath, depth + 1);
+        const s = fs.lstatSync(fullPath);
+        if (s.isSymbolicLink()) continue;
+        if (entry.isDirectory()) await walk(fullPath, depth + 1);
         else if (entry.isFile()) {
           if (nameRe && !nameRe.test(entry.name)) continue;
           if (s.mtimeMs < afterMs || s.mtimeMs > beforeMs) continue;
           if (s.size < sizeMin || s.size > sizeMax) continue;
           if (contentRe) {
             try {
-              const fileContent = fs.readFileSync(fullPath, "utf-8").substring(0, 1024 * 1024);
+              const fileContent = readTextBounded(fullPath, { maxBytes: DEFAULT_FILE_READ_BYTES, noFollow: true }).content;
               if (!contentRe.test(fileContent)) continue;
             } catch (e) { continue; }
           }
@@ -320,8 +514,11 @@ async function sidekick_find({ path: searchPath, name, modified_after, modified_
       } catch (e) {}
     }
   }
-  walk(searchPath, 0);
-  return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
+  await walk(searchPath, 0);
+  const response = [{ type: "text", text: JSON.stringify(results, null, 2) }];
+  if (resultLimited) response.push({ type: "text", text: `[partial search: result limit of ${maxResults} reached]` });
+  if (scanLimited) response.push({ type: "text", text: `[partial search: stopped after ${MAX_FIND_SCAN_ENTRIES} entries]` });
+  return { content: response };
 }
 
 function parseSize(str) {
@@ -337,9 +534,12 @@ function parseSize(str) {
 const descriptors = Object.freeze([
   Object.freeze({
     name: "read",
-    description: "Read a file from the remote filesystem",
-    schema: z.object({ path: z.string().describe("Absolute path to the file to read") }),
-    args: { path: "string" },
+    description: "Read up to 1 MiB from a file on the remote filesystem; use offset to continue a larger file",
+    schema: z.object({
+      path: z.string().describe("Absolute path to the file to read"),
+      offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional().default(0).describe("Byte offset for reading the next bounded file segment"),
+    }),
+    args: { path: "string", offset: "number (optional, byte offset; default 0)" },
     risk: "medium",
     category: "Core",
     source: "builtin",
@@ -377,7 +577,7 @@ const descriptors = Object.freeze([
     description: "Summarize large files before returning to reduce token usage. Strategies: head, tail, grep, stats.",
     schema: z.object({
       path: z.string().describe("File path to summarize"),
-      max_lines: z.number().optional().describe("Maximum lines to return (default: 50)"),
+      max_lines: z.number().int().min(1).max(MAX_SUMMARY_LINES).optional().describe(`Maximum lines or matches to return (default: 50, maximum: ${MAX_SUMMARY_LINES})`),
       strategy: z.enum(["head", "tail", "grep", "stats"]).optional().describe("Summarization strategy (default: head)"),
       pattern: z.string().max(512).optional().describe("Regex pattern for grep strategy (maximum 512 characters)"),
     }),
@@ -396,7 +596,7 @@ const descriptors = Object.freeze([
       pattern: z.string().max(512).optional().describe("Regex pattern to match (maximum 512 characters)"),
       after: z.string().optional().describe("ISO date: include files modified after this date"),
       before: z.string().optional().describe("ISO date: include files modified before this date"),
-      max_results: z.number().optional().describe("Maximum results to return (default: 50)"),
+      max_results: z.number().int().min(1).max(MAX_FILTER_RESULTS).optional().describe(`Maximum results to return (default: 50, maximum: ${MAX_FILTER_RESULTS})`),
     }),
     args: { path: "string (file or directory path)", pattern: "string (optional, regex pattern)", after: "string (optional, ISO date for files modified after)", before: "string (optional, ISO date for files modified before)", max_results: "number (optional, default 50)" },
     risk: "medium",
@@ -423,7 +623,7 @@ const descriptors = Object.freeze([
   Object.freeze({
     name: "write",
     description: "Write content to a file on the remote machine",
-    schema: z.object({ path: z.string().describe("Absolute path to write to"), content: z.string().describe("File content to write") }),
+    schema: z.object({ path: z.string().describe("Absolute path to write to"), content: z.string().max(MAX_FILE_CONTENT_BYTES).describe(`File content (maximum ${MAX_FILE_CONTENT_BYTES} characters; 50 MiB UTF-8 write limit)`) }),
     args: { path: "string", content: "string" },
     risk: "critical",
     category: "Core",
@@ -442,7 +642,7 @@ const descriptors = Object.freeze([
       size_min: z.string().optional().describe("Minimum file size (e.g. '1KB', '1MB')"),
       size_max: z.string().optional().describe("Maximum file size (e.g. '10MB')"),
       content: z.string().max(512).optional().describe("Regex pattern to match file contents (maximum 512 characters)"),
-      max_results: z.number().optional().describe("Maximum results (default: 50)"),
+      max_results: z.number().int().min(1).max(MAX_FIND_RESULTS).optional().describe(`Maximum results (default: 50, maximum: ${MAX_FIND_RESULTS})`),
     }),
     args: { path: "string (directory to search)", name: "string (optional, glob pattern e.g. '*.js')", modified_after: "string (optional, ISO date)", modified_before: "string (optional, ISO date)", size_min: "string (optional, e.g. '1KB', '1MB')", size_max: "string (optional, e.g. '10MB')", content: "string (optional, regex pattern to match file contents)", max_results: "number (optional, default 50)" },
     risk: "medium",
@@ -453,4 +653,4 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_read, sidekick_list, sidekick_search, sidekick_summarize, sidekick_filter, sidekick_write, sidekick_diff_files, sidekick_find };
+module.exports = { descriptors, sidekick_read, sidekick_list, sidekick_search, sidekick_summarize, sidekick_filter, sidekick_write, sidekick_diff_files, sidekick_find, buildSearchArgs, boundedResultLimit, MAX_DIRECTORY_LIST_ENTRIES, MAX_SEARCH_SCAN_ENTRIES, MAX_FIND_RESULTS, MAX_FIND_SCAN_ENTRIES, MAX_FILTER_RESULTS, MAX_FILTER_SCAN_ENTRIES, MAX_SUMMARY_LINES };

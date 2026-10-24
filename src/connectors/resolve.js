@@ -23,7 +23,12 @@ try { kernel = require("../platform/kernel"); } catch { kernel = null; }
 // failures throw before decryption so callers cannot fall through to a weaker
 // credential source.
 function authorizeSecretUse(context, resource) {
-  const authIdentity = context?.authIdentity || null;
+  const storedIdentity = context?.authIdentity || null;
+  let authIdentity = storedIdentity;
+  if (storedIdentity?.credential_id) {
+    authIdentity = require("../core/authentication").refreshCredentialIdentity(storedIdentity);
+    if (!authIdentity) return { ok: false, code: "credential_invalid" };
+  }
   const principalId = authIdentity?.principal_id || null;
   if (!principalId) return { ok: false, code: "unauthenticated" };
   return authorization.authorize({

@@ -14,6 +14,10 @@ function requestId(context = {}) { return context.requestId || `node_req_${Date.
 function workspaceIdFromArgs(args = {}) { return args.workspace_id || args.workspaceId || null; }
 function repositoryIdFromArgs(args = {}) { return args.repository_id || args.repositoryId || null; }
 function isNodeDispatchEnabled(context = {}) { return context.executionLocation !== "server" && context.allowNodeExecution !== false; }
+function requiredIsolationForTool(toolName, args = {}) {
+  if (toolName === "bash" || (toolName === "dev_verify" && args?.dry_run !== true)) return "bubblewrap";
+  return null;
+}
 function pathArguments(args = {}) {
   return Object.entries(args).filter(([key, value]) => typeof value === "string" && /(?:^path$|_path$|^path_[ab]$|^destination$|^output$|^cwd$)/i.test(key)).map(([, value]) => value);
 }
@@ -39,6 +43,7 @@ async function maybeExecute(descriptor, args, context = {}, nodeAuthorization = 
   manager.ensureSchema();
   const requestedPaths = pathArguments(args);
   const requiredWorkspacePermission = manager.workspacePermissionForTool(descriptor.name, args);
+  const requiredIsolation = requiredIsolationForTool(descriptor.name, args);
   const nodes = manager.list().filter(node => node.worker && node.worker.connectionState === "online");
   const placement = selectNode(nodes.map(node => ({ nodeId: node.nodeId, capabilities: {
     ...node.capabilities,
@@ -49,7 +54,7 @@ async function maybeExecute(descriptor, args, context = {}, nodeAuthorization = 
     networkScopes: node.authorizedNetworkScopes,
     healthy: node.capabilityState === "healthy",
     authorized: node.worker.adminState === "enabled" && node.worker.credentialState === "active",
-  }, node })), descriptor, { descriptorSetHash: context.descriptorSetHash, protocolVersion: "1", requestedPaths, requiredWorkspacePermission });
+  }, node })), descriptor, { descriptorSetHash: context.descriptorSetHash, protocolVersion: "1", requestedPaths, requiredWorkspacePermission, requiredIsolation });
   if (!placement.selected) {
     const pathIsRemoteOnly = requestedPaths.length > 0 && requestedPaths.some(target => !visibleOnServer(target));
     if (pathIsRemoteOnly) return {
@@ -132,4 +137,4 @@ async function maybeExecute(descriptor, args, context = {}, nodeAuthorization = 
   return { content: [{ type: "text", text: "Node execution timed out; cancellation was requested and the operation will not be automatically repeated" }], isError: true, code: "node_execution_timeout", operationMayContinue: cancellation?.state === "leased", nodeExecution: { location: "node", jobId: job.jobId, nodeId: selected.nodeId, timeoutMs: Number(context.timeoutMs) || null, timedOutAt: new Date().toISOString(), cancellation_requested: Boolean(cancellation) } };
 }
 
-module.exports = { maybeExecute };
+module.exports = { maybeExecute, requiredIsolationForTool };

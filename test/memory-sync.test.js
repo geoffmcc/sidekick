@@ -131,10 +131,12 @@ const syncData = {
       source: "remote",
       source_tool: "test",
       tags: ["remote"],
-      metadata: { remote: true },
+      metadata: { remote: true, source_authority: 100, verified: true },
       enabled: true,
       automatic: false,
       times_confirmed: 5,
+      state: "confirmed",
+      requires_confirmation: false,
       created_at: new Date(Date.now() - 7200000).toISOString(),
       updated_at: new Date().toISOString(),
       last_seen_at: new Date().toISOString(),
@@ -152,8 +154,15 @@ assert.ok(importResult.imported >= 1, "Should import at least 1 memory");
 
 const importedMem = dbStore.searchMemories({ project: "sync_test", type: "fact", limit: 10 }).find(m => m.content.includes("Remote fact"));
 assert.ok(importedMem, "Imported memory should be findable");
-assert.strictEqual(importedMem.origin_machine_id, remoteMachineId, "Imported memory should have remote origin");
-assert.strictEqual(importedMem.origin_user_id, remoteUserId, "Imported memory should have remote user ID");
+assert.strictEqual(importedMem.origin_machine_id, machineId, "imported memory must be attributed to this local database");
+assert.strictEqual(importedMem.origin_user_id, "test-user-456", "untrusted payload must not choose the local user identity");
+assert.strictEqual(importedMem.state, "pending", "synced memories remain untrusted until explicitly confirmed");
+assert.strictEqual(importedMem.requires_confirmation, true, "sync payload cannot supply its own confirmation");
+assert.strictEqual(importedMem.last_confirmed_at, null, "remote confirmation timestamps are not trusted");
+assert.strictEqual(importedMem.times_confirmed, 0, "remote confirmation counts are not trusted");
+assert.strictEqual(importedMem.source, "sync", "remote source labels cannot impersonate local provenance");
+assert.notStrictEqual(importedMem.source_authority, 100, "remote metadata cannot claim trusted authority");
+assert.strictEqual(importedMem.metadata.sync_metadata.source_authority, 100, "untrusted metadata remains available only in a nested review field");
 console.log("  ✓ Sync import with origin tracking works");
 
 console.log("Test sync import conflict resolution");
@@ -190,15 +199,18 @@ const conflictingSyncData = {
   ]
 };
 
+const localBeforeConflict = dbStore.getMemoryById(mem1.id, { includeDisabled: true });
 const conflictResult = dbStore.importFromSync(conflictingSyncData, { strategy: "highest_confidence" });
 assert.ok(conflictResult, "Conflict import should return result");
 assert.ok(conflictResult.conflicts >= 1, "Should have at least 1 conflict resolved");
 
 const updatedMem = dbStore.searchMemories({ project: "sync_test", type: "fact", limit: 10 }).find(m => m.id === mem1.id);
 assert.ok(updatedMem, "Updated memory should still exist");
-assert.strictEqual(updatedMem.confidence, 0.95, "Memory should have updated confidence");
-assert.strictEqual(updatedMem.times_confirmed, 10, "Memory should have updated confirmation count");
-console.log("  ✓ Conflict resolution updates memory correctly");
+assert.strictEqual(updatedMem.confidence, localBeforeConflict.confidence, "untrusted sync data cannot raise local confidence");
+assert.strictEqual(updatedMem.times_confirmed, localBeforeConflict.times_confirmed, "untrusted sync data cannot forge confirmation count");
+assert.strictEqual(updatedMem.summary, localBeforeConflict.summary, "untrusted sync data cannot replace local summaries");
+assert.strictEqual(updatedMem.source, localBeforeConflict.source, "untrusted sync data cannot forge local provenance");
+console.log("  ✓ Conflicting sync data cannot rewrite local trust state");
 
 console.log("Test incremental sync with since parameter");
 

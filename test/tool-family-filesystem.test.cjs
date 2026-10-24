@@ -71,9 +71,36 @@ console.log('Running Filesystem Family Tests...');
     assert.ok(text(result).includes('one.txt'));
     assert.ok(text(result).includes('two.js'));
 
+    const deniedDirectory = path.join(ROOT, 'private');
+    fs.mkdirSync(deniedDirectory);
+    fs.writeFileSync(path.join(deniedDirectory, 'private.txt'), 'nested-denied-marker', 'utf8');
+    process.env.SIDEKICK_DENIED_PATHS = deniedDirectory;
+    try {
+      result = await family.sidekick_list({ path: ROOT });
+      assert.ok(!text(result).includes('private'), 'directory listing omits a denied child and its metadata');
+      result = await family.sidekick_search({ pattern: 'nested-denied-marker', path: ROOT });
+      assert.ok(!text(result).includes('nested-denied-marker'), 'search does not read denied descendants');
+      result = await family.sidekick_find({ path: ROOT, name: 'private.txt' });
+      assert.deepStrictEqual(JSON.parse(text(result)), [], 'find does not return entries under denied descendants');
+      result = await family.sidekick_filter({ path: ROOT, pattern: 'private' });
+      assert.ok(!text(result).includes('private.txt'), 'filter does not return denied descendant metadata');
+    } finally {
+      delete process.env.SIDEKICK_DENIED_PATHS;
+      fs.rmSync(deniedDirectory, { recursive: true, force: true });
+    }
+
     result = await family.sidekick_search({ pattern: 'marker', path: ROOT, include: '*.js' });
     assert.ok(text(result).includes('two.js'));
     assert.strictEqual(text(await family.sidekick_search({ pattern: 'missing', path: ROOT })), 'No matches found');
+    const originalPath = process.env.PATH;
+    process.env.PATH = TEST_DATA_DIR;
+    try {
+      result = await family.sidekick_search({ pattern: 'marker', path: ROOT, include: '*.js' });
+      assert.ok(text(result).includes('two.js'), 'bounded Node fallback remains functional when rg and grep are unavailable');
+    } finally {
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+    }
 
     const summaryPath = path.join(ROOT, 'summary.txt');
     result = await family.sidekick_summarize({ path: summaryPath, max_lines: 2 });
@@ -86,6 +113,14 @@ console.log('Running Filesystem Family Tests...');
     result = await family.sidekick_summarize({ path: summaryPath, strategy: 'stats' });
     assert.ok(text(result).includes('strategy=stats'));
     assert.ok(text(result).includes('Non-empty lines: 5'));
+    const manyLinesPath = path.join(ROOT, 'many-lines.txt');
+    fs.writeFileSync(manyLinesPath, Array.from({ length: 700 }, (_, index) => `line-${index}`).join('\n'), 'utf8');
+    result = await tools.dispatchTool({ name: 'summarize', args: { path: manyLinesPath, max_lines: 500 }, context: authorizedContext });
+    assert.equal(text(result).split('\n').length, 501, 'summary output is capped without allocating a split array for every input line');
+    result = await tools.dispatchTool({ name: 'summarize', args: { path: manyLinesPath, strategy: 'stats' }, context: authorizedContext });
+    assert.ok(text(result).includes('Total lines: 700'));
+    const oversizedSummary = await tools.dispatchTool({ name: 'summarize', args: { path: manyLinesPath, max_lines: 100000 }, context: authorizedContext });
+    assert.equal(oversizedSummary.isError, true, 'schema rejects caller-supplied summary limits above the platform ceiling');
     result = await family.sidekick_summarize({ path: summaryPath, strategy: 'grep' });
     assert.strictEqual(result.isError, true);
     assert.strictEqual(text(result), 'pattern required for grep strategy');
@@ -100,6 +135,14 @@ console.log('Running Filesystem Family Tests...');
     assert.ok(!text(result).includes('secret=token'));
     result = await family.sidekick_filter({ path: ROOT, pattern: 'two', max_results: 1 });
     assert.strictEqual(JSON.parse(text(result)).length, 1);
+    result = await tools.dispatchTool({ name: 'filter', args: { path: summaryPath, max_results: 1 }, context: authorizedContext });
+    assert.strictEqual(JSON.parse(text(result)).length, 1, 'file filter caps its result count');
+    assert.match(result.content[1]?.text || '', /result limit of 1 reached/, 'file filter reports when additional lines were omitted');
+    result = await tools.dispatchTool({ name: 'filter', args: { path: ROOT, max_results: 2 }, context: authorizedContext });
+    assert.strictEqual(JSON.parse(text(result)).length, 2, 'directory filter caps its result count');
+    assert.match(result.content[1]?.text || '', /result limit of 2 reached/, 'directory filter reports partial results separately');
+    result = await tools.dispatchTool({ name: 'filter', args: { path: ROOT, max_results: 100000 }, context: authorizedContext });
+    assert.strictEqual(result.isError, true, 'filter schema rejects caller-supplied result ceilings above the platform limit');
 
     const comparePath = path.join(ROOT, 'compare.txt');
     result = await family.sidekick_diff_files({ path_a: path.join(ROOT, 'one.txt'), path_b: comparePath, format: 'summary' });
@@ -113,13 +156,24 @@ console.log('Running Filesystem Family Tests...');
     fs.writeFileSync(path.join(ROOT, 'two.js.bak'), 'marker', 'utf8');
     result = await family.sidekick_find({ path: ROOT, name: '*.js' });
     assert.deepStrictEqual(JSON.parse(text(result)).map(entry => path.basename(entry.path)), ['two.js']);
-    result = await family.sidekick_find({ path: ROOT, size_min: '1KB' });
+    result = await family.sidekick_find({ path: ROOT, size_min: '10KB' });
     assert.deepStrictEqual(JSON.parse(text(result)), []);
 
     result = await tools.dispatchTool({ name: 'sidekick_read', args: { path: path.join(ROOT, 'two.js') }, context: authorizedContext });
     assert.ok(text(result).includes('marker'));
     result = await tools.dispatchTool({ name: 'sidekick_list', args: { path: ROOT }, context: authorizedContext });
     assert.ok(text(result).includes('one.txt'));
+    if (process.platform !== 'win32') {
+      const linkTarget = path.join(TEST_DATA_DIR, 'list-metadata-target.txt');
+      const linkPath = path.join(ROOT, 'metadata-link.txt');
+      fs.writeFileSync(linkTarget, 'x'.repeat(4096));
+      fs.symlinkSync(linkTarget, linkPath);
+      result = await tools.dispatchTool({ name: 'sidekick_list', args: { path: ROOT }, context: authorizedContext });
+      const linkLine = text(result).split('\n').find(line => line.endsWith('metadata-link.txt'));
+      assert.ok(linkLine?.startsWith('OTHER'), 'directory listing identifies symlinks without following them');
+      assert.match(linkLine, new RegExp(`\\b${fs.lstatSync(linkPath).size}\\b`), 'listing reports link metadata, not target size');
+      assert.doesNotMatch(linkLine, new RegExp(`\\b${fs.statSync(linkPath).size}\\b`), 'listing does not disclose target file metadata');
+    }
     result = await tools.dispatchTool({ name: 'sidekick_search', args: { pattern: 'marker', path: ROOT }, context: authorizedContext });
     assert.ok(text(result).includes('two.js'));
     result = await tools.dispatchTool({ name: 'sidekick_summarize', args: { path: path.join(ROOT, 'summary.txt'), max_lines: 1 }, context: authorizedContext });
@@ -128,6 +182,17 @@ console.log('Running Filesystem Family Tests...');
     assert.ok(text(result).includes('strategy=head'));
     result = await tools.dispatchTool({ name: 'sidekick_find', args: { path: ROOT, name: '*.js' }, context: authorizedContext });
     assert.strictEqual(JSON.parse(text(result)).length, 1);
+
+    for (let index = 0; index < 505; index++) {
+      fs.writeFileSync(path.join(ROOT, `bounded_${String(index).padStart(3, '0')}.txt`), '');
+    }
+    result = await tools.dispatchTool({ name: 'sidekick_list', args: { path: ROOT }, context: authorizedContext });
+    assert.ok(text(result).includes('[truncated: showing the first 500 entries]'), 'directory listing reports its fixed entry ceiling');
+    result = await tools.dispatchTool({ name: 'sidekick_find', args: { path: ROOT, name: 'bounded_*.txt', max_results: 500 }, context: authorizedContext });
+    assert.strictEqual(JSON.parse(text(result)).length, 500, 'file finder cannot return more than its fixed result ceiling');
+    assert.match(result.content[1]?.text || '', /result limit of 500 reached/, 'the result remains valid JSON and reports a partial search separately');
+    const oversizedFind = await tools.dispatchTool({ name: 'sidekick_find', args: { path: ROOT, max_results: 100000 }, context: authorizedContext });
+    assert.strictEqual(oversizedFind.isError, true, 'schema rejects caller-supplied result ceilings above the platform limit');
 
     process.env.SIDEKICK_ALLOWED_PATHS = ROOT;
     result = await family.sidekick_read({ path: OUTSIDE });

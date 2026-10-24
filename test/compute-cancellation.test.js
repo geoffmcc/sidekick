@@ -48,6 +48,7 @@ function test(name, fn) {
 function enrollWorker({ maxConcurrentJobs = 1, openvino = false } = {}) {
   const token = workerManager.createEnrollmentToken({
     displayName: "cancel-test-worker", trustLevel: "trusted", maxConcurrentJobs,
+    allowedDataClassifications: ["public", "internal", "private"],
   });
   const executors = [{ type: "mock.inference", capabilities: ["chat"] }];
   if (openvino) executors.push({ type: "openvino.text_embedding", capabilities: [`openvino.text_embedding:${QWEN}:NPU:seq512:batch1:certified`] });

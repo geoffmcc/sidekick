@@ -35,6 +35,15 @@ test("manifest resource ownership is explicit and complete", () => {
   assert.throws(() => validateContract({ kind: "isolated", provisioner: "none", fixture: "fixture", cleanup: "no-op", cleanup_owner: "suite", lock_identity: "fixture", supported_platforms: ["linux"] }, "fixture resource"), /meaningful registered name/);
 });
 
+test("fixture provisioners cannot add loader variables to suite child environments", async () => {
+  const name = "runner-loader-env-fixture";
+  registerProvisioner(name, () => ({ env: { LD_AUDIT: "attacker-controlled" } }));
+  const suite = fixtureSuite("fixture.test.js", {
+    environment: { kind: "isolated", provisioner: name, fixture: "environment", cleanup: "no-op", cleanup_owner: "suite", lock_identity: "loader-env", supported_platforms: ["linux", "win32", "darwin"] },
+  });
+  await assert.rejects(() => provisionSuiteResources(suite), /invalid scoped environment key LD_AUDIT/);
+});
+
 test("resource provisioners give children distinct scoped temp resources and env", async () => {
   const first = temporarySuite("const test = require('node:test'); test('scope', () => { console.log(JSON.stringify({ root: process.env.SIDEKICK_TEST_SUITE_ROOT, db: process.env.SIDEKICK_TEST_DB_FILE, port: process.env.SIDEKICK_TEST_PORT })); });");
   const second = temporarySuite("const test = require('node:test'); test('scope', () => { console.log(JSON.stringify({ root: process.env.SIDEKICK_TEST_SUITE_ROOT, db: process.env.SIDEKICK_TEST_DB_FILE, port: process.env.SIDEKICK_TEST_PORT })); });");

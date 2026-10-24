@@ -21,6 +21,7 @@ const { getStaticToolRisk } = require("../src/tools/metadata");
 const { collectSnapshotRows } = require("../src/db/snapshot-bounds");
 const { createEscalationApprovalRef, validateEscalationApprovalRef } = require("../src/agent/escalation-approval");
 const { verifyRequiredRuntimeSecrets } = require("../scripts/verify-runtime-secrets");
+const { boundedResultLimit, MAX_DIRECTORY_LIST_ENTRIES, MAX_SEARCH_SCAN_ENTRIES, MAX_FIND_RESULTS, MAX_FIND_SCAN_ENTRIES, MAX_FILTER_RESULTS, MAX_FILTER_SCAN_ENTRIES, MAX_SUMMARY_LINES } = require("../src/tools/families/filesystem");
 
 const root = path.resolve(__dirname, "..");
 
@@ -94,7 +95,7 @@ test("all Core systemd services explicitly locate file-backed runtime secrets", 
 
 test("deployment secret preflight covers every canonical file-backed secret", () => {
   const { FILE_SECRET_NAMES } = require("../src/core/runtime-secrets");
-  const preflight = fs.readFileSync(path.join(root, "scripts/ensure-secret-config.sh"), "utf8");
+  const preflight = fs.readFileSync(path.join(root, "scripts/ensure-secret-config.js"), "utf8");
   for (const name of FILE_SECRET_NAMES) {
     assert.ok(preflight.includes(name), `deployment preflight must reject ${name} in .env`);
   }
@@ -279,6 +280,22 @@ test("prediction and history pagination offsets stay within returned-data bounds
   assert.equal(clampHistoryOffset(Number.MAX_SAFE_INTEGER), 5000);
 });
 
+test("filesystem directory listing and search have fixed result and scan ceilings", () => {
+  assert.equal(MAX_DIRECTORY_LIST_ENTRIES, 500);
+  assert.equal(MAX_SEARCH_SCAN_ENTRIES, 10000);
+  assert.equal(MAX_FIND_RESULTS, 500);
+  assert.equal(MAX_FIND_SCAN_ENTRIES, 10000);
+  assert.equal(MAX_FILTER_RESULTS, 500);
+  assert.equal(MAX_FILTER_SCAN_ENTRIES, 10000);
+  assert.equal(MAX_SUMMARY_LINES, 500);
+  assert.equal(boundedResultLimit(undefined), 50);
+  assert.equal(boundedResultLimit(-1), 50);
+  assert.equal(boundedResultLimit(1.5), 50);
+  assert.equal(boundedResultLimit(1), 1);
+  assert.equal(boundedResultLimit(500), 500);
+  assert.equal(boundedResultLimit(100000), 500);
+});
+
 test("database content and execution-log reads require authenticated medium-risk execution", async () => {
   for (const name of ["db_search", "db_diff", "log_query"]) {
     assert.equal(getStaticToolRisk(name), "medium", `${name} must not be classified as a public low-risk read`);
@@ -290,6 +307,18 @@ test("database content and execution-log reads require authenticated medium-risk
     assert.equal(result.isError, true, `${name} must refuse anonymous MCP dispatch`);
     assert.equal(result.code, "unauthenticated");
   }
+});
+
+test("embedding input is bounded at the tool boundary before Compute dispatch", async () => {
+  const result = await dispatchTool({
+    name: "embed",
+    args: { text: "x".repeat(8 * 1024 + 1) },
+    context: { source: "mcp", requestId: "oversized-embedding-input" },
+  });
+
+  assert.equal(result.isError, true);
+  assert.equal(result.code, "validation_failed");
+  assert.match(result.content[0].text, /<=8192 characters/i);
 });
 
 test("legacy installation API key denial explains scoped principal setup without granting authority", async () => {
@@ -309,6 +338,24 @@ test("legacy installation API key denial explains scoped principal setup without
   assert.match(result.content[0].text, /does not identify a principal/);
   assert.match(result.content[0].text, /Identity → Connect an MCP client/);
   assert.match(result.content[0].text, /service credential/);
+});
+
+test("legacy installation API keys cannot bypass scoped permission on low-risk workflow reads", async () => {
+  const context = {
+    source: "mcp",
+    requestId: "legacy-key-scoped-read-no-principal",
+    authIdentity: { authentication_method: "legacy_api_key", scopes: ["legacy"] },
+  };
+
+  for (const action of ["list", "show"]) {
+    const result = await dispatchTool({
+      name: "workflow",
+      args: { action },
+      context: { ...context, requestId: `${context.requestId}-${action}` },
+    });
+    assert.equal(result.isError, true, `workflow.${action} must enforce its scoped read permission`);
+    assert.equal(result.code, "unauthenticated");
+  }
 });
 
 test("database query, search, log, and diff handlers reject direct calls before access", async () => {
@@ -527,12 +574,12 @@ test("deployment secret preflight fails closed before restart when required cred
   writeSecrets("synthetic-api-key", "synthetic-proxy-key");
   if (process.platform !== "win32") {
     fs.chmodSync(tempDir, 0o777);
-    assert.throws(() => verifyRequiredRuntimeSecrets(tempDir), /SIDEKICK_SECRET_DIR is writable by group or other users/);
+    assert.throws(() => verifyRequiredRuntimeSecrets(tempDir), /SIDEKICK_SECRET_DIR secret directory is writable by group or other users/);
     fs.chmodSync(tempDir, 0o700);
   }
   fs.rmSync(proxyPath);
   fs.symlinkSync(apiPath, proxyPath);
-  assert.throws(() => verifyRequiredRuntimeSecrets(tempDir), /regular, non-symlink/);
+  assert.throws(() => verifyRequiredRuntimeSecrets(tempDir), /must not be a symlink/);
 });
 
 test("Agent proxy identity requires a fresh request-bound signature and rejects replay", () => {
@@ -598,7 +645,8 @@ test("identityless certification service can access only its durably attributed 
   assert.equal(taskBelongsToIdentity(certification, { principal_context: { service_identity: "dashboard-proxy" } }), false);
   assert.equal(taskBelongsToIdentity(certification, { actor_principal_id: "human-1" }), false);
   assert.equal(taskBelongsToIdentity(null, { actor_principal_id: "human-1" }), false);
-  assert.equal(taskBelongsToIdentity({ principal_id: "human-1" }, { actor_principal_id: "human-1" }), true);
+  assert.equal(taskBelongsToIdentity({ principal_id: "human-1" }, { actor_principal_id: "human-1" }), false,
+    "an unknown principal must not gain access by matching a stored task owner id");
   assert.equal(taskBelongsToIdentity({ principal_id: "human-2" }, { actor_principal_id: "human-1" }), false);
   assert.deepEqual(normalizePrincipalContext({ service_identity: "certification" }), {
     version: 1, credential_scopes: [], delegation_id: null, service_identity: "certification",

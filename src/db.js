@@ -1339,7 +1339,7 @@ function getMemoryIntelligenceStats() {
   // string, so an ISO row always sorts above such a bound. Bind an ISO value.
   const countSince = (sql, bound) => db.prepare(sql).get(bound).count;
   const nowBound = nowIso();
-  stats.durable_active = count("SELECT COUNT(*) AS count FROM memories WHERE enabled = 1 AND COALESCE(memory_class, 'semantic') NOT IN ('working') AND type NOT IN ('tool_call')");
+  stats.durable_active = count("SELECT COUNT(*) AS count FROM memories WHERE enabled = 1 AND COALESCE(state, 'active') != 'pending' AND type != 'open_thread' AND COALESCE(memory_class, 'semantic') NOT IN ('working') AND type NOT IN ('tool_call')");
   stats.pending_review = count("SELECT COUNT(*) AS count FROM memories WHERE enabled = 1 AND state = 'pending'");
   stats.conflicting = count("SELECT COUNT(*) AS count FROM memories WHERE enabled = 1 AND (conflict_group IS NOT NULL OR metadata_json LIKE '%conflicts_with%')");
   stats.expired = countSince("SELECT COUNT(*) AS count FROM memories WHERE state = 'expired' OR (expires_at IS NOT NULL AND expires_at <= ?)", nowBound);
@@ -1467,47 +1467,26 @@ function importMemories(data, options = {}) {
       `).get(mem.type, mem.project || null, mem.content);
 
       if (existing) {
-        if (options.onConflict === "skip") {
-          skipped++;
-          continue;
-        }
-
-        const existingMeta = parseJson(existing.metadata_json, {});
-        const newMeta = { ...existingMeta, ...(mem.metadata || {}), imported_at: ts, import_source: "import" };
-
-        db.prepare(`
-          UPDATE memories
-          SET summary = ?,
-              tags = ?,
-              confidence = MAX(confidence, ?),
-              metadata_json = ?,
-              times_confirmed = times_confirmed + 1,
-              updated_at = ?,
-              last_seen_at = ?
-          WHERE id = ?
-        `).run(
-          mem.summary || mem.content,
-          JSON.stringify(mem.tags || []),
-          Number.isFinite(mem.confidence) ? mem.confidence : 0.5,
-          JSON.stringify(newMeta),
-          ts,
-          ts,
-          existing.id
-        );
-        updated++;
+        // Imported snapshots are untrusted even when they claim to be
+        // confirmed or originate from a known machine. Do not let a duplicate
+        // replace a local summary, confidence, provenance, or confirmation
+        // state; those changes require the governed memory lifecycle APIs.
+        skipped++;
         continue;
       }
 
       const id = options.preserveIds && mem.id ? mem.id : `mem_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
-      const metadata = { ...(mem.metadata || {}), imported_at: ts, import_source: "import" };
+      // Keep source metadata available for review without letting its top-level
+      // claims alter the normalized authority/provenance fields used by Core.
+      const metadata = { import_metadata: mem.metadata && typeof mem.metadata === "object" ? mem.metadata : {}, imported_at: ts, import_source: "json_import" };
 
       db.prepare(`
         INSERT INTO memories (
           id, type, project, content, summary, tags, confidence, source, source_tool,
           source_task_id, source_ref, metadata_json, enabled, automatic,
           times_confirmed, created_at, updated_at, last_seen_at, last_confirmed_at,
-          expires_at, origin_machine_id, origin_user_id, sync_version
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          state, requires_confirmation, expires_at, origin_machine_id, origin_user_id, sync_version
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'pending', 1, ?, ?, ?, ?)
       `).run(
         id,
         mem.type,
@@ -1515,23 +1494,22 @@ function importMemories(data, options = {}) {
         mem.content,
         mem.summary || mem.content,
         JSON.stringify(mem.tags || []),
-        Number.isFinite(mem.confidence) ? mem.confidence : 0.5,
-        mem.source || "import",
-        mem.source_tool || null,
-        mem.source_task_id || null,
-        mem.source_ref || null,
+        Number.isFinite(mem.confidence) ? Math.min(0.5, mem.confidence) : 0.5,
+        "import",
+        null,
+        null,
+        null,
         JSON.stringify(metadata),
         mem.enabled === false ? 0 : 1,
         mem.automatic === false ? 0 : 1,
-        Number.isFinite(mem.times_confirmed) ? mem.times_confirmed : 1,
-        mem.created_at || ts,
+        0,
         ts,
-        mem.last_seen_at || ts,
+        ts,
         ts,
         mem.expires_at || null,
-        mem.origin_machine_id || null,
-        mem.origin_user_id || null,
-        mem.sync_version || 1
+        getMachineId(),
+        getUserId(),
+        1
       );
       imported++;
     }
@@ -2202,7 +2180,6 @@ function importFromSync(data, options = {}) {
   
   const ts = nowIso();
   const localMachineId = getMachineId();
-  const strategy = options.strategy || "newest";
   
   let imported = 0;
   let updated = 0;
@@ -2240,115 +2217,23 @@ function importFromSync(data, options = {}) {
       `).get(mem.type, mem.project || null, mem.content);
       
       if (existing) {
-        if (existing.origin_machine_id === localMachineId && mem.origin_machine_id === localMachineId) {
-          skipped++;
-          continue;
-        }
-        
-        const resolution = resolveConflict(existing, mem, strategy);
-        
-        if (resolution === "skip") {
-          skipped++;
-          continue;
-        }
-        
-        if (resolution === "local") {
-          conflicts++;
-          continue;
-        }
-        
-        if (resolution === "merge") {
-          const mergedMeta = {
-            ...parseJson(existing.metadata_json, {}),
-            ...mem.metadata,
-            merged_at: ts,
-            merge_source: "sync"
-          };
-          const mergedConfidence = Math.max(existing.confidence, mem.confidence);
-          const mergedConfirmed = existing.times_confirmed + mem.times_confirmed;
-          
-          db.prepare(`
-            UPDATE memories
-            SET confidence = ?,
-                times_confirmed = ?,
-                metadata_json = ?,
-                sync_version = sync_version + 1,
-                last_synced_at = ?,
-                updated_at = ?
-            WHERE id = ?
-          `).run(
-            mergedConfidence,
-            mergedConfirmed,
-            JSON.stringify(mergedMeta),
-            ts,
-            ts,
-            existing.id
-          );
-          conflicts++;
-          continue;
-        }
-        
-        const remoteMeta = {
-          ...mem.metadata,
-          synced_at: ts,
-          sync_source: "remote",
-          previous_local_id: existing.id
-        };
-        
-        db.prepare(`
-          UPDATE memories
-          SET summary = ?,
-              tags = ?,
-              confidence = ?,
-              source = ?,
-              source_tool = ?,
-              source_task_id = ?,
-              source_ref = ?,
-              metadata_json = ?,
-              enabled = ?,
-              times_confirmed = ?,
-              last_seen_at = ?,
-              last_confirmed_at = ?,
-              origin_machine_id = ?,
-              origin_user_id = ?,
-              sync_version = ?,
-              last_synced_at = ?,
-              updated_at = ?
-          WHERE id = ?
-        `).run(
-          mem.summary || mem.content,
-          JSON.stringify(mem.tags || []),
-          mem.confidence,
-          mem.source || "sync",
-          mem.source_tool || null,
-          mem.source_task_id || null,
-          mem.source_ref || null,
-          JSON.stringify(remoteMeta),
-          mem.enabled === false ? 0 : 1,
-          mem.times_confirmed || 1,
-          mem.last_seen_at || ts,
-          mem.last_confirmed_at || ts,
-          mem.origin_machine_id || data.machine_id,
-          mem.origin_user_id || data.user_id,
-          (mem.sync_version || 1) + 1,
-          ts,
-          ts,
-          existing.id
-        );
+        // A sync payload is transport data, not proof of confirmation or
+        // provenance. Keep the local record intact; a governed correction or
+        // confirmation is required to change its trusted state.
         conflicts++;
         continue;
       }
       
       const id = options.preserveIds && mem.id ? mem.id : `mem_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
-      const metadata = { ...mem.metadata, synced_at: ts, sync_source: "remote" };
+      const metadata = { sync_metadata: mem.metadata && typeof mem.metadata === "object" ? mem.metadata : {}, synced_at: ts, sync_source: "remote" };
       
       db.prepare(`
         INSERT INTO memories (
           id, type, project, content, summary, tags, confidence, source, source_tool,
           source_task_id, source_ref, metadata_json, enabled, automatic,
           times_confirmed, created_at, updated_at, last_seen_at, last_confirmed_at,
-          expires_at, origin_machine_id, origin_user_id, sync_version, last_synced_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          state, requires_confirmation, expires_at, origin_machine_id, origin_user_id, sync_version, last_synced_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'pending', 1, ?, ?, ?, ?, ?)
       `).run(
         id,
         mem.type,
@@ -2356,23 +2241,22 @@ function importFromSync(data, options = {}) {
         mem.content,
         mem.summary || mem.content,
         JSON.stringify(mem.tags || []),
-        mem.confidence || 0.5,
-        mem.source || "sync",
-        mem.source_tool || null,
-        mem.source_task_id || null,
-        mem.source_ref || null,
+        Number.isFinite(mem.confidence) ? Math.min(0.5, mem.confidence) : 0.5,
+        "sync",
+        null,
+        null,
+        null,
         JSON.stringify(metadata),
         mem.enabled === false ? 0 : 1,
         mem.automatic === false ? 0 : 1,
-        mem.times_confirmed || 1,
-        mem.created_at || ts,
+        0,
         ts,
-        mem.last_seen_at || ts,
-        mem.last_confirmed_at || ts,
+        ts,
+        ts,
         mem.expires_at || null,
-        mem.origin_machine_id || data.machine_id,
-        mem.origin_user_id || data.user_id,
-        mem.sync_version || 1,
+        localMachineId,
+        getUserId(),
+        1,
         ts
       );
       imported++;

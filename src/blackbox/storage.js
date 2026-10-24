@@ -1,5 +1,8 @@
 const fs = require("fs");
 const path = require("path");
+const { readTextBounded, MAX_BOUNDED_FILE_READ_BYTES } = require("../core/bounded-file-read");
+
+const MAX_ARTIFACT_READ_BYTES = MAX_BOUNDED_FILE_READ_BYTES;
 
 function createBlackboxStorage({ rootDir, safeId, redact, hashText, nowIso, defaults }) {
   function within(root, candidate) { return candidate === root || candidate.startsWith(`${root}${path.sep}`); }
@@ -39,9 +42,17 @@ function createBlackboxStorage({ rootDir, safeId, redact, hashText, nowIso, defa
   }
   function readArtifactByPath(filePath, offset = 0, limit = 65536) {
     if (!filePath) return "";
+    if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 0) {
+      throw new Error("Invalid artifact read range");
+    }
     const root = realRoot();
     const resolved = assertNoSymlinkedPath(filePath, root);
-    return fs.readFileSync(resolved, "utf8").slice(offset, offset + limit);
+    const result = readTextBounded(resolved, {
+      maxBytes: MAX_ARTIFACT_READ_BYTES,
+      requireComplete: true,
+      noFollow: true,
+    });
+    return result.content.slice(offset, offset + limit);
   }
   function removeIncidentArtifacts(incidentId) {
     safeId(incidentId, "incident id");

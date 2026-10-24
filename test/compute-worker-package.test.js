@@ -56,7 +56,7 @@ test('package.json is dependency-free with correct bin and engines', () => {
 
 test('includes the worker modules, OpenVINO helper, and service files', () => {
   const expected = [
-    'worker-agent.js', 'worker-config.js', 'worker-credential.js', 'worker-cli.js', 'worker-reconnect.js',
+    'worker-agent.js', 'worker-config.js', 'worker-credential.js', 'worker-cli.js', 'worker-reconnect.js', 'control-plane-url.js',
     'openvino-executor.js', 'openvino/helper.py',
     'systemd/sidekick-compute-worker.service',
     'packaging/compute-worker/install-linux.sh', 'packaging/compute-worker/install-windows.ps1',

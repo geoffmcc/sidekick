@@ -139,6 +139,9 @@ function requiredToolPermission(descriptor, args = {}) {
     const readActions = new Set(["list", "available", "show", "inspect", "validate", "health", "doctor"]);
     return readActions.has(args.action || "list") ? "packs.read" : "packs.manage";
   }
+  if (descriptor.name === "project_registry") {
+    return ["list", "get", "sources"].includes(args.action) ? "memory.read" : "projects.access.manage";
+  }
   if (descriptor.name === "workflow") {
     return ["run", "resume"].includes(args.action) ? "workflows.execute" : "workflows.read";
   }
@@ -279,8 +282,45 @@ async function executeResolvedTool(descriptor, args, context, requestedName = de
     return errorResult("Approval evaluation failed", "approval_evaluation_failed");
   }
   const effectiveRisk = approvalDecision?.risk;
-  const requiresIdentity = !options.testExecution && (descriptor.name === "secret" || descriptor.name === "predict" || effectiveRisk !== "low");
-  if (requiresIdentity && !context.authIdentity?.principal_id) {
+  const permission = requiredToolPermission(descriptor, executionArgs);
+  // Workflow definitions and detailed pack state can contain operational or
+  // credential-reference metadata. Their low-risk read actions still require
+  // explicit scoped grants. Only capability/tool catalogs remain public;
+  // low-risk actions on higher-risk tools retain their action-level risk.
+  const requiresScopedIdentity = (descriptor.name === "workflow"
+    && ["list", "show"].includes(executionArgs.action || "list"))
+    || (descriptor.name === "capability"
+      && ["show", "inspect", "validate", "health", "doctor", "maturity"].includes(executionArgs.action))
+    || (descriptor.name === "project_registry"
+      && ["list", "get", "sources"].includes(executionArgs.action))
+    || (descriptor.name === "browser"
+      && ["list", "status"].includes(executionArgs.action));
+  const requiresIdentity = !options.testExecution && (
+    descriptor.name === "secret" || descriptor.name === "predict" || effectiveRisk !== "low" || requiresScopedIdentity
+  );
+  // Long-running agent tasks retain an identity snapshot. Revalidate any
+  // credential-backed identity at the canonical dispatch boundary so
+  // revocation, expiry, principal disablement, and scope reduction take
+  // effect before the next tool call. Role-backed browser sessions continue
+  // to use their request-time session validation.
+  let authIdentity = context.authIdentity;
+  if (authIdentity?.credential_id) {
+    authIdentity = require("../core/authentication").refreshCredentialIdentity(authIdentity);
+    if (!authIdentity) {
+      try {
+        recordSecurityEvent("authorization.denied", {
+          context,
+          principalId: context.authIdentity.principal_id || null,
+          details: { permission, tool: descriptor.name, code: "credential_invalid" },
+        });
+      } catch {}
+      return errorResult("Authorization denied: credential is revoked, expired, disabled, or invalid", "credential_invalid");
+    }
+    // Pass narrowed current authority into nested dispatch and handler context
+    // so secondary checks cannot consult the stale task snapshot.
+    context = childContext({ ...context, authIdentity });
+  }
+  if (requiresIdentity && !authIdentity?.principal_id) {
     try {
       recordSecurityEvent("authorization.denied", {
         context,
@@ -288,7 +328,7 @@ async function executeResolvedTool(descriptor, args, context, requestedName = de
         details: { tool: descriptor.name, risk: effectiveRisk, code: "unauthenticated" },
       });
     } catch {}
-    if (context.authIdentity?.authentication_method === "legacy_api_key") {
+    if (authIdentity?.authentication_method === "legacy_api_key") {
       return errorResult(
         `This connection uses the legacy installation API key, which does not identify a principal and cannot authorize ${descriptor.name}. In Dashboard, open Identity → Connect an MCP client, create a service credential with the permissions this client needs, then configure the MCP client to reconnect with that credential.`,
         "unauthenticated",
@@ -302,20 +342,19 @@ async function executeResolvedTool(descriptor, args, context, requestedName = de
   // legacy API-key compatibility remains transitional and is intentionally
   // visible as a separate authentication method.
   let nodeAuthorization = null;
-  if (context.authIdentity?.principal_id) {
-    const permission = requiredToolPermission(descriptor, executionArgs);
+  if (authIdentity?.principal_id) {
     const decision = authorization.authorize({
-      principalId: context.authIdentity.principal_id,
+      principalId: authIdentity.principal_id,
       permission,
-      credentialScopes: context.authIdentity.scopes,
-      delegationId: context.authIdentity.delegation_id || context.authIdentity.delegationId || null,
+      credentialScopes: authIdentity.scopes,
+      delegationId: authIdentity.delegation_id || authIdentity.delegationId || null,
       resource: { tool: descriptor.name, source: context.source },
     });
     if (!decision.ok) {
       try {
         recordSecurityEvent("authorization.denied", {
           context,
-          principalId: context.authIdentity.principal_id,
+          principalId: authIdentity.principal_id,
           details: { permission, tool: descriptor.name, code: decision.code },
         });
       } catch {}
@@ -326,10 +365,10 @@ async function executeResolvedTool(descriptor, args, context, requestedName = de
       );
     }
     nodeAuthorization = {
-      principalId: context.authIdentity.principal_id,
+      principalId: authIdentity.principal_id,
       permission,
-      credentialScopes: Array.isArray(context.authIdentity.scopes) ? context.authIdentity.scopes.slice(0, 128) : null,
-      delegationId: context.authIdentity.delegation_id || context.authIdentity.delegationId || null,
+      credentialScopes: Array.isArray(authIdentity.scopes) ? authIdentity.scopes.slice(0, 128) : null,
+      delegationId: authIdentity.delegation_id || authIdentity.delegationId || null,
       resource: { tool: descriptor.name, source: context.source },
     };
   }

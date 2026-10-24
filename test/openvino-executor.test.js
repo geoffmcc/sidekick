@@ -7,7 +7,7 @@ const assert = require("assert");
 
 const { initOpenVinoExecutor, executeOpenVinoEmbed, getCapabilityStatus, getOpenVinoCapabilities } = require("../src/compute/openvino-executor");
 const { loadOpenVinoConfig, validateConfigPath, validatePythonPath } = require("../src/compute/openvino-config");
-const { validateJobRequest, getApprovedModel, verifyModelIntegrity, verifyModelFileHash, CERTIFICATION_TIER } = require("../src/compute/openvino-model-manifest");
+const { validateJobRequest, getApprovedModel, listApprovedModels, verifyModelIntegrity, verifyModelFileHash, sha256File, MAX_MODEL_MANIFEST_FILE_BYTES, CERTIFICATION_TIER } = require("../src/compute/openvino-model-manifest");
 const { HelperManager, HelperProcess } = require("../src/compute/openvino-helper-manager");
 
 // ---------------------------------------------------------------------------
@@ -100,6 +100,31 @@ async function runConfigTests() {
 
 async function runManifestTests() {
   console.log("\nModel Manifest Tests:");
+
+  await test("model manifest hashes are incremental, bounded, and reject symlinks", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ov-bounded-hash-"));
+    const contentPath = path.join(dir, "config.json");
+    const oversizedPath = path.join(dir, "oversized.json");
+    const linkedPath = path.join(dir, "linked.json");
+    try {
+      fs.writeFileSync(contentPath, "{\"model\":true}");
+      assert.strictEqual(sha256File(contentPath), require("crypto").createHash("sha256").update("{\"model\":true}").digest("hex"));
+
+      const oversizedFd = fs.openSync(oversizedPath, "w");
+      try { fs.ftruncateSync(oversizedFd, MAX_MODEL_MANIFEST_FILE_BYTES + 1); }
+      finally { fs.closeSync(oversizedFd); }
+      assert.throws(() => sha256File(oversizedPath), /integrity limit/);
+
+      try {
+        fs.symlinkSync(contentPath, linkedPath, "file");
+        assert.throws(() => sha256File(linkedPath), /symlink|symbolic link|not a regular file/i);
+      } catch (error) {
+        if (!["EPERM", "EACCES", "ENOTSUP"].includes(error.code)) throw error;
+      }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 
   await test("Validates valid job payload", () => {
     const job = {
@@ -195,12 +220,17 @@ async function runManifestTests() {
     assert.ok(result.reason.includes("not in approved manifest"));
   });
 
-  await test("verifyModelFileHash: model with no integrity hashes passes", () => {
-    // Temporarily create a model without integrity for testing.
-    // Instead, verify that model entries have integrity declared.
-    const e5 = getApprovedModel("e5-small-v2-qint8");
-    assert.ok(e5.integrity, "E5 model has integrity hashes");
-    assert.strictEqual(e5.integrity.algorithm, "sha256");
+  await test("certified models declare concrete SHA-256 integrity hashes", () => {
+    const certified = listApprovedModels().filter(model => model.status === CERTIFICATION_TIER.CERTIFIED);
+    assert.ok(certified.length > 0, "the catalogue must contain certified models");
+    for (const model of certified) {
+      assert.equal(model.integrity?.algorithm, "sha256", `${model.modelId}: integrity algorithm`);
+      const files = Object.entries(model.integrity?.files || {});
+      assert.ok(files.length > 0, `${model.modelId}: certified model must pin integrity files`);
+      for (const [name, digest] of files) {
+        assert.match(digest, /^[a-f0-9]{64}$/, `${model.modelId}/${name}: digest must be a concrete SHA-256 value`);
+      }
+    }
   });
 
   await test("verifyModelIntegrity: missing model dir reports missing files but not manifestMismatch", () => {
@@ -236,22 +266,20 @@ async function runManifestTests() {
     }
   });
 
-  await test("verifyModelIntegrity: matching hashes pass", () => {
+  await test("verifyModelIntegrity: approved E5 fixture matches pinned hashes", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ov-integrity-"));
     try {
       const e5Dir = path.join(dir, "e5-small-v2-qint8");
       fs.mkdirSync(e5Dir, { recursive: true });
+      const fixtureDir = path.join(__dirname, "spike-openvino-python", "e5-small-v2-baseline", "models", "e5-small-v2-qint8-ov");
+      for (const name of ["config.json", "tokenizer.json"]) {
+        fs.copyFileSync(path.join(fixtureDir, name), path.join(e5Dir, name));
+      }
 
-      // Compute actual SHA-256 of the files we write.
-      const configContent = "test config";
-      const tokenizerContent = "test tokenizer";
-      fs.writeFileSync(path.join(e5Dir, "config.json"), configContent);
-      fs.writeFileSync(path.join(e5Dir, "tokenizer.json"), tokenizerContent);
-
-      // Verify fails because placeholder hashes don't match.
-      const result = verifyModelIntegrity(dir);
-      assert.strictEqual(result.ok, false);
-      assert.strictEqual(result.manifestMismatch, true);
+      const result = verifyModelFileHash("e5-small-v2-qint8", dir);
+      assert.strictEqual(result.ok, true, `approved E5 fixture should match: ${JSON.stringify(result)}`);
+      assert.strictEqual(result.checked, 2);
+      assert.strictEqual(result.matched, 2);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

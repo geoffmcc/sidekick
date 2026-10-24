@@ -18,6 +18,8 @@ const { redactSensitive } = require("../../redact");
 const { enforcePathPolicy } = require("../path-policy");
 const { resolveOutboundUrl } = require("../../security/outbound-url");
 const { validIdentifier } = require("../../core/command-validation");
+const { readTextBounded } = require("../../core/bounded-file-read");
+const { writeTextFile } = require("../../core/json-file-store");
 const { runLlm } = require("./inference");
 const { childProcessEnv } = require("../../security/child-process");
 const { requireToolExecution, requireCanonicalInvocation } = require("../read-authorization");
@@ -25,6 +27,8 @@ const { requireToolExecution, requireCanonicalInvocation } = require("../read-au
 const GIT_EXTERNAL_EXECUTION_OPTIONS = /^(?:-c(?:$|=)|--config(?:=|-env(?:=|$))|--(?:exec-path|upload-pack|receive-pack|git-dir|work-tree)(?:=|$)|--(?:ext-diff|paginate)(?:=|$))/;
 const GIT_CLONE_TIMEOUT_MS = 120000;
 const GIT_CLONE_MAX_OUTPUT = 2 * 1024 * 1024;
+const MAX_CHANGELOG_BYTES = 5 * 1024 * 1024;
+const MAX_CHANGELOG_REVISION_LENGTH = 256;
 const GIT_FILTER_EXECUTION_ACTIONS = new Set(["add", "commit", "checkout", "pull", "stash"]);
 
 function cloneError(message) {
@@ -463,6 +467,48 @@ function parseConventionalCommit(message) {
   };
 }
 
+function resolveChangelogRevision(cwd, revision, execute = execFileSync) {
+  if (typeof revision !== "string" || !revision || revision.length > MAX_CHANGELOG_REVISION_LENGTH) {
+    throw new Error("Git revision is invalid or too long");
+  }
+  const resolved = execute("git", ["--no-pager", "-c", "core.fsmonitor=false", "-c", "log.showSignature=false", "-c", `safe.directory=${cwd}`, "-C", cwd,
+    "rev-parse", "--verify", "--end-of-options", `${revision}^{commit}`], {
+    cwd,
+    env: childProcessEnv(),
+    timeout: 10000,
+    encoding: "utf8",
+    maxBuffer: 64 * 1024,
+    stdio: ["ignore", "pipe", "ignore"],
+  }).trim();
+  if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(resolved)) throw new Error("Git revision did not resolve to a commit");
+  return resolved;
+}
+
+function readChangelogFile(filePath) {
+  if (enforcePathPolicy(filePath, "read")) throw new Error("Changelog is outside the configured read scope");
+  try {
+    const stat = fs.lstatSync(filePath);
+    if (stat.isSymbolicLink() || !stat.isFile()) throw new Error("Changelog must be a regular, non-symlink file");
+    const read = readTextBounded(filePath, { maxBytes: MAX_CHANGELOG_BYTES, requireComplete: true, noFollow: true });
+    return { content: read.content, mode: stat.mode & 0o777 };
+  } catch (error) {
+    if (error.code === "ENOENT") return { content: "", mode: 0o600 };
+    throw error;
+  }
+}
+
+function writeChangelogFile(filePath, content, mode = 0o600) {
+  if (enforcePathPolicy(filePath, "write")) throw new Error("Changelog is outside the configured write scope");
+  try {
+    const stat = fs.lstatSync(filePath);
+    if (stat.isSymbolicLink() || !stat.isFile()) throw new Error("Changelog must be a regular, non-symlink file");
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  if (enforcePathPolicy(filePath, "write")) throw new Error("Changelog is outside the configured write scope");
+  writeTextFile(filePath, content, { maxBytes: MAX_CHANGELOG_BYTES, mode });
+}
+
 async function sidekick_changelog({ action, from, to, format, group_by, use_llm, include, path: repoPath }) {
   const denied = requireCanonicalInvocation("changelog");
   if (denied) return denied;
@@ -474,13 +520,24 @@ async function sidekick_changelog({ action, from, to, format, group_by, use_llm,
   const fmt = format || "markdown";
   const groupBy = group_by || "type";
   const includeType = include || "all";
-  const cwd = repoPath || process.cwd();
+  let cwd = repoPath || process.cwd();
   const pathPolicyError = enforcePathPolicy(cwd, action === "save" ? "write" : "read");
   if (pathPolicyError) return pathPolicyError;
+  try {
+    cwd = fs.realpathSync(cwd);
+    if (!fs.statSync(cwd).isDirectory()) throw new Error("Repository path must be a directory");
+  } catch (error) {
+    return { content: [{ type: "text", text: `Repository path is unavailable: ${error.message}` }], isError: true };
+  }
 
   let logOutput = "";
   try {
-    logOutput = execFileSync("git", ["log", `${from}..${toRef}`, "--pretty=format:%H|%s|%an|%ad", "--date=short"], { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"], cwd, env: childProcessEnv() });
+    const fromCommit = resolveChangelogRevision(cwd, from);
+    const toCommit = resolveChangelogRevision(cwd, toRef);
+    logOutput = execFileSync("git", ["--no-pager", "-c", "core.fsmonitor=false", "-c", "log.showSignature=false", "-c", `safe.directory=${cwd}`, "-C", cwd,
+      "log", "--no-show-signature", `${fromCommit}..${toCommit}`, "--pretty=format:%H|%s|%an|%ad", "--date=short"], {
+      encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], cwd, env: childProcessEnv(), timeout: 30000, maxBuffer: MAX_CHANGELOG_BYTES,
+    });
   } catch (e) {
     return { content: [{ type: "text", text: `Git log failed: ${e.message}\n\nMake sure you're in a git repository and the refs exist.` }], isError: true };
   }
@@ -587,16 +644,15 @@ async function sidekick_changelog({ action, from, to, format, group_by, use_llm,
 
   if (action === "save") {
     const changelogPath = path.join(cwd, "CHANGELOG.md");
-    let existingContent = "";
-    try {
-      existingContent = fs.readFileSync(changelogPath, "utf8");
-    } catch {}
+    let existing;
+    try { existing = readChangelogFile(changelogPath); }
+    catch (error) { return { content: [{ type: "text", text: `Unable to read changelog: ${error.message}` }], isError: true }; }
 
     const date = new Date().toISOString().split("T")[0];
     const header = `## ${date}\n\n`;
     const newEntry = header + changelog;
 
-    const lines = existingContent.split("\n");
+    const lines = existing.content.split("\n");
     let insertIndex = 0;
     for (let i = 0; i < lines.length; i++) {
       if (lines[i].startsWith("# ")) {
@@ -607,7 +663,8 @@ async function sidekick_changelog({ action, from, to, format, group_by, use_llm,
     }
 
     lines.splice(insertIndex, 0, newEntry);
-    fs.writeFileSync(changelogPath, lines.join("\n"));
+    try { writeChangelogFile(changelogPath, lines.join("\n"), existing.mode); }
+    catch (error) { return { content: [{ type: "text", text: `Unable to save changelog: ${error.message}` }], isError: true }; }
 
     return { content: [{ type: "text", text: `Changelog saved to ${changelogPath}\n\n${newEntry}` }] };
   }
@@ -618,10 +675,23 @@ async function sidekick_changelog({ action, from, to, format, group_by, use_llm,
 const MAX_DEPEND_DEPTH = 10;
 const MAX_DEPEND_RESULTS = 100;
 
+function resolveNpmProjectDirectory(requestedPath) {
+  const candidate = path.resolve(requestedPath || process.cwd());
+  if (enforcePathPolicy(candidate, "read")) throw new Error("npm project directory is outside the configured read scope");
+  const canonical = fs.realpathSync(candidate);
+  if (enforcePathPolicy(canonical, "read")) throw new Error("npm project directory is outside the configured read scope");
+  if (!fs.statSync(canonical).isDirectory()) throw new Error("npm project path must be a directory");
+  return canonical;
+}
+
+function runDependencyCommand(program, args, options = {}, execute = execFileSync) {
+  return execute(program, args, { ...options, env: childProcessEnv() });
+}
+
 async function sidekick_depend({ action, type, target, depth, format }) {
   const denied = requireCanonicalInvocation("depend");
   if (denied) return denied;
-  const maxDepth = Math.min(depth || 5, MAX_DEPEND_DEPTH);
+  const maxDepth = Math.min(depth ?? 5, MAX_DEPEND_DEPTH);
   const fmt = format || "tree";
 
   if (action === "tree") {
@@ -630,9 +700,9 @@ async function sidekick_depend({ action, type, target, depth, format }) {
     }
 
     if (type === "npm") {
-      const cwd = target || process.cwd();
       try {
-        const result = execFileSync("npm", ["ls", `--depth=${maxDepth}`, "--json"], {
+        const cwd = resolveNpmProjectDirectory(target);
+        const result = runDependencyCommand("npm", ["ls", `--depth=${maxDepth}`, "--json"], {
           encoding: "utf8",
           cwd,
           timeout: 10000,
@@ -669,7 +739,7 @@ async function sidekick_depend({ action, type, target, depth, format }) {
         return { content: [{ type: "text", text: "target required for service tree" }], isError: true };
       }
       try {
-        const result = execFileSync("systemctl", ["list-dependencies", validIdentifier(target, "service name", 128), "--no-pager"], {
+        const result = runDependencyCommand("systemctl", ["list-dependencies", validIdentifier(target, "service name", 128), "--no-pager"], {
           encoding: "utf8",
           timeout: 5000,
           stdio: ["pipe", "pipe", "pipe"]
@@ -684,7 +754,7 @@ async function sidekick_depend({ action, type, target, depth, format }) {
       const pid = target || "1";
       try {
         if (!/^\d+$/.test(String(pid))) throw new Error("Invalid PID");
-        const result = execFileSync("pstree", ["-p", String(pid)], {
+        const result = runDependencyCommand("pstree", ["-p", String(pid)], {
           encoding: "utf8",
           timeout: 5000,
           stdio: ["pipe", "pipe", "pipe"]
@@ -704,9 +774,9 @@ async function sidekick_depend({ action, type, target, depth, format }) {
     }
 
     if (type === "npm") {
-      const cwd = process.cwd();
       try {
-        const result = execFileSync("npm", ["ls", "--all", "--json"], {
+        const cwd = resolveNpmProjectDirectory();
+        const result = runDependencyCommand("npm", ["ls", "--all", "--json"], {
           encoding: "utf8",
           cwd,
           timeout: 15000,
@@ -741,7 +811,7 @@ async function sidekick_depend({ action, type, target, depth, format }) {
 
     if (type === "service") {
       try {
-        const result = execFileSync("systemctl", ["list-dependencies", "--reverse", validIdentifier(target, "service name", 128), "--no-pager"], {
+        const result = runDependencyCommand("systemctl", ["list-dependencies", "--reverse", validIdentifier(target, "service name", 128), "--no-pager"], {
           encoding: "utf8",
           timeout: 5000,
           stdio: ["pipe", "pipe", "pipe"]
@@ -755,7 +825,7 @@ async function sidekick_depend({ action, type, target, depth, format }) {
     if (type === "process") {
       try {
         if (!/^\d+$/.test(String(target))) throw new Error("Invalid PID");
-        const result = execFileSync("ps", ["-o", "pid,ppid,comm", "--ppid", String(target)], {
+        const result = runDependencyCommand("ps", ["-o", "pid,ppid,comm", "--ppid", String(target)], {
           encoding: "utf8",
           timeout: 5000,
           stdio: ["pipe", "pipe", "pipe"]
@@ -773,9 +843,9 @@ async function sidekick_depend({ action, type, target, depth, format }) {
     if (type !== "npm") {
       return { content: [{ type: "text", text: "outdated only supported for npm" }], isError: true };
     }
-    const cwd = target || process.cwd();
     try {
-      const result = execFileSync("npm", ["outdated", "--json"], {
+      const cwd = resolveNpmProjectDirectory(target);
+      const result = runDependencyCommand("npm", ["outdated", "--json"], {
         encoding: "utf8",
         cwd,
         timeout: 15000,
@@ -812,9 +882,10 @@ async function sidekick_depend({ action, type, target, depth, format }) {
 
     if (type === "npm") {
       try {
-        const result = execFileSync("npm", ["ls", "--all", "--json"], {
+        const cwd = resolveNpmProjectDirectory();
+        const result = runDependencyCommand("npm", ["ls", "--all", "--json"], {
           encoding: "utf8",
-          cwd: process.cwd(),
+          cwd,
           timeout: 15000,
           stdio: ["pipe", "pipe", "pipe"]
         });
@@ -847,7 +918,7 @@ async function sidekick_depend({ action, type, target, depth, format }) {
       }
     } else if (type === "service") {
       try {
-        const result = execFileSync("systemctl", ["list-dependencies", "--reverse", validIdentifier(target, "service name", 128), "--no-pager"], {
+        const result = runDependencyCommand("systemctl", ["list-dependencies", "--reverse", validIdentifier(target, "service name", 128), "--no-pager"], {
           encoding: "utf8",
           timeout: 5000,
           stdio: ["pipe", "pipe", "pipe"]
@@ -871,8 +942,8 @@ async function sidekick_depend({ action, type, target, depth, format }) {
     if (type !== "npm") {
       return { content: [{ type: "text", text: "orphans only supported for npm" }], isError: true };
     }
-    const cwd = target || process.cwd();
     try {
+      const cwd = resolveNpmProjectDirectory(target);
       const pkgPath = path.join(cwd, "package.json");
       if (!fs.existsSync(pkgPath)) {
         return { content: [{ type: "text", text: "No package.json found" }], isError: true };
@@ -880,7 +951,7 @@ async function sidekick_depend({ action, type, target, depth, format }) {
       const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
       const declared = Object.keys(pkg.dependencies || {});
 
-      const result = execFileSync("npm", ["ls", "--depth=0", "--json"], {
+      const result = runDependencyCommand("npm", ["ls", "--depth=0", "--json"], {
         encoding: "utf8",
         cwd,
         timeout: 10000,
@@ -916,8 +987,8 @@ const SCHEMAS = {
   }).strict()),
   changelog: z.object({
     action: z.enum(["generate", "preview", "save"]),
-    from: z.string().describe("Starting ref (tag, commit, branch)"),
-    to: z.string().optional().default("HEAD"),
+    from: z.string().min(1).max(MAX_CHANGELOG_REVISION_LENGTH).describe("Starting ref (tag, commit, branch)"),
+    to: z.string().max(MAX_CHANGELOG_REVISION_LENGTH).optional().default("HEAD"),
     format: z.enum(["markdown", "plain", "conventional"]).optional().default("markdown"),
     group_by: z.enum(["type", "scope", "author"]).optional().default("type"),
     use_llm: z.boolean().optional().default(false),
@@ -927,8 +998,8 @@ const SCHEMAS = {
   depend: z.object({
     action: z.enum(["tree", "reverse", "outdated", "impact", "orphans"]),
     type: z.enum(["npm", "service", "process"]),
-    target: z.string().optional().describe("Package, service, or PID to analyze"),
-    depth: z.number().optional().default(5),
+    target: z.string().max(4096).optional().describe("Package, service, process, or scoped project directory to analyze"),
+    depth: z.number().int().min(0).max(MAX_DEPEND_DEPTH).optional().default(5),
     format: z.enum(["tree", "flat", "json"]).optional().default("tree")
   }),
 };
@@ -970,4 +1041,5 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_git, sidekick_changelog, sidekick_depend, parseGitExtraArgs };
+module.exports = { descriptors, sidekick_git, sidekick_changelog, sidekick_depend, parseGitExtraArgs, resolveNpmProjectDirectory, runDependencyCommand,
+  resolveChangelogRevision, readChangelogFile, writeChangelogFile, MAX_CHANGELOG_BYTES, MAX_CHANGELOG_REVISION_LENGTH };

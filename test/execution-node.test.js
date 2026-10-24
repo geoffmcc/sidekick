@@ -17,6 +17,24 @@ const { descriptorIdentity } = placement;
 const configured = workspace.createWorkspace({ name: "security-research", root, permissions: { read: true, write: false, execute: false } });
 assert.strictEqual(configured.name, "security-research");
 assert.ok(workspace.discoverRepositories(configured).some(repo => repo.root.endsWith(path.join("buried", "repo"))));
+const nestedRepository = path.join(root, "buried", "repo");
+const nestedSecrets = [
+  path.join(nestedRepository, ".env"),
+  path.join(nestedRepository, ".env.local"),
+  path.join(nestedRepository, ".ssh", "id_ed25519"),
+  path.join(nestedRepository, ".config", "credentials"),
+  path.join(nestedRepository, ".sidekick", "state.json"),
+  path.join(nestedRepository, ".local", "share", "opencode", "auth.json"),
+];
+for (const secretPath of nestedSecrets) {
+  fs.mkdirSync(path.dirname(secretPath), { recursive: true });
+  fs.writeFileSync(secretPath, "synthetic nested secret");
+  assert.throws(
+    () => workspace.resolveWorkspacePath(configured, secretPath),
+    /outside the authorized workspace/,
+    `protected nested path must remain unreadable: ${path.relative(root, secretPath)}`
+  );
+}
 assert.throws(() => workspace.resolveWorkspacePath(configured, path.join(root, "..", "outside")), /outside|traversal/);
 assert.throws(() => workspace.resolveWorkspacePath(configured, outside), /outside/);
 const link = path.join(root, "escape");
@@ -29,6 +47,21 @@ assert.throws(() => workspace.resolveWorkspacePath(writable, path.join(outside, 
 const descriptor = { name: "read", version: "1", placement: { locations: ["node"], nodeSafe: true, requirements: { os: ["linux"], workspaces: ["security-research"] } } };
 const eligible = placement.checkEligibility(descriptor, { nodeId: "node_a", platform: "linux", protocolVersion: "1", workspaces: ["security-research"], authorized: true, healthy: true });
 assert.strictEqual(eligible.eligible, true);
+const shellExecutionDescriptor = { ...descriptor, name: "bash" };
+const isolationMissing = placement.checkEligibility(shellExecutionDescriptor, {
+  nodeId: "node_no_sandbox", platform: "linux", protocolVersion: "1", workspaces: ["security-research"], authorized: true, healthy: true,
+}, { requiredIsolation: "bubblewrap" });
+assert.strictEqual(isolationMissing.eligible, false, "legacy nodes without an isolation report cannot receive shell execution");
+assert.ok(isolationMissing.reasons.includes("isolation_unavailable:bubblewrap"));
+const isolationReady = placement.checkEligibility(shellExecutionDescriptor, {
+  nodeId: "node_sandbox", platform: "linux", protocolVersion: "1", workspaces: ["security-research"], authorized: true, healthy: true,
+  shellIsolation: { backend: "bubblewrap", configured: true, code: null },
+}, { requiredIsolation: "bubblewrap" });
+assert.strictEqual(isolationReady.eligible, true);
+const isolationUnneeded = placement.checkEligibility(descriptor, {
+  nodeId: "node_read_only", platform: "linux", protocolVersion: "1", workspaces: ["security-research"], authorized: true, healthy: true,
+}, { requiredIsolation: null });
+assert.strictEqual(isolationUnneeded.eligible, true, "read-only work does not require shell isolation");
 const visible = placement.checkEligibility(descriptor, { nodeId: "node_path", platform: "linux", protocolVersion: "1", workspaces: [{ name: "security-research", root }], authorized: true, healthy: true }, { requestedPaths: [path.join(root, "buried", "repo")] });
 assert.strictEqual(visible.eligible, true);
 const invisible = placement.checkEligibility(descriptor, { nodeId: "node_path", platform: "linux", protocolVersion: "1", workspaces: [{ name: "security-research", root }], authorized: true, healthy: true }, { requestedPaths: [outside] });
@@ -49,11 +82,19 @@ assert.strictEqual(placement.checkEligibility({ ...descriptor, placement: { ...d
 process.env.SIDEKICK_DATA_DIR = path.join(fixture, "data");
 process.env.SIDEKICK_SECRET_KEY = "execution-node-test-secret-key";
 const manager = require("../src/node/manager");
-const { maybeExecute } = require("../src/node/dispatch");
+const { maybeExecute, requiredIsolationForTool } = require("../src/node/dispatch");
 require("../src/db").runPendingMigrations();
 manager.ensureSchema();
 assert.strictEqual(manager.workspacePermissionForTool("git", { action: "branch" }), "read");
 assert.strictEqual(manager.workspacePermissionForTool("git", { action: "branch", args: "-D feature" }), "write");
+assert.strictEqual(manager.workspacePermissionForTool("write", { path: path.join(root, "file") }), "write", "Core and node share the workspace write classification");
+assert.strictEqual(manager.workspacePermissionForTool("bash", { command: "npm test" }), "execute", "Core and node require an explicit execute grant for shell jobs");
+assert.strictEqual(manager.workspacePermissionForTool("dev_verify", {}), "execute", "verification runs require an explicit execute grant");
+assert.strictEqual(manager.workspacePermissionForTool("dev_verify", { dry_run: true }), "read", "verification planning without execution needs only read access");
+assert.strictEqual(requiredIsolationForTool("bash", {}), "bubblewrap", "node shell jobs require the OS isolation backend");
+assert.strictEqual(requiredIsolationForTool("dev_verify", {}), "bubblewrap", "verification that runs project commands requires OS isolation");
+assert.strictEqual(requiredIsolationForTool("dev_verify", { dry_run: true }), null, "verification planning does not run shell commands");
+assert.strictEqual(requiredIsolationForTool("read", { path: path.join(root, "file") }), null, "read-only tools do not require a shell backend");
 const db = require("../src/db").getDb();
 db.prepare("INSERT INTO compute_workers (worker_id, node_id, display_name, platform, state, connection_state, credential_state) VALUES (?, ?, ?, ?, 'online', 'online', 'active')").run("wk_test_node", "node_test", "test", "linux");
 const identity = require("../src/core/identity");

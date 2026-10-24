@@ -12,7 +12,7 @@ process.env.SIDEKICK_TOOL_POLICY = 'open';
 process.env.SIDEKICK_APPROVAL_MODE = 'off';
 
 process.env.SIDEKICK_INFLUX_TOKEN_FILE = path.join(TEST_DATA_DIR, 'influx-token');
-fs.writeFileSync(process.env.SIDEKICK_INFLUX_TOKEN_FILE, 'metrics-surface-test-token');
+fs.writeFileSync(process.env.SIDEKICK_INFLUX_TOKEN_FILE, 'metrics-surface-test-token', { mode: 0o600 });
 delete process.env.SIDEKICK_INFLUX_TOKEN;
 process.env.SIDEKICK_INFLUX_ORG = 'sidekick';
 process.env.SIDEKICK_INFLUX_BUCKET = 'sidekick';

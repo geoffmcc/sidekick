@@ -687,12 +687,16 @@ function showMcpServiceCredentialToken(result) {
   status.className = 'metrics-status-pill ok';
   const scopes = (result.credential?.scopes || []).join(', ');
   const expiresAt = result.credential?.expires_at ? 'Expires ' + esc(new Date(result.credential.expires_at).toLocaleDateString()) : 'No expiration';
+  const projectGrants = Array.isArray(result.project_grants) && result.project_grants.length
+    ? '<div class="sub">Project access: ' + esc(result.project_grants.map(grant => grant.project_id + ' (' + grant.access_level + ')').join(', ')) + '</div>'
+    : '';
   output.innerHTML = '<div class="service-credential-warning">Copy this token now. Sidekick will not show it again. Store it in the client’s protected credential settings.</div>' +
     '<div class="sub">For HTTP MCP clients, use the Sidekick MCP URL and send this credential as an Authorization: Bearer token.</div>' +
     '<div class="sub">Identity: ' + esc(result.principal.display_name) + ' · Permissions: ' + esc(scopes) + ' · ' + expiresAt + '</div>' +
     '<pre class="service-credential-token" id="mcpServiceCredentialToken"></pre>' +
     '<button class="btn btn-sm btn-outline" type="button" data-dashboard-action="copy-element" data-id="mcpServiceCredentialToken">Copy token</button>';
   $('mcpServiceCredentialToken').textContent = result.token;
+  if (projectGrants) output.insertAdjacentHTML('afterbegin', projectGrants);
 }
 
 async function loadMcpServiceCredentialSetup() {
@@ -717,6 +721,7 @@ async function loadMcpServiceCredentialSetup() {
     }
     const clientForm = document.querySelector('.mcp-client-form');
     if (clientForm) clientForm.hidden = false;
+    await loadMcpProjectOptions();
     const principals = (data.service_principals || []).filter(item => item.enabled);
     const clientsWithCredentials = principals.filter(principal => (principal.credentials || []).some(credential =>
       !credential.revoked_at && (!credential.expires_at || Date.parse(credential.expires_at) > Date.now())));
@@ -741,11 +746,42 @@ async function loadMcpServiceCredentialSetup() {
   }
 }
 
+async function loadMcpProjectOptions() {
+  const select = $('mcpProjectAccess');
+  if (!select) return;
+  select.replaceChildren();
+  try {
+    const response = await authFetch('/api/projects?limit=200');
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Project access list unavailable.');
+    const projects = Array.isArray(data.projects) ? data.projects : [];
+    for (const entry of projects) {
+      const project = entry?.project;
+      if (project?.project_id) select.add(new Option(String(project.display_name || project.project_id), String(project.project_id)));
+    }
+    if (!select.options.length) {
+      const option = new Option('No accessible projects', '');
+      option.disabled = true;
+      select.add(option);
+    }
+  } catch (error) {
+    const option = new Option('Project list unavailable', '');
+    option.disabled = true;
+    select.add(option);
+    select.title = dashboardSafeErrorMessage(error);
+  }
+}
+
 async function createMcpServiceCredential(principalId) {
   const details = $('mcpServiceSetupDetails');
   const name = String($('mcpClientName')?.value || '').trim();
   const permissions = [];
   if ($('mcpGrantTools')?.checked) permissions.push('tools.execute');
+  if ($('mcpGrantMemoryRead')?.checked) permissions.push('memory.read');
+  if ($('mcpGrantMemoryWrite')?.checked) permissions.push('memory.write');
+  if ($('mcpGrantKnowledgeRead')?.checked) permissions.push('knowledge.read');
+  if ($('mcpGrantCatalogRead')?.checked) permissions.push('tools.catalog.read');
+  if ($('mcpGrantWorkflows')?.checked) permissions.push('workflows.execute');
   if ($('mcpGrantPacks')?.checked) permissions.push('packs.read', 'packs.manage');
   if ($('mcpGrantHigh')?.checked) permissions.push('tools.execute_high');
   if ($('mcpGrantCritical')?.checked) permissions.push('tools.execute_critical');
@@ -759,6 +795,16 @@ async function createMcpServiceCredential(principalId) {
     permissions,
     scopes: permissions,
   };
+  const selectedProjects = Array.from($('mcpProjectAccess')?.selectedOptions || [])
+    .map(option => String(option.value || '').trim()).filter(Boolean);
+  if (selectedProjects.length > 100) {
+    identityError('Select no more than 100 projects for one client.');
+    return;
+  }
+  if (selectedProjects.length) {
+    const accessLevel = $('mcpProjectAccessLevel')?.value === 'write' ? 'write' : 'read';
+    body.project_grants = selectedProjects.map(project_id => ({ project_id, access_level: accessLevel }));
+  }
   const lifetimeDays = Number($('mcpClientExpiry')?.value ?? 90);
   if (lifetimeDays > 0) body.expires_at = new Date(Date.now() + lifetimeDays * 24 * 60 * 60 * 1000).toISOString();
   if (principalId) body.principal_id = principalId;
@@ -3251,6 +3297,7 @@ function createComputeEnrollment(){
   const body = {
     displayName: fieldValue('computeEnrollName', 'sidekick-worker'),
     trustLevel: fieldValue('computeEnrollTrust', 'trusted'),
+    allowedDataClassifications: Array.from(document.querySelectorAll('input[name="computeEnrollDataClass"]:checked'), input => input.value),
     maxConcurrentJobs: Number(fieldValue('computeEnrollJobs', 2)),
     expiresInMs: Number(fieldValue('computeEnrollTtl', 3600000))
   };
@@ -4848,6 +4895,9 @@ function renderInstalledCapabilities(packs) {
       actions.push('<button class="btn btn-sm" data-dashboard-action="callback" data-handler="capabilityAction" data-id="' + attr(pack.name) + '" data-value="enable"><i class="fas fa-play"></i> Enable</button>');
     }
     actions.push('<button class="btn btn-sm btn-outline" data-dashboard-action="callback" data-handler="capabilityUpgrade" data-id="' + attr(pack.name) + '"><i class="fas fa-arrow-up"></i> Upgrade</button>');
+    if (pack.bundled === true && pack.provenance === 'first_party') {
+      actions.push('<button class="btn btn-sm btn-outline" data-dashboard-action="callback" data-handler="capabilityRefreshBundled" data-id="' + attr(pack.name) + '" title="Replace package files with this release’s verified bundled copy"><i class="fas fa-arrows-rotate"></i> Refresh bundled copy</button>');
+    }
     actions.push('<button class="btn btn-sm btn-outline" data-dashboard-action="callback" data-handler="capabilityUninstall" data-id="' + attr(pack.name) + '"><i class="fas fa-trash"></i> Uninstall</button>');
 
     return '<div class="card capability-card">'
@@ -5023,6 +5073,11 @@ function capabilityUpgrade(name) {
   const path = prompt('Server-local path of the upgrade package (leave blank to upgrade from the bundled release copy):', '');
   if (path === null) return;
   return capabilityPost('/api/capabilities/' + encodeURIComponent(name) + '/upgrade', path ? { path } : {}, 'upgrade');
+}
+
+function capabilityRefreshBundled(name) {
+  if (!confirm('Refresh "' + name + '" from this release’s verified bundled copy? This replaces the installed package files, preserves pack configuration and enabled state, and explicitly allows a same-version refresh. It does not grant third-party code first-party trust.')) return;
+  return capabilityPost('/api/capabilities/' + encodeURIComponent(name) + '/upgrade', { allow_same_version: true }, 'refresh bundled copy');
 }
 
 function capabilityUninstall(name) {

@@ -14,8 +14,14 @@ assert.strictEqual(safeDownloadFilename(null), "download");
 console.log("Phase 12 browser download metadata security test passed.");
 
 test("browser handlers cannot bypass the canonical dispatcher or execution identity", async () => {
-  const read = await browserTool.sidekick_browser({ action: "status" });
-  assert.strictEqual(read.code, "canonical_dispatch_required");
-  const navigate = await browserTool.sidekick_browser({ action: "open", url: "https://example.invalid" });
-  assert.strictEqual(navigate.code, "unauthenticated");
+  const anonymousRead = await browserTool.sidekick_browser({ action: "status" });
+  assert.strictEqual(anonymousRead.code, "unauthenticated");
+  const anonymousOpen = await browserTool.sidekick_browser({ action: "open", url: "https://example.invalid" });
+  assert.strictEqual(anonymousOpen.code, "unauthenticated");
+
+  const { createOwnerContext } = require("./helpers/authorized-context");
+  const { runWithContext } = require("../src/tools/context");
+  const authenticated = createOwnerContext({ source: "mcp" });
+  const directRead = await runWithContext(authenticated, () => browserTool.sidekick_browser({ action: "status" }));
+  assert.strictEqual(directRead.code, "canonical_dispatch_required");
 });

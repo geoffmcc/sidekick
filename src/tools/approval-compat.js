@@ -247,6 +247,7 @@ function queueApproval(toolName, args, decision, context = {}) {
     risk: decision.risk,
     source: decision.source,
     requester: context.actor || decision.source || null,
+    requested_by_principal_id: context.authIdentity?.principal_id || null,
     mode: decision.mode,
     reason: decision.reason,
     args_encrypted: encryptApprovalArgs(storedArgs),
@@ -438,6 +439,21 @@ async function resolveApproval(id, action, reviewer = "dashboard", options = {})
   }
   if (item.status !== "pending") {
     return { content: [{ type: "text", text: `Approval ${id} is already ${item.status}` }], isError: true };
+  }
+
+  if (action === "approve") {
+    const approverPrincipalId = options.reviewerAuthIdentity?.principal_id || options.reviewerPrincipalId || null;
+    // Legacy approvals created before principal binding cannot prove who
+    // initiated the request. An authenticated reviewer must not approve one:
+    // doing so could let the original requester self-approve through an old
+    // record. Unauthenticated legacy test callers still reach canonical
+    // dispatch, where execution is denied for lacking reviewer authority.
+    if (approverPrincipalId && !item.requested_by_principal_id) {
+      return { content: [{ type: "text", text: `Approval ${id} has no bound requester and must be re-requested` }], isError: true, code: "approval_requester_unbound" };
+    }
+    if (approverPrincipalId && item.requested_by_principal_id === approverPrincipalId) {
+      return { content: [{ type: "text", text: `Approval ${id} cannot be approved by the principal that requested it` }], isError: true, code: "self_approval_denied" };
+    }
   }
 
   if (action === "reject") {

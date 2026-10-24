@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { spawnSync } = require("node:child_process");
 const { after, before, test } = require("node:test");
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-security-boundaries-"));
@@ -25,8 +26,15 @@ const dispatcher = require("../../src/tools/dispatcher");
 const tools = require("../../src/tools");
 const { normalizeDefinition } = require("../../src/workflows/definition");
 const packLifecycle = require("../../src/packs/lifecycle");
-const { redactSensitive, redactSensitiveKeysDeep } = require("../../src/redact");
+const { redactSensitive, redactSensitiveKeysDeep, isSensitiveKey } = require("../../src/redact");
 const { normalizeResult } = require("../../src/tools/result");
+const { descriptors: filesystemDescriptors, buildSearchArgs } = require("../../src/tools/families/filesystem");
+const { descriptors: monitoringDescriptors, resolveSnapshotPath, readSnapshotFile, writeSnapshotFile, MAX_SNAPSHOT_BYTES } = require("../../src/tools/families/monitoring");
+const { readTextBounded } = require("../../src/core/bounded-file-read");
+const { tunnelStopPattern, createTunnelLog } = require("../../src/tools/families/networking");
+const { readJsonFile, writeJsonFile, writeTextFile } = require("../../src/core/json-file-store");
+const proceduresStore = require("../../src/core/procedures-store");
+const { createMcpServer, isRegistrableProcedure } = require("../../src/mcp/server");
 
 let owner;
 
@@ -150,9 +158,269 @@ test("redaction covers nested credentials, encoded tokens, and structured result
   assert.equal(nested.safe, "visible");
   assert.doesNotMatch(redactSensitive(`token=${encodeURIComponent(secret)}`), new RegExp(secret));
 
+  const remoteInput = ["https:", "//", "deploy-user:ordinary-password@git.example.test/team/repository.git"].join("");
+  const remote = redactSensitive(remoteInput);
+  assert.doesNotMatch(remote, /deploy-user|ordinary-password/);
+  assert.match(remote, /\[REDACTED\]@git\.example\.test\/team\/repository\.git/);
+  const longSchemeRemote = `${"a".repeat(80)}://deploy-user:ordinary-password@git.example.test/team/repository.git`;
+  const redactedLongSchemeRemote = redactSensitive(longSchemeRemote);
+  assert.doesNotMatch(redactedLongSchemeRemote, /deploy-user|ordinary-password/);
+  const schemeWithLeadingDigit = ["3https:", "//", "deploy-user:ordinary-password@git.example.test"].join("");
+  assert.doesNotMatch(redactSensitive(schemeWithLeadingDigit), /deploy-user|ordinary-password/);
+  const privateKeyFixture = ["-----BEGIN PRIVATE ", "KEY-----body-----END PRIVATE ", "KEY-----"].join("");
+  assert.equal(redactSensitive(privateKeyFixture), "[REDACTED PRIVATE KEY]");
+
   const result = normalizeResult({ content: [{ type: "text", text: JSON.stringify({ api_key: secret, credentialState: "configured" }) }] });
   assert.doesNotMatch(result.content[0].text, new RegExp(secret));
   assert.match(result.content[0].text, /configured/);
+});
+
+test("redaction stays bounded on long untrusted strings that resemble URL schemes", () => {
+  const redactModule = path.resolve(__dirname, "../../src/redact.js");
+  const pemBegin = ["-----BEGIN PRIVATE ", "KEY-----"].join("");
+  const script = `const { redactSensitive } = require(${JSON.stringify(redactModule)}); const plain = "x".repeat(500000); const urls = "x://a/".repeat(100000); const jwtPrefixes = "eyJ".repeat(100000); const pemBegin = ${JSON.stringify(pemBegin)}; const pemPrefixes = (pemBegin + "x").repeat(30000); if (redactSensitive(plain) !== plain || redactSensitive(urls) !== urls || redactSensitive(jwtPrefixes) !== jwtPrefixes || redactSensitive(pemPrefixes) !== pemPrefixes) process.exit(2);`;
+  const result = spawnSync(process.execPath, ["-e", script], {
+    encoding: "utf8",
+    timeout: 5000,
+    maxBuffer: 1024 * 1024,
+  });
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, result.stderr || "redaction child process failed");
+});
+
+test("redaction parsers leave malformed URL, JWT, and PEM fragments intact", () => {
+  assert.equal(isSensitiveKey("credential_id"), false);
+  assert.equal(isSensitiveKey("credential_scopes"), false);
+  assert.equal(isSensitiveKey("secret_names"), false);
+  assert.equal(redactSensitive(42), 42);
+  const tokenKey = ["to", "ken"].join("");
+  const tokenValue = ["synthetic", "-credential-", "fixture"].join("");
+  assert.deepEqual(redactSensitiveKeysDeep(["visible", { [tokenKey]: tokenValue }]), ["visible", { [tokenKey]: "[REDACTED]" }]);
+
+  const https = ["https:", "//"].join("");
+  const invalidScheme = [":", "//"].join("");
+  const userInfo = ["fixture-user", ":", "fixture-pass", "@"].join("");
+  const privateKeyBegin = ["-----BEGIN PRIVATE ", "KEY-----"].join("");
+  const privateKeyEnd = ["-----END PRIVATE ", "KEY-----"].join("");
+  const certificateBegin = ["-----BEGIN CERTIFICATE", "-----"].join("");
+  const certificateEnd = ["-----END CERTIFICATE", "-----"].join("");
+
+  for (const value of [
+    `${invalidScheme}${userInfo}example.test/path`,
+    `${https}example.test/path`,
+    "eyJ..",
+    "eyJheader",
+    "eyJheaderX!",
+    "eyJheader.not-a-payload",
+    "eyJheader.eyJ.",
+    "eyJheader.eyJpayload",
+    "eyJheader.eyJpayloadX",
+    "eyJheader.eyJpayloadX!",
+    "eyJheader.eyJpayload.",
+    "-----BEGIN -----",
+    `${certificateBegin}public${certificateEnd}`,
+    `-----BEGIN ${"A".repeat(65)}-----body`,
+    `${privateKeyBegin}body${certificateEnd}`,
+    `${privateKeyBegin}body-----END ?-----`,
+    `${privateKeyBegin}body without a footer`,
+  ]) {
+    assert.equal(redactSensitive(value), value, `malformed or non-secret input changed: ${value.slice(0, 40)}`);
+  }
+
+  const privateKey = `${privateKeyBegin}private material${privateKeyEnd}`;
+  assert.equal(
+    redactSensitive(`prefix ${certificateBegin}public${certificateEnd} ${privateKey} suffix`),
+    `prefix ${certificateBegin}public${certificateEnd} [REDACTED PRIVATE KEY] suffix`,
+  );
+  assert.equal(redactSensitive(`${https}${userInfo}example.test/path`), `${https}[REDACTED]@example.test/path`);
+  assert.equal(redactSensitive("eyJheader.eyJpayload.signature"), "[REDACTED JWT]");
+});
+
+test("filesystem search patterns cannot become ripgrep or grep options", () => {
+  const hostilePattern = "--pre=write-side-effect";
+  for (const executable of ["/usr/bin/rg", "/usr/bin/grep"]) {
+    const args = buildSearchArgs(executable, hostilePattern, "/workspace", "*.txt");
+    const separator = args.indexOf("--");
+    assert.ok(separator >= 0, `${executable} arguments must terminate options`);
+    assert.deepEqual(args.slice(separator), ["--", hostilePattern, "/workspace"]);
+  }
+});
+
+test("tunnel logs are exclusively created and stop patterns treat names literally", () => {
+  const directory = fs.mkdtempSync(path.join(dataDir, "tunnel-logs-"));
+  let first;
+  let second;
+  try {
+    first = createTunnelLog(directory);
+    second = createTunnelLog(directory);
+    assert.notEqual(first.logPath, second.logPath);
+    assert.equal(fs.existsSync(first.logPath), true);
+    assert.equal(fs.existsSync(second.logPath), true);
+    if (process.platform !== "win32") {
+      assert.equal(fs.statSync(first.logPath).mode & 0o777, 0o600);
+    }
+    assert.equal(tunnelStopPattern("edge.v1"), "cloudflared tunnel.*--name edge\\.v1");
+    assert.throws(() => tunnelStopPattern("edge.*"));
+  } finally {
+    for (const item of [first, second]) {
+      if (!item) continue;
+      try { fs.closeSync(item.fd); } catch {}
+      try { fs.unlinkSync(item.logPath); } catch {}
+    }
+    fs.rmdirSync(directory);
+  }
+});
+
+test("snapshot names cannot escape the snapshot storage directory", () => {
+  const descriptor = monitoringDescriptors.find(item => item.name === "snapshot");
+  assert.ok(descriptor);
+  for (const name of ["../outside", "nested/name", "nested\\name", "..", "name.", "name ", "bad\nname"]) {
+    assert.equal(resolveSnapshotPath(name), null, `unsafe snapshot name accepted: ${JSON.stringify(name)}`);
+    assert.equal(descriptor.schema.safeParse({ action: "capture", name }).success, false);
+  }
+  const safePath = resolveSnapshotPath("release baseline.v1");
+  assert.ok(safePath);
+  assert.equal(path.dirname(safePath), path.resolve(process.env.SIDEKICK_DATA_DIR, "snapshots"));
+});
+
+test("snapshot storage reads bounded regular files and atomically replaces symlinks", async t => {
+  const snapshot = { name: "safe-snapshot", date: new Date().toISOString(), types: ["processes"], data: { processes: [] } };
+  writeSnapshotFile(snapshot.name, snapshot);
+  assert.deepEqual(readSnapshotFile(resolveSnapshotPath(snapshot.name)), snapshot);
+
+  const outside = path.join(dataDir, "snapshot-outside.json");
+  const linkPath = resolveSnapshotPath("snapshot-link");
+  fs.writeFileSync(outside, "outside data");
+  try {
+    fs.symlinkSync(outside, linkPath);
+  } catch (error) {
+    if (process.platform === "win32" && ["EPERM", "EACCES", "ENOTSUP"].includes(error.code)) {
+      t.skip("symlink creation is unavailable on this Windows host");
+      return;
+    }
+    throw error;
+  }
+
+  assert.throws(() => readSnapshotFile(linkPath));
+  const replacement = { ...snapshot, name: "snapshot-link" };
+  writeSnapshotFile(replacement.name, replacement);
+  assert.equal(fs.readFileSync(outside, "utf8"), "outside data");
+  assert.deepEqual(readSnapshotFile(linkPath), replacement);
+});
+
+test("snapshot storage rejects oversized and malformed persisted data", () => {
+  const oversizedPath = resolveSnapshotPath("oversized-snapshot");
+  fs.writeFileSync(oversizedPath, Buffer.alloc(MAX_SNAPSHOT_BYTES + 1));
+  assert.throws(() => readSnapshotFile(oversizedPath), error => error.code === "FILE_READ_TOO_LARGE");
+
+  const malformedPath = resolveSnapshotPath("malformed-snapshot");
+  fs.writeFileSync(malformedPath, JSON.stringify({ name: "bad", date: "today", types: [], data: [] }));
+  assert.throws(() => readSnapshotFile(malformedPath), /invalid structure/);
+
+  assert.throws(() => writeSnapshotFile("too-large-snapshot", {
+    name: "too-large-snapshot", date: "today", types: [], data: { note: "x".repeat(MAX_SNAPSHOT_BYTES) },
+  }), /storage limit/);
+});
+
+test("persistent JSON stores use bounded no-follow reads and atomic replacement", () => {
+  const storePath = path.join(dataDir, "persistent-state.json");
+  const original = { tasks: [{ id: 1, status: "pending" }] };
+  writeJsonFile(storePath, original, { maxBytes: 4096 });
+  assert.deepEqual(readJsonFile(storePath, { maxBytes: 4096 }), original);
+
+  const originalText = fs.readFileSync(storePath, "utf8");
+  assert.throws(() => writeJsonFile(storePath, { text: "x".repeat(4096) }, { maxBytes: 4096 }), /byte limit/);
+  assert.equal(fs.readFileSync(storePath, "utf8"), originalText, "oversized state must preserve the last committed value");
+
+  const transcriptPath = path.join(dataDir, "bounded-transcript.json");
+  writeTextFile(transcriptPath, "{\"status\":\"completed\"}", { maxBytes: 4096, mode: 0o600 });
+  const transcriptText = fs.readFileSync(transcriptPath, "utf8");
+  assert.equal(transcriptText, "{\"status\":\"completed\"}");
+  assert.throws(() => writeTextFile(transcriptPath, "x".repeat(4097), { maxBytes: 4096 }), /byte limit/);
+  assert.equal(fs.readFileSync(transcriptPath, "utf8"), transcriptText, "oversized transcript must preserve the last published value");
+
+  const realRename = fs.renameSync;
+  fs.renameSync = () => { throw new Error("synthetic atomic replacement failure"); };
+  try {
+    assert.throws(() => writeJsonFile(storePath, { tasks: [] }, { maxBytes: 4096 }), /synthetic atomic replacement failure/);
+  } finally {
+    fs.renameSync = realRename;
+  }
+  assert.equal(fs.readFileSync(storePath, "utf8"), originalText, "failed replacement must preserve existing state");
+  assert.deepEqual(fs.readdirSync(dataDir).filter(name => name.startsWith(".sidekick-json-")), []);
+});
+
+test("persistent JSON reads reject symlinks where the platform supports no-follow opens", { skip: typeof fs.constants.O_NOFOLLOW !== "number" }, () => {
+  const target = path.join(dataDir, "json-outside-target.json");
+  const link = path.join(dataDir, "json-state-link.json");
+  fs.writeFileSync(target, JSON.stringify({ secret: "synthetic" }));
+  fs.symlinkSync(target, link);
+  assert.throws(() => readJsonFile(link));
+});
+
+test("learned procedures use bounded atomic persistent storage", () => {
+  const procedures = { safe_example: { name: "safe_example", steps: [], parameters: {} } };
+  proceduresStore.saveProcedures(procedures);
+  assert.deepEqual(proceduresStore.loadProcedures(), procedures);
+  if (process.platform !== "win32") assert.equal(fs.statSync(proceduresStore.PROCEDURES_FILE).mode & 0o777, 0o600);
+
+  fs.writeFileSync(proceduresStore.PROCEDURES_FILE, Buffer.alloc(proceduresStore.MAX_PROCEDURES_BYTES + 1), { mode: 0o600 });
+  assert.deepEqual(proceduresStore.loadProcedures(), {}, "oversized stored procedures are not loaded into the dynamic tool registry");
+  proceduresStore.saveProcedures({});
+  assert.deepEqual(proceduresStore.loadProcedures(), {});
+});
+
+test("MCP startup ignores unsafe or malformed persisted procedure definitions", () => {
+  const valid = { description: "safe stored procedure", parameters: {}, steps: [{ tool: "respond", args: { text: "hello" } }] };
+  assert.equal(isRegistrableProcedure("safe_persisted", valid), true);
+  assert.equal(isRegistrableProcedure("toString", valid), false);
+  assert.equal(isRegistrableProcedure("unsafe_parameters", { ...valid, parameters: { token: { type: "object" } } }), false);
+
+  proceduresStore.saveProcedures({
+    safe_persisted: valid,
+    toString: valid,
+    malformed_parameters: { ...valid, parameters: { token: { type: "object" } } },
+    git: valid,
+  });
+  try {
+    const server = createMcpServer(() => null);
+    assert.equal(Object.hasOwn(server._registeredTools, "safe_persisted"), true);
+    assert.equal(Object.hasOwn(server._registeredTools, "toString"), false);
+    assert.equal(Object.hasOwn(server._registeredTools, "malformed_parameters"), false);
+    assert.equal(Object.hasOwn(server._registeredTools, "git"), true, "the built-in registration remains intact");
+  } finally {
+    proceduresStore.saveProcedures({});
+  }
+});
+
+test("filesystem text reads enforce byte limits and support bounded continuation", () => {
+  const descriptor = filesystemDescriptors.find(item => item.name === "read");
+  const file = path.join(dataDir, "bounded-read-fixture.txt");
+  const text = "0123456789abcdefghijklmnopqrstuvwxyz";
+  fs.writeFileSync(file, text);
+
+  const first = readTextBounded(file, { maxBytes: 12 });
+  assert.equal(first.content, text.slice(0, 12));
+  assert.equal(first.truncated, true);
+  const second = readTextBounded(file, { maxBytes: 12, offset: first.bytesRead });
+  assert.equal(second.content, text.slice(12, 24));
+  assert.equal(second.truncated, true);
+  assert.throws(() => readTextBounded(file, { maxBytes: 12, requireComplete: true }), error => error.code === "FILE_READ_TOO_LARGE");
+  assert.throws(() => readTextBounded(dataDir, { maxBytes: 12 }), error => error.code === "FILE_READ_NOT_REGULAR");
+  assert.equal(descriptor.schema.safeParse({ path: file, offset: 0 }).success, true);
+  assert.equal(descriptor.schema.safeParse({ path: file, offset: -1 }).success, false);
+});
+
+test("bounded no-follow reads reject symlinks", t => {
+  const target = path.join(dataDir, "no-follow-target.txt");
+  const link = path.join(dataDir, "no-follow-link.txt");
+  fs.writeFileSync(target, "target contents");
+  try { fs.symlinkSync(target, link, "file"); }
+  catch (error) {
+    if (["EPERM", "EACCES", "ENOTSUP"].includes(error.code)) return t.skip(`symlink creation is unavailable: ${error.code}`);
+    throw error;
+  }
+  assert.throws(() => readTextBounded(link, { maxBytes: 100, noFollow: true }), error => ["ELOOP", "FILE_READ_SYMLINK"].includes(error.code));
 });
 
 test("workflow definitions reject forward references, executable syntax, and duplicate steps", () => {

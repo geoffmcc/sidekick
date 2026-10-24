@@ -109,7 +109,6 @@ function startNode(port, command = "run") {
       SIDEKICK_URL: `http://127.0.0.1:${port}`,
       SIDEKICK_NODE_CONFIG: configPath,
       SIDEKICK_NODE_CREDENTIAL: credentialPath,
-      SIDEKICK_NODE_ENROLL_TOKEN: token,
       SIDEKICK_NODE_ENROLL_TOKEN_FILE: path.join(fixture, "enrollment-token"),
       SIDEKICK_NODE_ID: nodeId,
       SIDEKICK_NODE_NAME: "protocol-fixture",
@@ -191,7 +190,11 @@ async function waitForExit(child, timeoutMs = 5000) {
     requests.jobById = new Map([first, second, third].map(job => [job.jobId, job]));
 
     nodeProcess = startNode(port);
-    await waitFor(() => first.outcome, "successful completion");
+    try {
+      await waitFor(() => first.outcome, "successful completion");
+    } catch (error) {
+      throw new Error(`${error.message}; worker output: ${nodeProcess.output()}`);
+    }
     await waitFor(() => second.outcome, "failure delivery");
     await waitFor(() => third.outcome, "cancellation delivery", 20000);
 

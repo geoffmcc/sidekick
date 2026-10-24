@@ -1,6 +1,7 @@
 "use strict";
 
 const projectAccess = require("../core/project-access");
+const authorization = require("../core/authorization");
 
 function registerKnowledgeRoute({ app, dbStore, requireIdentityPermission, errorResponse }) {
   app.get("/api/knowledge", (req, res) => {
@@ -16,7 +17,15 @@ function registerKnowledgeRoute({ app, dbStore, requireIdentityPermission, error
       const delegationId = principal?.delegation_id || principal?.delegationId || null;
       let scopeSql = "project_id IS NULL";
       let scopeParams = [];
-      if (principal && projectAccess.hasGlobalProjectAccess(principal.principal_id, principal.scopes, delegationId)) {
+      const globalKnowledgeRead = principal
+        && projectAccess.hasGlobalProjectAccess(principal.principal_id, principal.scopes, delegationId)
+        && authorization.authorize({
+          principalId: principal.principal_id,
+          permission: "knowledge.read",
+          credentialScopes: principal.scopes,
+          delegationId,
+        }).ok;
+      if (globalKnowledgeRead) {
         scopeSql = "1 = 1";
       } else if (principal) {
         const projects = projectAccess.listAccessibleProjectsForPermission(

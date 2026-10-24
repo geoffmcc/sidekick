@@ -3,6 +3,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const { assertWindowsSecretAcl } = require("./windows-secret-acl");
 const MAX_SECRET_BYTES = 16384;
 
 // These are the application credentials that must be supplied through a secret
@@ -27,6 +28,7 @@ const FILE_SECRET_NAMES = new Set([
   "SMTP_USER",
   "SMTP_PASS",
   "SIDEKICK_ENROLL_TOKEN",
+  "SIDEKICK_NODE_ENROLL_TOKEN",
   "COMPUTE_TOKEN",
   "SIDEKICK_COMPUTE_LIVE_API_KEY",
   "SIDEKICK_BOOTSTRAP_TOKEN"
@@ -52,6 +54,7 @@ const SECRET_FILE_NAMES = Object.freeze({
   SMTP_USER: "smtp_user",
   SMTP_PASS: "smtp_pass",
   SIDEKICK_ENROLL_TOKEN: "sidekick_enroll_token",
+  SIDEKICK_NODE_ENROLL_TOKEN: "sidekick_node_enroll_token",
   COMPUTE_TOKEN: "compute_token",
   SIDEKICK_COMPUTE_LIVE_API_KEY: "sidekick_compute_live_api_key",
   SIDEKICK_BOOTSTRAP_TOKEN: "sidekick_bootstrap_token"
@@ -61,34 +64,55 @@ function isWindows() {
   return os.platform() === "win32";
 }
 
+function shouldVerifyWindowsSecretAcl() {
+  // Synthetic test trees live under OS temp directories and deliberately have
+  // runner ACLs. The native ACL verifier has its own tests against synthetic
+  // ACLs; production callers always verify the real path.
+  return isWindows() && !process.env.SIDEKICK_TEST_SUITE_ID;
+}
+
+function assertSafeSecretDirectory(directoryPath, name) {
+  if (!path.isAbsolute(directoryPath)) throw new Error(`${name} secret directory path must be absolute`);
+  const resolved = path.resolve(directoryPath);
+  const root = path.parse(resolved).root;
+  const segments = resolved.slice(root.length).split(path.sep).filter(Boolean);
+  let currentDirectory = root;
+  const checkedDirectories = [];
+  const verifyWindowsAcl = shouldVerifyWindowsSecretAcl();
+  if (verifyWindowsAcl) checkedDirectories.push(root);
+  for (const segment of segments) {
+    currentDirectory = path.join(currentDirectory, segment);
+    let stat;
+    try {
+      stat = fs.lstatSync(currentDirectory);
+    } catch {
+      throw new Error(`${name} secret directory is unavailable`);
+    }
+    if (stat.isSymbolicLink() || !stat.isDirectory()) {
+      throw new Error(`${name} secret directory must be a real directory`);
+    }
+
+    // An attacker able to replace a parent directory entry can swap the
+    // protected secrets directory itself. A sticky system temp ancestor is
+    // safe because users cannot rename entries they do not own.
+    const writableByOthers = !isWindows() && (stat.mode & 0o022) !== 0;
+    const secureStickyAncestor = currentDirectory !== resolved && (stat.mode & 0o1000) !== 0;
+    if (writableByOthers && !secureStickyAncestor) {
+      throw new Error(`${name} secret directory is writable by group or other users`);
+    }
+    if (verifyWindowsAcl) checkedDirectories.push(currentDirectory);
+  }
+  if (verifyWindowsAcl) {
+    assertWindowsSecretAcl({ directories: checkedDirectories, secretDirectory: resolved, secretFile: null, name });
+  }
+  return resolved;
+}
+
 function assertSafeFile(filePath, name) {
   if (!path.isAbsolute(filePath)) throw new Error(`${name} secret path must be absolute`);
   const resolved = path.resolve(filePath);
   const secretDirectory = path.dirname(resolved);
-  const root = path.parse(secretDirectory).root;
-  const segments = secretDirectory.slice(root.length).split(path.sep).filter(Boolean);
-  let currentDirectory = root;
-  for (const segment of segments) {
-    currentDirectory = path.join(currentDirectory, segment);
-    let directoryStat;
-    try {
-      directoryStat = fs.lstatSync(currentDirectory);
-    } catch {
-      throw new Error(`${name} secret directory is unavailable`);
-    }
-    if (directoryStat.isSymbolicLink() || !directoryStat.isDirectory()) {
-      throw new Error(`${name} secret directory must be a real directory`);
-    }
-    // A writable containing directory permits replacing an otherwise
-    // protected file. Sticky system temp directories are safe ancestors, but
-    // the immediate directory containing the secret must remain private or
-    // read-only (for example, a root-owned /run/secrets mount).
-    const writableByOthers = !isWindows() && (directoryStat.mode & 0o022) !== 0;
-    const secureStickyAncestor = currentDirectory !== secretDirectory && (directoryStat.mode & 0o1000) !== 0;
-    if (writableByOthers && !secureStickyAncestor) {
-      throw new Error(`${name} secret directory is writable by group or other users`);
-    }
-  }
+  assertSafeSecretDirectory(secretDirectory, name);
   let stat;
   try {
     stat = fs.lstatSync(resolved);
@@ -97,14 +121,61 @@ function assertSafeFile(filePath, name) {
   }
   if (stat.isSymbolicLink()) throw new Error(`${name} secret file must not be a symlink`);
   if (!stat.isFile()) throw new Error(`${name} secret path is not a regular file`);
+  if (stat.nlink !== 1) throw new Error(`${name} secret file must have exactly one link`);
 
-  // On POSIX, reject group/world-writable secret files. Readability for the
-  // service account is intentionally allowed because Docker secrets commonly
-  // use a read-only mount with a non-0600 mode.
+  // A group-readable file may be used with a dedicated service group, but
+  // world-readable secret files expose credentials to unrelated local users
+  // even when the file and directory are read-only.
   if (!isWindows() && (stat.mode & 0o022) !== 0) {
     throw new Error(`${name} secret file is writable by group or other users`);
   }
+  if (!isWindows() && (stat.mode & 0o004) !== 0) {
+    throw new Error(`${name} secret file is readable by other users`);
+  }
+  if (shouldVerifyWindowsSecretAcl()) {
+    assertWindowsSecretAcl({ directories: [], secretDirectory: null, secretFile: resolved, name });
+  }
   return { resolved, stat };
+}
+
+function readSecretFile(filePath, name) {
+  const safeFile = assertSafeFile(filePath, name);
+  let fd;
+  try {
+    const flags = fs.constants.O_RDONLY |
+      (fs.constants.O_NOFOLLOW || 0) |
+      (fs.constants.O_NONBLOCK || 0);
+    fd = fs.openSync(safeFile.resolved, flags);
+    const opened = fs.fstatSync(fd);
+    if (!opened.isFile() || opened.nlink !== 1 ||
+        (safeFile.stat.dev !== opened.dev || safeFile.stat.ino !== opened.ino) ||
+        (!isWindows() && ((opened.mode & 0o022) !== 0 || (opened.mode & 0o004) !== 0))) {
+      throw new Error(`${name} secret file changed or became unsafe while opening`);
+    }
+    if (opened.size > MAX_SECRET_BYTES) throw new Error(`${name} secret file is too large`);
+    const buffer = Buffer.alloc(MAX_SECRET_BYTES + 1);
+    let bytesRead = 0;
+    while (bytesRead < buffer.length) {
+      const count = fs.readSync(fd, buffer, bytesRead, buffer.length - bytesRead, null);
+      if (count === 0) break;
+      bytesRead += count;
+    }
+    if (bytesRead > MAX_SECRET_BYTES) throw new Error(`${name} secret file is too large`);
+    let value = buffer.subarray(0, bytesRead).toString("utf8");
+    value = value.replace(/\r?\n$/, "");
+    if (!value || value.includes("\0")) throw new Error(`${name} secret file is invalid`);
+    return value;
+  } catch (error) {
+    if (error.message === `${name} secret file is too large` ||
+        error.message === `${name} secret file is invalid` ||
+        error.message === `${name} secret file changed or became unsafe while opening` ||
+        error.message === `${name} secret file must have exactly one link`) throw error;
+    throw new Error(`${name} secret file could not be read`);
+  } finally {
+    if (fd !== undefined) {
+      try { fs.closeSync(fd); } catch {}
+    }
+  }
 }
 
 function secretFilePath(name) {
@@ -120,49 +191,13 @@ function readSecret(name, options = {}) {
   const explicitFile = process.env[`${name}_FILE`];
   const filePath = secretFilePath(name);
   if (filePath) {
-    let safeFile;
     try {
-      safeFile = assertSafeFile(filePath, name);
+      return readSecretFile(filePath, name);
     } catch (error) {
       // A shared secret directory may legitimately omit optional integrations.
       // Explicit per-secret paths and required credentials always fail closed.
       if (!explicitFile && !options.required && /secret (?:file|directory) is unavailable$/.test(error.message)) return "";
       throw error;
-    }
-    let fd;
-    try {
-      const flags = fs.constants.O_RDONLY |
-        (fs.constants.O_NOFOLLOW || 0) |
-        (fs.constants.O_NONBLOCK || 0);
-      fd = fs.openSync(safeFile.resolved, flags);
-      const opened = fs.fstatSync(fd);
-      if (!opened.isFile() ||
-          (safeFile.stat.dev !== opened.dev || safeFile.stat.ino !== opened.ino) ||
-          (!isWindows() && (opened.mode & 0o022) !== 0)) {
-        throw new Error(`${name} secret file changed or became unsafe while opening`);
-      }
-      if (opened.size > MAX_SECRET_BYTES) throw new Error(`${name} secret file is too large`);
-      const buffer = Buffer.alloc(MAX_SECRET_BYTES + 1);
-      let bytesRead = 0;
-      while (bytesRead < buffer.length) {
-        const count = fs.readSync(fd, buffer, bytesRead, buffer.length - bytesRead, null);
-        if (count === 0) break;
-        bytesRead += count;
-      }
-      if (bytesRead > MAX_SECRET_BYTES) throw new Error(`${name} secret file is too large`);
-      let value = buffer.subarray(0, bytesRead).toString("utf8");
-      value = value.replace(/\r?\n$/, "");
-      if (!value || value.includes("\0")) throw new Error(`${name} secret file is invalid`);
-      return value;
-    } catch (error) {
-      if (error.message === `${name} secret file is too large` ||
-          error.message === `${name} secret file is invalid` ||
-          error.message === `${name} secret file changed or became unsafe while opening`) throw error;
-      throw new Error(`${name} secret file could not be read`);
-    } finally {
-      if (fd !== undefined) {
-        try { fs.closeSync(fd); } catch {}
-      }
     }
   }
 
@@ -188,4 +223,4 @@ function isFileBacked(name) {
   return Boolean(secretFilePath(name));
 }
 
-module.exports = { FILE_SECRET_NAMES, SECRET_FILE_NAMES, readSecret, hasSecret, isFileBacked };
+module.exports = { FILE_SECRET_NAMES, SECRET_FILE_NAMES, assertSafeSecretDirectory, readSecretFile, readSecret, hasSecret, isFileBacked };

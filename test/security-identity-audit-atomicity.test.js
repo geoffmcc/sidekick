@@ -136,7 +136,7 @@ test("profile, username, enabled-state, and password mutations roll back when au
   rejectAudit("user.password_changed", "reject_password_audit", () => {
     assert.throws(() => identity.changePassword(user.principal_id, "synthetic sufficiently long changed password", owner), /synthetic audit failure/);
     assert.ok(identity.verifyUserPassword("atomic_profile_user", "synthetic sufficiently long original password"));
-    assert.equal(db.prepare("SELECT COUNT(*) AS count FROM identity_sessions WHERE principal_id = ? AND invalidated_at IS NOT NULL").get(user.principal_id).count, 1,
+    assert.ok(authentication.getSession(passwordSession.token),
       "failed password mutation does not invalidate the active session");
   });
   identity.changePassword(user.principal_id, "synthetic sufficiently long changed password", owner);

@@ -1,15 +1,21 @@
 "use strict";
 
 const fs = require("fs");
+const crypto = require("crypto");
 const { execFileSync } = require("child_process");
 const { runBoundedShell } = require("../../security/command-execution");
 const { z } = require("zod");
 const dbStore = require("../../db");
 const { redactSensitive } = require("../../redact");
-const { enforcePathPolicy } = require("../path-policy");
+const { enforcePathPolicy, hasConfiguredDeniedPaths } = require("../path-policy");
 const { childProcessEnv } = require("../../security/child-process");
 const { requireToolExecution } = require("../read-authorization");
 const { BoundedRegex } = require("../../core/bounded-regex");
+const { readTextBounded } = require("../../core/bounded-file-read");
+
+const MAX_MONITORING_FILE_BYTES = 10 * 1024 * 1024;
+const MAX_SNAPSHOT_BYTES = 5 * 1024 * 1024;
+const MAX_SNAPSHOT_COUNT = 500;
 
 function safeExecFileSync(program, args, options = {}) {
   return execFileSync(program, args, { ...options, env: childProcessEnv(options.env) });
@@ -52,7 +58,14 @@ async function sidekick_tail({ source, pattern, lines, since }) {
     if (!fs.existsSync(source)) {
       return { content: [{ type: "text", text: "File not found: " + source }], isError: true };
     }
-    const allLines = fs.readFileSync(source, "utf-8").split("\n");
+    try { content = readTextBounded(source, { maxBytes: MAX_MONITORING_FILE_BYTES, requireComplete: true, noFollow: true }).content; }
+    catch (error) {
+      const message = error.code === "FILE_READ_TOO_LARGE"
+        ? `Log file exceeds the ${MAX_MONITORING_FILE_BYTES}-byte tail limit`
+        : `Unable to read log file: ${error.message}`;
+      return { content: [{ type: "text", text: message }], isError: true };
+    }
+    const allLines = content.split("\n");
     let filtered = allLines;
     if (re) filtered = allLines.filter(l => re.test(l));
     content = filtered.slice(-maxLines).join("\n");
@@ -66,7 +79,80 @@ const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "..
 
 const SNAPSHOTS_DIR = path.join(DATA_DIR, "snapshots");
 if (!fs.existsSync(SNAPSHOTS_DIR)) {
-  fs.mkdirSync(SNAPSHOTS_DIR, { recursive: true });
+  fs.mkdirSync(SNAPSHOTS_DIR, { recursive: true, mode: 0o700 });
+}
+
+const SNAPSHOT_NAME_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9 ._-]{0,126}[A-Za-z0-9_-])?$/;
+
+function resolveSnapshotPath(name) {
+  if (typeof name !== "string" || !SNAPSHOT_NAME_PATTERN.test(name)) return null;
+  const root = path.resolve(SNAPSHOTS_DIR);
+  const resolved = path.resolve(root, `${name}.json`);
+  const relative = path.relative(root, resolved);
+  if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return null;
+  return resolved;
+}
+
+function assertSnapshotDirectory() {
+  const stat = fs.lstatSync(SNAPSHOTS_DIR);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("snapshot storage directory must be a real directory");
+}
+
+function validateSnapshotShape(snapshot) {
+  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot) ||
+      typeof snapshot.name !== "string" || typeof snapshot.date !== "string" ||
+      !Array.isArray(snapshot.types) || !snapshot.data || typeof snapshot.data !== "object" || Array.isArray(snapshot.data)) {
+    throw new Error("snapshot data has an invalid structure");
+  }
+  for (const key of ["processes", "services", "disk", "packages"]) {
+    if (snapshot.data[key] !== undefined && !Array.isArray(snapshot.data[key])) throw new Error(`snapshot ${key} data has an invalid structure`);
+  }
+  if (snapshot.data.processes && snapshot.data.processes.some(item => !item || typeof item !== "object" || !Number.isFinite(item.pid) || typeof item.command !== "string")) {
+    throw new Error("snapshot process data has an invalid structure");
+  }
+  if (snapshot.data.services && snapshot.data.services.some(item => !item || typeof item !== "object" || typeof item.unit !== "string")) {
+    throw new Error("snapshot service data has an invalid structure");
+  }
+  for (const key of ["network", "files"]) {
+    if (snapshot.data[key] !== undefined && (!snapshot.data[key] || typeof snapshot.data[key] !== "object" || Array.isArray(snapshot.data[key]))) {
+      throw new Error(`snapshot ${key} data has an invalid structure`);
+    }
+  }
+  if (snapshot.data.files && Object.values(snapshot.data.files).some(value => !value || typeof value !== "object" || Array.isArray(value))) {
+    throw new Error("snapshot file data has an invalid structure");
+  }
+  return snapshot;
+}
+
+function readSnapshotFile(filePath) {
+  assertSnapshotDirectory();
+  const stat = fs.lstatSync(filePath);
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("snapshot must be a regular file");
+  const text = readTextBounded(filePath, { maxBytes: MAX_SNAPSHOT_BYTES, requireComplete: true, noFollow: true }).content;
+  return validateSnapshotShape(JSON.parse(text));
+}
+
+function writeSnapshotFile(name, snapshot) {
+  const snapshotPath = resolveSnapshotPath(name);
+  if (!snapshotPath) throw new Error("invalid snapshot name");
+  assertSnapshotDirectory();
+  const contents = JSON.stringify(validateSnapshotShape(snapshot), null, 2);
+  if (Buffer.byteLength(contents, "utf8") > MAX_SNAPSHOT_BYTES) throw new Error(`snapshot exceeds the ${MAX_SNAPSHOT_BYTES}-byte storage limit`);
+
+  const temporaryPath = path.join(SNAPSHOTS_DIR, `.snapshot-${crypto.randomUUID()}.tmp`);
+  let fd = null;
+  try {
+    fd = fs.openSync(temporaryPath, "wx", 0o600);
+    fs.writeFileSync(fd, contents, "utf8");
+    fs.closeSync(fd);
+    fd = null;
+    fs.renameSync(temporaryPath, snapshotPath);
+  } finally {
+    if (fd !== null) {
+      try { fs.closeSync(fd); } catch {}
+    }
+    try { fs.unlinkSync(temporaryPath); } catch (error) { if (error.code !== "ENOENT") throw error; }
+  }
 }
 
 function captureProcesses() {
@@ -182,6 +268,10 @@ async function sidekick_snapshot({ action, name, capture, compare }) {
     if (!name) {
       return { content: [{ type: "text", text: "name required" }], isError: true };
     }
+    const snapshotPath = resolveSnapshotPath(name);
+    if (!snapshotPath) {
+      return { content: [{ type: "text", text: "Snapshot name must be 1–128 letters or numbers, spaces, periods, underscores, or hyphens; it must start with a letter or number and end with a letter, number, underscore, or hyphen" }], isError: true };
+    }
 
     const types = capture ? capture.split(",").map(t => t.trim()) : ["processes", "services", "disk"];
     const snapshot = { name, date: now, types, data: {} };
@@ -207,8 +297,11 @@ async function sidekick_snapshot({ action, name, capture, compare }) {
       }
     }
 
-    const snapshotPath = path.join(SNAPSHOTS_DIR, `${name}.json`);
-    fs.writeFileSync(snapshotPath, JSON.stringify(snapshot, null, 2));
+    try {
+      writeSnapshotFile(name, snapshot);
+    } catch (error) {
+      return { content: [{ type: "text", text: `Unable to save snapshot: ${error.message}` }], isError: true };
+    }
 
     return { content: [{ type: "text", text: `Captured snapshot: ${name}\nTypes: ${types.join(", ")}\nDate: ${now}` }] };
   }
@@ -218,18 +311,20 @@ async function sidekick_snapshot({ action, name, capture, compare }) {
       return { content: [{ type: "text", text: "name and compare required" }], isError: true };
     }
 
-    const snapshotPath = path.join(SNAPSHOTS_DIR, `${name}.json`);
-    const comparePath = path.join(SNAPSHOTS_DIR, `${compare}.json`);
-
-    if (!fs.existsSync(snapshotPath)) {
-      return { content: [{ type: "text", text: `Snapshot not found: ${name}` }], isError: true };
-    }
-    if (!fs.existsSync(comparePath)) {
-      return { content: [{ type: "text", text: `Snapshot not found: ${compare}` }], isError: true };
+    const snapshotPath = resolveSnapshotPath(name);
+    const comparePath = resolveSnapshotPath(compare);
+    if (!snapshotPath || !comparePath) {
+      return { content: [{ type: "text", text: "Invalid snapshot name" }], isError: true };
     }
 
-    const current = JSON.parse(fs.readFileSync(snapshotPath, "utf-8"));
-    const baseline = JSON.parse(fs.readFileSync(comparePath, "utf-8"));
+    let current;
+    let baseline;
+    try {
+      current = readSnapshotFile(snapshotPath);
+      baseline = readSnapshotFile(comparePath);
+    } catch (error) {
+      return { content: [{ type: "text", text: `Unable to read snapshots: ${error.message}` }], isError: true };
+    }
 
     let output = `# Snapshot Comparison\n\n`;
     output += `**Current: ${name}** (${current.date})\n`;
@@ -313,11 +408,18 @@ async function sidekick_snapshot({ action, name, capture, compare }) {
   }
 
   if (action === "list") {
-    const files = fs.readdirSync(SNAPSHOTS_DIR).filter(f => f.endsWith(".json"));
-    const snapshots = files.map(f => {
-      const data = JSON.parse(fs.readFileSync(path.join(SNAPSHOTS_DIR, f), "utf-8"));
-      return { name: data.name, date: data.date, types: data.types.join(", ") };
-    });
+    let snapshots;
+    try {
+      assertSnapshotDirectory();
+      const files = fs.readdirSync(SNAPSHOTS_DIR).filter(f => f.endsWith(".json"));
+      if (files.length > MAX_SNAPSHOT_COUNT) throw new Error(`snapshot count exceeds the ${MAX_SNAPSHOT_COUNT}-file listing limit`);
+      snapshots = files.map(file => {
+        const data = readSnapshotFile(path.join(SNAPSHOTS_DIR, file));
+        return { name: data.name, date: data.date, types: data.types.join(", ") };
+      });
+    } catch (error) {
+      return { content: [{ type: "text", text: `Unable to list snapshots: ${error.message}` }], isError: true };
+    }
 
     let output = `# Snapshots (${snapshots.length})\n\n`;
     for (const s of snapshots) {
@@ -332,12 +434,20 @@ async function sidekick_snapshot({ action, name, capture, compare }) {
       return { content: [{ type: "text", text: "name required" }], isError: true };
     }
 
-    const snapshotPath = path.join(SNAPSHOTS_DIR, `${name}.json`);
+    const snapshotPath = resolveSnapshotPath(name);
+    if (!snapshotPath) {
+      return { content: [{ type: "text", text: "Invalid snapshot name" }], isError: true };
+    }
     if (!fs.existsSync(snapshotPath)) {
       return { content: [{ type: "text", text: `Snapshot not found: ${name}` }], isError: true };
     }
 
-    fs.unlinkSync(snapshotPath);
+    try {
+      assertSnapshotDirectory();
+      fs.unlinkSync(snapshotPath);
+    } catch (error) {
+      return { content: [{ type: "text", text: `Unable to delete snapshot: ${error.message}` }], isError: true };
+    }
     return { content: [{ type: "text", text: `Deleted snapshot: ${name}` }] };
   }
 
@@ -384,14 +494,18 @@ function parseGitLogLine(line) {
 
 function findRecentFiles(root, startTime, limit = 50) {
   const results = [];
+  if (enforcePathPolicy(root, "read")) return results;
+  const checkDescendantPolicy = hasConfiguredDeniedPaths();
   function walk(dir) {
     if (results.length >= limit) return;
+    if (checkDescendantPolicy && enforcePathPolicy(dir, "read")) return;
     let entries = [];
     try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
     for (const entry of entries) {
       if (results.length >= limit) break;
       if (entry.name === "node_modules" || entry.name === ".git") continue;
       const fullPath = path.join(dir, entry.name);
+      if (checkDescendantPolicy && enforcePathPolicy(fullPath, "read")) continue;
       let stat;
       try { stat = fs.statSync(fullPath); } catch { continue; }
       if (entry.isDirectory()) walk(fullPath);
@@ -466,11 +580,13 @@ async function sidekick_timeline({ action, since, until, sources, pattern, sever
 
   if (effectiveSources.includes("git")) {
     try {
+      const repositoryRoot = process.env.SIDEKICK_REPOSITORY_ROOT || "/home/sidekick/sidekick";
+      if (enforcePathPolicy(repositoryRoot, "read")) throw new Error("repository is outside the configured read scope");
       const sinceDate = startTime.toISOString();
       const result = safeExecFileSync("git", ["log", `--since=${sinceDate}`, "--pretty=format:%H%x09%ad%x09%s", "--date=iso", "-n", "100"], {
         encoding: "utf8",
         timeout: 10000,
-        cwd: process.env.SIDEKICK_REPOSITORY_ROOT || "/home/sidekick/sidekick",
+        cwd: repositoryRoot,
         stdio: ["pipe", "pipe", "pipe"]
       });
       const lines = result.trim().split("\n");
@@ -738,9 +854,9 @@ async function sidekick_baseline({ action, metric_name, value, source, command, 
 const EXTRA_SCHEMAS = {
   snapshot: z.object({
     action: z.enum(["capture", "compare", "list", "delete"]).describe("Snapshot action: capture (save state), compare (detect drift), list (show all), delete (remove)"),
-    name: z.string().optional().describe("Snapshot name"),
+    name: z.string().max(128).regex(SNAPSHOT_NAME_PATTERN).optional().describe("Snapshot name (letters, numbers, spaces, periods, underscores, or hyphens)"),
     capture: z.string().optional().describe("What to capture: processes,services,disk,packages,network,files:/path (comma-separated)"),
-    compare: z.string().optional().describe("Baseline snapshot name for compare action")
+    compare: z.string().max(128).regex(SNAPSHOT_NAME_PATTERN).optional().describe("Baseline snapshot name for compare action")
   }),
   timeline: z.object({
     action: z.enum(["build", "filter", "export"]),
@@ -819,4 +935,4 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_tail, sidekick_snapshot, sidekick_timeline, sidekick_baseline };
+module.exports = { descriptors, sidekick_tail, sidekick_snapshot, sidekick_timeline, sidekick_baseline, resolveSnapshotPath, SNAPSHOT_NAME_PATTERN, readSnapshotFile, writeSnapshotFile, MAX_SNAPSHOT_BYTES, MAX_SNAPSHOT_COUNT };

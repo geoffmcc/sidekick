@@ -334,9 +334,7 @@ try { platformKernelForComputeAudit = require("./platform/kernel"); } catch {}
 const computeEnrollmentRateLimit = new Map();
 
 function sendComputeError(res, error, status = 400) {
-  const code = error.code || "COMPUTE_ERROR";
-  const message = String(error.message || "Compute error").replace(/(wksec_|enroll_)[A-Za-z0-9_-]+/g, "[REDACTED]");
-  res.status(status).json({ ok: false, error: message, code });
+  return require("./compute/admin-api").sendComputeAdminError(res, error, status);
 }
 
 function auditComputeEvent(eventType, { actor = "compute", subjectType, subjectId, payload = {}, severity = "info" } = {}) {
@@ -422,9 +420,9 @@ function createEnrollmentTokenHandler(req, res) {
     const token = compute.workerManager.createEnrollmentToken({
       displayName: body.displayName || body.display_name,
       trustLevel: body.trustLevel || body.trust_level || "trusted",
-      allowedDataClassifications: body.allowedDataClassifications || body.allowed_data_classifications || ["public", "internal", "private"],
-      maxConcurrentJobs: body.maxConcurrentJobs || body.max_concurrent_jobs || 2,
-      expiresInMs: body.expiresInMs || body.expires_in_ms || 3600000,
+      allowedDataClassifications: body.allowedDataClassifications ?? body.allowed_data_classifications ?? ["public"],
+      maxConcurrentJobs: body.maxConcurrentJobs ?? body.max_concurrent_jobs ?? 2,
+      expiresInMs: body.expiresInMs ?? body.expires_in_ms ?? 3600000,
       createdBy: req.authIdentity.principal_id,
       reEnrollmentOf: body.reEnrollmentOf || body.re_enrollment_of || null,
     });
@@ -696,11 +694,7 @@ function adminRotateWorkerCredentialHandler(req, res) {
 }
 
 function computeHealthHandler(req, res) {
-  try {
-    res.json({ ok: true, overview: compute.overview() });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  return require("./compute/admin-api").sendComputeHealthResponse(res, compute);
 }
 
 // Canonical Compute routes. Enrollment exchange is public but validates a one-time token;

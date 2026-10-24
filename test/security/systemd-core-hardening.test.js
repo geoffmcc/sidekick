@@ -1,0 +1,44 @@
+"use strict";
+
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const { test } = require("node:test");
+
+const root = path.resolve(__dirname, "..", "..");
+const CORE_UNITS = [
+  "systemd/sidekick-mcp.service",
+  "systemd/sidekick-dashboard.service",
+  "systemd/sidekick-agent.service",
+];
+
+test("Core systemd units apply host filesystem and kernel hardening without blocking Sidekick state", () => {
+  const required = [
+    "NoNewPrivileges=true",
+    "PrivateTmp=true",
+    "RemoveIPC=true",
+    "ProtectSystem=full",
+    "ProtectKernelTunables=true",
+    "ProtectKernelModules=true",
+    "ProtectControlGroups=true",
+    "RestrictSUIDSGID=true",
+    "LockPersonality=true",
+    "RestrictRealtime=true",
+  ];
+
+  for (const relativePath of CORE_UNITS) {
+    const unit = fs.readFileSync(path.join(root, relativePath), "utf8");
+    for (const setting of required) {
+      assert.ok(unit.split(/\r?\n/).includes(setting), `${relativePath} must set ${setting}`);
+    }
+
+    assert.match(unit, /^WorkingDirectory=\/home\/sidekick\/sidekick$/m,
+      `${relativePath} keeps the application tree readable and writable as required`);
+    assert.match(unit, /^Environment=SIDEKICK_SECRET_DIR=\/etc\/sidekick\/secrets$/m,
+      `${relativePath} can read its protected secret directory`);
+    assert.doesNotMatch(unit, /^ProtectHome=(?:true|tmpfs|read-only)$/m,
+      `${relativePath} must preserve authorized project and runtime writes under /home`);
+    assert.doesNotMatch(unit, /^RestrictAddressFamilies=/m,
+      `${relativePath} must preserve legitimate outbound integrations and local IPC`);
+  }
+});

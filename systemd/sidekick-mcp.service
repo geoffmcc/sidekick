@@ -13,6 +13,15 @@ TimeoutStartSec=190
 TimeoutStopSec=30
 KillMode=mixed
 NoNewPrivileges=true
+PrivateTmp=true
+RemoveIPC=true
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
 User=sidekick
 Group=sidekick
 Environment=NODE_ENV=production

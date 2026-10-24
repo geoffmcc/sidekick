@@ -21,6 +21,18 @@ const storage = createBlackboxStorage({
 try {
   const artifact = storage.writeArtifact("incident", "capture", "source", "stdout", "safe output");
   assert.strictEqual(storage.readArtifactByPath(artifact.path), "safe output");
+  assert.strictEqual(storage.readArtifactByPath(artifact.path, 5, 3), "out");
+  assert.throws(() => storage.readArtifactByPath(artifact.path, -1, 3), /range/i);
+  assert.throws(() => storage.readArtifactByPath(artifact.path, 0, 1.5), /range/i);
+
+  const oversized = path.join(root, "oversized.txt");
+  fs.writeFileSync(oversized, "");
+  fs.truncateSync(oversized, 50 * 1024 * 1024 + 1);
+  assert.throws(
+    () => storage.readArtifactByPath(oversized),
+    error => error && error.code === "FILE_READ_TOO_LARGE",
+    "artifact reads must reject files beyond the bounded read limit"
+  );
 
   const escaped = path.join(root, "escaped");
   fs.symlinkSync(outside, escaped, "dir");

@@ -17,9 +17,9 @@
  *   - Model file integrity is verified via SHA-256 at init.
  */
 
-const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
+const { sha256File, MAX_MODEL_MANIFEST_FILE_BYTES } = require("./model-file-hash");
 
 // ---------------------------------------------------------------------------
 // Certification tier (explicit lifecycle states for runtime trust)
@@ -121,8 +121,8 @@ const APPROVED_MODELS = Object.freeze([
     integrity: Object.freeze({
       algorithm: "sha256",
       files: Object.freeze({
-        "config.json": "placeholder_e5_config_sha256",
-        "tokenizer.json": "placeholder_e5_tokenizer_sha256",
+        "config.json": "5dfb0363cd0243be179c03bcaafd1542d0fbb95e8cbcf575fff3e229342adc2f",
+        "tokenizer.json": "d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66",
       }),
     }),
 
@@ -425,11 +425,6 @@ function getAdvertisedCapabilities(modelId, availableDevices) {
  * @param {string} filePath  Absolute path to the file.
  * @returns {string}  Lowercase hex-encoded SHA-256 digest.
  */
-function sha256File(filePath) {
-  const data = fs.readFileSync(filePath);
-  return crypto.createHash("sha256").update(data).digest("hex");
-}
-
 /**
  * Verify model file integrity against the manifest's expected hashes.
  *
@@ -599,5 +594,6 @@ module.exports = {
   verifyModelIntegrity,
   verifyModelFileHash,
   sha256File,
+  MAX_MODEL_MANIFEST_FILE_BYTES,
   _testOverrideModelStatus,
 };

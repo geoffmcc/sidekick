@@ -14,6 +14,8 @@ const dbStore = require("./db");
 const identity = require("./core/identity");
 const authentication = require("./core/authentication");
 const { AuthRateLimiter } = require("./core/auth-rate-limit");
+const { BoundedRateLimiter } = require("./core/bounded-rate-limiter");
+const { parseTrustedProxyConfig } = require("./security/trusted-proxies");
 const authorization = require("./core/authorization");
 const { allowedActions } = require("./evolve/lifecycle");
 const { redactSensitive } = require("./redact");
@@ -66,7 +68,7 @@ const { addCorrelationMiddleware, createDashboardErrorBoundary, requestCorrelati
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const PORT = parseInt(process.env.SIDEKICK_DASHBOARD_PORT || "4098", 10);
 const BIND_HOST = process.env.SIDEKICK_DASHBOARD_BIND_HOST || "127.0.0.1";
-const TRUST_PROXY = process.env.SIDEKICK_DASHBOARD_TRUST_PROXY === "true";
+const TRUST_PROXY = parseTrustedProxyConfig(process.env.SIDEKICK_DASHBOARD_TRUST_PROXY);
 const ERROR_LOG = path.join(DATA_DIR, "dashboard-errors.log");
 if (["0.0.0.0", "::"].includes(BIND_HOST) && process.env.SIDEKICK_ALLOW_PUBLIC_BIND !== "1") {
   throw new Error("wildcard Dashboard bind requires SIDEKICK_ALLOW_PUBLIC_BIND=1");
@@ -83,10 +85,13 @@ fs.mkdirSync(DATA_DIR, { recursive: true });
 // The dashboard is a separate process in production. Converge migrations here
 // as well as in the MCP process so authentication routes never race startup.
 dbStore.runPendingMigrations();
-syncToolRegistry();
 
-// Restore persisted platform modules only after this process has converged
-// the shared database schema and synchronized the builtin tool registry.
+// Restore persisted platform modules before synchronizing the shared tool
+// registry. The registry is shared by MCP, Dashboard, and Agent processes;
+// syncing from this process before its modules are active would incorrectly
+// mark every pack-owned tool deprecated in the shared database. That hides
+// healthy capabilities from Agent planning even after this process restores
+// them locally.
 try {
   const builtinModules = require("./modules/builtin-modules");
   builtinModules.provisionBuiltinModules();
@@ -95,6 +100,10 @@ try {
 } catch (error) {
   console.error("[Modules] Builtin module provisioning failed:", String(error?.message || error).slice(0, 300));
 }
+
+// This is safe only after the process-local module registry reflects the
+// persisted enabled modules (matching src/index.js startup ordering).
+syncToolRegistry();
 
 const app = express();
 const dashboardErrors = createDashboardErrorBoundary({ fs, logFile: ERROR_LOG });
@@ -258,19 +267,12 @@ function ipInRange(ip, cidr) {
   return (ipNum & mask) === (rangeNum & mask);
 }
 
-// Rate limiting (in-memory, per IP)
-const rateLimit = new Map();
+// Rate limiting (bounded in-memory token bucket, per IP)
 const RATE_LIMIT_WINDOW = parseInt(process.env.SIDEKICK_DASHBOARD_RATE_LIMIT_WINDOW_MS || String(15 * 60 * 1000), 10);
 const RATE_LIMIT_MAX = parseInt(process.env.SIDEKICK_DASHBOARD_RATE_LIMIT_MAX || "1500", 10);
+const rateLimit = new BoundedRateLimiter({ limit: RATE_LIMIT_MAX, windowMs: RATE_LIMIT_WINDOW, maxKeys: 10_000 });
 
-function checkRateLimit(ip) {
-  const now = Date.now();
-  const timestamps = (rateLimit.get(ip) || []).filter(t => now - t < RATE_LIMIT_WINDOW);
-  if (timestamps.length >= RATE_LIMIT_MAX) return false;
-  timestamps.push(now);
-  rateLimit.set(ip, timestamps);
-  return true;
-}
+function checkRateLimit(ip) { return rateLimit.consume(ip).allowed; }
 
 function shouldRateLimit(req) {
   if (req.path.startsWith('/static/')) return false;
@@ -449,6 +451,7 @@ const { requireIdentityPermission, hasIdentityPermission, requireIdentityAdminis
   identity,
   authentication,
   authorization,
+  projectAccess,
   timingSafeCompare,
   dashboardUser: DASHBOARD_USER,
   dashboardPass: DASHBOARD_PASS,
@@ -1228,9 +1231,9 @@ app.post("/api/compute/enrollment-tokens", (req, res) => {
     action: "create_token",
     display_name: body.displayName || body.display_name,
     trust_level: body.trustLevel || body.trust_level || "trusted",
-    allowed_data_classifications: body.allowedDataClassifications || body.allowed_data_classifications || ["public", "internal", "private"],
-    max_concurrent_jobs: Math.min(16, Math.max(1, Number(body.maxConcurrentJobs || body.max_concurrent_jobs || 2))),
-    expires_in_ms: Math.min(7 * 24 * 60 * 60 * 1000, Math.max(60 * 1000, Number(body.expiresInMs || body.expires_in_ms || 3600000))),
+    allowed_data_classifications: body.allowedDataClassifications ?? body.allowed_data_classifications ?? ["public"],
+    max_concurrent_jobs: body.maxConcurrentJobs ?? body.max_concurrent_jobs ?? 2,
+    expires_in_ms: body.expiresInMs ?? body.expires_in_ms ?? 3600000,
     ...(body.reEnrollmentOf || body.re_enrollment_of ? { re_enrollment_of: body.reEnrollmentOf || body.re_enrollment_of } : {}),
   }, "compute.enrollment_token.created");
 });

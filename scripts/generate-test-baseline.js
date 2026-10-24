@@ -3,15 +3,17 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const { execFileSync } = require("node:child_process");
+const { childProcessEnv } = require("../src/security/child-process");
 
 const root = path.resolve(__dirname, "..");
-const tracked = require("child_process").execFileSync("git", ["ls-files", "test"], { cwd: root, encoding: "utf8" }).trim().split(/\r?\n/).filter(Boolean);
+const tracked = execFileSync("git", ["ls-files", "test"], { cwd: root, encoding: "utf8", env: childProcessEnv() }).trim().split(/\r?\n/).filter(Boolean);
 const testFiles = tracked.filter(file => /\.test\.(?:js|cjs|mjs)$/.test(file));
-const lines = Number(require("child_process").execFileSync("wc", ["-l", ...testFiles], { cwd: root, encoding: "utf8" }).trim().split("\n").at(-1).trim().split(/\s+/)[0]);
+const lines = Number(execFileSync("wc", ["-l", ...testFiles], { cwd: root, encoding: "utf8", env: childProcessEnv() }).trim().split("\n").at(-1).trim().split(/\s+/)[0]);
 const baseline = {
   version: 1,
   generated_for: "origin/main",
-  commit: require("child_process").execFileSync("git", ["rev-parse", "origin/main"], { cwd: root, encoding: "utf8" }).trim(),
+  commit: execFileSync("git", ["rev-parse", "origin/main"], { cwd: root, encoding: "utf8", env: childProcessEnv() }).trim(),
   suite_count: testFiles.length,
   test_case_count: null,
   test_lines: lines,

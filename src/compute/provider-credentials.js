@@ -34,7 +34,16 @@ function resolveProviderApiKey(provider) {
   let ref = null;
   try { ref = providerRegistry.getAuthSecretRef(provider.providerId); } catch { ref = null; }
   if (ref) {
-    const authIdentity = getExecutionContext()?.authIdentity || null;
+    const storedIdentity = getExecutionContext()?.authIdentity || null;
+    let authIdentity = storedIdentity;
+    if (storedIdentity?.credential_id) {
+      authIdentity = require("../core/authentication").refreshCredentialIdentity(storedIdentity);
+      if (!authIdentity) {
+        const error = new Error("provider credential use requires a current authorized credential");
+        error.code = "credential_invalid";
+        throw error;
+      }
+    }
     const principalId = authIdentity?.principal_id || null;
     if (!principalId) {
       const error = new Error("provider credential use requires an authenticated principal");

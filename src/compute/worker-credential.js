@@ -18,6 +18,7 @@ const { execFileSync } = require("child_process");
 // a PATH entry run code inside the elevated `enroll` the installer performs.
 const ICACLS = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "icacls.exe");
 const WHOAMI = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "whoami.exe");
+const POWERSHELL = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
 function windowsSystemEnv(systemRoot = process.env.SystemRoot || process.env.SYSTEMROOT || "C:\\Windows") {
   const root = path.win32.resolve(systemRoot);
   return { SystemRoot: root, WINDIR: root, PATH: path.win32.join(root, "System32") };
@@ -25,6 +26,7 @@ function windowsSystemEnv(systemRoot = process.env.SystemRoot || process.env.SYS
 
 const WORKER_ID_RE = /^wk_[A-Za-z0-9_-]+$/;
 const CREDENTIAL_RE = /^wksec_[A-Za-z0-9_-]+$/;
+const MAX_CREDENTIAL_BYTES = 16 * 1024;
 
 function defaultCredentialPath() {
   return process.env.SIDEKICK_WORKER_CONFIG || path.join(os.homedir(), ".sidekick", "worker-credential.json");
@@ -49,14 +51,85 @@ function applyWindowsAcl(filePath) {
     const identity = execFileSync(WHOAMI, ["/user", "/fo", "csv", "/nh"], { encoding: "utf8", windowsHide: true, env: windowsSystemEnv() }).trim();
     const sid = identity.match(/,\s*"(S-1-[0-9-]+)"\s*$/)?.[1];
     if (!sid) return false;
-    // Add explicit access before removing inherited ACEs so the current token
-    // retains the ability to finish the operation and clean up on failure.
+    // Clear any pre-existing explicit grants before installing the narrow ACL.
+    // /reset first restores inherited rules; /inheritance:r then removes those
+    // rules so a broad parent ACL cannot leak the credential.
+    execFileSync(ICACLS, [filePath, "/reset"], { stdio: "ignore", windowsHide: true, env: windowsSystemEnv() });
+    execFileSync(ICACLS, [filePath, "/inheritance:r"], { stdio: "ignore", windowsHide: true, env: windowsSystemEnv() });
     execFileSync(ICACLS, [filePath, "/grant:r", `*${sid}:F`], { stdio: "ignore", windowsHide: true, env: windowsSystemEnv() });
     // If the current token is LocalSystem, it already has full control; a
     // second /grant:r for the same SID would replace F with read-only access.
     if (sid !== "S-1-5-18") execFileSync(ICACLS, [filePath, "/grant:r", "*S-1-5-18:(R)"], { stdio: "ignore", windowsHide: true, env: windowsSystemEnv() });
-    execFileSync(ICACLS, [filePath, "/inheritance:r"], { stdio: "ignore", windowsHide: true, env: windowsSystemEnv() });
+    execFileSync(ICACLS, [filePath, "/grant:r", "*S-1-5-32-544:(R)"], { stdio: "ignore", windowsHide: true, env: windowsSystemEnv() });
+    return verifyWindowsAcl(filePath);
+  } catch {
+    return false;
+  }
+}
+
+function applyWindowsDirectoryAcl(directoryPath) {
+  try {
+    const stat = fs.lstatSync(directoryPath);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) return false;
+    const identity = execFileSync(WHOAMI, ["/user", "/fo", "csv", "/nh"], {
+      encoding: "utf8", windowsHide: true, env: windowsSystemEnv(),
+    }).trim();
+    const sid = identity.match(/,\s*"(S-1-[0-9-]+)"\s*$/)?.[1];
+    if (!sid) return false;
+    const inheritance = "(OI)(CI)F";
+    execFileSync(ICACLS, [directoryPath, "/reset"], { stdio: "ignore", windowsHide: true, env: windowsSystemEnv() });
+    execFileSync(ICACLS, [directoryPath, "/inheritance:r"], { stdio: "ignore", windowsHide: true, env: windowsSystemEnv() });
+    execFileSync(ICACLS, [directoryPath, "/grant:r", `*${sid}:${inheritance}`], { stdio: "ignore", windowsHide: true, env: windowsSystemEnv() });
+    if (sid !== "S-1-5-18") execFileSync(ICACLS, [directoryPath, "/grant:r", `*S-1-5-18:${inheritance}`], { stdio: "ignore", windowsHide: true, env: windowsSystemEnv() });
+    execFileSync(ICACLS, [directoryPath, "/grant:r", `*S-1-5-32-544:${inheritance}`], { stdio: "ignore", windowsHide: true, env: windowsSystemEnv() });
     return true;
+  } catch {
+    return false;
+  }
+}
+
+// Validate the credential and its dedicated containing directory before
+// reading it. The installer separately validates and protects the complete
+// ancestor chain. ACL enforcement is performed by Windows, outside this Node
+// process; the current token, SYSTEM, Administrators and TrustedInstaller are
+// the only principals accepted for credential access.
+function verifyWindowsAcl(filePath) {
+  try {
+    const absolutePath = path.win32.resolve(filePath);
+    const parentPath = path.win32.dirname(absolutePath);
+    const quotedFile = `'${absolutePath.replace(/'/g, "''")}'`;
+    const quotedParent = `'${parentPath.replace(/'/g, "''")}'`;
+    const script = `
+$ErrorActionPreference = 'Stop'
+$filePath = ${quotedFile}
+$parentPath = ${quotedParent}
+$currentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$trusted = @($currentSid, 'S-1-5-18', 'S-1-5-32-544', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
+$fileReadWrite = [int]([System.Security.AccessControl.FileSystemRights]::ReadData -bor [System.Security.AccessControl.FileSystemRights]::ReadExtendedAttributes -bor [System.Security.AccessControl.FileSystemRights]::ReadAttributes -bor [System.Security.AccessControl.FileSystemRights]::ReadPermissions -bor [System.Security.AccessControl.FileSystemRights]::WriteData -bor [System.Security.AccessControl.FileSystemRights]::AppendData -bor [System.Security.AccessControl.FileSystemRights]::WriteExtendedAttributes -bor [System.Security.AccessControl.FileSystemRights]::WriteAttributes -bor [System.Security.AccessControl.FileSystemRights]::Delete -bor [System.Security.AccessControl.FileSystemRights]::ChangePermissions -bor [System.Security.AccessControl.FileSystemRights]::TakeOwnership)
+$directoryWrite = [int]([System.Security.AccessControl.FileSystemRights]::WriteData -bor [System.Security.AccessControl.FileSystemRights]::AppendData -bor [System.Security.AccessControl.FileSystemRights]::WriteExtendedAttributes -bor [System.Security.AccessControl.FileSystemRights]::WriteAttributes -bor [System.Security.AccessControl.FileSystemRights]::Delete -bor [System.Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor [System.Security.AccessControl.FileSystemRights]::ChangePermissions -bor [System.Security.AccessControl.FileSystemRights]::TakeOwnership)
+$paths = @(@{ Path = $filePath; Kind = 'file' }, @{ Path = $parentPath; Kind = 'directory' })
+foreach ($entry in $paths) {
+  $item = Get-Item -LiteralPath $entry.Path -Force
+  if ($item.Attributes.ToString() -match '(^|,\\s*)ReparsePoint(,|$)') { exit 21 }
+  $acl = Get-Acl -LiteralPath $entry.Path
+  $ownerSid = $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+  if ($trusted -notcontains $ownerSid) { exit 22 }
+  foreach ($rule in $acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])) {
+    if ($rule.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow) { continue }
+    if (($rule.PropagationFlags -band [System.Security.AccessControl.PropagationFlags]::InheritOnly) -ne 0) { continue }
+    if ($trusted -contains $rule.IdentityReference.Value) { continue }
+    $rights = [int]$rule.FileSystemRights
+    if ($entry.Kind -eq 'file' -and ($rights -band $fileReadWrite) -ne 0) { exit 23 }
+    if ($entry.Kind -eq 'directory' -and ($rights -band $directoryWrite) -ne 0) { exit 24 }
+  }
+}
+Write-Output 'OK'
+`;
+    const encodedCommand = Buffer.from(script, "utf16le").toString("base64");
+    const output = execFileSync(POWERSHELL, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedCommand], {
+      encoding: "utf8", windowsHide: true, env: windowsSystemEnv(), stdio: ["ignore", "pipe", "pipe"], timeout: 5000,
+    }).trim();
+    return output === "OK";
   } catch {
     return false;
   }
@@ -70,7 +143,17 @@ function save(record, pathOverride) {
   const credPath = pathOverride || defaultCredentialPath();
   const dir = path.dirname(credPath);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  if (process.platform !== "win32") { try { fs.chmodSync(dir, 0o700); } catch {} }
+  const dirStat = fs.lstatSync(dir);
+  if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) {
+    throw new Error("Refusing to persist worker credentials in an unsafe directory");
+  }
+  if (process.platform !== "win32") {
+    fs.chmodSync(dir, 0o700);
+    const securedDirStat = fs.lstatSync(dir);
+    if (!securedDirStat.isDirectory() || securedDirStat.isSymbolicLink() || (securedDirStat.mode & 0o077)) {
+      throw new Error("Refusing to persist worker credentials in an unsafe directory");
+    }
+  }
   const payload = {
     workerId: record.workerId,
     nodeId: record.nodeId || null,
@@ -79,13 +162,31 @@ function save(record, pathOverride) {
     version: 1,
   };
   const tempPath = `${credPath}.${process.pid}.tmp`;
-  fs.writeFileSync(tempPath, JSON.stringify(payload, null, 2), { mode: 0o600 });
-  if (process.platform !== "win32") { try { fs.chmodSync(tempPath, 0o600); } catch {} }
-  fs.renameSync(tempPath, credPath);
-  if (process.platform === "win32" && !applyWindowsAcl(credPath)) {
+  let moved = false;
+  try {
+    // Create exclusively so a pre-created temp path cannot redirect this
+    // write. On Windows, secure the empty file before placing secret bytes in
+    // it; the ACL moves atomically with the file into its final name.
+    if (process.platform === "win32" && !applyWindowsDirectoryAcl(dir)) {
+      throw new Error("Windows credential directory ACL could not be secured");
+    }
+    fs.writeFileSync(tempPath, "", { flag: "wx", mode: 0o600 });
+    if (process.platform === "win32") {
+      if (!applyWindowsAcl(tempPath)) throw new Error("Windows ACL verification failed");
+    } else {
+      try { fs.chmodSync(tempPath, 0o600); } catch {}
+    }
+    fs.writeFileSync(tempPath, JSON.stringify(payload, null, 2), { flag: "w", mode: 0o600 });
+    fs.renameSync(tempPath, credPath);
+    moved = true;
+    if (process.platform === "win32" && !verifyWindowsAcl(credPath)) throw new Error("Windows ACL verification failed after rename");
+  } catch {
     let cleanupFailed = false;
-    try { fs.unlinkSync(credPath); } catch { cleanupFailed = true; }
-    throw new Error(`Unable to apply the current process ACL to the worker credential file; credential persistence was refused${cleanupFailed ? " and cleanup failed" : ""}`);
+    try { fs.unlinkSync(moved ? credPath : tempPath); } catch { cleanupFailed = true; }
+    if (process.platform === "win32") {
+      throw new Error(`Unable to secure the worker credential file; credential persistence was refused${cleanupFailed ? " and cleanup failed" : ""}`);
+    }
+    throw new Error("Unable to persist the worker credential file");
   }
   return credPath;
 }
@@ -94,13 +195,40 @@ function save(record, pathOverride) {
 // place. Returns the record, or null if absent/unreadable/malformed.
 function load(pathOverride) {
   const credPath = pathOverride || defaultCredentialPath();
+  let fd;
   try {
-    const stat = fs.statSync(credPath);
-    if (!stat.isFile()) return null;
-    if (process.platform !== "win32" && (stat.mode & 0o077)) {
-      try { fs.chmodSync(credPath, 0o600); } catch {}
+    const dirPath = path.dirname(credPath);
+    let dirStat = fs.lstatSync(dirPath);
+    if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) return null;
+    if (process.platform !== "win32" && (dirStat.mode & 0o077)) {
+      fs.chmodSync(dirPath, 0o700);
+      dirStat = fs.lstatSync(dirPath);
+      if (!dirStat.isDirectory() || (dirStat.mode & 0o077)) return null;
     }
-    const parsed = JSON.parse(fs.readFileSync(credPath, "utf8"));
+
+    let stat = fs.lstatSync(credPath);
+    if (!stat.isFile() || stat.isSymbolicLink()) return null;
+    if (process.platform === "win32" && !verifyWindowsAcl(credPath)) return null;
+    if (process.platform !== "win32" && (stat.mode & 0o077)) {
+      fs.chmodSync(credPath, 0o600);
+      stat = fs.lstatSync(credPath);
+      if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o077)) return null;
+    }
+    const flags = fs.constants.O_RDONLY |
+      (fs.constants.O_NOFOLLOW || 0) |
+      (fs.constants.O_NONBLOCK || 0);
+    fd = fs.openSync(credPath, flags);
+    const opened = fs.fstatSync(fd);
+    if (!opened.isFile() || stat.dev !== opened.dev || stat.ino !== opened.ino || opened.size > MAX_CREDENTIAL_BYTES) return null;
+    const buffer = Buffer.alloc(MAX_CREDENTIAL_BYTES + 1);
+    let bytesRead = 0;
+    while (bytesRead < buffer.length) {
+      const count = fs.readSync(fd, buffer, bytesRead, buffer.length - bytesRead, null);
+      if (count === 0) break;
+      bytesRead += count;
+    }
+    if (bytesRead > MAX_CREDENTIAL_BYTES) return null;
+    const parsed = JSON.parse(buffer.subarray(0, bytesRead).toString("utf8"));
     if (WORKER_ID_RE.test(parsed.workerId || "") && CREDENTIAL_RE.test(parsed.credential || "")) {
       return {
         workerId: parsed.workerId,
@@ -111,6 +239,7 @@ function load(pathOverride) {
       };
     }
   } catch {}
+  finally { if (fd !== undefined) { try { fs.closeSync(fd); } catch {} } }
   return null;
 }
 
@@ -161,4 +290,4 @@ function discard(parkedPath) {
   try { fs.unlinkSync(parkedPath); return true; } catch { return false; }
 }
 
-module.exports = { defaultCredentialPath, applyWindowsAcl, windowsSystemEnv, save, load, remove, park, restore, discard, WORKER_ID_RE, CREDENTIAL_RE };
+module.exports = { defaultCredentialPath, applyWindowsAcl, applyWindowsDirectoryAcl, verifyWindowsAcl, windowsSystemEnv, save, load, remove, park, restore, discard, WORKER_ID_RE, CREDENTIAL_RE };

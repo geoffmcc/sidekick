@@ -7,7 +7,7 @@ const crypto = require("crypto");
 const net = require("net");
 const dns = require("dns").promises;
 const { domainToASCII } = require("url");
-const { METADATA_HOSTS } = require("../compute/endpoint-guard");
+const { isLinkLocal, isMetadataAddress, isNonUnicastAddress, isPrivateAddress, isIPv4MappedAddress } = require("./ip-address-policy");
 
 const MAX_LIST = 256;
 const MAX_HOST = 253;
@@ -83,7 +83,10 @@ function normalizeCidr(value, name) {
 }
 function ipv6Text(value) {
   const parts = [];
-  for (let i = 7; i >= 0; i--) parts.unshift(((value >> BigInt(i * 16)) & 0xffffn).toString(16));
+  // Shifting from the most-significant hextet down already produces network
+  // order. Using unshift here reverses every IPv6 prefix during CIDR
+  // normalization, which can silently change the operator's intended scope.
+  for (let i = 7; i >= 0; i--) parts.push(((value >> BigInt(i * 16)) & 0xffffn).toString(16));
   let bestStart = -1, bestLength = 0;
   for (let i = 0; i < 8;) { if (parts[i] !== "0") { i++; continue; } const start = i; while (i < 8 && parts[i] === "0") i++; if (i - start > bestLength) { bestStart = start; bestLength = i - start; } }
   if (bestLength > 1) parts.splice(bestStart, bestLength, "");
@@ -149,14 +152,14 @@ function cidrContains(cidr, address) {
 function patternMatches(value, pattern) { return pattern.startsWith("*.") ? value.endsWith(pattern.slice(1)) && value.length > pattern.length - 1 : value === pattern; }
 function permanentDenial(value) {
   const text = String(value || "").toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
-  if (METADATA_HOSTS.has(text) || text === "localhost" || text.endsWith(".localhost")) return PERMANENT_REASON;
+  if (isIPv4MappedAddress(text)) return PERMANENT_REASON;
+  if (text === "localhost" || text.endsWith(".localhost") || isMetadataAddress(text) || isLinkLocal(text) || isNonUnicastAddress(text)) return PERMANENT_REASON;
   let address; try { address = parseAddress(text); } catch { return null; }
-  if (address.value === 0n || (address.bits === 32 && ((address.value >> 24n) & 255n) === 255n)) return PERMANENT_REASON;
-  if (address.bits === 32 && ((address.value >> 24n) & 255n) === 169n && ((address.value >> 16n) & 255n) === 254n) return PERMANENT_REASON;
-   if (address.bits === 128 && (((address.value >> 120n) & 0xffn) === 0xffn || (address.value >> 118n) === 0x3fan)) return PERMANENT_REASON;
+  if (address.value === 0n) return PERMANENT_REASON;
+  if (address.bits === 128 && (address.value >> 108n) === 0x3fff0n) return PERMANENT_REASON;
   return null;
 }
-function isPrivate(value) { let a; try { a = parseAddress(value); } catch { return false; } if (a.bits === 32) { const n = a.value; const first = Number(n >> 24n), second = Number((n >> 16n) & 255n); return first === 10 || first === 127 || first === 0 || (first === 172 && second >= 16 && second <= 31) || (first === 192 && second === 168) || (first === 100 && second >= 64 && second <= 127); } return ((a.value >> 121n) & 0x7fn) === 0x7en || a.value === 1n; }
+function isPrivate(value) { return isPrivateAddress(String(value || "")); }
 function portAllowed(port, ranges) { return !ranges.length || ranges.some(range => { const [a, b] = String(range).split("-").map(Number); return port >= a && port <= (b || a); }); }
 function decision(scope, { host: rawHost, address: rawAddress, protocol, port, allowedHosts = null } = {}) {
    if (!scope || !scope.enabled) return { ok: false, reason: "scope_disabled" };
@@ -164,7 +167,7 @@ function decision(scope, { host: rawHost, address: rawAddress, protocol, port, a
   if (scope.expires_at && Date.parse(scope.expires_at) <= Date.now()) return { ok: false, reason: "scope_expired" };
   const h = rawHost ? (rawHost.includes(":") || net.isIP(rawHost) ? String(rawHost).toLowerCase().replace(/^\[|\]$/g, "") : host(rawHost)) : null;
   const address = rawAddress || (h && (net.isIP(h) ? h : null));
-  const protectedReason = permanentDenial(address || h); if (protectedReason) return { ok: false, reason: protectedReason };
+  const protectedReason = permanentDenial(h) || permanentDenial(address); if (protectedReason) return { ok: false, reason: protectedReason };
   if (protocol && !scope.allowed_protocols.includes(String(protocol).toLowerCase().replace(":", ""))) return { ok: false, reason: "protocol_not_allowed" };
   if (port && !portAllowed(Number(port), scope.allowed_ports)) return { ok: false, reason: "port_not_allowed" };
   if (allowedHosts && (!h || !allowedHosts.some(p => patternMatches(h, normalizePattern(p))))) return { ok: false, reason: "session_host_not_allowed" };

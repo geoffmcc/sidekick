@@ -26,6 +26,7 @@ process.env.GROQ_API_KEY = "test-fake-key";
 
 const dbStore = require("../src/db");
 assert.strictEqual(path.dirname(dbStore.DB_FILE), TEST_DATA_DIR, "Agent Bridge tests must use their fresh temporary database");
+const identity = require("../src/core/identity");
 let port;
 
 delete require.cache[require.resolve("../src/agent")];
@@ -44,6 +45,13 @@ const authenticatedTestHeaders = {
   "X-Sidekick-Principal-ID": authenticatedTestPrincipal.authIdentity.principal_id,
   "X-Sidekick-Principal-Scopes": JSON.stringify(authenticatedTestPrincipal.authIdentity.scopes),
 };
+const otherTestPrincipal = identity.createPrincipal({
+  type: "service",
+  displayName: "Agent Bridge cross-owner fixture",
+  createdByPrincipalId: authenticatedTestPrincipal.authIdentity.principal_id,
+  actorIdentity: { principal_id: authenticatedTestPrincipal.authIdentity.principal_id },
+});
+const otherTestHeaders = { "X-Sidekick-Principal-ID": otherTestPrincipal.principal_id, "X-Sidekick-Principal-Scopes": "[]" };
 
 console.log("Running Agent Bridge follow-up API/security tests...\n");
 
@@ -258,24 +266,24 @@ let server;
 
   await ok("1c) authenticated task projections cannot cross principal ownership", async () => {
     fake = fakeDirect("owned task");
-    const created = await request("POST", "/api/agent/run", { goal: "Principal-owned task" }, { "X-Sidekick-Principal-ID": "principal_alpha" });
+    const created = await request("POST", "/api/agent/run", { goal: "Principal-owned task" }, authenticatedTestHeaders);
     assert.strictEqual(created.status, 200);
     await waitForTranscript(created.data.taskId);
-    const allowed = await request("GET", "/api/agent/tasks/" + created.data.taskId, null, { "X-Sidekick-Principal-ID": "principal_alpha" });
+    const allowed = await request("GET", "/api/agent/tasks/" + created.data.taskId, null, authenticatedTestHeaders);
     assert.strictEqual(allowed.status, 200);
-    const forged = await request("GET", "/api/agent/tasks/" + created.data.taskId, null, { "X-Sidekick-Principal-ID": "principal_alpha" }, false);
+    const forged = await request("GET", "/api/agent/tasks/" + created.data.taskId, null, authenticatedTestHeaders, false);
     assert.strictEqual(forged.status, 401, "loopback caller cannot forge a Dashboard principal header");
     const unsignedList = await request("GET", "/api/agent/tasks", null, {}, false);
     assert.strictEqual(unsignedList.status, 401, "unsigned loopback callers cannot enumerate durable tasks");
-    const mcpKeySpoof = await request("GET", "/api/agent/tasks/" + created.data.taskId, null, { "X-Sidekick-Principal-ID": "principal_alpha" }, true, process.env.SIDEKICK_API_KEY);
+    const mcpKeySpoof = await request("GET", "/api/agent/tasks/" + created.data.taskId, null, authenticatedTestHeaders, true, process.env.SIDEKICK_API_KEY);
     assert.strictEqual(mcpKeySpoof.status, 401, "the shared MCP client key cannot forge Dashboard proxy identity");
-    const denied = await request("GET", "/api/agent/tasks/" + created.data.taskId, null, { "X-Sidekick-Principal-ID": "principal_beta" });
+    const denied = await request("GET", "/api/agent/tasks/" + created.data.taskId, null, otherTestHeaders);
     assert.strictEqual(denied.status, 404);
-    const legacyDenied = await request("GET", "/api/agent/run/" + created.data.taskId, null, { "X-Sidekick-Principal-ID": "principal_beta" });
+    const legacyDenied = await request("GET", "/api/agent/run/" + created.data.taskId, null, otherTestHeaders);
     assert.strictEqual(legacyDenied.status, 404, "legacy task detail must retain principal scoping");
-    const streamDenied = await request("GET", "/api/agent/stream/" + created.data.taskId, null, { "X-Sidekick-Principal-ID": "principal_beta" });
+    const streamDenied = await request("GET", "/api/agent/stream/" + created.data.taskId, null, otherTestHeaders);
     assert.strictEqual(streamDenied.status, 404, "SSE must retain principal scoping");
-    const followupDenied = await request("POST", "/api/agent/run/" + created.data.taskId + "/follow-up", { goal: "read another principal's result" }, { "X-Sidekick-Principal-ID": "principal_beta" });
+    const followupDenied = await request("POST", "/api/agent/run/" + created.data.taskId + "/follow-up", { goal: "read another principal's result" }, otherTestHeaders);
     assert.strictEqual(followupDenied.status, 404, "follow-up must retain principal scoping");
   });
 

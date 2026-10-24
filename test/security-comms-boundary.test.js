@@ -3,7 +3,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const path = require("node:path");
-const { EventEmitter } = require("node:events");
 
 const testDataDir = process.env.SIDEKICK_TEST_DATA_DIR || path.join(__dirname, `test-data-comms-boundary-${process.pid}`);
 process.env.SIDEKICK_DATA_DIR = testDataDir;
@@ -11,7 +10,7 @@ process.env.SIDEKICK_DB_FILE = process.env.SIDEKICK_TEST_DB_FILE || path.join(te
 delete require.cache[require.resolve("../src/db")];
 require("../src/db").runPendingMigrations();
 
-const { sidekick_notify, sidekick_webhook, descriptors, readBoundedNotificationError } = require("../src/tools/families/comms");
+const { sidekick_notify, sidekick_webhook, descriptors, notificationEndpointFailure } = require("../src/tools/families/comms");
 const { runWithContext } = require("../src/tools/context");
 const { dispatchTestTool } = require("../src/tools/dispatcher");
 const { createOwnerContext } = require("./helpers/authorized-context");
@@ -47,18 +46,13 @@ test("webhook operations are classified as high risk for dispatcher policy", () 
   assert.equal(descriptors.find(item => item.name === "webhook").risk, "high");
 });
 
-test("notification error bodies are retained only up to the configured byte limit", async () => {
-  const response = new EventEmitter();
-  response.destroy = () => response.emit("close");
-  const pending = readBoundedNotificationError(response, 5);
-  response.emit("data", Buffer.from("0123456789"));
-  assert.equal(await pending, "01234 [truncated: response exceeded 5 bytes]");
-});
-
-test("notification error bodies preserve a complete response within the byte limit", async () => {
-  const response = new EventEmitter();
-  const pending = readBoundedNotificationError(response, 16);
-  response.emit("data", Buffer.from("remote error"));
-  response.emit("end");
-  assert.equal(await pending, "remote error");
+test("webhook error responses are drained but never reflected to the caller", () => {
+  const secretUrl = "https://hooks.slack.com/services/T000/B000/synthetic-webhook-token";
+  let drained = false;
+  const result = notificationEndpointFailure(502, { resume() { drained = true; }, body: secretUrl });
+  assert.equal(drained, true, "the response stream must be drained");
+  assert.deepEqual(result.content, [{ type: "text", text: "Notification endpoint returned HTTP 502" }]);
+  assert.equal(result.isError, true);
+  assert.equal(result.code, "notification_endpoint_rejected");
+  assert.ok(!JSON.stringify(result).includes(secretUrl));
 });

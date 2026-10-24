@@ -22,6 +22,7 @@ const path = require("path");
 const { execFile, execFileSync, spawn } = require("child_process");
 const { childProcessEnv } = require("../../security/child-process");
 const { z } = require("zod");
+const toolContext = require("../context");
 const { enforcePathPolicy } = require("../path-policy");
 const { requireToolExecution, requireCanonicalInvocation } = require("../read-authorization");
 const { validateOutboundUrl, resolveOutboundUrl } = require("../../security/outbound-url");
@@ -36,12 +37,49 @@ const INI = require("ini");
 const { detectFormat } = require("../../core/format");
 const { DATA_DIR } = require("../../db");
 const platformKernel = require("../../platform/kernel");
+const { openRegularFile, readTextBounded } = require("../../core/bounded-file-read");
+const { hashFile: hashFileDetails } = require("../../core/stream-file-hash");
 
 const TRANSCRIPTION_JOB_ROOT = path.join(DATA_DIR, "transcription-jobs");
+const MAX_TRANSCRIPTION_OUTPUT_BYTES = 2 * 1024 * 1024;
+const MAX_ACTIVE_TRANSCRIPTION_JOBS = 2;
+const TRANSCRIPTION_JOB_ID_PATTERN = /^tr_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const transcriptionJobs = new Map();
 
+function readTranscriptionText(filePath, maxBytes = MAX_TRANSCRIPTION_OUTPUT_BYTES) {
+  const result = readTextBounded(filePath, { maxBytes, noFollow: true });
+  const text = result.content.trim();
+  return result.truncated ? `${text}\n[transcript truncated at ${maxBytes} bytes]` : text;
+}
+
 function transcriptionJobPath(jobId) {
+  if (typeof jobId !== "string" || !TRANSCRIPTION_JOB_ID_PATTERN.test(jobId)) {
+    throw new Error("invalid transcription job ID");
+  }
   return path.join(TRANSCRIPTION_JOB_ROOT, `${jobId}.json`);
+}
+
+function transcriptionJobBelongsToPrincipal(job, principalId) {
+  return Boolean(principalId && job?.owner_principal_id && job.owner_principal_id === principalId);
+}
+
+function publicTranscriptionJob(job) {
+  const { child, owner_principal_id, ...publicJob } = job;
+  return publicJob;
+}
+
+function countActiveTranscriptionJobs(jobs) {
+  return [...jobs.values()].filter(job => job.status === "queued" || job.status === "running").length;
+}
+
+function assertTranscriptionCapacity(jobs = transcriptionJobs, maximum = MAX_ACTIVE_TRANSCRIPTION_JOBS) {
+  if (countActiveTranscriptionJobs(jobs) >= maximum) {
+    throw new Error(`transcription capacity reached (${maximum} active jobs); wait for a job to finish before submitting another`);
+  }
+}
+
+function removeTranscriptionOutput(outputDir) {
+  try { fs.rmSync(outputDir, { recursive: true, force: true }); } catch {}
 }
 
 function saveTranscriptionJob(job) {
@@ -157,38 +195,64 @@ function transcriptionArgs(backend, device, audioPath, model, language, outputDi
   return [audioPath, "--model", model, "--output_format", "txt", "--output_dir", outputDir, "--device", device, ...(backend === "faster-whisper" ? ["--compute_type", "auto"] : []), ...(language ? ["--language", language] : [])];
 }
 
+function transcriptionOutputPath(backend, audioPath, outputDir) {
+  return backend === "whisper.cpp"
+    ? path.join(outputDir, "transcript.txt")
+    : path.join(outputDir, path.basename(audioPath).replace(/\.[^.]+$/, "") + ".txt");
+}
+
 function finishTranscriptionJob(job, patch) {
   Object.assign(job, patch, { updated_at: new Date().toISOString() });
   saveTranscriptionJob(job);
 }
 
 function startTranscriptionJob({ audioPath, model, language, backend, device: requestedDevice }) {
+  assertTranscriptionCapacity();
   const selected = selectTranscriptionBackend(backend);
   const device = selectTranscriptionDevice(selected.name, requestedDevice);
   const jobId = `tr_${crypto.randomUUID()}`;
+  const ownerPrincipalId = toolContext.getExecutionContext().authIdentity?.principal_id || null;
+  if (!ownerPrincipalId) throw new Error("authenticated principal required for asynchronous transcription");
   const outputDir = path.join(TRANSCRIPTION_JOB_ROOT, jobId);
   fs.mkdirSync(outputDir, { recursive: true, mode: 0o700 });
-  const job = { job_id: jobId, status: "queued", backend: selected.name, device, model, language: language || null, input: audioPath, created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+  const job = { job_id: jobId, owner_principal_id: ownerPrincipalId, status: "queued", backend: selected.name, device, model, language: language || null, input: audioPath, created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
   saveTranscriptionJob(job);
 
-  const child = spawn(selected.command, transcriptionArgs(selected.name, device, audioPath, model, language, outputDir), {
-    detached: false,
-    stdio: ["ignore", "pipe", "pipe"],
-    env: childProcessEnv(),
-  });
+  let child;
+  try {
+    child = spawn(selected.command, transcriptionArgs(selected.name, device, audioPath, model, language, outputDir), {
+      detached: false,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: childProcessEnv(),
+    });
+  } catch (error) {
+    finishTranscriptionJob(job, { status: "failed", error: String(error?.message || "transcription process could not start").slice(0, 1000) });
+    removeTranscriptionOutput(outputDir);
+    throw error;
+  }
   job.child = child;
   finishTranscriptionJob(job, { status: "running" });
   child.stdout.on("data", () => {});
   let stderr = "";
   child.stderr.on("data", chunk => { stderr = (stderr + chunk.toString()).slice(-4096); });
-  child.on("error", error => finishTranscriptionJob(job, { status: "failed", error: error.message }));
+  child.on("error", error => {
+    finishTranscriptionJob(job, { status: "failed", error: error.message });
+    removeTranscriptionOutput(outputDir);
+  });
   child.on("close", code => {
-    if (job.status === "cancelled") return;
-    const txtPath = selected.name === "whisper.cpp"
-      ? path.join(outputDir, "transcript.txt")
-      : path.join(outputDir, `${path.basename(audioPath).replace(/\.[^.]+$/, "")}.txt`);
-    if (code === 0 && fs.existsSync(txtPath)) finishTranscriptionJob(job, { status: "completed", output: fs.readFileSync(txtPath, "utf8").slice(0, 2 * 1024 * 1024).trim() || "(no speech detected)" });
-    else finishTranscriptionJob(job, { status: "failed", error: stderr || `transcription exited with code ${code}` });
+    try {
+      if (job.status === "cancelled") return;
+      const txtPath = transcriptionOutputPath(selected.name, audioPath, outputDir);
+      if (code === 0 && fs.existsSync(txtPath)) {
+        try {
+          finishTranscriptionJob(job, { status: "completed", output: readTranscriptionText(txtPath) || "(no speech detected)" });
+        } catch (error) {
+          finishTranscriptionJob(job, { status: "failed", error: `Unable to read transcript output: ${error.message}` });
+        }
+      } else finishTranscriptionJob(job, { status: "failed", error: stderr || `transcription exited with code ${code}` });
+    } finally {
+      removeTranscriptionOutput(outputDir);
+    }
   });
   return job;
 }
@@ -228,13 +292,66 @@ function mediaContentType(filePath, audioOnly) {
   return types[path.extname(filePath).toLowerCase()] || "application/octet-stream";
 }
 
+function assertLocalMediaPath(filePath, label = "Media path") {
+  if (typeof filePath !== "string" || !filePath || filePath.length > 4096 || filePath.includes("\0")) {
+    throw new Error(`${label} is invalid`);
+  }
+  const windowsDrivePath = process.platform === "win32" && /^[A-Za-z]:[\\/]/.test(filePath);
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(filePath) && !windowsDrivePath) {
+    throw new Error(`${label} must be a local filesystem path; URL and device protocols are not accepted`);
+  }
+  return path.resolve(filePath);
+}
+
+function resolveMediaInputPath(filePath) {
+  const normalized = assertLocalMediaPath(filePath, "Media input");
+  const policyError = enforcePathPolicy(filePath, "read");
+  if (policyError) throw new Error(policyError.content?.[0]?.text || "Media input is outside the configured read scope");
+  let canonicalPath;
+  try { canonicalPath = fs.realpathSync(normalized); }
+  catch (error) {
+    if (error.code === "ENOENT") throw new Error("Media input file is unavailable");
+    throw error;
+  }
+  const canonicalPolicyError = enforcePathPolicy(canonicalPath, "read");
+  if (canonicalPolicyError) throw new Error(canonicalPolicyError.content?.[0]?.text || "Media input is outside the configured read scope");
+  let opened;
+  try { opened = openRegularFile(canonicalPath, { noFollow: true }); }
+  catch (error) {
+    if (error.code === "ENOENT") throw new Error("Media input file changed or is unavailable");
+    throw error;
+  }
+  fs.closeSync(opened.fd);
+  return canonicalPath;
+}
+
+function resolveMediaOutputPath(filePath) {
+  const normalized = assertLocalMediaPath(filePath, "Media output");
+  const policyError = enforcePathPolicy(filePath, "write");
+  if (policyError) throw new Error(policyError.content?.[0]?.text || "Media output is outside the configured write scope");
+  const parentPath = path.dirname(normalized);
+  let canonicalParent;
+  try { canonicalParent = fs.realpathSync(parentPath); }
+  catch (error) {
+    if (error.code === "ENOENT") throw new Error("Media output parent does not exist or is inaccessible");
+    throw error;
+  }
+  if (!fs.statSync(canonicalParent).isDirectory()) throw new Error("Media output parent must be a directory");
+  const canonicalOutput = path.join(canonicalParent, path.basename(normalized));
+  const canonicalPolicyError = enforcePathPolicy(canonicalOutput, "write");
+  if (canonicalPolicyError) throw new Error(canonicalPolicyError.content?.[0]?.text || "Media output is outside the configured write scope");
+  try {
+    const stat = fs.lstatSync(canonicalOutput);
+    if (stat.isSymbolicLink() || !stat.isFile()) throw new Error("Media output must be a regular, non-symlink file");
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  return canonicalOutput;
+}
+
 async function runOcr({ path: imagePath, language, psm }) {
   try {
-    const policyError = enforcePathPolicy(imagePath, "read");
-    if (policyError) return policyError;
-    if (!fs.existsSync(imagePath)) {
-      return { content: [{ type: "text", text: `Error: File not found: ${imagePath}` }], isError: true };
-    }
+    imagePath = resolveMediaInputPath(imagePath);
 
     const lang = validLangCode(language, "eng");
     const args = [imagePath, "stdout", "-l", lang];
@@ -267,12 +384,8 @@ async function sidekick_media({ action, input, output, options }) {
     if (!input) {
       return { content: [{ type: "text", text: "Error: input is required" }], isError: true };
     }
-    const inputPolicyError = enforcePathPolicy(input, "read");
-    if (inputPolicyError) return inputPolicyError;
-    if (output) {
-      const outputPolicyError = enforcePathPolicy(output, "write");
-      if (outputPolicyError) return outputPolicyError;
-    }
+    input = resolveMediaInputPath(input);
+    if (output) output = resolveMediaOutputPath(output);
 
     if (action === "info") {
       const result = safeExecFileSync("ffprobe", ["-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", input], { timeout: 15000 });
@@ -330,25 +443,23 @@ async function sidekick_transcribe({ path: audioPath, model, language, async: ru
     if (action === "status") {
       if (!jobId) return { content: [{ type: "text", text: "Error: job_id is required for status" }], isError: true };
       const job = loadTranscriptionJob(jobId);
-      if (!job) return { content: [{ type: "text", text: `Error: transcription job not found: ${jobId}` }], isError: true };
-      const { child, ...publicJob } = job;
+      const principalId = toolContext.getExecutionContext().authIdentity?.principal_id || null;
+      if (!job || !transcriptionJobBelongsToPrincipal(job, principalId)) return { content: [{ type: "text", text: "Error: transcription job not found" }], isError: true };
+      const publicJob = publicTranscriptionJob(job);
       return { content: [{ type: "text", text: JSON.stringify(publicJob) }] };
     }
     if (action === "cancel") {
       if (!jobId) return { content: [{ type: "text", text: "Error: job_id is required for cancel" }], isError: true };
       const job = loadTranscriptionJob(jobId);
-      if (!job) return { content: [{ type: "text", text: `Error: transcription job not found: ${jobId}` }], isError: true };
+      const principalId = toolContext.getExecutionContext().authIdentity?.principal_id || null;
+      if (!job || !transcriptionJobBelongsToPrincipal(job, principalId)) return { content: [{ type: "text", text: "Error: transcription job not found" }], isError: true };
       if (job.child && !job.child.killed) job.child.kill("SIGTERM");
       finishTranscriptionJob(job, { status: "cancelled" });
-      const { child, ...publicJob } = job;
+      const publicJob = publicTranscriptionJob(job);
       return { content: [{ type: "text", text: JSON.stringify(publicJob) }] };
     }
     if (!audioPath) return { content: [{ type: "text", text: "Error: path is required" }], isError: true };
-    const policyError = enforcePathPolicy(audioPath, "read");
-    if (policyError) return policyError;
-    if (!fs.existsSync(audioPath)) {
-      return { content: [{ type: "text", text: `Error: File not found: ${audioPath}` }], isError: true };
-    }
+    audioPath = resolveMediaInputPath(audioPath);
 
     const m = validWhisperModel(model);
     const lang = language ? validLangCode(language, "eng") : undefined;
@@ -356,22 +467,22 @@ async function sidekick_transcribe({ path: audioPath, model, language, async: ru
     const device = selectTranscriptionDevice(selected.name, requestedDevice);
     if (runAsync) {
       const job = startTranscriptionJob({ audioPath, model: m, language: lang, backend, device });
-      const { child, ...publicJob } = job;
+      const publicJob = publicTranscriptionJob(job);
       return { content: [{ type: "text", text: JSON.stringify(publicJob) }] };
     }
-    const args = transcriptionArgs(selected.name, device, audioPath, m, lang, "/tmp");
-    const result = safeExecFileSync(selected.command, args, { timeout: 600000, maxBuffer: 2 * 1024 * 1024 });
-
-    const tmpTxtPath = selected.name === "whisper.cpp"
-      ? "/tmp/transcript.txt"
-      : `/tmp/${path.basename(audioPath).replace(/\.[^.]+$/, ".txt")}`;
-    if (fs.existsSync(tmpTxtPath)) {
-      const text = fs.readFileSync(tmpTxtPath, "utf-8").trim();
-      fs.unlinkSync(tmpTxtPath);
-      return { content: [{ type: "text", text: text || "(no speech detected)" }] };
+    const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-transcribe-"));
+    try {
+      const args = transcriptionArgs(selected.name, device, audioPath, m, lang, outputDir);
+      const result = safeExecFileSync(selected.command, args, { timeout: 600000, maxBuffer: 2 * 1024 * 1024 });
+      const outputPath = transcriptionOutputPath(selected.name, audioPath, outputDir);
+      if (fs.existsSync(outputPath)) {
+        const text = readTranscriptionText(outputPath);
+        return { content: [{ type: "text", text: text || "(no speech detected)" }] };
+      }
+      return { content: [{ type: "text", text: result || "(no speech detected)" }] };
+    } finally {
+      fs.rmSync(outputDir, { recursive: true, force: true });
     }
-
-    return { content: [{ type: "text", text: result || "(no speech detected)" }] };
   } catch (e) {
     if (e.message.includes("not found") || e.message.includes("ENOENT")) {
       return { content: [{ type: "text", text: "Error: whisper not installed. Run: pip3 install openai-whisper" }], isError: true };
@@ -380,70 +491,103 @@ async function sidekick_transcribe({ path: audioPath, model, language, async: ru
   }
 }
 
+const MAX_ANALYTICS_FILE_BYTES = 64 * 1024 * 1024;
+const MAX_ANALYTICS_QUERY_CHARS = 16 * 1024;
+const MAX_ANALYTICS_RESULT_ROWS = 1000;
+const MAX_ANALYTICS_RESULT_BYTES = 2 * 1024 * 1024;
+
+function copyAnalyticsInput(sourcePath, destinationPath) {
+  const canonicalPath = fs.realpathSync(sourcePath);
+  const decision = enforcePathPolicy(canonicalPath, "read");
+  if (decision) throw new Error("Analytics input is outside the configured read scope");
+
+  let sourceFd;
+  let destinationFd;
+  try {
+    const source = openRegularFile(canonicalPath, { noFollow: true });
+    sourceFd = source.fd;
+    const stat = source.stat;
+    if (stat.size > MAX_ANALYTICS_FILE_BYTES) throw new Error(`Analytics input exceeds ${MAX_ANALYTICS_FILE_BYTES} bytes`);
+
+    destinationFd = fs.openSync(destinationPath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL, 0o600);
+    const buffer = Buffer.alloc(64 * 1024);
+    let total = 0;
+    for (;;) {
+      const bytesRead = fs.readSync(sourceFd, buffer, 0, buffer.length, null);
+      if (bytesRead === 0) break;
+      total += bytesRead;
+      if (total > MAX_ANALYTICS_FILE_BYTES) throw new Error(`Analytics input exceeds ${MAX_ANALYTICS_FILE_BYTES} bytes`);
+      let offset = 0;
+      while (offset < bytesRead) offset += fs.writeSync(destinationFd, buffer, offset, bytesRead - offset);
+    }
+  } finally {
+    if (Number.isInteger(sourceFd)) fs.closeSync(sourceFd);
+    if (Number.isInteger(destinationFd)) fs.closeSync(destinationFd);
+  }
+}
+
+function buildAnalyticsScript({ file = null, format = null, query }) {
+  const encoded = Buffer.from(JSON.stringify({ file, format, query }), "utf8").toString("base64");
+  return `import base64, duckdb, json, pandas
+params = json.loads(base64.b64decode("${encoded}"))
+con = duckdb.connect(":memory:")
+con.execute("SET memory_limit='512MB'")
+con.execute("SET threads=2")
+if params["file"]:
+    reader = {"csv": "read_csv_auto(?)", "json": "read_json_auto(?)", "parquet": "read_parquet(?)"}[params["format"]]
+    con.execute(f"CREATE TABLE data AS SELECT * FROM {reader}", [params["file"]])
+con.execute("SET enable_external_access=false")
+con.execute("SET lock_configuration=true")
+cursor = con.execute(params["query"])
+if cursor.description:
+    columns = [column[0] for column in cursor.description]
+    rows = cursor.fetchmany(${MAX_ANALYTICS_RESULT_ROWS})
+    print(pandas.DataFrame(rows, columns=columns).to_string(index=False))
+    if cursor.fetchone() is not None:
+        print("\\n[analytics result truncated after ${MAX_ANALYTICS_RESULT_ROWS} rows]")
+`;
+}
+
 async function sidekick_analytics({ query, file, format }) {
   const denied = requireCanonicalInvocation("analytics");
   if (denied) return denied;
+  let tempDir = null;
   try {
     const venvPath = "/home/sidekick/.sidekick-tools/bin/python3";
     const pythonCmd = fs.existsSync(venvPath) ? venvPath : "python3";
-
-    // Helper: run Python script via temp file to avoid shell escaping issues
-    const runPyScript = (pyScript) => {
-      const tmpFile = path.join(os.tmpdir(), "sidekick_analytics_" + Date.now() + ".py");
-      try {
-        fs.writeFileSync(tmpFile, pyScript);
-        return execFileSync(pythonCmd, [tmpFile], { timeout: 60000, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"], env: childProcessEnv() });
-      } finally {
-        try { fs.unlinkSync(tmpFile); } catch (e) {}
-      }
-    };
-
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-analytics-"));
+    const scriptPath = path.join(tempDir, "query.py");
+    const inputFormat = format || "csv";
+    let safeInputPath = null;
     if (file) {
       const policyError = enforcePathPolicy(file, "read");
       if (policyError) return policyError;
       if (!fs.existsSync(file)) {
         return { content: [{ type: "text", text: "Error: File not found: " + file }], isError: true };
       }
-
-      const sql = query || "SELECT * FROM data LIMIT 100";
-      const fmt = format || "csv";
-      // Pass all parameters via JSON to avoid escaping issues
-      const params = JSON.stringify({ file, sql, fmt });
-      const pyScript = `import duckdb, json, sys
-params = json.loads(${JSON.stringify(params)})
-con = duckdb.connect()
-f = params["file"]
-if params["fmt"] == "csv":
-    con.execute(f"CREATE TABLE data AS SELECT * FROM read_csv_auto('{f}')")
-elif params["fmt"] == "json":
-    con.execute(f"CREATE TABLE data AS SELECT * FROM read_json_auto('{f}')")
-elif params["fmt"] == "parquet":
-    con.execute(f"CREATE TABLE data AS SELECT * FROM read_parquet('{f}')")
-result = con.execute(params["sql"]).fetchdf()
-print(result.to_string(index=False))
-`;
-      const result = runPyScript(pyScript);
-      return { content: [{ type: "text", text: result }] };
+      safeInputPath = path.join(tempDir, `input.${inputFormat}`);
+      copyAnalyticsInput(file, safeInputPath);
     }
-
-    if (query) {
-      const params = JSON.stringify({ query });
-      const pyScript = `import duckdb, json, sys
-params = json.loads(${JSON.stringify(params)})
-con = duckdb.connect()
-result = con.execute(params["query"]).fetchdf()
-print(result.to_string(index=False))
-`;
-      const result = runPyScript(pyScript);
-      return { content: [{ type: "text", text: result }] };
-    }
-
-    return { content: [{ type: "text", text: "Error: query or file is required" }], isError: true };
+    if (!query && !file) return { content: [{ type: "text", text: "Error: query or file is required" }], isError: true };
+    const sql = query || "SELECT * FROM data LIMIT 100";
+    fs.writeFileSync(scriptPath, buildAnalyticsScript({ file: safeInputPath, format: safeInputPath ? inputFormat : null, query: sql }), { mode: 0o600, flag: "wx" });
+    const result = execFileSync(pythonCmd, [scriptPath], {
+      timeout: 60000,
+      encoding: "utf-8",
+      maxBuffer: MAX_ANALYTICS_RESULT_BYTES,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: childProcessEnv(),
+    });
+    return { content: [{ type: "text", text: result }] };
   } catch (e) {
     if (e.message.includes("not found") || e.message.includes("ModuleNotFoundError")) {
       return { content: [{ type: "text", text: "Error: DuckDB not installed. Run: pip3 install duckdb" }], isError: true };
     }
-    return { content: [{ type: "text", text: "Error: " + e.message }], isError: true };
+    return { content: [{ type: "text", text: "Error: " + String(e.message || e).slice(0, 2000) }], isError: true };
+  } finally {
+    if (tempDir) {
+      try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch {}
+    }
   }
 }
 
@@ -813,7 +957,7 @@ async function sidekick_download({ url, output, format, audio_only }, runtime = 
 
     let artifact = null;
     if (managedDownload) {
-      const bytes = fs.readFileSync(canonicalFile);
+      const fileHash = await hashFileDetails(canonicalFile, "sha256", { maxBytes: maxDownloadBytes });
       const storageRef = path.relative(DATA_DIR, canonicalFile).split(path.sep).join("/");
       artifact = platformKernel.registerArtifact({
         type: "media_download",
@@ -821,8 +965,8 @@ async function sidekick_download({ url, output, format, audio_only }, runtime = 
         producer: "download",
         storage_ref: storageRef,
         content_type: mediaContentType(canonicalFile, audio_only),
-        byte_size: bytes.length,
-        content_hash: `sha256:${crypto.createHash("sha256").update(bytes).digest("hex")}`,
+        byte_size: fileHash.bytesRead,
+        content_hash: `sha256:${fileHash.hash}`,
         redaction_state: "not_required",
         verification: { verified: true, method: "sha256", source_url: url },
         metadata: { source_url: url, audio_only: Boolean(audio_only) },
@@ -862,14 +1006,14 @@ const SCHEMAS = {
     language: z.string().optional().describe("Language code"),
     async: z.boolean().optional().default(false).describe("Return a persistent job ID instead of waiting for completion"),
     action: z.enum(["submit", "status", "cancel"]).optional().default("submit").describe("Transcription job action"),
-    job_id: z.string().optional().describe("Job ID for status or cancel"),
+    job_id: z.string().regex(TRANSCRIPTION_JOB_ID_PATTERN).optional().describe("Job ID for status or cancel"),
     backend: z.enum(["auto", "faster-whisper", "whisper.cpp", "whisper"]).optional().default("auto").describe("Transcription backend; auto prefers optimized installed backends"),
     device: z.enum(["auto", "cpu", "cuda", "metal", "vulkan"]).optional().default("auto").describe("Local inference device; Vulkan supports compatible AMD/Intel/NVIDIA backends")
   }),
   analytics: z.object({
-    query: z.string().optional().describe("SQL query"),
-    file: z.string().optional().describe("Data file path (CSV, JSON, or Parquet)"),
-    format: z.string().optional().describe("File format (csv|json|parquet)")
+    query: z.string().max(MAX_ANALYTICS_QUERY_CHARS).optional().describe("Read-only SQL query (maximum 16384 characters)"),
+    file: z.string().max(4096).optional().describe("Data file (CSV, JSON, or Parquet; maximum 64 MiB)"),
+    format: z.enum(["csv", "json", "parquet"]).optional().default("csv").describe("File format")
   }),
   insight_report: z.object({
     paths: z.union([z.string(), z.array(z.string())]).describe("Text, data, or image file path(s) to analyze"),
@@ -921,7 +1065,7 @@ const descriptors = Object.freeze([
     name: "analytics",
     description: "Fast analytical queries on CSV/JSON/Parquet files using DuckDB",
     schema: SCHEMAS.analytics,
-    args: { query: "string (SQL query)", file: "string (optional, data file path - CSV, JSON, or Parquet)", format: "string (optional, file format: csv|json|parquet - auto-detected)" },
+    args: { query: `string (optional, SQL query; maximum ${MAX_ANALYTICS_QUERY_CHARS} characters)`, file: `string (optional, data file path; maximum ${MAX_ANALYTICS_FILE_BYTES} bytes)`, format: "string (optional, csv|json|parquet; defaults to csv)" },
     risk: "medium",
     category: "Database",
     source: "builtin",
@@ -952,4 +1096,4 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_ocr, sidekick_media, sidekick_transcribe, sidekick_analytics, sidekick_insight_report, sidekick_download, localCudaAvailable, localVulkanAvailable };
+module.exports = { descriptors, sidekick_ocr, sidekick_media, sidekick_transcribe, sidekick_analytics, sidekick_insight_report, sidekick_download, localCudaAvailable, localVulkanAvailable, readTranscriptionText, transcriptionOutputPath, transcriptionJobPath, transcriptionJobBelongsToPrincipal, countActiveTranscriptionJobs, assertTranscriptionCapacity, removeTranscriptionOutput, assertLocalMediaPath, resolveMediaInputPath, resolveMediaOutputPath, copyAnalyticsInput, buildAnalyticsScript, saveTranscriptionJob, MAX_TRANSCRIPTION_OUTPUT_BYTES, MAX_ACTIVE_TRANSCRIPTION_JOBS, MAX_ANALYTICS_FILE_BYTES, MAX_ANALYTICS_QUERY_CHARS, MAX_ANALYTICS_RESULT_ROWS };

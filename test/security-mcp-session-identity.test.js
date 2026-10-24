@@ -5,6 +5,8 @@ const assert = require("node:assert/strict");
 const { createSessionManager } = require("../src/mcp/session-manager");
 const { registerLegacySseRoutes } = require("../src/mcp/legacy-sse");
 const { registerStreamableHttpRoutes } = require("../src/mcp/streamable-http");
+const { sanitizeMcpLogLabel } = require("../src/mcp/log-label");
+const { SSEServerTransport } = require("@modelcontextprotocol/server-legacy/sse");
 
 function createApp() {
   const routes = new Map();
@@ -19,10 +21,65 @@ function createApp() {
 function createResponse() {
   return {
     statusCode: 200,
+    headers: {},
     status(code) { this.statusCode = code; return this; },
+    setHeader(name, value) { this.headers[name.toLowerCase()] = value; },
     json(value) { this.body = value; return this; },
   };
 }
+
+test("MCP request logs bound and sanitize client-controlled labels", async t => {
+  const manager = createSessionManager({ createMcpServer: () => ({}), logDebug() {} });
+  t.after(() => manager.dispose());
+  const app = createApp();
+  registerStreamableHttpRoutes({ app, sessionManager: manager, createMcpServer: () => ({}), logDebug() {} });
+  const lines = [];
+  const originalLog = console.log;
+  console.log = (...args) => lines.push(args.join(" "));
+  t.after(() => { console.log = originalLog; });
+
+  const response = createResponse();
+  await app.routes.get("GET /mcp")({
+    headers: { "mcp-session-id": `${"x".repeat(200)}\r\nforged log entry` },
+    authIdentity: { principal_id: "prn_test" },
+  }, response);
+
+  assert.equal(response.statusCode, 404);
+  assert.equal(lines.length, 1);
+  assert.doesNotMatch(lines[0], /[\r\n]/, "untrusted values cannot forge additional log lines");
+  assert.ok(lines[0].length < 200, "untrusted log labels have a strict length bound");
+});
+
+test("MCP log label sanitizer removes control characters and bounds client metadata", () => {
+  assert.equal(sanitizeMcpLogLabel("client\r\nforged\u001b[31m"), "client??forged?[31m");
+  assert.equal(sanitizeMcpLogLabel("x".repeat(200)).length, 128);
+  assert.equal(sanitizeMcpLogLabel(undefined, "unknown"), "unknown");
+});
+
+test("MCP session manager bounds and projects client metadata before retaining it", async t => {
+  const events = [];
+  const manager = createSessionManager({
+    createMcpServer: () => ({}),
+    logDebug: (event, details) => events.push({ event, details }),
+  });
+  t.after(() => manager.dispose());
+  manager.registerSession("safe-session", {}, {}, {
+    authIdentity: { principal_id: "prn_test" },
+    userAgent: `${"u".repeat(200)}\r\nforged`,
+    clientInfo: { name: "n".repeat(200), version: "v\nforged", extra: "discard this" },
+  });
+
+  const snapshot = manager.getHealthSnapshot();
+  assert.equal(snapshot.sessionDetails[0].userAgent.length, 128);
+  assert.doesNotMatch(snapshot.sessionDetails[0].userAgent, /[\r\n]/);
+  assert.deepEqual(snapshot.sessionDetails[0].clientInfo, { name: "n".repeat(128), version: "v?forged" });
+  assert.deepEqual(events[0].details.clientInfo, snapshot.sessionDetails[0].clientInfo);
+
+  await manager.getTransportForRequest(`${"s".repeat(300)}\r\nforged`, { authIdentity: { principal_id: "prn_test" } });
+  const requestEvent = events.find(event => event.event === "getTransportForRequest");
+  assert.equal(requestEvent.details.requestedSessionId.length, 128);
+  assert.doesNotMatch(JSON.stringify(events), /[\r\n]forged/);
+});
 
 test("MCP session identity rejects a different principal without rebinding the session", async t => {
   const manager = createSessionManager({ createMcpServer: () => ({}), logDebug() {} });
@@ -85,6 +142,46 @@ test("MCP streamable HTTP returns 403 for another principal's session", async t 
   assert.equal(res.body.code, "session_identity_mismatch");
 });
 
+test("MCP transport failures hide exception details from clients and routine logs", async t => {
+  const secretDiagnostic = "synthetic-secret /srv/sidekick/private/config.json";
+  const manager = createSessionManager({ createMcpServer: () => ({}), logDebug() {} });
+  t.after(() => manager.dispose());
+  const transport = { handleRequest: async () => { throw new Error(secretDiagnostic); } };
+  manager.registerSession("failing-session", {}, transport, { authIdentity: { principal_id: "prn_service" } });
+  const app = createApp();
+  const events = [];
+  registerStreamableHttpRoutes({
+    app,
+    sessionManager: manager,
+    createMcpServer: () => ({}),
+    logDebug: (event, details) => events.push({ event, details }),
+  });
+
+  for (const method of ["GET", "DELETE", "POST"]) {
+    const request = {
+      headers: { "mcp-session-id": "failing-session", "content-type": "application/json" },
+      authIdentity: { principal_id: "prn_service" },
+    };
+    if (method === "POST") {
+      request.body = {
+        jsonrpc: "2.0",
+        method: "initialize",
+        id: 1,
+        params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "test", version: "1" } },
+      };
+    }
+    const res = createResponse();
+    await app.routes.get(`${method} /mcp`)(request, res);
+    assert.equal(res.statusCode, 500);
+    assert.deepEqual(res.body, { error: "MCP request failed" });
+    assert.doesNotMatch(JSON.stringify(res.body), /synthetic-secret|private/);
+  }
+
+  assert.equal(events.length, 3);
+  assert.ok(events.every(({ details }) => details.error === "internal_error"));
+  assert.doesNotMatch(JSON.stringify(events), /synthetic-secret|private|stack/);
+});
+
 test("legacy SSE message posts cannot rebind another principal's session", async t => {
   const manager = createSessionManager({ createMcpServer: () => ({}), logDebug() {} });
   t.after(() => manager.dispose());
@@ -121,6 +218,24 @@ test("legacy-key MCP sessions remain bound to the same identityless authenticati
   assert.equal(scopedPrincipal.identityMismatch, true);
 });
 
+test("MCP session cleanup logs do not expose close exception details", async () => {
+  const events = [];
+  const manager = createSessionManager({
+    createMcpServer: () => ({}),
+    logDebug: (event, details) => events.push({ event, details }),
+  });
+  const secretDiagnostic = "synthetic-secret /srv/sidekick/private/config.json";
+  manager.registerSession("cleanup-session", {}, {
+    async close() { throw new Error(secretDiagnostic); },
+  }, { authIdentity: { principal_id: "prn_service" } });
+  await manager.dispose();
+
+  const failures = events.filter(event => event.event === "SESSION_CLOSE_ERROR");
+  assert.equal(failures.length, 1);
+  assert.deepEqual(failures[0].details, { sessionId: "cleanup-session", error: "internal_error" });
+  assert.doesNotMatch(JSON.stringify(events), /synthetic-secret|private|stack/);
+});
+
 test("MCP session capacity limits individual identities and the whole server", async t => {
   const perIdentity = createSessionManager({ createMcpServer: () => ({}), logDebug() {}, maxSessions: 2, maxSessionsPerIdentity: 1 });
   t.after(() => perIdentity.dispose());
@@ -152,4 +267,58 @@ test("legacy SSE refuses sessions above the per-identity cap before creating a s
   assert.equal(res.statusCode, 429);
   assert.equal(res.body.code, "session_capacity_exceeded");
   assert.equal(serverCreated, false);
+});
+
+test("legacy SSE route failures hide exception details from clients and routine logs", async t => {
+  const secretDiagnostic = "synthetic-secret /srv/sidekick/private/config.json";
+  const manager = createSessionManager({ createMcpServer: () => ({}), logDebug() {} });
+  t.after(() => manager.dispose());
+  const app = createApp();
+  registerLegacySseRoutes({
+    app,
+    sessionManager: manager,
+    createMcpServer: () => { throw new Error(secretDiagnostic); },
+  });
+
+  const originalError = console.error;
+  const logs = [];
+  console.error = (...args) => logs.push(args.join(" "));
+  try {
+    const res = createResponse();
+    await app.routes.get("GET /sse")({ headers: {}, authIdentity: { principal_id: "prn_service" } }, res);
+    assert.equal(res.statusCode, 500);
+    assert.deepEqual(res.body, { error: "MCP request failed" });
+  } finally {
+    console.error = originalError;
+  }
+  assert.doesNotMatch(logs.join(" "), /synthetic-secret|private/);
+});
+
+test("legacy SSE message failures hide exception details from clients and routine logs", async t => {
+  const secretDiagnostic = "synthetic-secret /srv/sidekick/private/config.json";
+  const manager = createSessionManager({ createMcpServer: () => ({}), logDebug() {} });
+  t.after(() => manager.dispose());
+  const transport = Object.create(SSEServerTransport.prototype);
+  transport.handlePostMessage = async () => { throw new Error(secretDiagnostic); };
+  const authIdentity = { principal_id: "prn_service" };
+  manager.registerSession("failing-sse-session", {}, transport, { authIdentity });
+  const app = createApp();
+  registerLegacySseRoutes({ app, sessionManager: manager, createMcpServer: () => ({}) });
+
+  const originalError = console.error;
+  const logs = [];
+  console.error = (...args) => logs.push(args.join(" "));
+  try {
+    const res = createResponse();
+    await app.routes.get("POST /messages")({
+      query: { sessionId: "failing-sse-session" },
+      body: {},
+      authIdentity,
+    }, res);
+    assert.equal(res.statusCode, 500);
+    assert.deepEqual(res.body, { error: "MCP request failed" });
+  } finally {
+    console.error = originalError;
+  }
+  assert.doesNotMatch(logs.join(" "), /synthetic-secret|private/);
 });

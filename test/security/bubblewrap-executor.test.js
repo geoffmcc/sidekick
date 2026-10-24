@@ -53,6 +53,19 @@ test("sandbox output limits always resolve to a positive finite hard ceiling", (
   }
 });
 
+test("sandbox applies an explicit per-process address-space ceiling", () => {
+  const args = executor.buildPrlimitArgs("true");
+  const memoryLimit = `--as=${executor.COMMAND_LIMITS.addressSpaceBytes}:${executor.COMMAND_LIMITS.addressSpaceBytes}`;
+  assert.ok(args.includes(memoryLimit), "prlimit must cap soft and hard address-space limits");
+  assert.equal(executor.COMMAND_LIMITS.addressSpaceBytes, 8 * 1024 * 1024 * 1024);
+  assert.throws(() => executor.buildPrlimitArgs(""), error => error.code === "command_invalid");
+
+  const invocation = executor.composeBubblewrapArgs({ command: "true", canonicalWorkspace: null, workspaceFd: null, executable: "/trusted/bwrap" });
+  const prlimitIndex = invocation.args.indexOf("/usr/bin/prlimit");
+  assert.notEqual(prlimitIndex, -1, "Bubblewrap must invoke the trusted resource limiter");
+  assert.ok(invocation.args.slice(prlimitIndex + 1).includes(memoryLimit), "the actual sandbox invocation must carry the address-space limit");
+});
+
 test("missing Linux isolation backend fails closed", () => {
   if (process.platform !== "linux") return;
   assert.throws(
@@ -94,6 +107,12 @@ test("bubblewrap starts only after namespace setup and clears inherited environm
   });
   assert.equal(result.exitCode, 0, result.stderr);
   assert.equal(result.stdout, "isolated-command-ok");
+});
+
+test("the isolated shell inherits the configured address-space ceiling", { skip: process.platform !== "linux" || !fs.existsSync(executor.DEFAULT_BWRAP) }, async () => {
+  const result = await executor.runBubblewrap({ command: "ulimit -v", source: "mcp" });
+  assert.equal(result.exitCode, 0, result.stderr);
+  assert.equal(Number(result.stdout.trim()), executor.COMMAND_LIMITS.addressSpaceBytes / 1024);
 });
 
 test("legacy bounded-shell callers get the OS boundary, no host filesystem, and no host network", { skip: process.platform !== "linux" || !fs.existsSync(executor.DEFAULT_BWRAP) }, async () => {
@@ -161,11 +180,18 @@ test("workspace binding permits scoped writes and hides unrelated host files and
   const args = executor.buildBubblewrapArgs({ command: "true", workspace, workspaceFd: 4, source: "mcp" });
   assert.ok(args.args.includes("--bind-fd"), "workspace must be bound from the authorized open descriptor");
   assert.ok(!args.args.includes(workspace), "sandbox arguments must not reopen the authorized workspace by path");
+  const readOnlyArgs = executor.buildBubblewrapArgs({ command: "true", workspace, workspaceFd: 4, workspaceReadOnly: true, source: "mcp" });
+  assert.ok(readOnlyArgs.args.includes("--ro-bind-fd"), "a workspace without a write grant must use a read-only descriptor mount");
+  assert.ok(!readOnlyArgs.args.includes("--bind-fd"), "read-only workspace execution must not include a writable bind");
 
   const command = `grep -qx authorized-workspace input.txt && printf workspace-write > output.txt && test ! -e ${shellQuote(outside)}`;
   const result = await executor.runBubblewrap({ command, workspace, source: "mcp" });
   assert.equal(result.exitCode, 0, result.stderr);
   assert.equal(fs.readFileSync(path.join(workspace, "output.txt"), "utf8"), "workspace-write");
+
+  const readOnly = await executor.runBubblewrap({ command: "printf denied > read-only-output.txt", workspace, workspaceReadOnly: true, source: "mcp" });
+  assert.notEqual(readOnly.exitCode, 0, "a read-only mount rejects shell writes");
+  assert.equal(fs.existsSync(path.join(workspace, "read-only-output.txt")), false, "failed shell writes leave the host workspace unchanged");
 
   const server = http.createServer((_req, res) => res.end("host-network-visible"));
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));

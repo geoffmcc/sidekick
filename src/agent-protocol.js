@@ -268,10 +268,10 @@ function classifyEvidenceRequirement(goal, { repositoryCapabilityDiscovered = fa
   }
 
   const localSignals = [
-    /\bhow many\b.*\b(tools?|services|models|tasks|memories|watches|delays)\b/,
-    /\b(status|logs?|history|memory|context|database|db|knowledge|repo|repository|project)\b.*\b(current|latest|recent|today|running|active|configured|enabled)\b/,
-    new RegExp(localActionPattern.source + ".*" + localResourcePattern.source),
-    new RegExp(localResourcePattern.source + ".*" + exactnessPattern.source)
+    /\bhow many\b[\s\S]{0,512}\b(tools?|services|models|tasks|memories|watches|delays)\b/,
+    /\b(status|logs?|history|memory|context|database|db|knowledge|repo|repository|project)\b[\s\S]{0,512}\b(current|latest|recent|today|running|active|configured|enabled)\b/,
+    new RegExp(localActionPattern.source + "[\\s\\S]{0,512}" + localResourcePattern.source),
+    new RegExp(localResourcePattern.source + "[\\s\\S]{0,512}" + exactnessPattern.source)
   ];
 
   if (localSignals.some(pattern => pattern.test(text))) {

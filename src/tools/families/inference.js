@@ -29,6 +29,9 @@ let inferenceService = null;
 try { inferenceService = require("../../compute/inference-service"); } catch {}
 
 const OPENVINO_EMBEDDING_MODEL = "qwen3-embedding-0.6b-int8";
+// Match Compute's MAX_STRING_LENGTH so an oversized embedding is rejected at
+// the tool boundary instead of consuming a provider/worker request.
+const MAX_EMBEDDING_TEXT_CHARS = 8 * 1024;
 const MAX_OLLAMA_RESPONSE_BYTES = 8 * 1024 * 1024;
 const MAX_OLLAMA_ERROR_BYTES = 16 * 1024;
 
@@ -297,7 +300,7 @@ const descriptors = Object.freeze([
     name: "embed",
     description: "Generate text embeddings via Compute (private by default)",
     schema: z.object({
-      text: z.string().describe("Text to embed"),
+      text: z.string().max(MAX_EMBEDDING_TEXT_CHARS).describe("Text to embed (maximum 8192 characters)"),
       model: z.string().optional().default("nomic-embed-text").describe("Embedding model"),
       device: z.enum(["GPU", "NPU"]).optional().describe("OpenVINO device profile (Qwen embeddings only)"),
     }),

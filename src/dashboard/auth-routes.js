@@ -12,6 +12,7 @@ function registerAuthRoutes({
   identity,
   authentication,
   authorization,
+  projectAccess,
   timingSafeCompare,
   dashboardUser,
   dashboardPass,
@@ -355,6 +356,14 @@ function registerAuthRoutes({
     if (!requireIdentityPermission(req, res, "principals.manage")) return;
     if (!requireIdentityPermission(req, res, "roles.manage")) return;
     if (!requireIdentityPermission(req, res, "credentials.create")) return;
+    const requestedProjectGrants = req.body?.project_grants;
+    if (requestedProjectGrants !== undefined) {
+      if (!Array.isArray(requestedProjectGrants) || requestedProjectGrants.length > 100 || requestedProjectGrants.some(grant =>
+        !grant || typeof grant !== "object" || Array.isArray(grant) || typeof grant.project_id !== "string" || !grant.project_id.trim() || !["read", "write"].includes(grant.access_level))) {
+        return res.status(400).json({ error: "project_grants must contain up to 100 project_id and read/write access_level entries", code: "invalid_request" });
+      }
+      if (!requireIdentityPermission(req, res, "projects.access.manage")) return;
+    }
     const permissions = req.body?.permissions;
     const scopes = req.body?.scopes === undefined ? permissions : req.body.scopes;
     if (!Array.isArray(permissions) || permissions.length === 0 || permissions.some(value => typeof value !== "string") ||
@@ -363,6 +372,7 @@ function registerAuthRoutes({
     }
     const uniquePermissions = [...new Set(permissions.map(value => value.trim()))];
     const uniqueScopes = [...new Set(scopes.map(value => value.trim()))];
+    const projectGrants = [...new Map((requestedProjectGrants || []).map(grant => [grant.project_id.trim(), { project_id: grant.project_id.trim(), access_level: grant.access_level }])).values()];
     if (!uniquePermissions.every(Boolean) || !uniqueScopes.every(Boolean) || uniqueScopes.some(scope => !uniquePermissions.includes(scope))) {
       return res.status(400).json({ error: "credential scopes must be a subset of granted permissions", code: "invalid_request" });
     }
@@ -381,6 +391,7 @@ function registerAuthRoutes({
       const db = dbStore.getDb();
       let provisioned;
       db.transaction(() => {
+        if (projectGrants.length && !identityPermissionDecision(req, "projects.access.manage").ok) throw new Error("Project access authority was revoked");
         let principal;
         if (req.body?.principal_id) {
           principal = identity.getPrincipal(req.body.principal_id);
@@ -399,6 +410,15 @@ function registerAuthRoutes({
           });
           for (const permission of uniquePermissions) identity.grantPrincipalPermission(principal.principal_id, permission, actor);
         }
+        for (const grant of projectGrants) {
+          projectAccess.grantProjectAccess({
+            actorPrincipalId: actorId,
+            credentialScopes: actor.scopes,
+            principalId: principal.principal_id,
+            project: grant.project_id,
+            accessLevel: grant.access_level,
+          });
+        }
         const created = authentication.createCredential({
           principalId: principal.principal_id,
           displayName: req.body?.credential_name || req.body?.display_name,
@@ -407,7 +427,7 @@ function registerAuthRoutes({
           createdByPrincipalId: actorId,
           actorContext: actor,
         });
-        provisioned = { principal, credential: created.credential, token: created.token };
+        provisioned = { principal, credential: created.credential, token: created.token, project_grants: projectGrants };
       })();
       res.set("Cache-Control", "no-store");
       res.status(201).json(provisioned);

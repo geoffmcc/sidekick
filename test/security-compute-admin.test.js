@@ -15,7 +15,7 @@ const identity = require("../src/core/identity");
 const authentication = require("../src/core/authentication");
 const authorization = require("../src/core/authorization");
 const express = require("express");
-const { registerComputeAdminRoutes } = require("../src/compute/admin-api");
+const { registerComputeAdminRoutes, sendComputeHealthResponse, sendComputeAdminError } = require("../src/compute/admin-api");
 const jobManager = require("../src/compute/job-manager");
 
 const owner = identity.bootstrapOwner({ username: "compute_admin_test_owner", password: "synthetic compute test password" });
@@ -165,4 +165,47 @@ test("lease recovery rolls back when its attributable audit callback fails", () 
   assert.equal(jobManager.getJob(created.jobId).status, "leased", "failed audit leaves the job recovery unapplied");
   assert.equal(jobManager.recoverExpiredLeases({ onRecovered: event => identity.recordAuditEvent("compute.admin.mutation", owner.principal_id, owner.principal_id, event) }), 1);
   assert.equal(jobManager.getJob(created.jobId).status, "retry_wait");
+});
+
+test("Compute health failures return a stable diagnostic without exception details", () => {
+  const response = {
+    statusCode: 200,
+    status(code) { this.statusCode = code; return this; },
+    json(body) { this.body = body; return this; },
+  };
+  sendComputeHealthResponse(response, {
+    overview() { throw new Error("synthetic-secret /srv/sidekick/private/config.json"); },
+  });
+  assert.equal(response.statusCode, 500);
+  assert.deepEqual(response.body, {
+    ok: false,
+    error: "Compute health check failed",
+    code: "compute_health_unavailable",
+  });
+  assert.doesNotMatch(JSON.stringify(response.body), /synthetic-secret|private/);
+
+  const healthyResponse = {
+    json(body) { this.body = body; return this; },
+  };
+  sendComputeHealthResponse(healthyResponse, { overview: () => ({ workers: 2 }) });
+  assert.deepEqual(healthyResponse.body, { ok: true, overview: { workers: 2 } });
+});
+
+test("unexpected Compute server failures do not disclose exception text", () => {
+  const response = {
+    statusCode: 200,
+    status(code) { this.statusCode = code; return this; },
+    json(body) { this.body = body; return this; },
+  };
+  sendComputeAdminError(response, Object.assign(new Error("synthetic-secret /srv/sidekick/private/db.sqlite"), { code: "SQLITE_IOERR" }), 500);
+  assert.equal(response.statusCode, 500);
+  assert.deepEqual(response.body, { ok: false, error: "Compute operation failed", code: "compute_operation_failed" });
+  assert.doesNotMatch(JSON.stringify(response.body), /synthetic-secret|private|SQLITE_IOERR/);
+
+  const validationResponse = {
+    status(code) { this.statusCode = code; return this; },
+    json(body) { this.body = body; return this; },
+  };
+  sendComputeAdminError(validationResponse, Object.assign(new Error("invalid token wksec_synthetic-token"), { code: "invalid_token" }), 400);
+  assert.deepEqual(validationResponse.body, { ok: false, error: "invalid token [REDACTED]", code: "invalid_token" });
 });

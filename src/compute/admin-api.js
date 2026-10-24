@@ -86,6 +86,25 @@ function createAtomicAuditMiddleware({ dbStore, identity }, eventType = "compute
   };
 }
 
+function sendComputeHealthResponse(res, compute) {
+  try {
+    return res.json({ ok: true, overview: compute.overview() });
+  } catch {
+    return res.status(500).json({ ok: false, error: "Compute health check failed", code: "compute_health_unavailable" });
+  }
+}
+
+function sendComputeAdminError(res, error, status = 400) {
+  const code = typeof error?.code === "string" && /^[A-Za-z0-9_.:-]{1,80}$/.test(error.code)
+    ? error.code
+    : "COMPUTE_ERROR";
+  if (status >= 500) {
+    return res.status(status).json({ ok: false, error: "Compute operation failed", code: "compute_operation_failed" });
+  }
+  const message = String(error?.message || "Compute error").replace(/(wksec_|enroll_)[A-Za-z0-9_-]+/g, "[REDACTED]");
+  return res.status(status).json({ ok: false, error: message, code });
+}
+
 function registerComputeAdminRoutes({ app, express, authentication, authorization, identity, dbStore, projectAccess, platformKernel, compute, handlers }) {
   const requirePermission = permission => createPermissionMiddleware(
     { authentication, authorization, resourceType: "compute_admin", denialMessage: "Compute administration denied" },
@@ -133,4 +152,4 @@ function registerComputeAdminRoutes({ app, express, authentication, authorizatio
   app.get("/compute/health", nodesRead, jobsRead, auditRead, handlers.health);
 }
 
-module.exports = Object.freeze({ createProjectJobScopeMiddleware, createAtomicAuditMiddleware, registerComputeAdminRoutes });
+module.exports = Object.freeze({ createProjectJobScopeMiddleware, createAtomicAuditMiddleware, sendComputeHealthResponse, sendComputeAdminError, registerComputeAdminRoutes });

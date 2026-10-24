@@ -12,6 +12,7 @@ $ErrorActionPreference = "Stop"
 $VPS = "sidekick@$IP"
 $REMOTE_DIR = "/home/sidekick/sidekick"
 $GIT_DEPLOY_HELPER = "/home/sidekick/.sidekick-git-deploy.js"
+$GIT_DEPLOY_ENV_HELPER = "/home/sidekick/.sidekick-child-process.js"
 $EXPECTED_REPO_URL = "https://github.com/geoffmcc/sidekick.git"
 $SSH_KEY = if ($env:SIDEKICK_SSH_KEY) { $env:SIDEKICK_SSH_KEY } else { Join-Path $env:USERPROFILE ".ssh\sidekick" }
 $SSH_PUB_KEY = "$SSH_KEY.pub"
@@ -328,8 +329,12 @@ function Invoke-GitDeployCheck {
 
 function Assert-GitDeploySource {
   $helperLocal = Join-Path $PROJECT_DIR "scripts\git-deploy.js"
+  $envHelperLocal = Join-Path $PROJECT_DIR "src\security\child-process.js"
   if (-not (Test-Path $helperLocal)) {
     throw "Git deployment helper not found at $helperLocal"
+  }
+  if (-not (Test-Path $envHelperLocal)) {
+    throw "Git deployment environment policy not found at $envHelperLocal"
   }
 
   Invoke-GitDeployCheck @("-C", $PROJECT_DIR, "rev-parse", "--is-inside-work-tree") | Out-Null
@@ -474,6 +479,11 @@ try {
     Run-Remote "chmod 700 $REMOTE_DIR/scripts/ensure-secret-config.sh" | Out-Null
     $changed += "ensure-secret-config.sh"
 
+    if (-not (Copy-ToVPS (Join-Path $PROJECT_DIR "scripts\ensure-secret-config.js") "$REMOTE_DIR/scripts/ensure-secret-config.js")) {
+      throw "Failed to copy ensure-secret-config.js"
+    }
+    $changed += "ensure-secret-config.js"
+
     if (-not (Copy-ToVPS (Join-Path $PROJECT_DIR "scripts\verify-runtime-secrets.js") "$REMOTE_DIR/scripts/verify-runtime-secrets.js")) {
       throw "Failed to copy verify-runtime-secrets.js"
     }
@@ -518,7 +528,12 @@ try {
     if (-not (Copy-ToVPS $helperLocal $GIT_DEPLOY_HELPER)) {
       throw "Failed to upload Git deployment helper"
     }
+    $envHelperLocal = Join-Path $PROJECT_DIR "src\security\child-process.js"
+    if (-not (Copy-ToVPS $envHelperLocal $GIT_DEPLOY_ENV_HELPER)) {
+      throw "Failed to upload Git deployment environment policy"
+    }
     Run-Remote "chmod 700 $GIT_DEPLOY_HELPER" | Out-Null
+    Run-Remote "chmod 600 $GIT_DEPLOY_ENV_HELPER" | Out-Null
     $remoteHasGit = Run-Remote "test -d $REMOTE_DIR/.git && echo YES || echo NO"
     $gitMode = "deploy"
     if ($remoteHasGit -notmatch "YES") {

@@ -1,5 +1,6 @@
 const { createMcpHandler, isLegacyRequest } = require("@modelcontextprotocol/server");
 const { MAX_MCP_REQUEST_BODY_BYTES } = require("./limits");
+const { sanitizeMcpLogLabel } = require("./log-label");
 
 function createModernMcpHandler(createMcpServer) {
   return createMcpHandler(
@@ -30,6 +31,17 @@ function copyResponseHeaders(res, webRes) {
   webRes.headers.forEach((value, key) => {
     if (key !== "content-encoding" && key !== "content-length") res.setHeader(key, value);
   });
+}
+
+function reportRouteFailure(logDebug, event, sessionId) {
+  // Exception messages and stacks can contain credentials, request data, or
+  // local paths. Keep the client response and routine logs independent of
+  // exception-controlled text; detailed diagnostics belong in a separately
+  // protected operator channel.
+  const safeSessionId = typeof sessionId === "string" && /^[A-Za-z0-9._:-]{1,128}$/.test(sessionId)
+    ? sessionId
+    : null;
+  try { logDebug(event, { error: "internal_error", sessionId: safeSessionId }); } catch {}
 }
 
 function waitForDrainOrClose(res, isDisconnected) {
@@ -86,8 +98,10 @@ function registerStreamableHttpRoutes({ app, sessionManager, createMcpServer, lo
   const modernMcpHandler = createModernMcpHandler(createMcpServer);
 
   function logSession(method, headers, body) {
-    const sessionId = headers["mcp-session-id"] || headers["Mcp-Session-Id"] || "none";
-    const methodType = body ? (typeof body === "object" ? body.method : "unknown") : "unknown";
+    const rawSessionId = headers["mcp-session-id"] || headers["Mcp-Session-Id"] || "none";
+    const rawMethod = body && typeof body === "object" ? body.method : "unknown";
+    const sessionId = sanitizeMcpLogLabel(rawSessionId, "none");
+    const methodType = sanitizeMcpLogLabel(rawMethod, "unknown");
     console.log(`[MCP ${method}] session=${sessionId} method=${methodType}`);
   }
 
@@ -140,9 +154,8 @@ function registerStreamableHttpRoutes({ app, sessionManager, createMcpServer, lo
       copyResponseHeaders(res, webRes);
       await relayResponseBody(webRes.body, res);
     } catch (e) {
-      console.error("MCP error:", e.message);
-      logDebug("MCP_POST_ERROR", { error: e.message, stack: e.stack, sessionId: req.headers["mcp-session-id"] });
-      if (!res.headersSent) res.status(500).json({ error: e.message });
+      reportRouteFailure(logDebug, "MCP_POST_ERROR", req.headers["mcp-session-id"]);
+      if (!res.headersSent) res.status(500).json({ error: "MCP request failed" });
       else res.destroy(e);
     }
   });
@@ -167,9 +180,8 @@ function registerStreamableHttpRoutes({ app, sessionManager, createMcpServer, lo
       copyResponseHeaders(res, webRes);
       await relayResponseBody(webRes.body, res);
     } catch (e) {
-      console.error("MCP GET error:", e.message);
-      logDebug("MCP_GET_ERROR", { error: e.message, stack: e.stack, sessionId: req.headers["mcp-session-id"] });
-      if (!res.headersSent) res.status(500).json({ error: e.message });
+      reportRouteFailure(logDebug, "MCP_GET_ERROR", req.headers["mcp-session-id"]);
+      if (!res.headersSent) res.status(500).json({ error: "MCP request failed" });
       else res.destroy(e);
     }
   });
@@ -198,9 +210,8 @@ function registerStreamableHttpRoutes({ app, sessionManager, createMcpServer, lo
       copyResponseHeaders(res, webRes);
       await relayResponseBody(webRes.body, res);
     } catch (e) {
-      console.error("MCP DELETE error:", e.message);
-      logDebug("MCP_DELETE_ERROR", { error: e.message, stack: e.stack, sessionId: req.headers["mcp-session-id"] });
-      if (!res.headersSent) res.status(500).json({ error: e.message });
+      reportRouteFailure(logDebug, "MCP_DELETE_ERROR", req.headers["mcp-session-id"]);
+      if (!res.headersSent) res.status(500).json({ error: "MCP request failed" });
       else res.destroy(e);
     }
   });

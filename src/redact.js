@@ -9,6 +9,7 @@
 // Tokens are matched as substrings, so short entries are limited to spellings
 // unlikely to occur inside benign key names (`auth` would match `author`).
 const SENSITIVE_KEY_RE = /(password|passwd|passphrase|pwd|secret|token|bearer|apikey|accesskey|sshkey|authorization|cookie|privatekey|credential|otp)/;
+const PEM_PRIVATE_KEY_BEGIN_LABELS = new Set(["PRIVATE KEY", "RSA PRIVATE KEY", "EC PRIVATE KEY", "DSA PRIVATE KEY", "OPENSSH PRIVATE KEY"]);
 
 /**
  * Returns true when an argument/field name denotes a credential. Pattern
@@ -50,12 +51,142 @@ function redactSensitiveKeysDeep(value, key = "") {
   return typeof value === "string" ? redactSensitive(value) : value;
 }
 
+function redactUrlCredentials(text) {
+  let output = "";
+  let copyFrom = 0;
+  let searchFrom = 0;
+  while (true) {
+    const delimiter = text.indexOf("://", searchFrom);
+    if (delimiter < 0) break;
+
+    let schemeStart = delimiter - 1;
+    while (schemeStart >= 0 && /[a-z0-9+.-]/i.test(text[schemeStart])) schemeStart--;
+    schemeStart++;
+    while (schemeStart < delimiter && !/[a-z]/i.test(text[schemeStart])) schemeStart++;
+    if (schemeStart >= delimiter) {
+      searchFrom = delimiter + 3;
+      continue;
+    }
+
+    const authorityStart = delimiter + 3;
+    let authorityEnd = authorityStart;
+    while (authorityEnd < text.length && !/[\/?#\s]/.test(text[authorityEnd])) authorityEnd++;
+    const authority = text.slice(authorityStart, authorityEnd);
+    const at = authority.indexOf("@");
+    const colon = authority.indexOf(":");
+    if (at >= 0 && colon > 0 && colon < at) {
+      output += text.slice(copyFrom, authorityStart) + "[REDACTED]@";
+      copyFrom = authorityStart + at + 1;
+      searchFrom = copyFrom;
+    } else {
+      searchFrom = delimiter + 3;
+    }
+  }
+  return copyFrom === 0 ? text : output + text.slice(copyFrom);
+}
+
+function redactJwtTokens(text) {
+  let output = "";
+  let copyFrom = 0;
+  let searchFrom = 0;
+  while (true) {
+    const start = text.indexOf("eyJ", searchFrom);
+    if (start < 0) break;
+
+    let cursor = start + 3;
+    while (cursor < text.length && /[A-Za-z0-9_-]/.test(text[cursor])) cursor++;
+    if (cursor === start + 3) {
+      searchFrom = cursor + 1;
+      continue;
+    }
+    if (cursor >= text.length) break;
+    if (text[cursor] !== ".") {
+      searchFrom = cursor + 1;
+      continue;
+    }
+
+    const payloadStart = cursor + 1;
+    if (!text.startsWith("eyJ", payloadStart)) {
+      searchFrom = cursor + 1;
+      continue;
+    }
+    cursor = payloadStart + 3;
+    while (cursor < text.length && /[A-Za-z0-9_-]/.test(text[cursor])) cursor++;
+    if (cursor === payloadStart + 3) {
+      searchFrom = cursor + 1;
+      continue;
+    }
+    if (cursor >= text.length) break;
+    if (text[cursor] !== ".") {
+      searchFrom = cursor + 1;
+      continue;
+    }
+
+    const signatureStart = cursor + 1;
+    cursor = signatureStart;
+    while (cursor < text.length && /[A-Za-z0-9_-]/.test(text[cursor])) cursor++;
+    if (cursor === signatureStart) {
+      searchFrom = signatureStart + 1;
+      continue;
+    }
+    output += text.slice(copyFrom, start) + "[REDACTED JWT]";
+    copyFrom = cursor;
+    searchFrom = cursor;
+  }
+  return copyFrom === 0 ? text : output + text.slice(copyFrom);
+}
+
+function readPemLabel(text, start) {
+  let end = start;
+  while (end < text.length && /[A-Z ]/.test(text[end])) {
+    end++;
+    if (end - start > 64) return null;
+  }
+  return end > start ? { value: text.slice(start, end), end } : null;
+}
+
+function redactPemPrivateKeys(text) {
+  const beginMarker = "-----BEGIN ";
+  const endMarker = "-----END ";
+  let output = "";
+  let copyFrom = 0;
+  let searchFrom = 0;
+  while (true) {
+    const start = text.indexOf(beginMarker, searchFrom);
+    if (start < 0) break;
+    const labelStart = start + beginMarker.length;
+    const label = readPemLabel(text, labelStart);
+    if (!label || !PEM_PRIVATE_KEY_BEGIN_LABELS.has(label.value) || !text.startsWith("-----", label.end)) {
+      searchFrom = start + 1;
+      continue;
+    }
+
+    let endSearch = label.end + 5;
+    let end = -1;
+    while (true) {
+      const candidate = text.indexOf(endMarker, endSearch);
+      if (candidate < 0) break;
+      const footerLabelStart = candidate + endMarker.length;
+      const footerLabel = readPemLabel(text, footerLabelStart);
+      if (footerLabel && footerLabel.value.endsWith("PRIVATE KEY") && text.startsWith("-----", footerLabel.end)) {
+        end = footerLabel.end + 5;
+        break;
+      }
+      endSearch = footerLabel ? footerLabel.end + 1 : footerLabelStart + 1;
+    }
+    if (end < 0) break;
+
+    output += text.slice(copyFrom, start) + "[REDACTED PRIVATE KEY]";
+    copyFrom = end;
+    searchFrom = end;
+  }
+  return copyFrom === 0 ? text : output + text.slice(copyFrom);
+}
+
 function redactSensitive(text) {
   if (typeof text !== 'string') return text;
   
-  return text
-    // SSH private keys (RSA, EC, DSA, OPENSSH)
-    .replace(/-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END [A-Z ]+PRIVATE KEY-----/g, '[REDACTED PRIVATE KEY]')
+  const redacted = redactPemPrivateKeys(text)
     
     // GitHub tokens
     .replace(/ghp_[A-Za-z0-9_]{36}/g, '[REDACTED GITHUB TOKEN]')
@@ -78,18 +209,20 @@ function redactSensitive(text) {
     
     // Bearer tokens
     .replace(/Bearer\s+[A-Za-z0-9\-._~+/]+=*/gi, 'Bearer [REDACTED]')
-    
+
+    ;
+  const withUrlCredentialsRedacted = redactUrlCredentials(redacted)
     // Database connection strings
     .replace(/(postgres|mysql|mongodb(?:\+srv)?):\/\/([^:]+):([^@]+)@/gi, '$1://$2:[REDACTED]@')
     .replace(/(postgres|mysql|mongodb(?:\+srv)?):\/\/[^\s]+/gi, '[REDACTED DATABASE URL]')
-    
+
     // Stripe keys (constructed to avoid secret scanners)
     .replace(new RegExp('sk_' + 'live_[A-Za-z0-9]{24,}', 'g'), '[REDACTED STRIPE SECRET KEY]')
     .replace(new RegExp('rk_' + 'live_[A-Za-z0-9]{24,}', 'g'), '[REDACTED STRIPE RESTRICTED KEY]')
     .replace(new RegExp('pk_' + 'live_[A-Za-z0-9]{24,}', 'g'), '[REDACTED STRIPE PUBLISHABLE KEY]')
-    
-    // JWT tokens
-    .replace(/eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '[REDACTED JWT]');
+
+    ;
+  return redactJwtTokens(withUrlCredentialsRedacted);
 }
 
 module.exports = { redactSensitive, isSensitiveKey, redactSensitiveKeysDeep };

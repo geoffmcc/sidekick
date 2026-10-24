@@ -21,6 +21,8 @@ require("../src/db").runPendingMigrations();
 const bundled = require("../src/packs/bundled");
 const lifecycle = require("../src/packs/lifecycle");
 const { callInternalTool } = require("../src/tools/dispatcher");
+const authorizedContext = require("./helpers/authorized-context").createOwnerContext({ source: "internal" });
+const call = (name, args) => callInternalTool(name, args, authorizedContext);
 
 function json(result) {
   assert.ok(result && Array.isArray(result.content), "dispatcher result must be structured");
@@ -53,12 +55,12 @@ function json(result) {
     pending.splice(0, pending.length, ...deferred);
   }
 
-  const catalog = json(await callInternalTool("capability", { action: "catalog", kind: "pack", limit: 500 }));
+  const catalog = json(await call("capability", { action: "catalog", kind: "pack", limit: 500 }));
   assert.strictEqual(catalog.ok, true);
   assert.strictEqual(catalog.total, installedNames.size);
   assert.deepStrictEqual(new Set(catalog.entries.map(entry => entry.name)), new Set(candidates.map(pack => pack.name)));
   for (const candidate of candidates) {
-    const detail = json(await callInternalTool("capability", { action: "show", name: candidate.name }));
+    const detail = json(await call("capability", { action: "show", name: candidate.name }));
     assert.strictEqual(detail.ok, true, `${candidate.name}: canonical detail dispatch`);
     assert.strictEqual(detail.pack.name, candidate.name);
     assert.ok(detail.pack.maturity && detail.pack.maturity.level, `${candidate.name}: maturity projection`);

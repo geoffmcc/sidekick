@@ -53,7 +53,7 @@ The worker agent in `src/compute/worker-agent.js` can be configured with:
 The worker entry point in this repository is:
 
 ```bash
-node src/compute/worker-agent.js enroll --server http://<sidekick-host>:4097 --token <enrollment-token>
+node src/compute/worker-agent.js enroll --server https://<sidekick-host>:4097 --token <enrollment-token>
 ```
 
 `package.json` publishes a `sidekick-compute-worker` `bin`, and
@@ -63,7 +63,7 @@ launchd, winsw) live under `packaging/compute-worker/` and register the worker a
 a managed OS service:
 
 ```bash
-sidekick-compute-worker enroll --server http://<sidekick-host>:4097 --token <enrollment-token> --service
+sidekick-compute-worker enroll --server https://<sidekick-host>:4097 --token <enrollment-token> --service
 ```
 
 The agent validates persisted credentials, writes them atomically, and tightens POSIX file permissions where the filesystem supports it (and applies NTFS ACLs on Windows). On Windows-mounted WSL paths, the mount may report broader mode bits even when Node writes with `0600`.

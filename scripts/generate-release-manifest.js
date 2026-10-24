@@ -16,10 +16,38 @@ function sha256(file) {
 
 function safeRelative(value) {
   const normalized = String(value).replace(/\\/g, "/");
-  if (!normalized || normalized.startsWith("/") || normalized.split("/").includes("..")) {
+  const segments = normalized.split("/");
+  if (!normalized || normalized.startsWith("/") || /^[a-z]:/i.test(normalized) || segments.some(segment => !segment || segment === "." || segment === "..")) {
     throw new Error(`invalid checksum path: ${value}`);
   }
   return normalized;
+}
+
+function resolveContainedPath(root, relative, { label, regularFile = false } = {}) {
+  const rootReal = fs.realpathSync(root);
+  let current = rootReal;
+  for (const segment of relative.split("/")) {
+    current = path.join(current, segment);
+    let stat;
+    try { stat = fs.lstatSync(current); } catch {
+      throw new Error(`${label} is missing: ${relative}`);
+    }
+    if (stat.isSymbolicLink()) throw new Error(`${label} contains a symbolic link: ${relative}`);
+  }
+  const resolved = fs.realpathSync(current);
+  if (!resolved.startsWith(`${rootReal}${path.sep}`) || (regularFile && !fs.statSync(resolved).isFile())) {
+    throw new Error(`${label} is outside its root or is not a regular file: ${relative}`);
+  }
+  return resolved;
+}
+
+function rejectSymlinksInTree(directory, relativeRoot) {
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const relative = `${relativeRoot}/${entry.name}`;
+    if (entry.isSymbolicLink()) throw new Error(`package install surface contains a symbolic link: ${relative}`);
+    if (entry.isDirectory()) rejectSymlinksInTree(path.join(directory, entry.name), relative);
+    else if (!entry.isFile()) throw new Error(`package install surface contains a non-regular entry: ${relative}`);
+  }
 }
 
 function readChecksums(workerRoot) {
@@ -32,10 +60,7 @@ function readChecksums(workerRoot) {
     const match = line.match(/^([0-9a-f]{64})  (.+)$/);
     if (!match) throw new Error(`invalid worker checksum entry: ${line.slice(0, 120)}`);
     const relative = safeRelative(match[2]);
-    const absolute = path.resolve(workerRoot, relative);
-    if (!absolute.startsWith(`${path.resolve(workerRoot)}${path.sep}`) || !fs.statSync(absolute).isFile()) {
-      throw new Error(`worker checksum file is missing: ${relative}`);
-    }
+    const absolute = resolveContainedPath(workerRoot, relative, { label: "worker checksum file", regularFile: true });
     const size = fs.statSync(absolute).size;
     totalBytes += size;
     if (totalBytes > MAX_BYTES) throw new Error(`worker package exceeds ${MAX_BYTES} bytes`);
@@ -50,10 +75,8 @@ function readInstallSurface(repoRoot, packageJson) {
   const entries = [...(packageJson.files || []), ...Object.values(packageJson.bin || {})];
   const paths = [...new Set(entries.map(safeRelative))].sort();
   for (const relative of paths) {
-    const absolute = path.resolve(root, relative);
-    if (!absolute.startsWith(`${root}${path.sep}`) || !fs.existsSync(absolute)) {
-      throw new Error(`package install surface is missing: ${relative}`);
-    }
+    const resolved = resolveContainedPath(root, relative, { label: "package install surface" });
+    if (fs.statSync(resolved).isDirectory()) rejectSymlinksInTree(resolved, relative);
   }
   return {
     files: (packageJson.files || []).map(safeRelative),

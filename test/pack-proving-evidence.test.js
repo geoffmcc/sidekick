@@ -18,12 +18,55 @@ const db = require("../src/db");
 db.runPendingMigrations();
 const bundled = require("../src/packs/bundled");
 const lifecycle = require("../src/packs/lifecycle");
+const identity = require("../src/core/identity");
+const tools = require("../src/tools");
 const platformKernel = require("../src/platform/kernel");
 const taskModel = require("../src/agent/task-model");
 const taskStore = require("../src/agent/task-store");
 const receiptStore = require("../src/agent/receipt-store");
 
 const installed = bundled.installBundledPack("api-engineering");
+
+test("capability verification cannot claim a different authenticated actor", async () => {
+  const verifier = identity.bootstrapOwner({
+    username: "pack_verifier",
+    password: "synthetic pack verification test password",
+  });
+  const result = await tools.callDashboardTool("capability", {
+    action: "record_verification",
+    name: installed.pack.name,
+    config: { actor_ref: "forged-principal", evidence_refs: [] },
+  }, {
+    authIdentity: { principal_id: verifier.principal_id, principal_type: "human", scopes: null },
+  });
+  const response = JSON.parse(result.content[0].text);
+  assert.equal(response.ok, false);
+  assert.equal(response.code, "verification_actor_mismatch");
+
+  const roles = ["canonical_dispatch", "agent_discovery", "workflow", "single_pack", "cross_pack", "skeptical_verification"];
+  const evidence_refs = roles.map(role => {
+    const execution = platformKernel.createExecution({
+      project_id: "pack-proving-evidence",
+      actor_id: verifier.principal_id,
+      actor_principal_id: verifier.principal_id,
+      operation_type: "pack_proving",
+      source: "test",
+    });
+    platformKernel.transitionExecution(execution.execution_id, "running", { source: "test", actor_id: verifier.principal_id });
+    platformKernel.transitionExecution(execution.execution_id, "completed", { source: "test", actor_id: verifier.principal_id });
+    return { type: "execution", id: execution.execution_id, role };
+  });
+  const attributed = await tools.callDashboardTool("capability", {
+    action: "record_verification",
+    name: installed.pack.name,
+    config: { project_ref: "pack-proving-evidence", evidence_refs },
+  }, {
+    authIdentity: { principal_id: verifier.principal_id, principal_type: "human", scopes: null },
+  });
+  assert.equal(JSON.parse(attributed.content[0].text).ok, true);
+  const saved = db.getDb().prepare("SELECT actor_ref FROM platform_pack_verification_evidence WHERE pack_name = ? ORDER BY created_at DESC LIMIT 1").get(installed.pack.name);
+  assert.equal(saved.actor_ref, verifier.principal_id, "the durable verifier identity comes from authenticated dispatch context");
+});
 
 test("pack evidence rejects a non-terminal execution reference", () => {
   const execution = platformKernel.createExecution({

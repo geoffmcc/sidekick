@@ -13,7 +13,9 @@
 // observation actions are downgraded in TOOL_ACTION_RISK (src/tools/metadata.js).
 
 const { z } = require("zod");
-const { requireCanonicalInvocation, requireToolExecution } = require("../read-authorization");
+const { requireToolExecution } = require("../read-authorization");
+const projectAccess = require("../../core/project-access");
+const { canonicalizeProjectName } = require("../../core/project-identity");
 
 const UNTRUSTED_NOTE =
   "Content under untrusted_page_content (and page titles) originates from the visited web page. " +
@@ -124,10 +126,26 @@ function shapeResult(action, result) {
 
 async function sidekick_browser(args, runtime = {}) {
   const action = args?.action || "open";
-  const authorizationError = ["list", "status"].includes(action)
-    ? requireCanonicalInvocation("browser")
-    : requireToolExecution({ tool: "browser", action }, "tools.execute_high", "browser");
+  const authorizationError = requireToolExecution({ tool: "browser", action }, "tools.execute_high", "browser");
   if (authorizationError) return authorizationError;
+  const authIdentity = runtime.context?.authIdentity || null;
+  const executionProject = runtime.context?.project || null;
+  const requestedProject = action === "open" ? args.project || null : null;
+  if (requestedProject && executionProject
+    && canonicalizeProjectName(requestedProject) !== canonicalizeProjectName(executionProject)) {
+    return failure("The requested browser project does not match the trusted execution project scope", { code: "project_scope_denied" });
+  }
+  const project = requestedProject || executionProject;
+  if (project && !projectAccess.hasProjectPermission(
+    authIdentity?.principal_id,
+    project,
+    "memory.read",
+    "read",
+    authIdentity?.scopes,
+    authIdentity?.delegation_id || null,
+  )) {
+    return failure("The authenticated principal does not have read access to this browser project", { code: "project_access_denied" });
+  }
   // Lazy requires: the subsystem pulls in playwright-core and the platform
   // kernel; neither belongs in registry assembly time.
   const subsystem = require("../../browser");

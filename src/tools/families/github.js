@@ -44,7 +44,7 @@ function readGithubResponseText(response, maxBytes = MAX_GITHUB_RESPONSE_BYTES) 
   });
 }
 const { z } = require("zod");
-const { redactSensitive } = require("../../redact");
+const { redactSensitive, redactSensitiveKeysDeep } = require("../../redact");
 const { resolveOutboundUrl } = require("../../security/outbound-url");
 const { requireToolExecution, requireCanonicalInvocation } = require("../read-authorization");
 const { readSecret } = require("../../core/runtime-secrets");
@@ -233,9 +233,20 @@ function noteGithubResponse(httpStatus) {
 }
 
 function redactGithubError(value, token) {
-  let text = typeof value === "string" ? value : JSON.stringify(value);
+  let text = typeof value === "string" ? value : JSON.stringify(redactSensitiveKeysDeep(value));
+  if (typeof text !== "string") text = String(text ?? "");
   if (token) text = text.split(token).join("[REDACTED]");
   return redactSensitive(text);
+}
+
+function redactGithubResult(result, token) {
+  if (!result || !Array.isArray(result.content)) return result;
+  return {
+    ...result,
+    content: result.content.map(item => item?.type === "text"
+      ? { ...item, text: redactGithubError(item.text, token) }
+      : item),
+  };
 }
 
 async function githubRequest(token, method, endpoint, body) {
@@ -526,7 +537,7 @@ async function sidekick_ci_status(args = {}) {
     const resolvedSha = checks.items.find(run => run.head_sha)?.head_sha || legacy.response?.data?.sha || ref;
     const result = buildCiStatusResult(args.repo, requested, resolvedSha, checks.items, legacy.items);
     const text = format === "json" ? JSON.stringify(result, null, 2) : formatCiStatusText(result);
-    return { content: [{ type: "text", text }] };
+    return { content: [{ type: "text", text: redactGithubError(text, token) }] };
   } catch (e) {
     return { content: [{ type: "text", text: redactGithubError(e.message, token) }], isError: true };
   }
@@ -601,7 +612,7 @@ async function sidekick_github({ action, repo, args: extraArgs }) {
     pr_list: async () => {
       const state = parsedArgs.state || "open";
       const res = await ghRequest("GET", `/repos/${repo}/pulls?state=${encodeURIComponent(state)}`);
-      if (res.status !== 200) return { content: [{ type: "text", text: JSON.stringify(res.data) }], isError: true };
+      if (res.status !== 200) return { content: [{ type: "text", text: redactGithubError(res.data, token) }], isError: true };
       const prs = res.data.map(pr => `#${pr.number} ${pr.title} (${pr.user.login}) - ${pr.html_url}`);
       return { content: [{ type: "text", text: prs.join("\n") || "No open PRs" }] };
     },
@@ -609,14 +620,14 @@ async function sidekick_github({ action, repo, args: extraArgs }) {
       const { title, head, base, body } = parsedArgs;
       if (!title || !head) return { content: [{ type: "text", text: "title and head required" }], isError: true };
       const res = await ghRequest("POST", `/repos/${repo}/pulls`, { title, head, base: base || "main", body: body || "" });
-      if (res.status !== 201) return { content: [{ type: "text", text: JSON.stringify(res.data) }], isError: true };
+      if (res.status !== 201) return { content: [{ type: "text", text: redactGithubError(res.data, token) }], isError: true };
       return { content: [{ type: "text", text: `Created PR #${res.data.number}: ${res.data.html_url}` }] };
     },
     pr_get: async () => {
       const num = getGithubArg(parsedArgs, ["number", "pr", "pull", "pull_number"]);
       if (!isGithubNumericId(num)) return { content: [{ type: "text", text: "Valid PR number required" }], isError: true };
       const res = await ghRequest("GET", `/repos/${repo}/pulls/${num}`);
-      if (res.status !== 200) return { content: [{ type: "text", text: JSON.stringify(res.data) }], isError: true };
+      if (res.status !== 200) return { content: [{ type: "text", text: redactGithubError(res.data, token) }], isError: true };
       const pr = res.data;
       return { content: [{ type: "text", text: `#${pr.number} ${pr.title}\nState: ${pr.state}\nAuthor: ${pr.user.login}\nURL: ${pr.html_url}\n${pr.body || ""}` }] };
     },
@@ -625,12 +636,12 @@ async function sidekick_github({ action, repo, args: extraArgs }) {
       if (!isGithubNumericId(num)) return { content: [{ type: "text", text: "Valid PR number required" }], isError: true };
       const method = parsedArgs.method || parsedArgs.merge_method || "squash";
       const res = await ghRequest("PUT", `/repos/${repo}/pulls/${num}/merge`, { merge_method: method });
-      if (res.status !== 200) return { content: [{ type: "text", text: JSON.stringify(res.data) }], isError: true };
+      if (res.status !== 200) return { content: [{ type: "text", text: redactGithubError(res.data, token) }], isError: true };
       return { content: [{ type: "text", text: `Merged PR #${num}` }] };
     },
     issue_list: async () => {
       const res = await ghRequest("GET", `/repos/${repo}/issues?state=open`);
-      if (res.status !== 200) return { content: [{ type: "text", text: JSON.stringify(res.data) }], isError: true };
+      if (res.status !== 200) return { content: [{ type: "text", text: redactGithubError(res.data, token) }], isError: true };
       const issues = res.data.filter(i => !i.pull_request).map(i => `#${i.number} ${i.title} (${i.user.login}) - ${i.html_url}`);
       return { content: [{ type: "text", text: issues.join("\n") || "No open issues" }] };
     },
@@ -638,21 +649,21 @@ async function sidekick_github({ action, repo, args: extraArgs }) {
       const { title, body } = parsedArgs;
       if (!title) return { content: [{ type: "text", text: "title required" }], isError: true };
       const res = await ghRequest("POST", `/repos/${repo}/issues`, { title, body: body || "" });
-      if (res.status !== 201) return { content: [{ type: "text", text: JSON.stringify(res.data) }], isError: true };
+      if (res.status !== 201) return { content: [{ type: "text", text: redactGithubError(res.data, token) }], isError: true };
       return { content: [{ type: "text", text: `Created issue #${res.data.number}: ${res.data.html_url}` }] };
     },
     issue_close: async () => {
       const num = getGithubArg(parsedArgs, ["number", "issue", "issue_number"]);
       if (!isGithubNumericId(num)) return { content: [{ type: "text", text: "Valid issue number required" }], isError: true };
       const res = await ghRequest("PATCH", `/repos/${repo}/issues/${num}`, { state: "closed" });
-      if (res.status !== 200) return { content: [{ type: "text", text: JSON.stringify(res.data) }], isError: true };
+      if (res.status !== 200) return { content: [{ type: "text", text: redactGithubError(res.data, token) }], isError: true };
       return { content: [{ type: "text", text: `Closed issue #${num}` }] };
     },
     commit_status: async () => {
       const sha = getGithubArg(parsedArgs, ["sha", "ref", "commit", "commit_sha"]);
       if (!isGithubCommitId(sha)) return { content: [{ type: "text", text: "Valid commit SHA required" }], isError: true };
       const res = await ghRequest("GET", `/repos/${repo}/commits/${sha}/status`);
-      if (res.status !== 200) return { content: [{ type: "text", text: JSON.stringify(res.data) }], isError: true };
+      if (res.status !== 200) return { content: [{ type: "text", text: redactGithubError(res.data, token) }], isError: true };
       const statuses = res.data.statuses.map(s => `${s.context}: ${s.state} - ${s.description || ""}`);
       return { content: [{ type: "text", text: `Overall: ${res.data.state}\n${statuses.join("\n") || "No statuses"}` }] };
     },
@@ -660,12 +671,12 @@ async function sidekick_github({ action, repo, args: extraArgs }) {
       const { tag_name, name, body, draft, prerelease } = parsedArgs;
       if (!tag_name) return { content: [{ type: "text", text: "tag_name required" }], isError: true };
       const res = await ghRequest("POST", `/repos/${repo}/releases`, { tag_name, name: name || tag_name, body: body || "", draft: draft || false, prerelease: prerelease || false });
-      if (res.status !== 201) return { content: [{ type: "text", text: JSON.stringify(res.data) }], isError: true };
+      if (res.status !== 201) return { content: [{ type: "text", text: redactGithubError(res.data, token) }], isError: true };
       return { content: [{ type: "text", text: `Created release ${res.data.name}: ${res.data.html_url}` }] };
     },
     repo_info: async () => {
       const res = await ghRequest("GET", `/repos/${repo}`);
-      if (res.status !== 200) return { content: [{ type: "text", text: JSON.stringify(res.data) }], isError: true };
+      if (res.status !== 200) return { content: [{ type: "text", text: redactGithubError(res.data, token) }], isError: true };
       const r = res.data;
       return { content: [{ type: "text", text: `${r.full_name}\nStars: ${r.stargazers_count} | Forks: ${r.forks_count} | Issues: ${r.open_issues_count}\nDefault branch: ${r.default_branch}\n${r.description || ""}` }] };
     }
@@ -675,7 +686,7 @@ async function sidekick_github({ action, repo, args: extraArgs }) {
     return { content: [{ type: "text", text: "Invalid action. Allowed: " + Object.keys(actions).join(", ") }], isError: true };
   }
 
-  return actions[action]();
+  return redactGithubResult(await actions[action](), token);
 }
 
 const SCHEMAS = {
@@ -735,6 +746,8 @@ module.exports = {
   githubCredentialMissing,
   githubHealthDecision,
   noteGithubResponse,
+  redactGithubError,
+  redactGithubResult,
   readGithubResponseText,
   MAX_GITHUB_RESPONSE_BYTES,
   MAX_GITHUB_PAGES,

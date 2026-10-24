@@ -24,8 +24,21 @@
 const { spawn } = require("child_process");
 const { EventEmitter } = require("events");
 const crypto = require("crypto");
+const path = require("path");
 
 const { PROTOCOL_VERSION, HELPER_VERSION } = require("./openvino-config");
+
+function killWindowsProcessTree(pid, { spawnSyncImpl, systemRoot = process.env.SystemRoot || process.env.SYSTEMROOT || "C:\\Windows" } = {}) {
+  const run = spawnSyncImpl || require("child_process").spawnSync;
+  const executable = path.win32.join(systemRoot, "System32", "taskkill.exe");
+  return run(executable, ["/T", "/F", "/PID", String(pid)], {
+    shell: false,
+    timeout: 5000,
+    // taskkill is addressed by absolute path; it needs no inherited PATH or
+    // Sidekick service environment. Keep only the Windows system root.
+    env: { SYSTEMROOT: systemRoot },
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -502,11 +515,7 @@ class HelperProcess extends EventEmitter {
     try {
       if (process.platform === "win32") {
         // On Windows, use taskkill /T /F to kill the entire process tree.
-        const { spawnSync } = require("child_process");
-        spawnSync("taskkill", ["/T", "/F", "/PID", String(this.child.pid)], {
-          shell: false,
-          timeout: 5000,
-        });
+        killWindowsProcessTree(this.child.pid);
       } else {
         this.child.kill("SIGKILL");
       }
@@ -758,4 +767,5 @@ module.exports = {
   HelperProcess,
   HelperManager,
   HELPER_STATES,
+  killWindowsProcessTree,
 };

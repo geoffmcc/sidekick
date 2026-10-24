@@ -115,7 +115,7 @@ async function main() {
     assert.strictEqual((await request('GET', '/compute/unprotected-test')).status, 401, 'unknown compute route fails closed without auth');
     assert.strictEqual((await request('POST', '/compute/enrollment/exchange', { token: 'x' }, { 'Content-Type': 'text/plain' })).status, 415, 'compute protocol rejects non-json content type');
 
-    const tokenRes = await request('POST', '/compute/enrollment/tokens', { displayName: 'http-worker', expiresInMs: 600000, maxConcurrentJobs: 1 }, admin);
+    const tokenRes = await request('POST', '/compute/enrollment/tokens', { displayName: 'http-worker', allowedDataClassifications: ['public', 'internal', 'private'], expiresInMs: 600000, maxConcurrentJobs: 1 }, admin);
     assert.strictEqual(tokenRes.status, 200, 'admin can create enrollment token');
     assert.ok(tokenRes.data.token && tokenRes.data.token.startsWith('enroll_'), 'token returned once');
 
@@ -138,7 +138,7 @@ async function main() {
     let activeCredential = credential;
     let workerAuth = { Authorization: `Bearer ${workerId}:${activeCredential}` };
 
-    const tokenResB = await request('POST', '/compute/enrollment/tokens', { displayName: 'http-worker-b', expiresInMs: 600000, maxConcurrentJobs: 1 }, admin);
+    const tokenResB = await request('POST', '/compute/enrollment/tokens', { displayName: 'http-worker-b', allowedDataClassifications: ['public', 'internal', 'private'], expiresInMs: 600000, maxConcurrentJobs: 1 }, admin);
     const enrollResB = await request('POST', '/compute/enrollment/exchange', {
       token: tokenResB.data.token,
       nodeId: 'proto-node-2',
@@ -169,8 +169,11 @@ async function main() {
     assert.strictEqual(reuseRes.status, 400, 'enrollment token reuse rejected');
     const invalidTokenRes = await request('POST', '/compute/enrollment/exchange', { token: 'enroll_invalid', nodeId: 'proto-node-invalid', displayName: 'Invalid', platform: process.platform });
     assert.strictEqual(invalidTokenRes.status, 400, 'invalid enrollment token rejected');
-    const expiredToken = await request('POST', '/compute/enrollment/tokens', { displayName: 'expired-worker', expiresInMs: -1 }, admin);
-    assert.strictEqual(expiredToken.status, 200, 'expired token created for negative-lifetime test');
+    const invalidLifetime = await request('POST', '/compute/enrollment/tokens', { displayName: 'invalid-lifetime-worker', expiresInMs: -1 }, admin);
+    assert.strictEqual(invalidLifetime.status, 400, 'invalid enrollment lifetime rejected');
+    const expiredToken = await request('POST', '/compute/enrollment/tokens', { displayName: 'expired-worker', expiresInMs: 60000 }, admin);
+    assert.strictEqual(expiredToken.status, 200, 'valid enrollment token created');
+    require('../src/db').getDb().prepare('UPDATE compute_enrollment_tokens SET expires_at = ? WHERE token_id = ?').run(new Date(Date.now() - 1000).toISOString(), expiredToken.data.tokenId);
     const expiredTokenRes = await request('POST', '/compute/enrollment/exchange', { token: expiredToken.data.token, nodeId: 'proto-node-expired', displayName: 'Expired', platform: process.platform });
     assert.strictEqual(expiredTokenRes.status, 400, 'expired enrollment token rejected');
     assert.strictEqual((await request('POST', '/compute/worker/heartbeat', { currentJobs: 0 }, { Authorization: `Bearer ${workerId}:bad` })).status, 401, 'bad worker credential rejected');
@@ -432,7 +435,7 @@ async function main() {
     assert.strictEqual(cancelRetry.status, 200, 'admin cancellation endpoint works');
     assert.strictEqual(cancelRetry.data.job.status, 'cancelled', 'cancelled job remains terminal');
 
-    const agentToken = await request('POST', '/compute/enrollment/tokens', { displayName: 'agent-worker', expiresInMs: 600000 }, admin);
+    const agentToken = await request('POST', '/compute/enrollment/tokens', { displayName: 'agent-worker', allowedDataClassifications: ['public', 'internal', 'private'], expiresInMs: 600000 }, admin);
     assert.strictEqual(agentToken.status, 200, 'admin can create agent enrollment token');
     const agentConfig = path.join(TEST_DIR, 'agent-worker-credential.json');
     fs.writeFileSync(path.join(SECRET_DIR, 'sidekick_enroll_token'), agentToken.data.token, { mode: 0o600 });

@@ -54,6 +54,12 @@ a loopback listener intentionally exposed through a reverse proxy. Configure
 the token before exposing that proxy; the local-only setup path remains
 available for direct loopback administration.
 
+When `SIDEKICK_DASHBOARD_TRUST_PROXY=true`, Dashboard trusts forwarded headers
+only from loopback peers. For a reverse proxy on another host or container
+address, set `SIDEKICK_DASHBOARD_TRUST_PROXY` to a comma-separated list of that
+proxy's IP addresses or CIDRs. Do not list the public client network as trusted;
+forwarded headers from untrusted peers are ignored.
+
 Owner recovery uses a short-lived, single-use token generated under local host
 control. Recovery tokens are stored only as hashes, expire quickly, invalidate
 Owner sessions, and cannot be replayed through the dashboard or MCP API.

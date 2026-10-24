@@ -78,6 +78,10 @@ function createExecutionContext(input = {}) {
     allowNodeExecution: input.allowNodeExecution !== false && parent?.allowNodeExecution !== false,
     descriptorSetHash: input.descriptorSetHash || input.descriptor_set_hash || parent?.descriptorSetHash || null,
     signal: input.signal || parent?.signal || null,
+    // A remote execution node may further restrict its authorized workspace
+    // mount. Read-only is monotonic across nested dispatch so a child tool
+    // cannot turn a restricted parent workspace writable.
+    workspaceReadOnly: input.workspaceReadOnly === true || parent?.workspaceReadOnly === true,
     // Internal dispatcher telemetry. It is intentionally not included in
     // persisted provenance and each dispatch supplies its own tracker.
     latencyTracker: input.latencyTracker || parent?.latencyTracker || null,
