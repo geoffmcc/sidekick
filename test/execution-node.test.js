@@ -55,7 +55,7 @@ assert.strictEqual(isolationMissing.eligible, false, "legacy nodes without an is
 assert.ok(isolationMissing.reasons.includes("isolation_unavailable:bubblewrap"));
 const isolationReady = placement.checkEligibility(shellExecutionDescriptor, {
   nodeId: "node_sandbox", platform: "linux", protocolVersion: "1", workspaces: ["security-research"], authorized: true, healthy: true,
-  shellIsolation: { backend: "bubblewrap", available: true, code: null },
+  shellIsolation: { backend: "bubblewrap", configured: true, code: null },
 }, { requiredIsolation: "bubblewrap" });
 assert.strictEqual(isolationReady.eligible, true);
 const isolationUnneeded = placement.checkEligibility(descriptor, {

@@ -106,14 +106,14 @@ function binaries() {
   return names.filter(name => commandOnPath(name));
 }
 function shellIsolationStatus(platform = process.platform) {
-  if (platform !== "linux") return { backend: "bubblewrap", available: false, code: "unsupported_platform" };
+  if (platform !== "linux") return { backend: "bubblewrap", configured: false, code: "unsupported_platform" };
   try {
     resolveBubblewrap();
     resolvePrlimit();
-    return { backend: "bubblewrap", available: true, code: null };
+    return { backend: "bubblewrap", configured: true, code: null };
   } catch (error) {
     const code = /^[a-z0-9_]{1,64}$/.test(String(error?.code || "")) ? error.code : "isolation_unavailable";
-    return { backend: "bubblewrap", available: false, code };
+    return { backend: "bubblewrap", configured: false, code };
   }
 }
 function capabilities() { return { nodeId: nodeId(), executionHost: os.hostname(), nodeVersion: process.version, osType: os.type(), osRelease: os.release(), architecture: os.arch(), platform: process.platform, descriptorSetHash: descriptorSetHash(), binaries: binaries(), packs: Array.isArray(nodeConfig.packs) ? nodeConfig.packs.slice(0, 16) : [], workspaces: workspace ? [{ name: workspace.name, root: workspace.root, permissions: workspace.permissions, limits: workspace.limits }] : [], networkScopes: networkScopes(), shellIsolation: shellIsolationStatus(), browser: false, privilege: false, healthy: true }; }

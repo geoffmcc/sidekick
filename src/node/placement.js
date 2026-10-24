@@ -36,8 +36,8 @@ function normalizeNodeCapabilities(capabilities = {}) {
     workspaceRoots: workspaceEntries.filter(item => item && typeof item === "object" && item.root).map(item => ({ name: String(item.name || ""), root: String(item.root), permissions: item.permissions || {} })),
     networkScopes: new Set(Array.isArray(capabilities.networkScopes) ? capabilities.networkScopes.map(String) : []),
     shellIsolation: capabilities.shellIsolation && typeof capabilities.shellIsolation === "object"
-      ? { backend: String(capabilities.shellIsolation.backend || ""), available: capabilities.shellIsolation.available === true }
-      : { backend: "", available: false },
+      ? { backend: String(capabilities.shellIsolation.backend || ""), configured: capabilities.shellIsolation.configured === true }
+      : { backend: "", configured: false },
     browser: capabilities.browser === true,
     privilege: capabilities.privilege === true,
     healthy: capabilities.healthy !== false,
@@ -65,7 +65,7 @@ function checkEligibility(descriptor, capabilities, { descriptorSetHash, protoco
   if (!node.healthy) reasons.push("node_unhealthy");
   if (node.protocolVersion !== String(protocolVersion)) reasons.push("protocol_mismatch");
   if (descriptorSetHash && node.descriptorSetHash !== descriptorSetHash) reasons.push("descriptor_set_mismatch");
-  if (requiredIsolation && (requiredIsolation !== "bubblewrap" || node.shellIsolation.backend !== requiredIsolation || !node.shellIsolation.available)) reasons.push(`isolation_unavailable:${requiredIsolation}`);
+  if (requiredIsolation && (requiredIsolation !== "bubblewrap" || node.shellIsolation.backend !== requiredIsolation || !node.shellIsolation.configured)) reasons.push(`isolation_unavailable:${requiredIsolation}`);
   const requirements = placement?.requirements || {};
   if (requirements.os?.length && !requirements.os.includes(node.platform)) reasons.push("operating_system_unsupported");
   for (const binary of requirements.binaries || []) if (!node.binaries.has(binary)) reasons.push(`binary_missing:${binary}`);

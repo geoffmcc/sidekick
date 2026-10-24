@@ -11,14 +11,14 @@ const { ownedTempRoot, withEnv } = require("./helpers/isolated");
 test("execution-node shell isolation capability is explicit and does not disclose host paths", () => {
   assert.deepEqual(shellIsolationStatus("win32"), {
     backend: "bubblewrap",
-    available: false,
+    configured: false,
     code: "unsupported_platform",
   });
   const status = shellIsolationStatus();
   assert.equal(status.backend, "bubblewrap");
-  assert.equal(typeof status.available, "boolean");
-  assert.equal(status.available ? status.code === null : typeof status.code === "string", true);
-  assert.deepEqual(Object.keys(status).sort(), ["available", "backend", "code"]);
+  assert.equal(typeof status.configured, "boolean");
+  assert.equal(status.configured ? status.code === null : typeof status.code === "string", true);
+  assert.deepEqual(Object.keys(status).sort(), ["backend", "code", "configured"]);
   assert.doesNotMatch(JSON.stringify(status), /[A-Za-z]:\\|\/usr\/|\/home\//, "isolation diagnostics must not reveal binary or workspace paths");
 });
 
