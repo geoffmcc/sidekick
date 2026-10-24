@@ -59,6 +59,11 @@ test("sandbox applies an explicit per-process address-space ceiling", () => {
   assert.ok(args.includes(memoryLimit), "prlimit must cap soft and hard address-space limits");
   assert.equal(executor.COMMAND_LIMITS.addressSpaceBytes, 8 * 1024 * 1024 * 1024);
   assert.throws(() => executor.buildPrlimitArgs(""), error => error.code === "command_invalid");
+
+  const invocation = executor.composeBubblewrapArgs({ command: "true", canonicalWorkspace: null, workspaceFd: null, executable: "/trusted/bwrap" });
+  const prlimitIndex = invocation.args.indexOf("/usr/bin/prlimit");
+  assert.notEqual(prlimitIndex, -1, "Bubblewrap must invoke the trusted resource limiter");
+  assert.ok(invocation.args.slice(prlimitIndex + 1).includes(memoryLimit), "the actual sandbox invocation must carry the address-space limit");
 });
 
 test("missing Linux isolation backend fails closed", () => {

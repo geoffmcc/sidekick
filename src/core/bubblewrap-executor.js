@@ -364,6 +364,7 @@ module.exports = Object.freeze({
   MAX_OUTPUT_BUFFER_BYTES,
   COMMAND_LIMITS,
   buildPrlimitArgs,
+  composeBubblewrapArgs,
   normalizeOutputBufferLimit,
   hasProtectedAncestors,
   resolveBubblewrap,
