@@ -127,6 +127,17 @@ governed secret store only for the operation that needs them.
 
 This is a guardrail, not a full sandbox. It will not detect every destructive command. Avoid granting Sidekick broader sudo access than necessary.
 
+## Retrieved content and agent authority
+
+Retrieved memories, handoffs, repository search results, tool output, and other
+context are untrusted reference data. The Agent labels the assembled context as
+untrusted and does not copy stored provenance trust claims into the model-facing
+projection. This reduces trust confusion but does not prevent a model from
+being influenced by malicious text. Tool execution therefore remains subject
+to current dispatcher authorization, source policy, and approval checks; context
+text cannot grant permissions or approvals. Continue to treat prompt-injection
+resistance as a residual risk rather than a model guarantee.
+
 ## Tool permission policy
 
 Sidekick now supports a config-driven tool policy. Fresh installations default

@@ -625,3 +625,13 @@ case claims a synthetic, ready handoff through the MCP dispatcher, confirms the
 authenticated response contains the one-time token, confirms tool logs do not,
 and confirms an identityless retry receives no token and does not replace the
 active claim. The fixture uses a disposable Git repository and SQLite database.
+
+### Retrieved context trust-label boundary (2026-10-24)
+
+`test/evidence-projector.test.js` supplies a synthetic retrieved entry whose
+provenance claims `SYSTEM-TRUSTED` and verifies the model-facing projection
+omits both the claim and any `Trust:` label. Provenance remains available to
+evidence/audit paths. This is a prompt-boundary hardening regression, not proof
+that arbitrary malicious content cannot influence a model or that authorization
+can be inferred from model behavior; execution authority remains a dispatcher
+responsibility.

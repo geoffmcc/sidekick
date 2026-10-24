@@ -258,3 +258,19 @@ session resume. Agent task attachment, restart recovery, and automatic
 continuity checkpoints now recheck the Agent filesystem path policy before
 reading or persisting repository state. Direct database-store callers remain
 under review before this finding can be closed platform-wide.
+
+### Retrieved context trust-label hardening (2026-10-24)
+
+Model-facing context projection previously copied an arbitrary
+`provenance.trust` value into a `Trust:` label. This was a trust-confusion risk,
+not a demonstrated authorization bypass: the dispatcher independently checks
+the current principal, permission, policy, and approval before tool execution.
+The projection now omits trust metadata and uniformly presents retrieved
+summaries and content inside the caller's untrusted-context boundary. Evidence
+and audit manifests retain their provenance outside this model-facing label.
+
+Validation: `test/evidence-projector.test.js` supplies synthetic provenance
+claiming `SYSTEM-TRUSTED` and verifies that neither the trust label nor its
+value reaches the projection. This does not prove models cannot be influenced
+by malicious content; prompt-injection resistance remains an open platform
+risk and must continue to rely on independently enforced execution authority.
