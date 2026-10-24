@@ -1155,8 +1155,8 @@ about current lockfile vulnerability status.
 - `npm.cmd run check:docs`, `check:architecture`, `check:tests`, and
   `git diff --check` passed after the implementation and report updates.
 - These checks validate prompt placement, not model resistance to injection.
-- A separate `node test/agent-bridge-followup.test.js` run failed its task
-  control case after the synthetic task failed at its earlier checkpoint
-  because the linked handoff repository path was outside the test's configured
-  filesystem policy. The run did not reach an assertion about prompt assembly;
-  this remains an environment/test-fixture failure to investigate.
+- The first direct Agent follow-up test run exposed an incomplete fixture: it
+  used `process.cwd()` as handoff repository provenance without allowlisting
+  that exact test working directory. The fixture now sets
+  `SIDEKICK_ALLOWED_PATHS=process.cwd()` and the rerun passed all 33 API and
+  security cases. Runtime path enforcement was not changed.

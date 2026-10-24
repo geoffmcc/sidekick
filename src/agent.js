@@ -717,8 +717,8 @@ async function callAgentLLM(messages, taskGoal = "", llmCall = callLLM) {
   // timeoutMs makes the generation budget binding: without it the inference
   // request is unbounded and a hung provider stalls the whole tool loop.
   const modelMessages = [
-    ...messages,
     { role: "user", content: buildAgentReferenceContext(taskGoal) },
+    ...messages,
   ];
   return llmCall(modelMessages, { systemPrompt: buildSystemPrompt(), format: "json", temperature: 0.3, timeoutMs: AGENT_GENERATION_TIMEOUT_MS });
 }

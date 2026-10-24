@@ -143,6 +143,7 @@ ok("generic capability descriptions select semantic context for repository quest
   });
   assert.ok(!modelRequest.options.systemPrompt.includes("Installed capability packs"), "pack inventory must not enter system instructions");
   assert.ok(modelRequest.messages.some(message => message.role === "user" && message.content.startsWith("UNTRUSTED REFERENCE DATA.")), "the model receives registry and pack reference data in a separately labeled user message");
+  assert.deepStrictEqual(modelRequest.messages.at(-1), { role: "user", content: "check system status" }, "the original task remains the final user message after the reference catalog");
   console.log("\nAll " + passed + " prompt/routing tests passed.\n");
   process.exit(0);
 })().catch(error => { console.error(error.stack || error); process.exit(1); });

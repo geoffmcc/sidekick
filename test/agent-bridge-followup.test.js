@@ -19,6 +19,10 @@ process.env.NODE_ENV = "test";
 process.env.SIDEKICK_TOOL_POLICY = "open";
 process.env.SIDEKICK_APPROVAL_MODE = "off";
 process.env.SIDEKICK_ENVIRONMENT = "test";
+// Durable handoffs use process.cwd() as their repository provenance when a
+// task has no explicit workspace. Allow only this fixture repository so
+// checkpoint tests exercise the intended path-policy success case.
+process.env.SIDEKICK_ALLOWED_PATHS = process.cwd();
 process.env.SIDEKICK_API_KEY = "agent-bridge-followup-test-api-key";
 process.env.SIDEKICK_AGENT_PROXY_KEY = "agent-bridge-followup-dedicated-proxy-key";
 // Set a fake Groq key so the module-load ollama warmup path is skipped.
