@@ -54,7 +54,29 @@ function containsCredentialUrl(value) {
   if (typeof value !== "string" || !value.includes("://")) return false;
   try {
     const parsed = new URL(value);
-    return Boolean(parsed.username || parsed.password);
+    if (parsed.username || parsed.password) return true;
+    const hasCredentialParameter = (name, parameterValue) => {
+      const key = String(name || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      return Boolean(parameterValue) && (key === "key" || /(?:password|passwd|passphrase|pwd|token|secret|credential|authorization|auth|apikey|accesskey|privatekey|bearer|jwt)/i.test(key));
+    };
+    // Credentials are also commonly carried in URL query strings, especially
+    // by database, cache, and identity-provider connection URLs. These env
+    // variable names often look harmless (DATABASE_URL, REDIS_URL), so inspect
+    // parameter names without logging or retaining any parameter values.
+    for (const [name, parameterValue] of parsed.searchParams) {
+      if (hasCredentialParameter(name, parameterValue)) return true;
+    }
+    // JDBC and other semicolon-style connection strings keep credentials in
+    // the URL path instead of searchParams (for example, `jdbc:sqlserver://host;password=...`).
+    const withoutFragment = value.split("#", 1)[0];
+    for (const match of withoutFragment.matchAll(/;([^=?&#;]+)=([^&#;]*)/g)) {
+      let name = match[1];
+      let parameterValue = match[2];
+      try { name = decodeURIComponent(name.replace(/\+/g, " ")); } catch {}
+      try { parameterValue = decodeURIComponent(parameterValue.replace(/\+/g, " ")); } catch {}
+      if (hasCredentialParameter(name, parameterValue)) return true;
+    }
+    return false;
   } catch {
     return false;
   }

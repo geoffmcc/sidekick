@@ -108,6 +108,15 @@ The dashboard includes:
 
 ## Command safety
 
+Host utility subprocesses launched through Sidekick's filtered environment omit
+credential-named variables, known credential-file locators, runtime loader and
+injection hooks, and URL values with credentials in userinfo, query parameters,
+or semicolon-style connection parameters. This applies to both inherited
+environment values and explicit overrides. It is a defense-in-depth filter,
+not general secret discovery: arbitrary values may still contain sensitive
+data, so credentials should be retrieved through the governed secret store
+only for the operation that needs them.
+
 `bash` blocks commands matching known dangerous patterns, including examples such as recursive root deletion, common flag-order and case variants, block-device writes, filesystem creation, fork-bomb pattern, curl/wget piped to shell, and recursive `chmod 777 /`.
 
 This is a guardrail, not a full sandbox. It will not detect every destructive command. Avoid granting Sidekick broader sudo access than necessary.
