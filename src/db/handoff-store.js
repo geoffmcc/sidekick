@@ -63,9 +63,10 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
     const audit = Number.isFinite(Number(auditId))
       ? db.prepare("SELECT event_type, target_type, target_id, details_json FROM memory_audit_events WHERE id = ?").get(Number(auditId))
       : null;
+    const expectedDetails = redactSensitiveKeysDeep(details || {});
     if (!audit || audit.event_type !== eventType || audit.target_type !== targetType
       || audit.target_id !== targetId
-      || JSON.stringify(canonicalize(parseJson(audit.details_json, {}))) !== JSON.stringify(canonicalize(details))) {
+      || JSON.stringify(canonicalize(parseJson(audit.details_json, {}))) !== JSON.stringify(canonicalize(expectedDetails))) {
       throw new Error(`Handoff audit event "${eventType}" was not persisted`);
     }
     return auditId;

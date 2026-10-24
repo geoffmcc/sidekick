@@ -16,6 +16,7 @@ const { createGeneratedExecutionRowMappers } = require("./db/generated-execution
 const { createDatabaseInspection } = require("./db/inspection");
 const { createDatabaseQuery } = require("./db/query");
 const { collectSnapshotRows } = require("./db/snapshot-bounds");
+const { redactSensitive, redactSensitiveKeysDeep } = require("./redact");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const DB_FILE = process.env.SIDEKICK_DB_FILE || path.join(DATA_DIR, "sidekick.db");
@@ -1268,10 +1269,12 @@ function processAutoExpirations(options = {}) {
 
 function auditMemoryEvent(eventType, targetType, targetId, details = {}, actor = "system") {
   if (!hasTable("memory_audit_events")) return null;
+  const safeActor = redactSensitive(String(actor || "system"));
+  const safeDetails = redactSensitiveKeysDeep(details || {});
   const result = db.prepare(`
     INSERT INTO memory_audit_events (event_type, target_type, target_id, actor, details_json, created_at)
     VALUES (?, ?, ?, ?, ?, ?)
-  `).run(eventType, targetType, targetId || null, actor || "system", JSON.stringify(details || {}), nowIso());
+  `).run(eventType, targetType, targetId || null, safeActor, JSON.stringify(safeDetails), nowIso());
   return result.lastInsertRowid;
 }
 

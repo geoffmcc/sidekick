@@ -259,7 +259,7 @@ function parse(result) {
   assert.deepStrictEqual(afterPurge.versions.map(v => v.version), [5, 4, 3, 1], "only version 2 removed; rest of history intact");
   const audit = dbStore.getDb().prepare("SELECT * FROM memory_audit_events WHERE event_type = 'handoff_version_purged' AND target_id = ?").get(handoffId);
   assert.ok(audit, "purge must leave an audit event");
-  assert.ok(JSON.parse(audit.details_json).reason.includes("credential remediation drill"));
+  assert.equal(JSON.parse(audit.details_json).reason, "credential=[REDACTED] drill", "audit reason patterns are redacted before persistence");
   console.log("HV.18 passed: purge_version is deliberate, bounded, audited");
 
   // --- HV.19 verifiable continuity checkpoint and lifecycle -----------------

@@ -167,3 +167,18 @@ Validation: `test/handoff-reliability.test.js` checks synthetic sensitive
 values are absent from both stored rows and API results and that the sanitized
 journal chain verifies. This does not retroactively sanitize existing event
 rows; historical database contents remain an unverified residual risk.
+
+### Memory audit detail redaction (2026-10-24, SK-030)
+
+The shared memory audit writer persisted arbitrary structured details and actor
+labels unchanged. Memory management and handoff operations can carry
+caller-provided reasons, so credential-shaped values could enter audit rows.
+The writer now applies recursive key-aware redaction to details and pattern
+redaction to actor labels before persistence. Handoff atomic-audit validation
+compares the persisted sanitized representation, so failed or altered audit
+writes still roll back their associated mutation.
+
+Validation: `test/handoff-reliability.test.js` checks synthetic credentials are
+absent from stored audit rows; its atomic archive, restore, purge, session, and
+handoff tests also exercise audit transaction behavior. Historical audit rows
+were not migrated or inspected.

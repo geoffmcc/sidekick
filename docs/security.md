@@ -385,6 +385,9 @@ credentials. Handoff journal payloads use recursive key-aware redaction, and
 actor/source labels use pattern redaction, before event hashing and persistence;
 the tamper-evident chain verifies the sanitized representation. Previously
 stored journal rows are not retroactively rewritten.
+Memory audit records also recursively redact structured details and
+pattern-redact actor labels before persistence. Existing historical audit rows
+are not retroactively rewritten.
 
 ## Database query safety
 

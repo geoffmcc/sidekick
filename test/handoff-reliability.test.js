@@ -98,6 +98,18 @@ test("handoff journal redacts sensitive metadata, reasons, actor and source befo
   assert.equal(store.getHandoffReadiness(h.id).journal.valid, true, "hash chain must verify over the redacted event representation");
 });
 
+test("memory audit redacts synthetic credentials in details and actor before persistence", () => {
+  const marker = "SYNTHETIC_MEMORY_AUDIT_SECRET";
+  const id = store.auditMemoryEvent("synthetic.redaction.test", "fixture", "redaction-fixture", {
+    api_key: marker,
+    note: `password=${marker}`,
+  }, `token=${marker}`);
+  const row = store.getDb().prepare("SELECT actor, details_json FROM memory_audit_events WHERE id = ?").get(Number(id));
+  assert.ok(row);
+  assert.equal(JSON.stringify(row).includes(marker), false, "raw audit storage must not expose synthetic credentials");
+  assert.match(row.details_json, /\[REDACTED\]/);
+});
+
 test("handoff creation and version updates roll back when journal persistence fails", () => {
   const db = store.getDb();
   const original = create();
