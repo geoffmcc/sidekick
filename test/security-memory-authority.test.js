@@ -161,6 +161,18 @@ test("memory writes and imports redact credential-shaped content and metadata be
   db.softDeleteMemory(lifecycle.id, `api_key=${marker}`);
   const lifecycleRow = db.getDb().prepare("SELECT metadata_json FROM memories WHERE id = ?").get(lifecycle.id);
   assert.equal(lifecycleRow.metadata_json.includes(marker), false, "lifecycle reason must not persist synthetic credentials");
+
+  db.getDb().prepare("UPDATE memories SET content = ?, summary = ?, source_ref = ?, metadata_json = ? WHERE id = ?").run(
+    `Legacy raw token=${marker}`,
+    `Legacy api_key=${marker}`,
+    `https://example.invalid/legacy?password=${marker}`,
+    JSON.stringify({ password: marker, note: `secret=${marker}` }),
+    direct.id,
+  );
+  const legacyProjection = db.getMemoryById(direct.id, { includeDisabled: true });
+  assert.equal(JSON.stringify(legacyProjection).includes(marker), false, "memory projections must redact known credential shapes in legacy rows");
+  const legacyRaw = db.getDb().prepare("SELECT content, metadata_json FROM memories WHERE id = ?").get(direct.id);
+  assert.equal(JSON.stringify(legacyRaw).includes(marker), true, "read sanitization must not silently rewrite historical database rows");
 });
 
 test("failed replacement persistence rolls back the old-memory deletion", async () => {

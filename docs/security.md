@@ -392,7 +392,9 @@ pattern-redact content, summary, source, source reference, and evidence text,
 and recursively redact tags and metadata before storage. Memory lifecycle and
 supersession reasons receive the same text redaction. This cannot identify a
 secret represented as a generic value in an ordinary field, and no bulk cleanup
-of historical memory rows is performed.
+of historical memory rows is performed. Normalized memory reads redact known
+credential patterns and keyed values in legacy records without changing the
+stored row.
 
 ## Database query safety
 

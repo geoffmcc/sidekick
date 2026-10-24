@@ -192,10 +192,14 @@ write/admission boundary now pattern-redacts textual fields and recursively
 redacts metadata and tags before persistent writes; supersession and delete/
 expire reasons are also sanitized. This is pattern/key-aware protection and
 cannot detect a secret supplied as an ordinary-looking value under an ordinary
-field name. Existing database rows were not inspected or migrated.
+field name. Normalized memory reads also redact known sensitive patterns and
+keyed values from legacy rows without rewriting them. Existing database rows
+were not inspected or migrated.
 
 Validation: `test/security-memory-authority.test.js` uses synthetic markers to
 verify direct writes and imported records do not retain known credential
 shapes. The authoritative runner also passed automatic-memory, memory-sync,
 handoff reliability, project-access, and phase-7 secret-redaction suites
-(6 suites, 0 failures); no live database or service was used.
+(6 suites, 0 failures); a legacy-row projection check confirms read-time
+redaction while leaving its synthetic raw fixture unchanged in SQLite. No live
+database or service was used.

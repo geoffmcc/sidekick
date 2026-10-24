@@ -587,4 +587,6 @@ test/handoff-reliability.test.js --concurrency=1
 credential-shaped values are absent from direct memory writes, imports,
 metadata, source references, evidence text, lifecycle reasons, and audit/event
 rows. These tests do not detect secrets supplied as generic values in ordinary
-fields and do not inspect or migrate historical databases.
+fields and do not inspect or migrate historical databases. A synthetic legacy
+row test also confirms normalized reads redact known patterns without changing
+the underlying historical row.

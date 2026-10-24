@@ -490,19 +490,20 @@ const MEMORY_STOP_WORDS = new Set([
 
 function normalizeMemoryRow(row) {
   if (!row) return null;
-  const metadata = parseJson(row.metadata_json, {});
+  const metadata = redactSensitiveKeysDeep(parseJson(row.metadata_json, {}));
+  const tags = redactSensitiveKeysDeep(parseJson(row.tags, []));
   return {
     id: row.id,
     type: row.type,
     project: row.project,
-    content: row.content,
-    summary: row.summary,
-    tags: parseJson(row.tags, []),
+    content: redactSensitive(String(row.content || "")),
+    summary: redactSensitive(String(row.summary || "")),
+    tags,
     confidence: row.confidence,
-    source: row.source,
+    source: row.source == null ? null : redactSensitive(String(row.source)),
     source_tool: row.source_tool,
     source_task_id: row.source_task_id,
-    source_ref: row.source_ref,
+    source_ref: row.source_ref == null ? null : redactSensitive(String(row.source_ref)),
     metadata,
     enabled: !!row.enabled,
     automatic: !!row.automatic,
@@ -524,12 +525,12 @@ function normalizeMemoryRow(row) {
     memory_class: row.memory_class || metadata.memory_class || "semantic",
     primary_scope_type: row.primary_scope_type || metadata.primary_scope_type || (row.project ? "project" : "global"),
     primary_scope_id: row.primary_scope_id || row.project || metadata.primary_scope_id || null,
-    source_type: row.source_type || row.source || null,
-    evidence_excerpt: row.evidence_excerpt || metadata.evidence_excerpt || null,
+    source_type: (row.source_type || row.source) == null ? null : redactSensitive(String(row.source_type || row.source)),
+    evidence_excerpt: (row.evidence_excerpt || metadata.evidence_excerpt) == null ? null : redactSensitive(String(row.evidence_excerpt || metadata.evidence_excerpt)),
     extraction_method: row.extraction_method || metadata.extraction_method || null,
     directness: row.directness || metadata.directness || "direct",
     source_authority: row.source_authority ?? metadata.source_authority ?? null,
-    confidence_components: parseJson(row.confidence_json, metadata.confidence_components || {}),
+    confidence_components: redactSensitiveKeysDeep(parseJson(row.confidence_json, metadata.confidence_components || {})),
     recorded_at: row.recorded_at || row.created_at,
     source_timestamp: row.source_timestamp || null,
     observed_at: row.observed_at || row.last_seen_at,
