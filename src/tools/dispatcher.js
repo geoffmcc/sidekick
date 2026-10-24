@@ -100,6 +100,7 @@ function resolveDynamicDescriptor(name) {
       source: runtime.context.source,
       executionId: runtime.context.executionId,
       timeoutMs: runtime.context.timeoutMs,
+      signal: runtime.signal,
     }),
   };
 }

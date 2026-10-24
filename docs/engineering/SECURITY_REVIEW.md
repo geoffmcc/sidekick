@@ -512,3 +512,29 @@ authority, and resume options cannot manufacture identity. No executable-pack
 isolation bypass or workflow authority bypass was confirmed in the reviewed
 paths. This does not establish that untrusted executable packs are contained;
 they are blocked from execution until OS-enforced isolation exists.
+
+### Generated workflow cancellation propagation (2026-10-24, SK-044)
+
+Generated capabilities are declarative sequences of tool calls, rather than
+generated JavaScript. Each step is dispatched again through the canonical tool
+dispatcher, where the current identity, permission, policy, and approval are
+checked. Review found that the outer dispatch cancellation signal was not
+forwarded to this nested dispatcher. As a result, a generated workflow could
+continue starting later steps after the parent request had timed out or been
+cancelled.
+
+The generated-tool handler now forwards its signal to each nested dispatch and
+checks cancellation both before and after each step. A cancellation after a
+step completes leaves that completed step recorded, marks the parent workflow
+cancelled, and prevents any subsequent step from starting. This cannot stop an
+individual underlying handler that ignores its own cancellation signal; such
+operations may still complete, and the dispatcher reports timeout semantics
+accordingly. This change does not weaken authorization or add a generated-code
+execution path.
+
+`test/evolve.test.js` verifies signal propagation through canonical dispatch,
+that a cancelled generated workflow does not start its next step, and that its
+terminal state is persisted. The focused suite passed on 2026-10-24. Residual
+limitation: cancellation is cooperative at the individual tool boundary, so
+non-cooperative in-flight operations still require idempotency and state
+verification before a retry.

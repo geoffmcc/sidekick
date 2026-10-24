@@ -859,3 +859,15 @@ about current lockfile vulnerability status.
 - Third-party executable modules remain unavailable because there is no
   enforced OS isolation backend. Bundled first-party modules share Core's
   privileges and are not isolated; that trust exception remains explicit.
+
+## Generated workflow cancellation propagation: 2026-10-24 (SK-044)
+
+- `node test/run-all.js test/evolve.test.js --concurrency=1
+  --overall-timeout-ms=600000 --json` passed (1 suite, 0 failures, 0 skips).
+- Regression evidence verifies the canonical dispatcher passes its abort
+  signal to generated execution, nested generated steps receive that signal,
+  and cancellation prevents a later step from starting while persisting the
+  generated execution as cancelled.
+- `git diff --check` passed. Cancellation remains cooperative for an
+  individual in-flight tool handler; the existing dispatcher reports when a
+  timed-out operation may still be running.
