@@ -7,5 +7,17 @@ Wants=network-online.target sidekick-influxdb.service
 Type=oneshot
 User=sidekick
 WorkingDirectory=/home/sidekick/sidekick
-EnvironmentFile=/home/sidekick/sidekick/.env
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+UMask=0077
+Environment=NODE_ENV=production
+Environment=SIDEKICK_SECRET_DIR=/etc/sidekick/secrets
+EnvironmentFile=-/etc/sidekick/sidekick.env
 ExecStart=/usr/bin/node /home/sidekick/sidekick/scripts/collect-metrics.js

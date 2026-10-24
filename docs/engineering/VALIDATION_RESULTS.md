@@ -451,3 +451,21 @@ test/tool-family-database-inspection.test.cjs test/security-invariants.test.js -
 denied-before-storage checks, dispatcher use and response compatibility, and
 approval-required backup behavior. The broader Dashboard route authorization
 review remains in progress.
+
+### Metrics service secret provisioning
+
+The metrics unit previously loaded `/home/sidekick/sidekick/.env`, while the
+collector reads `SIDEKICK_INFLUX_TOKEN` through the protected runtime secret
+file API. Installer timer-enablement checks also searched that dotenv file,
+which could both miss a valid file-backed token and enable the timer for an
+environment-only token that production code rejects. The unit now receives the
+protected secret directory and system configuration file, applies the Core
+service hardening profile, and both installers check the secret through the
+runtime file reader without printing its value.
+
+Validation: `node test/run-all.js test/security/systemd-core-hardening.test.js
+test/security-install-scripts.test.js --concurrency=1
+--overall-timeout-ms=300000` passed both suites; `git diff --check` passed.
+`bash -n` could not run in this Windows environment because Bash launch was
+denied by the host. Linux systemd execution and an installer run remain
+unverified; no production service or timer was changed.

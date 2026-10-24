@@ -413,11 +413,11 @@ if [ -f "$ENV_FILE" ]; then
   chown "$USERNAME:$USERNAME" "$ENV_FILE"
   pass "Compose bind-mount identity configured ($SIDEKICK_UID_VALUE:$SIDEKICK_GID_VALUE)"
 fi
-if [ -f "$ENV_FILE" ] && grep -q '^SIDEKICK_INFLUX_TOKEN=.' "$ENV_FILE" && ! grep -q '^SIDEKICK_INFLUX_TOKEN=sidekick-influx-token$' "$ENV_FILE"; then
+if node "$SCRIPT_DIR/verify-runtime-secret.js" SIDEKICK_INFLUX_TOKEN /etc/sidekick/secrets >/dev/null 2>&1; then
   systemctl enable --now sidekick-metrics.timer 2>/dev/null
   pass "sidekick-metrics.timer enabled"
 else
-  warn "sidekick-metrics.timer installed but not enabled; set SIDEKICK_INFLUX_TOKEN first"
+  warn "sidekick-metrics.timer installed but not enabled; provision a valid SIDEKICK_INFLUX_TOKEN secret file first"
 fi
 
 echo ""

@@ -50,3 +50,21 @@ test("downloaded setup binaries are pinned, verified, and safely extracted", () 
   assert.ok(ollama.indexOf("sha256sum --check --status") < ollama.indexOf("--extract --file"));
   assert.doesNotMatch(setup, /ollama\.com\/install\.sh\s*\|\s*sh/);
 });
+
+test("metrics timer provisioning checks the protected Influx secret file", () => {
+  const bootstrap = read("scripts/bootstrap.sh");
+  const setup = read("scripts/setup-tools.sh");
+  const unit = read("systemd/sidekick-metrics.service");
+  const verifier = read("scripts/verify-runtime-secret.js");
+  const deploy = read("deploy.ps1");
+  for (const script of [bootstrap, setup]) {
+    assert.match(script, /verify-runtime-secret\.js" SIDEKICK_INFLUX_TOKEN \/etc\/sidekick\/secrets/);
+    assert.doesNotMatch(script, /grep -q '\^SIDEKICK_INFLUX_TOKEN=/,
+      "installer must not enable metrics based on a raw dotenv credential");
+  }
+  assert.match(unit, /^Environment=SIDEKICK_SECRET_DIR=\/etc\/sidekick\/secrets$/m);
+  assert.match(verifier, /readSecret\(name\)/);
+  assert.doesNotMatch(verifier, /console\.(?:log|error).*value/);
+  assert.match(deploy, /scripts\\verify-runtime-secret\.js/,
+    "incremental deployment must upload the new installer helper");
+});

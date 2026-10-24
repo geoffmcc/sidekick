@@ -50,3 +50,18 @@ test("Compute worker systemd unit defaults newly created files to owner-only", (
   assert.match(unit, /^User=sidekick-worker$/m);
   assert.match(unit, /^ReadWritePaths=\/var\/lib\/sidekick-compute-worker$/m);
 });
+
+test("metrics collector reads its credential from the protected secret directory", () => {
+  const unit = fs.readFileSync(path.join(root, "systemd/sidekick-metrics.service"), "utf8");
+  for (const setting of [
+    "NoNewPrivileges=true",
+    "PrivateTmp=true",
+    "ProtectSystem=full",
+    "UMask=0077",
+    "Environment=SIDEKICK_SECRET_DIR=/etc/sidekick/secrets",
+  ]) assert.ok(unit.split(/\r?\n/).includes(setting), `metrics service must set ${setting}`);
+  assert.match(unit, /^User=sidekick$/m);
+  assert.match(unit, /^EnvironmentFile=-\/etc\/sidekick\/sidekick\.env$/m);
+  assert.doesNotMatch(unit, /EnvironmentFile=.*\/sidekick\/\.env$/m,
+    "metrics must not load credentials from the repository dotenv file");
+});

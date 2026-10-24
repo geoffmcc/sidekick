@@ -32,6 +32,11 @@ InfluxDB metrics requests reject redirects, abort after 15 seconds, and stream
 responses through a 5 MiB bound (error bodies are limited to 64 KiB). The
 configured Influx URL must still pass the explicit host allowlist, and metrics
 operations retain their action-specific identity and risk checks.
+The optional systemd metrics collector reads its Influx token from the
+protected `SIDEKICK_SECRET_DIR`; installer checks validate that file before
+enabling the timer. The collector unit runs as `sidekick` with a restrictive
+umask and systemd filesystem and kernel protections, and loads non-secret
+settings from `/etc/sidekick/sidekick.env` rather than the repository `.env`.
 
 Qdrant memory requests reject redirects and abort after 15 seconds. Semantic
 search responses are streamed through an 8 MiB bound, with oversized response
@@ -379,7 +384,7 @@ in every format is removed.
 
 ## Secret storage
 
-`secret` provides AES-256-GCM encrypted credential management and requires `SIDEKICK_SECRET_KEY`. Store the secret key outside the repository and include it in your host secret management or systemd environment strategy. API tokens such as the GitHub PAT used by `github` belong in `secret` as encrypted secrets, not in KV memory.
+`secret` provides AES-256-GCM encrypted credential management and requires `SIDEKICK_SECRET_KEY`. Production runtime credentials, including the encryption key, are read from protected files under `SIDEKICK_SECRET_DIR`; raw environment values are supported only by test fixtures. API tokens such as the GitHub PAT used by `github` belong in `secret` as encrypted secrets, not in KV memory.
 
 ## Dashboard permissions
 
