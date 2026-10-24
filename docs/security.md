@@ -429,8 +429,9 @@ for Git-backed checkpoints. Agent workspaces are rechecked during task
 attachment, recovery, and automatic continuity checkpoints. The database
 handoff store is internal to trusted Sidekick services; production callers that
 can trigger Git-backed operations check the relevant MCP, Dashboard, or Agent
-path policy first. The claim path specifically checks the saved checkpoint
-workspace before the store performs its internal readiness/Git check.
+path policy first. The claim path checks both a supplied workspace and the
+saved checkpoint workspace before the store performs its internal
+readiness/Git check; a caller-supplied path cannot mask the persisted path.
 Handoff claim tokens are one-time bearer capabilities: dispatcher exposure is
 allowlisted for authenticated sessions, while generic results and persisted
 tool logs redact them. An integration regression covers token delivery, log

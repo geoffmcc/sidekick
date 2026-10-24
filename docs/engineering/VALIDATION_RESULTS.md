@@ -666,7 +666,8 @@ MCP action now rejects the request before the store call when the checkpoint
 workspace is outside the allowed roots. A regression prepares a disposable
 Git repository outside the configured MCP allow-list, captures a ready
 handoff checkpoint there, and verifies that the authenticated claim fails
-with a path-policy error and leaves the handoff unclaimed.
+with a path-policy error and leaves the handoff unclaimed, even when the
+request supplies a different, allowed workspace path.
 
 `node test/run-all.js test/security-project-access.test.js --concurrency=1
 --overall-timeout-ms=300000` passed (1 suite, 0 failures). This validates the

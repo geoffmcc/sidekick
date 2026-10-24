@@ -1739,7 +1739,7 @@ test("handoff provenance verification enforces the caller filesystem path policy
     db.refreshHandoffEvidence(claimHandoff.id, { working_directory: outsideRoot });
     db.transitionHandoff(claimHandoff.id, "ready", { expectedVersion: claimHandoff.version });
     const claimResult = await dispatcher.callMcpTool("handoff", {
-      action: "claim", id: claimHandoff.id, project: "memory_a", owner: owner.principal_id,
+      action: "claim", id: claimHandoff.id, project: "memory_a", owner: owner.principal_id, working_directory: allowedRoot,
     }, {
       authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
       project: "memory_a",

@@ -26,7 +26,10 @@ function handoffRepositoryPathError(handoff, action, requestedPath) {
   }
   if (action === "refresh_evidence" && requestedPath) paths.add(requestedPath);
   if (["start_here", "readiness", "preflight", "simulate_resume", "begin_resume", "claim"].includes(action)) {
-    if (requestedPath || checkpointPath) paths.add(requestedPath || checkpointPath);
+    if (action === "claim") {
+      if (requestedPath) paths.add(requestedPath);
+      if (checkpointPath) paths.add(checkpointPath);
+    } else if (requestedPath || checkpointPath) paths.add(requestedPath || checkpointPath);
     if (["preflight", "simulate_resume", "begin_resume"].includes(action) && packetPath) paths.add(packetPath);
   }
   for (const repositoryPath of paths) {

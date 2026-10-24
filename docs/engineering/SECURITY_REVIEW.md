@@ -259,7 +259,8 @@ continuity checkpoints now recheck the Agent filesystem path policy before
 reading or persisting repository state. A call-site audit found the MCP
 `claim` action was missing a check even though `claimHandoff` internally
 evaluates repository-backed readiness. The action now checks the persisted
-checkpoint workspace before calling the store. The remaining production
+checkpoint workspace before calling the store, even when the caller also
+supplies an allowed workspace path. The remaining production
 callers are service-internal and their HTTP/MCP/session/Agent entry paths
 perform the corresponding source policy check. Tests may call the database
 store directly for isolated fixtures; that API is not exposed to network
