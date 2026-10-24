@@ -292,7 +292,9 @@ async function executeResolvedTool(descriptor, args, context, requestedName = de
     || (descriptor.name === "capability"
       && ["show", "inspect", "validate", "health", "doctor", "maturity"].includes(executionArgs.action))
     || (descriptor.name === "project_registry"
-      && ["list", "get", "sources"].includes(executionArgs.action));
+      && ["list", "get", "sources"].includes(executionArgs.action))
+    || (descriptor.name === "browser"
+      && ["list", "status"].includes(executionArgs.action));
   const requiresIdentity = !options.testExecution && (
     descriptor.name === "secret" || descriptor.name === "predict" || effectiveRisk !== "low" || requiresScopedIdentity
   );

@@ -138,6 +138,33 @@ function countChromeProcesses() {
     assert.strictEqual(result.session.pages, 1);
   });
 
+  await test("a different authorized project member cannot list, use, or close another principal's browser session", async () => {
+    const { createServiceContext } = require("./helpers/authorized-context");
+    const projectAccess = require("../src/core/project-access");
+    const peer = createServiceContext({ role: "operator" });
+    projectAccess.grantProjectAccess({
+      actorPrincipalId: ownerContext.authIdentity.principal_id,
+      principalId: peer.authIdentity.principal_id,
+      project: PROJECT,
+      accessLevel: "read",
+    });
+    const peerContext = { ...peer, project: PROJECT };
+
+    const listed = parse(await dispatch({ action: "list", project: PROJECT }, peerContext));
+    assert.ok(!listed.sessions.some(session => session.id === sessionId), "same project membership does not reveal another principal's session");
+
+    const useResult = parse(await dispatch({ action: "pages", session: sessionId, project: PROJECT }, peerContext));
+    assert.equal(useResult.ok, false);
+    assert.equal(useResult.code, "browser_session_not_found");
+
+    const closeResult = parse(await dispatch({ action: "close", session: sessionId, project: PROJECT }, peerContext));
+    assert.equal(closeResult.ok, false);
+    assert.equal(closeResult.code, "browser_session_not_found");
+
+    const ownStatus = parse(await dispatch({ action: "status", project: PROJECT }, peerContext));
+    assert.equal(ownStatus.sessions.open, 0, "session counts are scoped to the requesting principal");
+  });
+
   await test("navigate loads a page and reports status", async () => {
     const result = parse(await dispatch({ action: "navigate", session: sessionId, url: `${base}/` }));
     assert.strictEqual(result.ok, true, JSON.stringify(result));

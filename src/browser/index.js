@@ -133,6 +133,7 @@ const SEQUENCE_ACTIONS = new Set([
 async function handleAction(args, runtime = {}, { resolveSecret = null } = {}) {
   const action = args.action;
   const project = runtime.context?.project || null;
+  const principalId = runtime.context?.authIdentity?.principal_id || null;
 
   switch (action) {
     case "open": {
@@ -140,15 +141,17 @@ async function handleAction(args, runtime = {}, { resolveSecret = null } = {}) {
       return { session: sessions.sessionSummary(session) };
     }
     case "close": {
-      const result = await sessions.closeSession(args.session, { reason: "closed_by_caller" });
+      const session = sessions.getSession(args.session, { project, principalId });
+      const result = await sessions.closeSession(session.id, { reason: "closed_by_caller" });
       return result;
     }
     case "list":
-      return { sessions: sessions.listSessions({ project }) };
+      return { sessions: sessions.listSessions({ project, principalId }) };
     case "status": {
       const report = await health({ deep: args.deep === true });
+      report.sessions.open = sessions.sessionCount({ project, principalId });
       if (args.session) {
-        const session = sessions.getSession(args.session, { project });
+        const session = sessions.getSession(args.session, { project, principalId });
         report.session = sessions.sessionSummary(session);
         report.session.warnings = session.warnings.slice(-20);
         report.session.blocked = session.blockedRequests.slice(-20);
@@ -159,7 +162,7 @@ async function handleAction(args, runtime = {}, { resolveSecret = null } = {}) {
       break;
   }
 
-  const session = sessions.getSession(args.session, { project });
+  const session = sessions.getSession(args.session, { project, principalId });
 
   switch (action) {
     case "navigate": return actions.navigate(session, args, runtime);

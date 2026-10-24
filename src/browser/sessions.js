@@ -240,6 +240,7 @@ async function openSession(options = {}, executionContext = null) {
     id,
     label: options.label ? String(options.label).slice(0, 120) : null,
     project: executionContext?.project || options.project || null,
+    principalId: executionContext?.authIdentity?.principal_id || null,
     createdAt: Date.now(),
     lastUsedAt: Date.now(),
     expiresAt: Date.now() + config.sessionTtlMs,
@@ -348,9 +349,17 @@ async function openSession(options = {}, executionContext = null) {
   }
 }
 
-function getSession(id, { project = null } = {}) {
+function getSession(id, { project = null, principalId = null } = {}) {
   const session = sessions.get(String(id || ""));
   if (!session || session.closed) {
+    const error = new Error(`No open browser session "${id}". Use action="open" first, or action="list" to see sessions.`);
+    error.code = "browser_session_not_found";
+    throw error;
+  }
+  // Browser contexts hold remote authentication state. Bind them to the
+  // authenticated principal that opened them; project labels alone are
+  // caller-controlled and cannot authorize another principal to reuse a tab.
+  if (session.principalId !== (principalId || null)) {
     const error = new Error(`No open browser session "${id}". Use action="open" first, or action="list" to see sessions.`);
     error.code = "browser_session_not_found";
     throw error;
@@ -436,14 +445,16 @@ async function closeAllSessions({ reason = "shutdown" } = {}) {
 // own project's sessions plus unscoped ones; an unscoped caller sees only
 // unscoped sessions. This prevents cross-tenant session-id/metadata disclosure
 // (session ids are otherwise unguessable, and `list` must not defeat that).
-function listSessions({ project = null } = {}) {
+function listSessions({ project = null, principalId = null } = {}) {
   return [...sessions.values()]
+    .filter((session) => session.principalId === (principalId || null))
     .filter((session) => !session.project || session.project === project)
     .map(sessionSummary);
 }
 
-function sessionCount() {
-  return sessions.size;
+function sessionCount({ project = null, principalId = null } = {}) {
+  return [...sessions.values()].filter(session => session.principalId === (principalId || null))
+    .filter(session => !session.project || session.project === project).length;
 }
 
 /** Track a secret used in this session so outputs can be scrubbed. */
