@@ -18,7 +18,9 @@ const express = require("express");
 const { registerExecutionNodeAdminRoutes } = require("../src/node/admin-api");
 const { validateLocalArguments, createDeveloperServices, boundedResult, effectiveConcurrency, effectiveOutputLimit } = require("../src/node/agent");
 const { createWorkspace } = require("../src/node/workspace");
+const { workspacePermissionForTool } = require("../src/node/workspace-permissions");
 const { getCanonicalRegistry } = require("../src/tools/canonical-registry");
+const { normalizeDescriptor } = require("../src/tools/descriptor");
 const developerEntry = require("../packs/developer/modules/developer-tools/entry");
 
 const owner = identity.bootstrapOwner({ username: "node_admin_test_owner", password: "synthetic test password with sufficient length" });
@@ -187,6 +189,26 @@ test("execution node enforces its local execute grant and binds bash cwd to its 
     /outside the authorized workspace/,
     "shell execution cannot select a directory outside its workspace"
   );
+});
+
+test("every node-safe built-in and Developer tool has an explicit workspace permission classification", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-node-permission-map-"));
+  const builtin = getCanonicalRegistry({ includeActiveModules: false });
+  const developer = developerEntry.buildDescriptors({
+    config: { repository_roots: [root] },
+    paths: { enforce: () => null },
+    dispatch: async () => ({ content: [] }),
+  }).map(descriptor => normalizeDescriptor({ ...descriptor, source: "module:developer-tools", family: null }));
+  const nodeSafe = [...builtin.list(), ...developer].filter(descriptor => descriptor.placement?.nodeSafe);
+  assert.ok(nodeSafe.length > 0, "the node-safe tool set is discovered from its actual registries");
+  for (const descriptor of nodeSafe) {
+    assert.ok(
+      ["read", "write", "execute"].includes(workspacePermissionForTool(descriptor.name, {})),
+      `${descriptor.name} must be explicitly classified instead of inheriting default read access`
+    );
+  }
+  assert.equal(workspacePermissionForTool("changelog", { action: "save" }), "write");
+  assert.equal(workspacePermissionForTool("git", { action: "commit" }), "write");
 });
 
 test("execution node applies workspace concurrency and output limits", () => {
