@@ -781,3 +781,17 @@ the target remains unchanged; the symlink case is skipped on Windows because
 the test environment does not provide a dependable symlink privilege. This
 does not address concurrent rotation races when multiple Dashboard processes
 share one data directory.
+
+### Git output-file path authorization (2026-10-24, SK-061)
+
+Confirmed local path-boundary issue: the canonical Git helper checked the
+repository path against the caller's read/write allowlist but passed arbitrary
+Git extra arguments through. A read-authorized `diff --output=<path>` therefore
+wrote output outside the allowed repository root. A disposable repository
+reproduced the write to a synthetic out-of-scope file. The Git argument parser
+now rejects `--output`, `--output=<path>`, `-o <path>`, and attached `-o<path>`
+forms before execution. A direct Git control confirms the fixture can perform
+the write, and the Sidekick regression confirms all forms are rejected and no
+output file is created. Normal diff output remains available. This finding is
+limited to Git-helper argument-mediated file writes; it does not establish
+general filesystem isolation for trusted in-process tools.

@@ -1099,3 +1099,17 @@ about current lockfile vulnerability status.
   it is active on POSIX CI.
 - Concurrent diagnostic rotation across multiple Dashboard processes remains
   a documented limitation.
+
+## Git output-file path authorization: 2026-10-24 (SK-061)
+
+- `node --test test/security-git-metadata-isolation.test.js` passed. The
+  disposable fixture first confirms that Git itself can write a synthetic
+  diff to an out-of-scope file, then verifies that the canonical Sidekick Git
+  helper rejects separate, attached, and equals-form output arguments without
+  creating that file.
+- The focused Git metadata suite also covers gitfile and alternate-object
+  policy, inherited Git environment neutralization, fsmonitor, external diff,
+  credentials, filters, and hooks.
+- `npm.cmd run check:docs`, `check:architecture`, `check:tests`, and
+  `git diff --check` passed. The finding is limited to this argument-mediated
+  write path; no general filesystem isolation claim is made.
