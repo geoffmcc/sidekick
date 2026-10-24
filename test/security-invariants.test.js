@@ -335,14 +335,13 @@ test("legacy installation API keys cannot bypass scoped permissions on low-risk 
     authIdentity: { authentication_method: "legacy_api_key", scopes: ["legacy"] },
   };
 
-  for (const [name, args] of [
-    ["tools", { action: "overview" }],
-    ["workflow", { action: "list" }],
-  ]) {
-    const result = await dispatchTool({ name, args, context: { ...context, requestId: `${context.requestId}-${name}` } });
-    assert.equal(result.isError, true, `${name} must enforce its scoped read permission`);
-    assert.equal(result.code, "unauthenticated");
-  }
+  const result = await dispatchTool({
+    name: "workflow",
+    args: { action: "list" },
+    context: { ...context, requestId: `${context.requestId}-workflow` },
+  });
+  assert.equal(result.isError, true, "workflow reads must enforce their scoped read permission");
+  assert.equal(result.code, "unauthenticated");
 });
 
 test("database query, search, log, and diff handlers reject direct calls before access", async () => {

@@ -280,12 +280,13 @@ async function executeResolvedTool(descriptor, args, context, requestedName = de
   }
   const effectiveRisk = approvalDecision?.risk;
   const permission = requiredToolPermission(descriptor, executionArgs);
-  // A low-risk action may still carry a narrower permission (for example,
-  // tools.catalog.read or workflows.read). Do not let an identityless legacy
-  // API key bypass those grants merely because the action does not need an
-  // approval. Pure low-risk utilities that use the generic tools.execute
-  // permission keep their legacy compatibility behavior.
-  const requiresScopedIdentity = Boolean(descriptor.authorizationPermission) || permission !== "tools.execute";
+  // Workflow definitions are globally registered and can contain operational
+  // details. Their low-risk list/show actions still require the explicit
+  // workflows.read grant. Other low-risk inventory surfaces (capability and
+  // tool catalogs) are intentionally public, and low-risk actions on higher
+  // risk tools retain their action-level risk behavior.
+  const requiresScopedIdentity = descriptor.name === "workflow"
+    && ["list", "show"].includes(executionArgs.action || "list");
   const requiresIdentity = !options.testExecution && (
     descriptor.name === "secret" || descriptor.name === "predict" || effectiveRisk !== "low" || requiresScopedIdentity
   );
