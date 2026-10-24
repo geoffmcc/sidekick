@@ -18,10 +18,11 @@ test("bootstrap provisions protected secrets without replacing existing values",
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   fs.chmodSync(directory, 0o700);
   const existing = path.join(directory, SECRET_FILES[0]);
-  fs.writeFileSync(existing, "preserve-existing-value\n", { mode: 0o640 });
+  const existingValue = "preserve-existing-runtime-secret-value-0123456789\n";
+  fs.writeFileSync(existing, existingValue, { mode: 0o640 });
 
   assert.equal(provisionRuntimeSecrets(directory, process.getuid()), true);
-  assert.equal(fs.readFileSync(existing, "utf8"), "preserve-existing-value\n");
+  assert.equal(fs.readFileSync(existing, "utf8"), existingValue);
   for (const name of SECRET_FILES) {
     const stat = fs.lstatSync(path.join(directory, name));
     assert.equal(stat.isSymbolicLink(), false);

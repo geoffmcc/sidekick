@@ -17,7 +17,7 @@ process.env.SIDEKICK_API_KEY = "sk-sidekick-test-key";
 // The approval queue encrypts reason/args at rest. Supply its synthetic key
 // through the supported file-backed secret reference, never a plaintext env var.
 process.env.SIDEKICK_SECRET_KEY_FILE = path.join(TEST_DATA_DIR, "secret-key");
-fs.writeFileSync(process.env.SIDEKICK_SECRET_KEY_FILE, "per-action-risk-test-key");
+fs.writeFileSync(process.env.SIDEKICK_SECRET_KEY_FILE, "per-action-risk-test-key", { mode: 0o600 });
 // This suite tests approval decisions for explicitly reachable capability
 // actions. The production default is restricted/strict; opt into the legacy
 // tool policy so policy does not preempt the approval assertions.

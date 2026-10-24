@@ -22,9 +22,11 @@ const boundedWarnings = normalizeResult({ content: [{ type: "text", text: JSON.s
 assert.strictEqual(boundedWarnings.warnings.length, 50, "result warnings must remain bounded");
 const boundedErrorMetadata = errorResult("bounded", "handler_error", {
   evidence_refs: Array.from({ length: 101 }, (_, index) => `evidence-${index}`),
+  warnings: Array.from({ length: 101 }, (_, index) => `warning-${index}`),
   limitations: Array.from({ length: 101 }, (_, index) => `limitation-${index}`),
 });
 assert.strictEqual(boundedErrorMetadata.evidence_refs.length, 100, "error evidence references must remain bounded");
+assert.strictEqual(boundedErrorMetadata.warnings.length, 50, "error warnings must remain bounded");
 assert.strictEqual(boundedErrorMetadata.limitations.length, 50, "error limitations must remain bounded");
 
 const result = normalizeResult({

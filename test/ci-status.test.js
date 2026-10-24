@@ -9,7 +9,7 @@ const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sidekick-ci-status-
 process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
 process.env.GITHUB_TOKEN_FILE = path.join(TEST_DATA_DIR, 'github-token');
 const TEST_GITHUB_TOKEN = 'ghp_test_token_secret';
-fs.writeFileSync(process.env.GITHUB_TOKEN_FILE, TEST_GITHUB_TOKEN);
+fs.writeFileSync(process.env.GITHUB_TOKEN_FILE, TEST_GITHUB_TOKEN, { mode: 0o600 });
 process.on('exit', () => {
   try { require('../src/db').closeDatabase?.(); } catch {}
   fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });

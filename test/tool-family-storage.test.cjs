@@ -9,7 +9,7 @@ process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
 process.env.SIDEKICK_TOOL_POLICY = 'open';
 process.env.SIDEKICK_APPROVAL_MODE = 'off';
 process.env.SIDEKICK_SECRET_KEY_FILE = path.join(TEST_DATA_DIR, 'secret-key');
-fs.writeFileSync(process.env.SIDEKICK_SECRET_KEY_FILE, 'storage-test-secret-key');
+fs.writeFileSync(process.env.SIDEKICK_SECRET_KEY_FILE, 'storage-test-secret-key', { mode: 0o600 });
 delete process.env.SIDEKICK_BLOCKED_TOOLS;
 delete process.env.SIDEKICK_APPROVAL_REQUIRED_TOOLS;
 

@@ -10,7 +10,7 @@ process.env.SIDEKICK_DATA_DIR = data;
 process.env.SIDEKICK_SECRET_KEY_FILE = path.join(data, "secret");
 process.env.SIDEKICK_APPROVAL_MODE = "off";
 process.env.SIDEKICK_TOOL_POLICY = "open";
-fs.writeFileSync(process.env.SIDEKICK_SECRET_KEY_FILE, "test-only-key");
+fs.writeFileSync(process.env.SIDEKICK_SECRET_KEY_FILE, "test-only-key", { mode: 0o600 });
 
 const { callAgentTool } = require("../src/tools/dispatcher");
 const { createAuthorityEnvelope, intersectEnvelope, decideAutonomy } = require("../src/agent/authority");
