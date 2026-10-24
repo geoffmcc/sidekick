@@ -24,13 +24,15 @@
 const { spawn } = require("child_process");
 const { EventEmitter } = require("events");
 const crypto = require("crypto");
+const path = require("path");
 
 const { PROTOCOL_VERSION, HELPER_VERSION } = require("./openvino-config");
 const { childProcessEnv } = require("../security/child-process");
 
-function killWindowsProcessTree(pid, { spawnSyncImpl } = {}) {
+function killWindowsProcessTree(pid, { spawnSyncImpl, systemRoot = process.env.SystemRoot || process.env.SYSTEMROOT || "C:\\Windows" } = {}) {
   const run = spawnSyncImpl || require("child_process").spawnSync;
-  return run("taskkill", ["/T", "/F", "/PID", String(pid)], {
+  const executable = path.win32.join(systemRoot, "System32", "taskkill.exe");
+  return run(executable, ["/T", "/F", "/PID", String(pid)], {
     shell: false,
     timeout: 5000,
     env: childProcessEnv(),
