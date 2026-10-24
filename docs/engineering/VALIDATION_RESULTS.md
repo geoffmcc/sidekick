@@ -975,5 +975,7 @@ about current lockfile vulnerability status.
 - An injected audit sink failure returns 503 and prevents both execution
   record creation and the service restart call. The existing route tests still
   verify that permission denial stops before audit or execution.
-- `git diff --check` passed. Full `npm.cmd test` has not yet been rerun after
-  SK-053.
+- After SK-053, `npm.cmd test` passed all 379 unit, contract, integration, and
+  security suites with 0 failures and 0 skips.
+- `npm.cmd run check:docs`, `check:architecture`, and `check:tests`, plus
+  `git diff --check`, passed.
