@@ -36,6 +36,14 @@ function test(name, fn) {
 
 const OPEN = egress.buildSessionPolicy({ allowPrivateNetwork: true }, { allowPrivateNetwork: true });
 const CLOSED = egress.buildSessionPolicy({ allowPrivateNetwork: false }, { allowPrivateNetwork: false });
+const TEST_PROXY_CREDENTIAL = Object.freeze({
+  username: "test-browser-proxy",
+  password: "synthetic-browser-proxy-password-0123456789",
+});
+const TEST_PROXY_AUTH_HEADER = "Proxy-Authorization: Basic " + Buffer.from(`${TEST_PROXY_CREDENTIAL.username}:${TEST_PROXY_CREDENTIAL.password}`).toString("base64") + "\r\n";
+function createTestProxy(policy, options = {}) {
+  return egress.createSessionProxy(policy, { credential: TEST_PROXY_CREDENTIAL, ...options });
+}
 
 (async () => {
   console.log("\nGoverned Browser Automation — egress & policy\n");
@@ -145,13 +153,18 @@ const CLOSED = egress.buildSessionPolicy({ allowPrivateNetwork: false }, { allow
 
   // --- Live proxy enforcement ---------------------------------------------
 
+  await test("session proxy refuses missing or weak credentials before listening", async () => {
+    await assert.rejects(egress.createSessionProxy(CLOSED), /requires a strong per-session credential/);
+    await assert.rejects(egress.createSessionProxy(CLOSED, { credential: { username: "u", password: "p" } }), /requires a strong per-session credential/);
+  });
+
   await test("session proxy blocks a CONNECT to a forbidden host", async () => {
     const blocked = [];
-    const proxy = await egress.createSessionProxy(CLOSED, { onBlocked: (r) => blocked.push(r) });
+    const proxy = await createTestProxy(CLOSED, { onBlocked: (r) => blocked.push(r) });
     try {
       const status = await new Promise((resolve, reject) => {
         const socket = net.connect(proxy.port, "127.0.0.1", () => {
-          socket.write("CONNECT 10.0.0.9:443 HTTP/1.1\r\nHost: 10.0.0.9:443\r\n\r\n");
+          socket.write(`CONNECT 10.0.0.9:443 HTTP/1.1\r\nHost: 10.0.0.9:443\r\n${TEST_PROXY_AUTH_HEADER}\r\n`);
         });
         let buf = "";
         socket.on("data", (d) => { buf += d; if (buf.includes("\r\n")) { resolve(buf.split("\r\n")[0]); socket.destroy(); } });
@@ -167,12 +180,12 @@ const CLOSED = egress.buildSessionPolicy({ allowPrivateNetwork: false }, { allow
 
   await test("blocked URL evidence omits URL credentials, path, and query", async () => {
     const blocked = [];
-    const proxy = await egress.createSessionProxy(CLOSED, { onBlocked: (r) => blocked.push(r) });
+    const proxy = await createTestProxy(CLOSED, { onBlocked: (r) => blocked.push(r) });
     const sensitive = "synthetic-browser-secret-7f2c";
     try {
       const request = (url) => new Promise((resolve, reject) => {
         const socket = net.connect(proxy.port, "127.0.0.1", () => {
-          socket.write(`GET ${url} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n`);
+          socket.write(`GET ${url} HTTP/1.1\r\nHost: x\r\n${TEST_PROXY_AUTH_HEADER}Connection: close\r\n\r\n`);
         });
         socket.on("data", () => {});
         socket.on("end", resolve);
@@ -196,12 +209,12 @@ const CLOSED = egress.buildSessionPolicy({ allowPrivateNetwork: false }, { allow
     await new Promise((r) => upstream.listen(0, "127.0.0.1", r));
     const upstreamPort = upstream.address().port;
     const requests = [];
-    const proxy = await egress.createSessionProxy(OPEN, { onRequest: (r) => requests.push(r) });
+    const proxy = await createTestProxy(OPEN, { onRequest: (r) => requests.push(r) });
     const sensitive = "synthetic-browser-request-9a4e";
     try {
       const body = await new Promise((resolve, reject) => {
         const socket = net.connect(proxy.port, "127.0.0.1", () => {
-          socket.write(`GET http://127.0.0.1:${upstreamPort}/private/${sensitive}?token=${sensitive} HTTP/1.1\r\nHost: 127.0.0.1:${upstreamPort}\r\nConnection: close\r\n\r\n`);
+          socket.write(`GET http://127.0.0.1:${upstreamPort}/private/${sensitive}?token=${sensitive} HTTP/1.1\r\nHost: 127.0.0.1:${upstreamPort}\r\n${TEST_PROXY_AUTH_HEADER}Connection: close\r\n\r\n`);
         });
         let buf = "";
         socket.on("data", (d) => { buf += d; });
@@ -221,7 +234,8 @@ const CLOSED = egress.buildSessionPolicy({ allowPrivateNetwork: false }, { allow
     const upstream = http.createServer((req, res) => { res.writeHead(200); res.end("secret-upstream"); });
     await new Promise((r) => upstream.listen(0, "127.0.0.1", r));
     const upstreamPort = upstream.address().port;
-    const proxy = await egress.createSessionProxy(OPEN, { credential: { username: "u", password: "p" } });
+    const authCredential = { username: "authenticated-test-proxy", password: "synthetic-authenticated-proxy-password" };
+    const proxy = await egress.createSessionProxy(OPEN, { credential: authCredential });
     try {
       // No Proxy-Authorization header → must be refused with 407.
       const status = await new Promise((resolve, reject) => {
@@ -236,7 +250,7 @@ const CLOSED = egress.buildSessionPolicy({ allowPrivateNetwork: false }, { allow
       assert.ok(status.includes("407"), `unauthenticated proxy use should be 407: ${status.slice(0, 80)}`);
       assert.ok(!status.includes("secret-upstream"), "proxy leaked upstream content to an unauthenticated client");
       // With the correct credential it works.
-      const auth = "Basic " + Buffer.from("u:p").toString("base64");
+      const auth = "Basic " + Buffer.from(`${authCredential.username}:${authCredential.password}`).toString("base64");
       const ok = await new Promise((resolve, reject) => {
         const socket = net.connect(proxy.port, "127.0.0.1", () => {
           socket.write(`GET http://127.0.0.1:${upstreamPort}/ HTTP/1.1\r\nHost: x\r\nProxy-Authorization: ${auth}\r\nConnection: close\r\n\r\n`);
@@ -262,11 +276,11 @@ const CLOSED = egress.buildSessionPolicy({ allowPrivateNetwork: false }, { allow
     });
     await new Promise((r) => origin.listen(0, "127.0.0.1", r));
     const originPort = origin.address().port;
-    const proxy = await egress.createSessionProxy(OPEN);
+    const proxy = await createTestProxy(OPEN);
     try {
       await new Promise((resolve, reject) => {
         const socket = net.connect(proxy.port, "127.0.0.1", () => {
-          socket.write(`GET http://127.0.0.1:${originPort}/ HTTP/1.1\r\nHost: x\r\n\r\n`);
+          socket.write(`GET http://127.0.0.1:${originPort}/ HTTP/1.1\r\nHost: x\r\n${TEST_PROXY_AUTH_HEADER}\r\n`);
         });
         socket.on("data", () => { socket.destroy(); resolve(); }); // reset after first bytes
         socket.on("error", reject);
@@ -282,11 +296,11 @@ const CLOSED = egress.buildSessionPolicy({ allowPrivateNetwork: false }, { allow
 
   await test("session proxy refuses a request that targets the proxy itself", async () => {
     const blocked = [];
-    const proxy = await egress.createSessionProxy(OPEN, { onBlocked: (r) => blocked.push(r) });
+    const proxy = await createTestProxy(OPEN, { onBlocked: (r) => blocked.push(r) });
     try {
       const status = await new Promise((resolve, reject) => {
         const socket = net.connect(proxy.port, "127.0.0.1", () => {
-          socket.write(`GET http://127.0.0.1:${proxy.port}/ HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n`);
+          socket.write(`GET http://127.0.0.1:${proxy.port}/ HTTP/1.1\r\nHost: x\r\n${TEST_PROXY_AUTH_HEADER}Connection: close\r\n\r\n`);
         });
         let buf = "";
         socket.on("data", (d) => { buf += d; });
@@ -300,7 +314,7 @@ const CLOSED = egress.buildSessionPolicy({ allowPrivateNetwork: false }, { allow
   });
 
   await test("session proxy applies its connection ceiling to HTTP requests too", async () => {
-    const proxy = await egress.createSessionProxy(CLOSED);
+    const proxy = await createTestProxy(CLOSED);
     try {
       assert.strictEqual(proxy.server.maxConnections, 64, "HTTP proxy sockets must share the bounded session ceiling");
     } finally {

@@ -246,6 +246,11 @@ function redactDiagnosticUrls(value) {
 }
 
 async function createSessionProxy(policy, { onBlocked = () => {}, onRequest = () => {}, credential = null } = {}) {
+  if (!credential || typeof credential.username !== "string" || typeof credential.password !== "string" ||
+      credential.username.length < 12 || credential.password.length < 24 ||
+      !/^[A-Za-z0-9_-]+$/.test(credential.username) || !/^[A-Za-z0-9_-]+$/.test(credential.password)) {
+    throw new Error("Browser egress proxy requires a strong per-session credential");
+  }
   let connections = 0;
   let selfPort = 0;
 
@@ -253,12 +258,9 @@ async function createSessionProxy(policy, { onBlocked = () => {}, onRequest = ()
   // could otherwise use it as an open forward proxy egressing with Sidekick's
   // identity. Require a per-session Proxy-Authorization credential; only the
   // browser (configured with it) can drive the proxy.
-  const expectedAuth = credential
-    ? "Basic " + Buffer.from(`${credential.username}:${credential.password}`).toString("base64")
-    : null;
+  const expectedAuth = "Basic " + Buffer.from(`${credential.username}:${credential.password}`).toString("base64");
 
   function authorized(req) {
-    if (!expectedAuth) return true;
     const provided = req.headers["proxy-authorization"] || "";
     if (provided.length !== expectedAuth.length) return false;
     try {
