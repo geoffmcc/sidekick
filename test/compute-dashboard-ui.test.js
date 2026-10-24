@@ -17,7 +17,7 @@ const root = path.join(__dirname, "..");
 const clientJs = fs.readFileSync(path.join(root, "static", "dashboard.js"), "utf-8");
 const clientCss = fs.readFileSync(path.join(root, "static", "dashboard.css"), "utf-8");
 const dashHtml = fs.readFileSync(path.join(root, "src", "dashboard.html"), "utf-8");
-const { JOB_STATES, JOB_TERMINAL_STATES } = require("../src/compute/errors");
+const { JOB_STATES, JOB_TERMINAL_STATES, TRUST_LEVELS } = require("../src/compute/errors");
 
 console.log("Running Compute tab UI tests...\n");
 
@@ -189,6 +189,14 @@ ok("the compute dashboard renders only the safe worker telemetry projection", ()
 });
 
 // ── Enrollment ──
+
+ok("worker enrollment trust choices match the placement taxonomy", () => {
+  for (const trustLevel of TRUST_LEVELS) {
+    assert.match(dashHtml, new RegExp(`<option value="${trustLevel}">`), `${trustLevel} must be selectable`);
+  }
+  assert.doesNotMatch(dashHtml, /<option value="(?:known|community|internal)">/,
+    "legacy labels must not mint workers that placement silently treats as untrusted");
+});
 
 ok("enrollment guards against double submission and offers a copy button", () => {
   const body = fnBody(clientJs, "createComputeEnrollment");

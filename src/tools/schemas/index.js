@@ -1,4 +1,5 @@
 const { z } = require("zod");
+const { TRUST_LEVELS } = require("../../compute/errors");
 
 const TOOL_SCHEMAS = {
   compute: z.object({
@@ -19,7 +20,7 @@ const TOOL_SCHEMAS = {
     executors: z.array(z.any()).optional().describe("Worker executor descriptors"),
     worker_version: z.string().optional().describe("Worker agent version"),
     public_key: z.string().optional().describe("Worker public key"),
-    trust_level: z.string().optional().describe("Worker trust level"),
+    trust_level: z.enum(TRUST_LEVELS).optional().describe("Worker placement trust level (untrusted|limited|trusted|privileged)"),
     allowed_data_classifications: z.array(z.string()).optional().describe("Allowed data classifications for token"),
     max_concurrent_jobs: z.number().optional().describe("Maximum concurrent jobs for enrolled worker"),
     expires_in_ms: z.number().optional().describe("Enrollment token lifetime in milliseconds"),
@@ -102,7 +103,7 @@ const TOOL_SCHEMAS = {
     workload_class: z.string().optional().describe("Workload class for explain (chat|generate|embeddings)"),
     capabilities_required: z.string().optional().describe("Comma-separated capabilities for explain"),
     data_classification: z.string().optional().describe("Data classification for explain (public|internal|private)"),
-    trust_level: z.string().optional().describe("Trust level for explain"),
+    trust_level: z.enum(TRUST_LEVELS).optional().describe("Placement trust level for explain (untrusted|limited|trusted|privileged)"),
     rule_id: z.string().optional().describe("Routing rule ID"),
     rule_name: z.string().optional().describe("Rule name for create_rule"),
     priority: z.number().optional().describe("Rule priority"),

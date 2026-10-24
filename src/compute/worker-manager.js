@@ -1,6 +1,6 @@
 const crypto = require("crypto");
 const dbStore = require("../db");
-const { WORKER_STATES, EnrollmentError, WorkerRevokedError } = require("./errors");
+const { WORKER_STATES, TRUST_LEVELS, EnrollmentError, WorkerRevokedError } = require("./errors");
 const { projectWorkerTelemetry, sanitizeTelemetry } = require("./telemetry");
 
 function nowIso() { return new Date().toISOString(); }
@@ -191,6 +191,9 @@ function rowToWorker(row) {
 
 function createEnrollmentToken({ displayName, trustLevel = "trusted", allowedDataClassifications = ["public", "internal", "private"], maxConcurrentJobs = 2, expiresInMs = 3600000, createdBy = "admin", reEnrollmentOf = null }) {
   ensureSchema();
+  if (!TRUST_LEVELS.includes(trustLevel)) {
+    throw new EnrollmentError(`Invalid worker trust level "${trustLevel}". Valid values: ${TRUST_LEVELS.join(", ")}`);
+  }
   const token = generateId("enroll") + crypto.randomBytes(16).toString("hex");
   const tokenHash = hashToken(token);
   const tokenId = generateId("etok");

@@ -17,6 +17,7 @@ db.runPendingMigrations();
 const identity = require("../src/core/identity");
 const dispatcher = require("../src/tools/dispatcher");
 const compute = require("../src/compute");
+const { TRUST_LEVELS } = require("../src/compute/errors");
 const { getCanonicalRegistry } = require("../src/tools/canonical-registry");
 
 const owner = identity.bootstrapOwner({ username: "compute_nodes_security_owner", password: "synthetic sufficiently long password" });
@@ -62,6 +63,27 @@ test("enrollment token creator attribution comes from the authenticated principa
   const row = db.getDb().prepare("SELECT created_by FROM compute_enrollment_tokens WHERE token_id = ?").get(payload.tokenId);
   assert.equal(row.created_by, owner.principal_id);
   assert.equal(row.created_by === "forged-creator", false);
+});
+
+test("worker enrollment accepts only the canonical trust taxonomy at schema and persistence boundaries", () => {
+  const before = db.getDb().prepare("SELECT COUNT(*) AS count FROM compute_enrollment_tokens").get().count;
+  for (const invalid of ["known", "community", "internal", "supertrusted"]) {
+    assert.equal(descriptor.schema.safeParse({ action: "create_token", trust_level: invalid }).success, false, `${invalid} must fail tool schema validation`);
+    assert.throws(
+      () => compute.workerManager.createEnrollmentToken({ displayName: `invalid-${invalid}`, trustLevel: invalid }),
+      /Invalid worker trust level/,
+      `${invalid} must fail at the storage boundary`
+    );
+  }
+  assert.equal(db.getDb().prepare("SELECT COUNT(*) AS count FROM compute_enrollment_tokens").get().count, before,
+    "invalid worker trust values must not create enrollment credentials");
+
+  for (const trustLevel of TRUST_LEVELS) {
+    assert.equal(descriptor.schema.safeParse({ action: "create_token", trust_level: trustLevel }).success, true, `${trustLevel} is canonical`);
+    const token = compute.workerManager.createEnrollmentToken({ displayName: `valid-${trustLevel}`, trustLevel });
+    const row = db.getDb().prepare("SELECT trust_level FROM compute_enrollment_tokens WHERE token_id = ?").get(token.tokenId);
+    assert.equal(row.trust_level, trustLevel);
+  }
 });
 
 test("worker enrollment credential is shown only through the authenticated one-time result", async () => {
