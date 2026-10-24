@@ -33,6 +33,25 @@ test("secret configuration safely updates .env and verifies required credentials
   const contents = fs.readFileSync(envPath, "utf8");
   assert.match(contents, new RegExp(`^SIDEKICK_SECRET_DIR=${secretDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"));
   assert.equal(fs.lstatSync(envPath).mode & 0o777, 0o600);
+  assert.deepEqual(fs.readdirSync(appDir).filter(name => name.startsWith(".env.sidekick-")), [], "atomic update should clean temporary files");
+});
+
+test("secret configuration atomically creates a missing .env", t => {
+  if (process.platform === "win32") {
+    t.skip("deployment secret configuration uses POSIX no-follow file opening");
+    return;
+  }
+  const appDir = path.join(fixtureRoot, "ensure-secret-config-missing-env-app");
+  const secretDir = path.join(fixtureRoot, "ensure-secret-config-missing-env-secrets");
+  fs.mkdirSync(appDir, { recursive: true, mode: 0o700 });
+  fs.chmodSync(appDir, 0o700);
+  createSecretDirectory(secretDir);
+
+  assert.equal(configureSecretDirectory(appDir, secretDir), true);
+  const envPath = path.join(appDir, ".env");
+  assert.match(fs.readFileSync(envPath, "utf8"), new RegExp(`^SIDEKICK_SECRET_DIR=${secretDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"));
+  assert.equal(fs.lstatSync(envPath).mode & 0o777, 0o600);
+  assert.deepEqual(fs.readdirSync(appDir).filter(name => name.startsWith(".env.sidekick-")), []);
 });
 
 test("secret configuration rejects a .env symlink without changing its target", t => {
