@@ -1235,7 +1235,7 @@ async function runAgentImpl(goal, taskId, parentContext = null, cancelController
       // Parallelism is an authenticated, durable-envelope limit. It never
       // comes from the plan or model output; the Brain still admits only
       // independent authoritative read-only steps.
-      concurrencyLimit: Math.max(1, Math.min(16, Number(durableTaskStore.getTask(taskId)?.authority_envelope?.concurrency_limit) || 1)),
+      concurrencyLimit: Math.floor(Math.max(1, Math.min(16, Number(durableTaskStore.getTask(taskId)?.authority_envelope?.concurrency_limit) || 1))),
       workPackageHooks: {
         start: async (step) => {
           durableTaskStore.incrementUsage(taskId, { work_packages: 1 }, "task.brain_work_package_reserved");

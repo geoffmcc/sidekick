@@ -713,3 +713,20 @@ about current lockfile vulnerability status.
   and security assertions, 0 failures, 135.7 seconds). This establishes this
   route's current behavior only; recovery and other child-creation paths retain
   their separate coverage requirements.
+
+## Fractional Agent quota limits: 2026-10-24 (SK-038)
+
+- Regression first failed because `createAuthorityEnvelope` preserved
+  `child_task_depth`, `child_task_count`, and `concurrency_limit` as `1.9`.
+  Integer reservation and active-work counts could then exceed those quotas by
+  one.
+- Fixed envelope normalization to floor bounded quotas. Child reservations and
+  durable work-package concurrency independently floor the persisted values;
+  Agent execution and approval-resume concurrency pass integer limits onward.
+- Validation: `test/agent-authority-quotas.test.js`,
+  `test/agent-authority-approval.test.js`, `test/agent-durable-operations.test.js`,
+  `test/agent-task-store.test.js`, `test/agent-task-model.test.js`,
+  `test/approval-continuation.test.cjs`, and `test/brain-concurrency.test.js`
+  passed (7 suites, 0 failures). The quota regression also injected fractional
+  values directly into disposable SQLite task rows to exercise enforcement
+  beyond input normalization. No production data was accessed.

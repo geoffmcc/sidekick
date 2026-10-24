@@ -331,3 +331,19 @@ caller-supplied replacement envelope, and verifies the resulting child remains
 read-only with change, external, and production effects disabled. This verifies
 the persisted child projection and route input boundary; it does not prove every
 Agent dispatch path or recovery path is covered by this single test.
+
+### Fractional Agent quota limits (2026-10-24, SK-038)
+
+Confirmed quota-enforcement defect: authority-envelope child depth, child count,
+and work-package concurrency were clamped to numeric ranges but not to integer
+counts. An authenticated caller could request a fractional child count such as
+`1.9`; atomic reservation compared integer usage against the fraction and
+admitted two reservations. The durable work-package lease check similarly
+admitted a second active package under a `1.9` concurrency limit. This exceeded
+the stated task quotas by one; it did not expand the permitted effect classes
+or project/resource scopes. Envelope creation now floors count limits, and the
+SQLite reservation/lease boundaries independently floor persisted values.
+Agent and approval-resume concurrency consumers use integer limits as well.
+Regression coverage proves the pre-fix normalizer retained `1.9`, then verifies
+normalization and direct enforcement against deliberately fractional persisted
+records. No production task records were read or changed.
