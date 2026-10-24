@@ -645,7 +645,8 @@ test("identityless certification service can access only its durably attributed 
   assert.equal(taskBelongsToIdentity(certification, { principal_context: { service_identity: "dashboard-proxy" } }), false);
   assert.equal(taskBelongsToIdentity(certification, { actor_principal_id: "human-1" }), false);
   assert.equal(taskBelongsToIdentity(null, { actor_principal_id: "human-1" }), false);
-  assert.equal(taskBelongsToIdentity({ principal_id: "human-1" }, { actor_principal_id: "human-1" }), true);
+  assert.equal(taskBelongsToIdentity({ principal_id: "human-1" }, { actor_principal_id: "human-1" }), false,
+    "an unknown principal must not gain access by matching a stored task owner id");
   assert.equal(taskBelongsToIdentity({ principal_id: "human-2" }, { actor_principal_id: "human-1" }), false);
   assert.deepEqual(normalizePrincipalContext({ service_identity: "certification" }), {
     version: 1, credential_scopes: [], delegation_id: null, service_identity: "certification",

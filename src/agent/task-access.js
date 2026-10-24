@@ -7,6 +7,12 @@ const projectAccess = require("../core/project-access");
 function taskBelongsToIdentity(identity, task) {
   if (!identity) return false;
   if (identity.principal_id) {
+    // Dashboard proxy assertions are authenticated before they cross the
+    // service boundary, but task reads may occur after that request context
+    // was captured. Recheck principal state here as well, including unscoped
+    // tasks that do not pass through projectAccess's principal check.
+    const principal = identityStore.getPrincipal(identity.principal_id);
+    if (!principal?.enabled) return false;
     const owner = task && (task.actor_principal_id || task.requested_by_principal_id);
     if (!owner || owner !== identity.principal_id) return false;
     if (!task.project_id) return true;

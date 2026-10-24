@@ -68,6 +68,18 @@ test("project grants attenuate access and revoke immediately", () => {
   assert.match(agentSource, /taskProject && authIdentity && !projectAccess\.hasProjectPermission\(authIdentity\.principal_id, taskProject, "agent\.tasks\.read"/);
 });
 
+test("principal disablement immediately revokes access to an owned unscoped task", () => {
+  const subject = require('./helpers/authorized-identity').createHumanUser(identity, {
+    username: "disabled_task_owner",
+    password: "a sufficiently long disabled owner password",
+  });
+  const task = { actor_principal_id: subject.principal_id, project_id: null };
+  assert.equal(taskBelongsToIdentity({ principal_id: subject.principal_id, scopes: null }, task), true);
+
+  identity.setPrincipalEnabled(subject.principal_id, false, owner);
+  assert.equal(taskBelongsToIdentity({ principal_id: subject.principal_id, scopes: null }, task), false);
+});
+
 test("project access changes roll back when their authoritative audit event cannot be written", () => {
   const target = require('./helpers/authorized-identity').createHumanUser(identity, { username: "audit_atomic_target", password: "a sufficiently long target password" });
   platformKernel.registerProject({ project_id: "audit_atomic_project", owner_actor_id: owner.principal_id });
