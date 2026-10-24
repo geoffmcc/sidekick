@@ -811,3 +811,18 @@ fixture. Ordinary HTTP(S) requests remain available under matching scopes.
 This finding concerns the `web_fetch` protocol dispatch and does not imply
 that the network-scope resolver is unsuitable for its other protocol-aware
 callers.
+
+### Planner pack metadata prompt boundary (2026-10-24, SK-063)
+
+Confirmed prompt-boundary defect: installed capability pack descriptions,
+workflow names, and pack-generated guidance were interpolated into the Brain
+planner's system prompt. Pack metadata can originate from installed extension
+content, so malicious prose entered the model's highest-priority instruction
+channel even though the surrounding text said to treat it as data. The planner
+now receives bounded pack context as a separate user message marked with the
+same explicit untrusted-context header used for retrieved memory. A model-call
+regression injects a synthetic instruction and verifies it is absent from the
+system prompt and present only in the labeled user message. This reduces the
+instruction-channel exposure; it is not a guarantee that a model will resist
+prompt injection. Plan schema validation, current dispatcher policy, and
+approval remain the enforcement boundaries for proposed actions.

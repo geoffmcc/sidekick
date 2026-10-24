@@ -1129,3 +1129,14 @@ about current lockfile vulnerability status.
   API-key assertion. The remaining 40 invariant cases passed.
 - `npm.cmd run check:docs`, `check:architecture`, `check:tests`, and
   `git diff --check` passed after the implementation and report updates.
+
+## Planner pack metadata prompt boundary: 2026-10-24 (SK-063)
+
+- `node test/brain.test.js` passed all 48 tests. A synthetic instruction in
+  installed-pack context is absent from the planner's system prompt and occurs
+  only in a labeled untrusted user message; the synthesis-only plan still
+  completes through deterministic validation.
+- `npm.cmd run check:docs`, `check:architecture`, `check:tests`, and
+  `git diff --check` passed after the implementation and report changes.
+- This verifies prompt placement, not model resistance to injection. Tool
+  authorization and approval continue to be enforced outside the model.
