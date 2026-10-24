@@ -966,3 +966,14 @@ about current lockfile vulnerability status.
 - After SK-052, `npm.cmd test` passed all 379 unit, contract, integration, and
   security suites with 0 failures and 0 skips.
 - `npm.cmd run check:docs`, `check:architecture`, and `check:tests` passed.
+
+## Quick-action restart request audit gate: 2026-10-24 (SK-053)
+
+- `node test/run-all.js test/security-dashboard-direct-routes.test.js
+  test/dashboard-api.test.js --concurrency=1 --overall-timeout-ms=900000
+  --json` passed both suites, 0 failures and 0 skips.
+- An injected audit sink failure returns 503 and prevents both execution
+  record creation and the service restart call. The existing route tests still
+  verify that permission denial stops before audit or execution.
+- `git diff --check` passed. Full `npm.cmd test` has not yet been rerun after
+  SK-053.

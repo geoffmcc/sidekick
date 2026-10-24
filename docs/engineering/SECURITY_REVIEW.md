@@ -653,3 +653,17 @@ in force. Rejected oversized events do not modify prior history; callers retain
 their existing fail/continue behavior, so each route's handling of audit
 failure remains a separate review concern. Host administrators can still
 modify or delete the audit file.
+
+### Quick-action restart request audit gate (2026-10-24, SK-053)
+
+The authenticated Dashboard `restart-agent` route required
+`dashboard.operations.manage` and used the canonical dispatcher, but its
+Dashboard audit event was written only after the service restart. If the
+Dashboard audit sink was unavailable, the restart could already have occurred
+before the route returned an error. The route now writes a fixed,
+principal-attributed request event before creating the execution record or
+calling the service tool; audit failure returns 503 without starting the
+restart. The canonical dispatcher tool log and post-action status audit remain
+in place. A later failure of the completion audit can still leave the request
+record as evidence that an operation was attempted while its final service
+state must be checked separately.

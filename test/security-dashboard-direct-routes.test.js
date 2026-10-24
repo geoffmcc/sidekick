@@ -444,6 +444,34 @@ test("quick actions require read/manage permissions before execution, logs, or s
   assert.equal(calls, 0, "denied operations must stop before execution, system, log, or tool calls");
 });
 
+test("quick-action restart does not execute when its attributable request audit cannot be written", async () => {
+  const handlers = new Map();
+  const calls = [];
+  const app = { post: (route, handler) => handlers.set(route, handler) };
+  registerQuickActionsRoute({
+    app,
+    requireIdentityPermission: (_req, _res, permission) => { calls.push(["authorize", permission]); return true; },
+    authenticatedUser: () => "principal-operator",
+    auditLog: (_req, action, details) => { calls.push(["audit", action, details]); throw new Error("audit storage unavailable"); },
+    startDashboardExecution: () => { calls.push("start_execution"); return { execution_id: "exec-test" }; },
+    finishDashboardExecution: (_execution, state) => calls.push(["finish_execution", state]),
+    callDashboardTool: async () => { calls.push("restart_service"); return { isError: false }; },
+    dashboardExecutionMetadata: () => ({}),
+    systemctlStatus: () => { calls.push("read_service_status"); return "active"; },
+    systemSnapshot: () => ({}), dbStore: { readToolLogs: () => [] }, logError() {},
+    fs: {}, path: { join: (...parts) => parts.join("/") }, rootDir: "root",
+    errorResponse: (_req, res, _error, options) => res.status(options.status).json({ code: options.code }),
+  });
+
+  const response = await invoke(handlers.get("/api/quick-actions/:action"), { params: { action: "restart-agent" }, body: {} });
+  assert.equal(response.statusCode, 503);
+  assert.equal(response.body.code, "audit_unavailable");
+  assert.deepEqual(calls, [
+    ["authorize", "dashboard.operations.manage"],
+    ["audit", "quick-action.restart-agent.requested", { service: "sidekick-agent" }],
+  ], "the service restart must not start without a durable request audit");
+});
+
 test("scope snapshots require scope permission and active project membership", () => {
   const handlers = new Map();
   const calls = [];
