@@ -837,10 +837,17 @@ test("database backup requires an attributable audit record before export", asyn
     json(body) { this.body = body; return this; },
   };
   const request = { body: {}, params: {}, query: {}, authPrincipal: { principal_id: "backup-actor" } };
+  let dispatchResult = { content: [{ type: "text", text: "Backup created" }] };
   const register = auditLog => registerDatabaseRoutes({
-    app, dbStore: { getDb: () => ({ backup: async () => { events.push("backup"); backups++; } }) },
+    app, dbStore: { getDb: () => ({ backup: async () => { assert.fail("backup route must use the canonical dispatcher"); } }) },
     dataDir: "C:/sidekick-test-data", path: require("node:path"), fs: { mkdirSync() {} },
-    callDashboardTool: async () => ({}), dashboardExecutionMetadata: () => ({}), authenticatedUser: () => "backup-actor",
+    callDashboardTool: async (tool, args) => {
+      assert.equal(tool, "db_backup");
+      assert.equal(args.compress, false);
+      events.push("dispatch");
+      if (!dispatchResult.isError) backups++;
+      return dispatchResult;
+    }, dashboardExecutionMetadata: () => ({}), authenticatedUser: () => "backup-actor",
     requireDashboardTool: () => true, requireIdentityPermission: () => true, auditLog,
     errorResponse: (_req, res, error, options) => res.status(options.status).json({ error: error?.message || "audit failed", code: options.code }),
   });
@@ -855,7 +862,7 @@ test("database backup requires an attributable audit record before export", asyn
   register((req, action) => events.push(action));
   await handlers.get("/api/db/backup")(request, response);
   assert.equal(response.statusCode, 200);
-  assert.deepEqual(events, ["db.backup.requested", "backup", "db.backup.completed"]);
+  assert.deepEqual(events, ["db.backup.requested", "dispatch", "db.backup.completed"]);
   assert.equal(backups, 1);
 
   events.length = 0;
@@ -864,8 +871,19 @@ test("database backup requires an attributable audit record before export", asyn
   await handlers.get("/api/db/backup")(request, response);
   assert.equal(response.statusCode, 200);
   assert.equal(response.body.audit_status, "degraded");
-  assert.deepEqual(events, ["db.backup.requested", "backup", "db.backup.completed"]);
+  assert.deepEqual(events, ["db.backup.requested", "dispatch", "db.backup.completed"]);
   assert.equal(backups, 2);
+
+  events.length = 0;
+  response.statusCode = 200;
+  response.body = undefined;
+  dispatchResult = { isError: true, approvalRequired: true, approvalId: "approval-1" };
+  register((req, action) => events.push(action));
+  await handlers.get("/api/db/backup")(request, response);
+  assert.equal(response.statusCode, 202);
+  assert.deepEqual(response.body, { ok: false, code: "approval_required", approval_id: "approval-1" });
+  assert.deepEqual(events, ["db.backup.requested", "dispatch"]);
+  assert.equal(backups, 2, "a queued backup must not create the artifact before approval");
 });
 
 test("direct database routes enforce their identity permission before accessing state", async () => {
@@ -907,6 +925,6 @@ test("direct database routes enforce their identity permission before accessing 
   await invoke("/api/db/backup");
   await invoke("/api/db/migrations");
 
-  assert.deepEqual(permissions, ["database.inspect", "database.inspect", "tools.execute", "database.inspect"]);
+  assert.deepEqual(permissions, ["database.inspect", "database.inspect", "tools.execute", "tools.execute_high"]);
   assert.equal(stateReads, 0, "denied callers must not reach direct database/filesystem operations or policy checks");
 });

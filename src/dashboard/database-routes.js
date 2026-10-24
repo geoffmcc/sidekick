@@ -52,13 +52,20 @@ function registerDatabaseRoutes({ app, dbStore, dataDir, path, fs, callDashboard
     if (!requireIdentityPermission(req, res, "tools.execute")) return;
     if (!requireDashboardTool(req, res, "sidekick_db_backup")) return;
     try {
-      const backupDir = path.join(dataDir, "backups"); fs.mkdirSync(backupDir, { recursive: true });
-      const backupPath = path.join(backupDir, `sidekick-${new Date().toISOString().replace(/[:.]/g, "-")}.db`);
+      const backupPath = path.join(dataDir, "backups", `sidekick-${new Date().toISOString().replace(/[:.]/g, "-")}.db`);
       // Persist an actor-attributed record before exporting the database. If
       // audit storage is unavailable, do not create a sensitive backup.
       try { auditLog(req, "db.backup.requested", { path: backupPath }); }
       catch (error) { return errorResponse(req, res, error, { status: 503, code: "audit_unavailable", component: "database" }); }
-      await dbStore.getDb().backup(backupPath);
+      const result = await callDashboardTool("db_backup", { path: backupPath, compress: false }, dashboardExecutionMetadata(req, authenticatedUser(req) || "dashboard"));
+      if (result?.isError) {
+        if (result.approvalRequired) {
+          return res.status(202).json({ ok: false, code: "approval_required", approval_id: result.approvalId || null });
+        }
+        const code = result.code === "authorization_denied" ? "forbidden" : result.code === "policy_denied" ? "policy_denied" : "service_unavailable";
+        const status = code === "forbidden" || code === "policy_denied" ? 403 : 502;
+        return errorResponse(req, res, null, { status, code, component: "database" });
+      }
       let auditStatus = "complete";
       try { auditLog(req, "db.backup.completed", { path: backupPath }); }
       catch { auditStatus = "degraded"; }
@@ -81,7 +88,7 @@ function registerDatabaseRoutes({ app, dbStore, dataDir, path, fs, callDashboard
   });
 
   app.get("/api/db/migrations", (req, res) => {
-    if (!requireIdentityPermission(req, res, "database.inspect")) return;
+    if (!requireIdentityPermission(req, res, "tools.execute_high")) return;
     if (!requireDashboardTool(req, res, "sidekick_db_migrate")) return;
     try {
       const currentVersion = Number.parseInt(dbStore.getDb().prepare("SELECT value FROM meta WHERE key = 'schema_version'").get()?.value || "0", 10);
