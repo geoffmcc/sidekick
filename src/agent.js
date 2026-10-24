@@ -16,6 +16,7 @@ const { createTaskExecutionContext } = require("./agent/task-execution-context")
 const { persistedTaskAuthIdentity } = require("./agent/task-identity");
 const { authorizeRecoveredTask } = require("./agent/recovery-authorization");
 const { authorizeScheduledAgentDelay } = require("./agent/delay-policy");
+const { authorizeScheduledWatch: authorizeScheduledWatchAuthority } = require("./agent/watch-authority");
 const { createEscalationApprovalRef } = require("./agent/escalation-approval");
 const { readSecret } = require("./core/runtime-secrets");
 const { writeTextFile } = require("./core/json-file-store");
@@ -439,12 +440,23 @@ let continuationJobs = null;
 let agentShutdown = null;
 
 const { checkService, checkProcess, checkEndpoint, checkFile, evaluateWatchCondition, executeWatchAction } = createWatchRuntime({ callAgentTool });
+
+function authorizeScheduledWatch(watch) {
+  try {
+    return authorizeScheduledWatchAuthority(watch, {
+      secret: readSecret("SIDEKICK_SECRET_KEY", { required: true }),
+      getDescriptor: getLiveAgentDescriptor,
+      authorizeAgentContext: authorizeScheduledAgentDelay,
+    });
+  } catch { return { ok: false, reason: "scheduled authority could not be verified" }; }
+}
+
 const { watchIntervals, scheduleWatch, loadAndScheduleWatches } = createWatchScheduler({
   loadWatches, saveWatches, claimScheduledDefinition, pauseWatchForCancel,
   startScheduledLeaseRenewal, releaseScheduledClaim, createScheduledPlatformExecution,
   appendScheduledPlatformEvent, transitionExecution: platformKernel.transitionExecution,
   executeWatchAction, checkService, checkProcess, checkEndpoint, checkFile,
-  evaluateWatchCondition, processId: process.pid,
+  evaluateWatchCondition, authorizeWatch: authorizeScheduledWatch, processId: process.pid,
 });
 
 loadAndScheduleWatches();

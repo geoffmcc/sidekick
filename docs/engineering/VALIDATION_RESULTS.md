@@ -635,3 +635,24 @@ evidence/audit paths. This is a prompt-boundary hardening regression, not proof
 that arbitrary malicious content cannot influence a model or that authorization
 can be inferred from model behavior; execution authority remains a dispatcher
 responsibility.
+
+### Scheduled watch authority (2026-10-24, SK-034)
+
+`node test/run-all.js test/security-scheduled-watch-authority.test.js
+test/scheduled-authority.test.js test/scheduled-delay-dispatch.test.js
+test/security-watch-endpoint-egress.test.js test/scheduler-platform.test.js
+test/scheduling-cancel.test.js --concurrency=1
+--overall-timeout-ms=900000` passed 6/6 suites. The tests verify signed
+definition binding, current principal/credential/permission checks, scope
+narrowing, Agent-envelope reevaluation, and pausing before a timer check when
+authority cannot be verified. Existing scheduled delay, watch, cancellation,
+and endpoint-egress behavior also passed. `npm run check:docs` and
+`git diff --check` passed. Existing unsigned production watches were not
+inspected; implementation pauses them at their next timer tick.
+
+`npm run check:tests` initially found an unsafe cleanup construct in
+`test/security/systemd-core-hardening.test.js`. Cleanup now goes through a
+shared helper that restricts removal to the named `mkdtemp` child of the OS temp
+directory, rejects a replaced/symlink fixture root, and unlinks symlinks rather
+than following them. The architecture check now passes all 420 suites, and the
+systemd hardening suite passes on Windows.

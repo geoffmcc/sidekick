@@ -22,6 +22,7 @@ const tools = require('../src/tools');
 const db = require('../src/db');
 const scheduledExecution = require('../src/tools/scheduled-execution');
 const { createDelayScheduler } = require('../src/agent/delay-scheduler');
+const { verifyScheduledWatchAuthority } = require('../src/security/scheduled-authority');
 const toolContext = require('../src/tools/context');
 const { createOwnerContext, createServiceContext } = require('./helpers/authorized-context');
 
@@ -230,6 +231,7 @@ console.log('Passed\n');
     assert.strictEqual(result.isError, undefined, result.content?.[0]?.text || "watch add should succeed");
     const watch = tools.loadWatches()[0];
     assert.ok(watch.platform_execution_id);
+    assert.ok(verifyScheduledWatchAuthority({ watch, secret: process.env.SIDEKICK_SECRET_KEY })?.authIdentity?.principal_id, 'watch persists authority bound to its authenticated creator');
     const watchMonitor = db.getDb().prepare('SELECT * FROM platform_executions WHERE execution_id = ?').get(watch.platform_execution_id);
     assert.strictEqual(watchMonitor.operation_type, 'watch_monitor');
     assert.strictEqual(watchMonitor.state, 'queued');

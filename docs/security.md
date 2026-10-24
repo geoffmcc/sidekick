@@ -138,6 +138,15 @@ to current dispatcher authorization, source policy, and approval checks; context
 text cannot grant permissions or approvals. Continue to treat prompt-injection
 resistance as a residual risk rather than a model guarantee.
 
+Scheduled watch definitions are signed with the initiating principal and the
+watch/action configuration. Before each timer check, the Agent verifies that
+record, reloads current principal and credential state, checks current action
+permissions, and revalidates any Agent authority envelope. Invalid, expired,
+revoked, or modified watch authority pauses the watch and is audited; it never
+falls back to an identityless action. Watches created before this protection
+have no signed principal and are paused on their next scheduled check. Recreate
+those watches under an authenticated identity after upgrading.
+
 ## Tool permission policy
 
 Sidekick now supports a config-driven tool policy. Fresh installations default
@@ -331,7 +340,7 @@ SIDEKICK_AGENT_APPROVAL_MODE=strict
 
 Pending requests appear in the dashboard Approvals tab with structurally redacted argument previews. Full arguments are encrypted with `SIDEKICK_SECRET_KEY`, never returned by the approval-list API, and discarded after approval, rejection, failure, or expiry. Pending approvals expire after `SIDEKICK_APPROVAL_TTL_SECONDS` (default: one hour). If the secret key is missing, Sidekick refuses to queue the action instead of storing its arguments in plaintext.
 
-Delayed tool executions also require `SIDEKICK_SECRET_KEY`. Core signs the exact tool, arguments, deadline, execution ID, and authority context; Agent verifies the signature at dispatch, rechecks current principal/credential state, intersects current credential scopes with the original grant, and re-evaluates the Agent authority envelope. Both services must use the same key file. Unsigned delays from older versions fail closed; review and recreate still-authorized delays after upgrade. Key rotation invalidates outstanding signed delays.
+Delayed tool executions and scheduled watches also require `SIDEKICK_SECRET_KEY`. Core signs delay tool arguments, deadline, execution ID, and authority context; watch signatures bind the initiating principal to the action and trigger definition. Agent verifies these records, rechecks current principal/credential state, intersects current credential scopes with the original grant, and re-evaluates any Agent authority envelope. Both services must use the same key file. Unsigned delays and watches from older versions fail closed; review and recreate still-authorized work after upgrade. Key rotation invalidates outstanding signed delays and watches.
 
 Approving a request executes it under the original source and reuses current tool-policy enforcement while bypassing only the approval check. A tool blocked after it was queued therefore remains blocked at execution time.
 

@@ -274,3 +274,26 @@ claiming `SYSTEM-TRUSTED` and verifies that neither the trust label nor its
 value reaches the projection. This does not prove models cannot be influenced
 by malicious content; prompt-injection resistance remains an open platform
 risk and must continue to rely on independently enforced execution authority.
+
+### Scheduled watch authority and recovery (2026-10-24, SK-034)
+
+Timer-driven watch checks previously dispatched their configured action without
+the initiating principal context. The canonical dispatcher denied privileged
+actions without identity, so this was a fail-closed unattended-functionality
+gap rather than a demonstrated privilege escalation. Watch creation now signs
+the principal and immutable watch/action definition with the scheduled
+authority key. Every timer tick verifies that signature, revalidates current
+principal and credential state, checks the current action permission, and
+rechecks a signed Agent authority envelope when present. The action receives
+only this current, narrowed context. Invalid or changed authority pauses the
+watch and records a denial; it does not run an identityless fallback.
+
+Existing watch records without a signed principal are intentionally paused at
+their next timer check and must be recreated by an authenticated operator.
+Validation: `test/security-scheduled-watch-authority.test.js` covers modified
+definitions, disabled principals, revoked credentials, permission revocation,
+current credential-scope narrowing, and denied Agent envelopes.
+`test/security-watch-endpoint-egress.test.js` proves the scheduler stops before
+checking or dispatching when authority is absent and passes current identity
+and Agent scope to an authorized action. No production watch store was read or
+migrated.

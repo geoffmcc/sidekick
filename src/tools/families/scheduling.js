@@ -28,7 +28,7 @@ const { childProcessEnv } = require("../../security/child-process");
 const { runBoundedShell } = require("../../security/command-execution");
 const { generateId } = require("../../core/ids");
 const { readSecret } = require("../../core/runtime-secrets");
-const { createScheduledAuthority, verifyScheduledAuthority } = require("../../security/scheduled-authority");
+const { createScheduledAuthority, verifyScheduledAuthority, createScheduledWatchAuthority, verifyScheduledWatchAuthority } = require("../../security/scheduled-authority");
 const { restoreScheduledContext, authorizeScheduledAgentDelay } = require("../../agent/delay-policy");
 const { resolveOutboundUrl } = require("../../security/outbound-url");
 const { checkEndpoint } = require("../../security/endpoint-probe");
@@ -761,12 +761,14 @@ async function sidekick_watch({ action, id, name, source, target, condition, val
     }
     let agentProxyKey;
     let agentSchedulerKey;
+    let scheduleAuthorityKey;
     try {
+      scheduleAuthorityKey = readSecret("SIDEKICK_SECRET_KEY", { required: true });
       agentProxyKey = readSecret("SIDEKICK_AGENT_PROXY_KEY", { required: true });
       agentSchedulerKey = readSecret("SIDEKICK_AGENT_SCHEDULER_KEY", { required: true });
       assertDistinctAgentSchedulerSecret(agentProxyKey, agentSchedulerKey);
     } catch {
-      return { content: [{ type: "text", text: "Cannot activate watch scheduling: distinct SIDEKICK_AGENT_PROXY_KEY and SIDEKICK_AGENT_SCHEDULER_KEY credentials are required" }], isError: true, code: "agent_service_credential_unavailable" };
+      return { content: [{ type: "text", text: "Cannot activate watch scheduling: SIDEKICK_SECRET_KEY and distinct SIDEKICK_AGENT_PROXY_KEY/SIDEKICK_AGENT_SCHEDULER_KEY credentials are required" }], isError: true, code: "scheduled_authority_unavailable" };
     }
 
     const watch = {
@@ -794,6 +796,19 @@ async function sidekick_watch({ action, id, name, source, target, condition, val
       metadata: { source: watch.source, target: watch.target, network_scope: watch.network_scope, network_scope_revision: watch.network_scope_revision, condition: watch.condition, interval: watch.interval, action_tool: watch.action_tool },
       reason: "watch scheduled",
     });
+    try {
+      watch.scheduled_authority = createScheduledWatchAuthority({
+        watch,
+        context: toolContext.getExecutionContext(),
+        secret: scheduleAuthorityKey,
+      });
+    } catch (error) {
+      transitionScheduledPlatformExecution("watch", watch, "failed", {
+        source: "watch", actor: actorId, reason: "watch authority could not be recorded",
+        result_status: "failure", error_category: "scheduled_authority_invalid",
+      });
+      return { content: [{ type: "text", text: "Cannot activate watch scheduling without a verifiable authenticated principal" }], isError: true, code: "scheduled_authority_invalid" };
+    }
 
     watches.push(watch);
     saveWatches(watches);
@@ -922,6 +937,29 @@ async function sidekick_watch({ action, id, name, source, target, condition, val
     const watch = watches.find(w => w.id === id);
     if (!watch) {
       return { content: [{ type: "text", text: `Watch not found: ${id}` }], isError: true };
+    }
+
+    let authorityValid = false;
+    try {
+      authorityValid = Boolean(verifyScheduledWatchAuthority({
+        watch,
+        secret: readSecret("SIDEKICK_SECRET_KEY", { required: true }),
+      }));
+    } catch {}
+    if (!authorityValid) {
+      watch.status = "paused";
+      watch.error = "Scheduled watch authority is missing or invalid";
+      watch.pausedAt = now;
+      transitionScheduledPlatformExecution("watch", watch, "blocked", {
+        source: "watch", actor: actorId, reason: "watch authority is missing or invalid",
+        result_status: "paused", error_category: "scheduled_authority_invalid",
+        result_summary: "watch paused because its signed definition could not be verified",
+      });
+      appendScheduledPlatformEvent("watch", watch, "schedule.watch.authorization_denied", {
+        code: "scheduled_authority_invalid",
+      }, { source: "watch", actor: actorId, severity: "warning" });
+      saveWatches(watches);
+      return { content: [{ type: "text", text: `Watch ${id} is paused because its signed authority is missing or invalid` }], isError: true, code: "scheduled_authority_invalid" };
     }
 
     const checkClaim = claimScheduledDefinition(watch, `watch-check:${process.pid}`, "watch");

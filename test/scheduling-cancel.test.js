@@ -20,6 +20,7 @@ process.env.SIDEKICK_TOOL_POLICY = 'open';
 process.env.SIDEKICK_API_KEY = 'synthetic-scheduling-cancel-mcp-api-key';
 process.env.SIDEKICK_AGENT_PROXY_KEY = 'synthetic-scheduling-cancel-agent-proxy-key';
 process.env.SIDEKICK_AGENT_SCHEDULER_KEY = 'synthetic-scheduling-cancel-agent-scheduler-key';
+process.env.SIDEKICK_SECRET_KEY = 'synthetic-scheduling-cancel-authority-key';
 
 delete require.cache[require.resolve('../src/tools')];
 delete require.cache[require.resolve('../src/db')];

@@ -6,6 +6,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { test } = require("node:test");
 const { configureWorkspaceWritePath } = require("../../packaging/execution-node/configure-systemd-workspace");
+const { removeOwnedTempTree } = require("../helpers/owned-temp-cleanup");
 
 const root = path.resolve(__dirname, "..", "..");
 const CORE_UNITS = [
@@ -71,7 +72,7 @@ test("metrics collector reads its credential from the protected secret directory
 
 test("execution-node installer grants systemd writes only to an explicitly writable workspace", t => {
   const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-node-systemd-"));
-  t.after(() => fs.rmSync(fixture, { recursive: true, force: true }));
+  t.after(() => removeOwnedTempTree(fixture, "sidekick-node-systemd-"));
   const home = path.join(fixture, "home");
   const workspace = path.join(home, "Projects", "Research 100%");
   const configDirectory = path.join(home, ".config", "sidekick");
