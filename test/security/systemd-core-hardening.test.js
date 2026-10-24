@@ -56,7 +56,8 @@ test("metrics collector reads its credential from the protected secret directory
   for (const setting of [
     "NoNewPrivileges=true",
     "PrivateTmp=true",
-    "ProtectSystem=full",
+    "ProtectSystem=strict",
+    "ProtectHome=read-only",
     "UMask=0077",
     "Environment=SIDEKICK_SECRET_DIR=/etc/sidekick/secrets",
   ]) assert.ok(unit.split(/\r?\n/).includes(setting), `metrics service must set ${setting}`);

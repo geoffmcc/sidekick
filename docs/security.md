@@ -35,8 +35,9 @@ operations retain their action-specific identity and risk checks.
 The optional systemd metrics collector reads its Influx token from the
 protected `SIDEKICK_SECRET_DIR`; installer checks validate that file before
 enabling the timer. The collector unit runs as `sidekick` with a restrictive
-umask and systemd filesystem and kernel protections, and loads non-secret
-settings from `/etc/sidekick/sidekick.env` rather than the repository `.env`.
+umask, read-only home access, and systemd filesystem and kernel protections.
+It loads non-secret settings from `/etc/sidekick/sidekick.env` rather than the
+repository `.env`.
 
 Qdrant memory requests reject redirects and abort after 15 seconds. Semantic
 search responses are streamed through an 8 MiB bound, with oversized response
