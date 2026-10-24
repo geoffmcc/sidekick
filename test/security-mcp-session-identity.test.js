@@ -5,6 +5,7 @@ const assert = require("node:assert/strict");
 const { createSessionManager } = require("../src/mcp/session-manager");
 const { registerLegacySseRoutes } = require("../src/mcp/legacy-sse");
 const { registerStreamableHttpRoutes } = require("../src/mcp/streamable-http");
+const { SSEServerTransport } = require("@modelcontextprotocol/server-legacy/sse");
 
 function createApp() {
   const routes = new Map();
@@ -192,4 +193,58 @@ test("legacy SSE refuses sessions above the per-identity cap before creating a s
   assert.equal(res.statusCode, 429);
   assert.equal(res.body.code, "session_capacity_exceeded");
   assert.equal(serverCreated, false);
+});
+
+test("legacy SSE route failures hide exception details from clients and routine logs", async t => {
+  const secretDiagnostic = "synthetic-secret /srv/sidekick/private/config.json";
+  const manager = createSessionManager({ createMcpServer: () => ({}), logDebug() {} });
+  t.after(() => manager.dispose());
+  const app = createApp();
+  registerLegacySseRoutes({
+    app,
+    sessionManager: manager,
+    createMcpServer: () => { throw new Error(secretDiagnostic); },
+  });
+
+  const originalError = console.error;
+  const logs = [];
+  console.error = (...args) => logs.push(args.join(" "));
+  try {
+    const res = createResponse();
+    await app.routes.get("GET /sse")({ headers: {}, authIdentity: { principal_id: "prn_service" } }, res);
+    assert.equal(res.statusCode, 500);
+    assert.deepEqual(res.body, { error: "MCP request failed" });
+  } finally {
+    console.error = originalError;
+  }
+  assert.doesNotMatch(logs.join(" "), /synthetic-secret|private/);
+});
+
+test("legacy SSE message failures hide exception details from clients and routine logs", async t => {
+  const secretDiagnostic = "synthetic-secret /srv/sidekick/private/config.json";
+  const manager = createSessionManager({ createMcpServer: () => ({}), logDebug() {} });
+  t.after(() => manager.dispose());
+  const transport = Object.create(SSEServerTransport.prototype);
+  transport.handlePostMessage = async () => { throw new Error(secretDiagnostic); };
+  const authIdentity = { principal_id: "prn_service" };
+  manager.registerSession("failing-sse-session", {}, transport, { authIdentity });
+  const app = createApp();
+  registerLegacySseRoutes({ app, sessionManager: manager, createMcpServer: () => ({}) });
+
+  const originalError = console.error;
+  const logs = [];
+  console.error = (...args) => logs.push(args.join(" "));
+  try {
+    const res = createResponse();
+    await app.routes.get("POST /messages")({
+      query: { sessionId: "failing-sse-session" },
+      body: {},
+      authIdentity,
+    }, res);
+    assert.equal(res.statusCode, 500);
+    assert.deepEqual(res.body, { error: "MCP request failed" });
+  } finally {
+    console.error = originalError;
+  }
+  assert.doesNotMatch(logs.join(" "), /synthetic-secret|private/);
 });

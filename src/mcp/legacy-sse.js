@@ -1,5 +1,10 @@
 const { SSEServerTransport } = require("@modelcontextprotocol/server-legacy/sse");
 
+function reportSseFailure(event) {
+  // Keep exception-controlled text out of client responses and routine logs.
+  console.error(`[${event}] internal_error`);
+}
+
 function registerLegacySseRoutes({ app, sessionManager, createMcpServer }) {
   app.get("/sse", async (req, res) => {
     try {
@@ -28,8 +33,8 @@ function registerLegacySseRoutes({ app, sessionManager, createMcpServer }) {
       await server.connect(transport);
       console.log(`[SSE] New session: ${sessionId} from ${metadata.userAgent || "unknown"}`);
     } catch (e) {
-      console.error("[SSE] Error:", e.message);
-      if (!res.headersSent) res.status(500).json({ error: e.message });
+      reportSseFailure("SSE");
+      if (!res.headersSent) res.status(500).json({ error: "MCP request failed" });
     }
   });
 
@@ -45,8 +50,8 @@ function registerLegacySseRoutes({ app, sessionManager, createMcpServer }) {
       entry.lastAccess = Date.now();
       await entry.transport.handlePostMessage(req, res, req.body);
     } catch (e) {
-      console.error("[SSE POST] Error:", e.message);
-      if (!res.headersSent) res.status(500).json({ error: e.message });
+      reportSseFailure("SSE POST");
+      if (!res.headersSent) res.status(500).json({ error: "MCP request failed" });
     }
   });
 }
