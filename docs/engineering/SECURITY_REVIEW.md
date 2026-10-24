@@ -674,15 +674,30 @@ Confirmed supply-chain exposure: a fresh `setup-tools.sh` run installed
 yt-dlp, OpenAI Whisper, DuckDB, and Mermaid CLI from unversioned registry
 specifiers, allowing a registry publication or compromised account to change
 the direct package selected by a later install. The installer now pins direct
-versions to yt-dlp 2026.10.21, OpenAI Whisper 20250625, DuckDB 1.5.6, and
-Mermaid CLI 12.0.0; existing installations continue to be detected and left
-untouched. Regression coverage rejects unversioned direct installs. This is a
-partial control: Python transitive dependencies and the Mermaid npm dependency
-tree are still resolved at install time, package artifact hashes are not
-verified by the installer, and no offline clean-host installation was run.
-Those remain explicit supply-chain risks. Version selection was checked
-against the upstream [PyPI project pages](https://pypi.org/project/yt-dlp/),
-[Whisper](https://pypi.org/project/openai-whisper/), [DuckDB](https://pypi.org/project/duckdb/),
-and [npm package page](https://www.npmjs.com/package/@mermaid-js/mermaid-cli)
-on 2026-10-24; the exact selected versions are recorded in
-`scripts/setup-tools.sh`.
+versions to yt-dlp 2026.10.21, OpenAI Whisper 20250625, and DuckDB 1.5.6;
+existing Python installations continue to be detected and left untouched.
+Regression coverage rejects unversioned direct installs. The Mermaid direct
+pin was replaced by the integrity-bearing lock described in SK-055. Python
+transitive dependencies are still resolved at install time without artifact
+hash verification, and no clean-host installation was run. Those remain
+explicit supply-chain risks. Python version selection was checked against the
+upstream [PyPI project pages](https://pypi.org/project/yt-dlp/),
+[Whisper](https://pypi.org/project/openai-whisper/), and
+[DuckDB](https://pypi.org/project/duckdb/) on 2026-10-24; exact versions are
+recorded in `scripts/setup-tools.sh`.
+
+### Locked Mermaid CLI runtime (2026-10-24, SK-055)
+
+The optional Mermaid CLI install previously selected a registry version at
+setup time. It now uses a dedicated committed npm manifest and lockfile for
+Mermaid CLI 11.17.0, including exact transitive versions, HTTPS registry
+locations, and SHA-512 integrity values for every resolved package. Setup
+copies that lock into the sidekick-owned tools directory and runs `npm ci` as
+the `sidekick` user; lifecycle scripts are therefore not run as root. The
+selected CLI supports Node 18.19 or 20+, preserving Sidekick's Node 22.0
+minimum. Existing global Mermaid installations are detected without being
+replaced. The focused regression validates all lock entries and the installer
+path, and `npm ci --dry-run --ignore-scripts` validates manifest/lock
+consistency. A real clean install was not run, so Puppeteer's lifecycle browser
+download and end-to-end rendering remain unverified. The Python package
+transitives remain unlocked as noted in SK-054.

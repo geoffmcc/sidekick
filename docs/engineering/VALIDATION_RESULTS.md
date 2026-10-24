@@ -987,14 +987,28 @@ about current lockfile vulnerability status.
   hooks as the `sidekick` user and now requires explicit direct versions for
   yt-dlp, OpenAI Whisper, DuckDB, and Mermaid CLI. The regression rejects the
   former unversioned install forms.
-- Selected direct releases were cross-checked against the upstream PyPI and
-  npm project pages on 2026-10-24. Existing installed tools remain untouched
-  by the setup script's existing presence checks.
-- Transitive Python/npm resolution, artifact hash verification, and clean-host
-  installation compatibility are not covered by this change and remain open.
+- Selected Python direct releases were cross-checked against upstream PyPI
+  project pages on 2026-10-24. Existing installed tools remain untouched by
+  the setup script's existing presence checks.
+- Python transitive resolution and artifact hash verification remain open.
 - After the installer change, `npm.cmd test` passed all 379 unit, contract,
   integration, and security suites in 417.023 seconds, with 0 failures and
   0 skips. The focused installer test also passed independently.
 - `npm.cmd run check:docs`, `npm.cmd run check:architecture`,
   `npm.cmd run check:tests`, Git for Windows Bash `-n` syntax validation of
   `scripts/setup-tools.sh`, and `git diff --check` passed.
+
+## Locked Mermaid CLI runtime: 2026-10-24 (SK-055)
+
+- The installer regression verifies the Mermaid CLI manifest version matches
+  the lock root; every resolved package uses the HTTPS npm registry and has a
+  SHA-512 integrity digest; setup invokes `npm ci` as the `sidekick` user and
+  retains detection of legacy global installs.
+- `npm.cmd ci --dry-run --ignore-scripts --no-audit --no-fund --prefix
+  scripts/tooling/mermaid-cli` accepted the manifest and lock and resolved the
+  locked tree; npm selected 190 install actions for this Windows dry-run, from
+  200 package records in the lock (including platform-specific optional
+  entries). Lifecycle hooks were not executed and no packages were installed.
+- The upstream 11.17.0 manifest metadata confirms Node `^18.19 || >=20.0`,
+  compatible with the repository's Node >=22 requirement. A clean install,
+  Puppeteer browser download, and Mermaid rendering were not validated.

@@ -29,14 +29,32 @@ test("setup-tools uses a fingerprint-pinned Docker APT source", () => {
 
 test("setup-tools runs third-party Python and npm package hooks as sidekick", () => {
   const setup = read("scripts/setup-tools.sh");
+  const mermaidManifest = JSON.parse(read("scripts/tooling/mermaid-cli/package.json"));
+  const mermaidLock = JSON.parse(read("scripts/tooling/mermaid-cli/package-lock.json"));
+  const mermaidCliPackage = mermaidLock.packages["node_modules/@mermaid-js/mermaid-cli"];
+  const lockedNpmArtifacts = Object.entries(mermaidLock.packages)
+    .filter(([name, pkg]) => name && pkg.resolved);
   assert.match(setup, /^YT_DLP_VERSION="\d{4}\.\d{2}\.\d+"$/m);
   assert.match(setup, /^WHISPER_VERSION="\d{8}"$/m);
   assert.match(setup, /^DUCKDB_VERSION="\d+\.\d+\.\d+"$/m);
-  assert.match(setup, /^MERMAID_CLI_VERSION="\d+\.\d+\.\d+"$/m);
   assert.match(setup, /sudo -H -u "\$USERNAME" "\$TOOLS_PYTHON" -m pip install -q "yt-dlp==\$YT_DLP_VERSION"/);
   assert.match(setup, /sudo -H -u "\$USERNAME" "\$TOOLS_PYTHON" -m pip install -q "openai-whisper==\$WHISPER_VERSION"/);
   assert.match(setup, /sudo -H -u "\$USERNAME" "\$TOOLS_PYTHON" -m pip install -q "duckdb==\$DUCKDB_VERSION"/);
-  assert.match(setup, /sudo -H -u "\$USERNAME" env NPM_CONFIG_PREFIX="\$TOOLS_NPM_PREFIX" npm install --global "@mermaid-js\/mermaid-cli@\$MERMAID_CLI_VERSION"/);
+  assert.equal(mermaidManifest.dependencies["@mermaid-js/mermaid-cli"], "11.17.0");
+  assert.deepEqual(mermaidLock.packages[""].dependencies, mermaidManifest.dependencies);
+  assert.match(mermaidCliPackage.engines.node, /\^18\.19/);
+  assert.match(mermaidCliPackage.engines.node, />=20\.0/,
+    "locked Mermaid CLI must support Sidekick's Node 22 runtime floor");
+  assert.ok(lockedNpmArtifacts.length > 0, "Mermaid runtime lock must contain resolved registry artifacts");
+  for (const [name, pkg] of lockedNpmArtifacts) {
+    assert.match(pkg.resolved, /^https:\/\/registry\.npmjs\.org\//, `${name} must resolve from the npm registry over HTTPS`);
+    assert.match(pkg.integrity || "", /^sha512-/, `${name} must have a SHA-512 integrity digest`);
+  }
+  assert.match(setup, /npm ci --prefix "\$TOOLS_NPM_PREFIX" --no-audit --no-fund/,
+    "fresh Mermaid installs must use the committed integrity-bearing lockfile");
+  assert.match(setup, /TOOLS_MMDC="\$TOOLS_NPM_PREFIX\/node_modules\/\.bin\/mmdc"/);
+  assert.match(setup, /TOOLS_MMDC_LEGACY="\$TOOLS_NPM_PREFIX\/bin\/mmdc"/,
+    "existing global installs must remain discoverable during migration");
   assert.doesNotMatch(setup, /pip install -q (?:yt-dlp|openai-whisper|duckdb)(?:\s|$)/m,
     "optional Python tool installs must not silently float to registry latest");
   assert.doesNotMatch(setup, /npm install --global @mermaid-js\/mermaid-cli(?:\s|$)/m,
