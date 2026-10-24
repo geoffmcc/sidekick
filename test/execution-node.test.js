@@ -82,7 +82,7 @@ assert.strictEqual(placement.checkEligibility({ ...descriptor, placement: { ...d
 process.env.SIDEKICK_DATA_DIR = path.join(fixture, "data");
 process.env.SIDEKICK_SECRET_KEY = "execution-node-test-secret-key";
 const manager = require("../src/node/manager");
-const { maybeExecute } = require("../src/node/dispatch");
+const { maybeExecute, requiredIsolationForTool } = require("../src/node/dispatch");
 require("../src/db").runPendingMigrations();
 manager.ensureSchema();
 assert.strictEqual(manager.workspacePermissionForTool("git", { action: "branch" }), "read");
@@ -91,6 +91,10 @@ assert.strictEqual(manager.workspacePermissionForTool("write", { path: path.join
 assert.strictEqual(manager.workspacePermissionForTool("bash", { command: "npm test" }), "execute", "Core and node require an explicit execute grant for shell jobs");
 assert.strictEqual(manager.workspacePermissionForTool("dev_verify", {}), "execute", "verification runs require an explicit execute grant");
 assert.strictEqual(manager.workspacePermissionForTool("dev_verify", { dry_run: true }), "read", "verification planning without execution needs only read access");
+assert.strictEqual(requiredIsolationForTool("bash", {}), "bubblewrap", "node shell jobs require the OS isolation backend");
+assert.strictEqual(requiredIsolationForTool("dev_verify", {}), "bubblewrap", "verification that runs project commands requires OS isolation");
+assert.strictEqual(requiredIsolationForTool("dev_verify", { dry_run: true }), null, "verification planning does not run shell commands");
+assert.strictEqual(requiredIsolationForTool("read", { path: path.join(root, "file") }), null, "read-only tools do not require a shell backend");
 const db = require("../src/db").getDb();
 db.prepare("INSERT INTO compute_workers (worker_id, node_id, display_name, platform, state, connection_state, credential_state) VALUES (?, ?, ?, ?, 'online', 'online', 'active')").run("wk_test_node", "node_test", "test", "linux");
 const identity = require("../src/core/identity");
