@@ -32,6 +32,10 @@ const POLL_MS = boundedInt(process.env.SIDEKICK_NODE_POLL_MS, 1000, 250, 60000);
 const CONCURRENCY = boundedInt(process.env.SIDEKICK_NODE_CONCURRENCY, 2, 1, 8);
 const MAX_OUTPUT = 1024 * 1024;
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
+const WORKSPACE_ROOT_DEFAULT_TOOLS = new Set([
+  "list", "search", "security_scan", "semantic_repo", "dev_repo_profile",
+  "dev_change_summary", "dev_verify", "changelog", "git",
+]);
 let workerId = null;
 let credential = null;
 let workspace = null;
@@ -141,6 +145,13 @@ function localPathPolicy(target, operation = "read") {
 function validateLocalArguments(descriptor, args, workspaceOverride = workspace) {
   const rawArgs = args || {};
   const parsed = descriptor.schema.safeParse(rawArgs); if (!parsed.success) throw new Error("local argument validation failed");
+  // These handlers otherwise fall back to the node process working directory
+  // or the Sidekick source tree. On an execution node, an omitted path means
+  // the explicitly configured workspace, never the service's own files.
+  if (workspaceOverride?.root && WORKSPACE_ROOT_DEFAULT_TOOLS.has(descriptor.name)
+    && typeof rawArgs.path !== "string" && !(descriptor.name === "git" && parsed.data.action === "clone")) {
+    parsed.data.path = workspaceOverride.root;
+  }
   const safetyArguments = {
     dev_verify: ["dry_run"],
     dev_change_summary: ["include_ignored"],

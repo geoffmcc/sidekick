@@ -19,6 +19,7 @@ const { registerExecutionNodeAdminRoutes } = require("../src/node/admin-api");
 const { validateLocalArguments, boundedResult, effectiveConcurrency, effectiveOutputLimit } = require("../src/node/agent");
 const { createWorkspace } = require("../src/node/workspace");
 const { getCanonicalRegistry } = require("../src/tools/canonical-registry");
+const developerEntry = require("../packs/developer/modules/developer-tools/entry");
 
 const owner = identity.bootstrapOwner({ username: "node_admin_test_owner", password: "synthetic test password with sufficient length" });
 const ownerContext = { principal_id: owner.principal_id };
@@ -171,4 +172,32 @@ test("execution node applies workspace concurrency and output limits", () => {
   const result = boundedResult({ content: [{ type: "text", text: "x".repeat(4096) }] }, effectiveOutputLimit(limitedWorkspace));
   assert.ok(Buffer.byteLength(JSON.stringify(result), "utf8") <= 2048, "normalized worker output remains within the configured byte limit");
   assert.equal(result.truncated, true);
+});
+
+test("node-safe tools bind implicit paths to the authorized workspace root", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-node-path-defaults-"));
+  const readWriteWorkspace = createWorkspace({ name: "bounded-defaults", root, permissions: { read: true, write: true } });
+  const registry = getCanonicalRegistry({ includeActiveModules: false });
+  const cases = [
+    ["list", {}],
+    ["search", { pattern: "synthetic" }],
+    ["security_scan", {}],
+    ["git", { action: "status" }],
+    ["changelog", { action: "preview", from: "v1.0.0" }],
+  ];
+  for (const [name, args] of cases) {
+    const descriptor = registry.get(name);
+    assert.ok(descriptor, `canonical ${name} descriptor is available`);
+    assert.equal(validateLocalArguments(descriptor, args, readWriteWorkspace).path, root, `${name} defaults stay in the workspace`);
+  }
+  const developerDescriptors = developerEntry.buildDescriptors({
+    config: { repository_roots: [root] },
+    paths: { enforce: () => null },
+    dispatch: async () => ({ content: [] }),
+  });
+  for (const name of ["semantic_repo", "dev_repo_profile", "dev_change_summary", "dev_verify"]) {
+    const descriptor = developerDescriptors.find(item => item.name === name);
+    assert.ok(descriptor, `developer ${name} descriptor is available`);
+    assert.equal(validateLocalArguments(descriptor, {}, readWriteWorkspace).path, root, `${name} defaults stay in the workspace`);
+  }
 });
