@@ -200,6 +200,10 @@ test("redaction parsers leave malformed URL, JWT, and PEM fragments intact", () 
   const https = ["https:", "//"].join("");
   const invalidScheme = [":", "//"].join("");
   const userInfo = ["fixture-user", ":", "fixture-pass", "@"].join("");
+  const privateKeyBegin = ["-----BEGIN PRIVATE ", "KEY-----"].join("");
+  const privateKeyEnd = ["-----END PRIVATE ", "KEY-----"].join("");
+  const certificateBegin = ["-----BEGIN CERTIFICATE", "-----"].join("");
+  const certificateEnd = ["-----END CERTIFICATE", "-----"].join("");
 
   for (const value of [
     `${invalidScheme}${userInfo}example.test/path`,
@@ -214,19 +218,19 @@ test("redaction parsers leave malformed URL, JWT, and PEM fragments intact", () 
     "eyJheader.eyJpayloadX!",
     "eyJheader.eyJpayload.",
     "-----BEGIN -----",
-    "-----BEGIN CERTIFICATE-----public-----END CERTIFICATE-----",
+    `${certificateBegin}public${certificateEnd}`,
     `-----BEGIN ${"A".repeat(65)}-----body`,
-    "-----BEGIN PRIVATE KEY-----body-----END CERTIFICATE-----",
-    "-----BEGIN PRIVATE KEY-----body-----END ?-----",
-    "-----BEGIN PRIVATE KEY-----body without a footer",
+    `${privateKeyBegin}body${certificateEnd}`,
+    `${privateKeyBegin}body-----END ?-----`,
+    `${privateKeyBegin}body without a footer`,
   ]) {
     assert.equal(redactSensitive(value), value, `malformed or non-secret input changed: ${value.slice(0, 40)}`);
   }
 
-  const privateKey = "-----BEGIN PRIVATE KEY-----private material-----END PRIVATE KEY-----";
+  const privateKey = `${privateKeyBegin}private material${privateKeyEnd}`;
   assert.equal(
-    redactSensitive(`prefix ${"-----BEGIN CERTIFICATE-----public-----END CERTIFICATE-----"} ${privateKey} suffix`),
-    "prefix -----BEGIN CERTIFICATE-----public-----END CERTIFICATE----- [REDACTED PRIVATE KEY] suffix",
+    redactSensitive(`prefix ${certificateBegin}public${certificateEnd} ${privateKey} suffix`),
+    `prefix ${certificateBegin}public${certificateEnd} [REDACTED PRIVATE KEY] suffix`,
   );
   assert.equal(redactSensitive(`${https}${userInfo}example.test/path`), `${https}[REDACTED]@example.test/path`);
   assert.equal(redactSensitive("eyJheader.eyJpayload.signature"), "[REDACTED JWT]");
