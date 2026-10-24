@@ -1064,3 +1064,16 @@ about current lockfile vulnerability status.
 - After the download URL persistence fix, `npm.cmd test` passed all 380 unit,
   contract, integration, and security suites in 460.000 seconds, with 0
   failures and 0 skips.
+
+## Python tools dependency hash lock: 2026-10-24 (SK-059)
+
+- Generated universal Python 3.10+ requirement locks for the optional Python
+  tools and the setuptools build backend with uv `--generate-hashes`.
+- Updated `setup-tools.sh` to install build requirements and runtime packages
+  as the `sidekick` user with pip hash checking; runtime builds do not resolve
+  separate unpinned build dependencies.
+- Setup now fails with an explicit diagnostic below Python 3.10, the minimum
+  required by the pinned yt-dlp and DuckDB versions.
+- Added regression assertions for the exact direct versions, artifact hashes
+  on every resolved package, and use of the lock files by the installer.
+- Clean-host installation and platform runtime behavior remain unverified.

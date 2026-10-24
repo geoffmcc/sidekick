@@ -29,17 +29,37 @@ test("setup-tools uses a fingerprint-pinned Docker APT source", () => {
 
 test("setup-tools runs third-party Python and npm package hooks as sidekick", () => {
   const setup = read("scripts/setup-tools.sh");
+  const pythonRequirements = read("scripts/tooling/python-tools/requirements.in");
+  const pythonLock = read("scripts/tooling/python-tools/requirements.txt");
+  const pythonBuildRequirements = read("scripts/tooling/python-tools/build-requirements.in");
+  const pythonBuildLock = read("scripts/tooling/python-tools/build-requirements.txt");
   const mermaidManifest = JSON.parse(read("scripts/tooling/mermaid-cli/package.json"));
   const mermaidLock = JSON.parse(read("scripts/tooling/mermaid-cli/package-lock.json"));
   const mermaidCliPackage = mermaidLock.packages["node_modules/@mermaid-js/mermaid-cli"];
   const lockedNpmArtifacts = Object.entries(mermaidLock.packages)
     .filter(([name, pkg]) => name && pkg.resolved);
-  assert.match(setup, /^YT_DLP_VERSION="\d{4}\.\d{2}\.\d+"$/m);
-  assert.match(setup, /^WHISPER_VERSION="\d{8}"$/m);
-  assert.match(setup, /^DUCKDB_VERSION="\d+\.\d+\.\d+"$/m);
-  assert.match(setup, /sudo -H -u "\$USERNAME" "\$TOOLS_PYTHON" -m pip install -q "yt-dlp==\$YT_DLP_VERSION"/);
-  assert.match(setup, /sudo -H -u "\$USERNAME" "\$TOOLS_PYTHON" -m pip install -q "openai-whisper==\$WHISPER_VERSION"/);
-  assert.match(setup, /sudo -H -u "\$USERNAME" "\$TOOLS_PYTHON" -m pip install -q "duckdb==\$DUCKDB_VERSION"/);
+  assert.match(pythonRequirements, /^yt-dlp==2026\.10\.21$/m);
+  assert.match(pythonRequirements, /^openai-whisper==20250625$/m);
+  assert.match(pythonRequirements, /^duckdb==1\.5\.6$/m);
+  assert.match(pythonBuildRequirements, /^setuptools==84\.2\.1$/m);
+  assert.match(setup, /sys\.version_info >= \(3, 10\)/,
+    "setup must give an actionable failure before installing locks on unsupported Python versions");
+  for (const [name, lock] of [["Python tools", pythonLock], ["Python build dependencies", pythonBuildLock]]) {
+    const requirementStarts = [...lock.matchAll(/^[A-Za-z0-9_.-]+==[^\s\\;]+.*$/gm)];
+    assert.ok(requirementStarts.length > 0, `${name} lock must contain resolved packages`);
+    for (let index = 0; index < requirementStarts.length; index++) {
+      const start = requirementStarts[index].index;
+      const end = requirementStarts[index + 1]?.index ?? lock.length;
+      assert.match(lock.slice(start, end), /--hash=sha256:[a-f0-9]{64}/,
+        `${name} lock entry ${requirementStarts[index][0]} must be artifact-hash pinned`);
+    }
+    assert.doesNotMatch(lock, /^\s*(?:-e\s|https?:|git\+)/m,
+      `${name} lock must not introduce editable or unreviewed URL dependencies`);
+  }
+  assert.match(setup, /pip install -q --require-hashes -r "\$PYTHON_TOOLS_DIR\/build-requirements\.txt"/,
+    "Python build backend must be installed from the hash-locked build requirements");
+  assert.match(setup, /pip install -q --require-hashes --no-build-isolation -r "\$PYTHON_TOOLS_DIR\/requirements\.txt"/,
+    "Python runtime dependencies must use the committed hash lock without resolving build dependencies");
   assert.equal(mermaidManifest.dependencies["@mermaid-js/mermaid-cli"], "11.17.0");
   assert.deepEqual(mermaidLock.packages[""].dependencies, mermaidManifest.dependencies);
   assert.match(mermaidCliPackage.engines.node, /\^18\.19/);
@@ -56,7 +76,7 @@ test("setup-tools runs third-party Python and npm package hooks as sidekick", ()
   assert.match(setup, /TOOLS_MMDC_LEGACY="\$TOOLS_NPM_PREFIX\/bin\/mmdc"/,
     "existing global installs must remain discoverable during migration");
   assert.doesNotMatch(setup, /pip install -q (?:yt-dlp|openai-whisper|duckdb)(?:\s|$)/m,
-    "optional Python tool installs must not silently float to registry latest");
+    "optional Python tool installs must not bypass the hash-locked requirement files");
   assert.doesNotMatch(setup, /npm install --global @mermaid-js\/mermaid-cli(?:\s|$)/m,
     "optional Mermaid CLI install must not silently float to registry latest");
   assert.doesNotMatch(setup, /^\s*pip3?\s+install\b/m);

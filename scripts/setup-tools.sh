@@ -14,11 +14,8 @@ NC='\033[0m'
 USERNAME="sidekick"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-# Optional host tools are pinned to reviewed direct releases. Their transitive
-# dependencies are not yet hash-locked; see the security review residual risk.
-YT_DLP_VERSION="2026.10.21"
-WHISPER_VERSION="20250625"
-DUCKDB_VERSION="1.5.6"
+# Optional Python tools and their transitive dependencies are pinned in a
+# platform-aware, hash-locked requirements file.
 source "$SCRIPT_DIR/lib/apt-repository.sh"
 source "$SCRIPT_DIR/lib/install-ollama.sh"
 source "$SCRIPT_DIR/lib/polkit.sh"
@@ -298,30 +295,17 @@ if [ ! -x "$TOOLS_PYTHON" ]; then
   err "Python tools venv has no safe interpreter: $TOOLS_PYTHON"
   exit 1
 fi
-
-# yt-dlp
-if sudo -H -u "$USERNAME" "$TOOLS_PYTHON" -m pip show yt-dlp &>/dev/null; then
-  skip "yt-dlp $(sudo -H -u "$USERNAME" "$TOOLS_VENV/bin/yt-dlp" --version)"
-else
-  sudo -H -u "$USERNAME" "$TOOLS_PYTHON" -m pip install -q "yt-dlp==$YT_DLP_VERSION"
-  pass "yt-dlp installed"
+if ! sudo -H -u "$USERNAME" "$TOOLS_PYTHON" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)'; then
+  err "Optional Python tools require Python 3.10 or newer; found $(sudo -H -u "$USERNAME" "$TOOLS_PYTHON" --version 2>&1)"
+  exit 1
 fi
 
-# Whisper
-if sudo -H -u "$USERNAME" "$TOOLS_PYTHON" -m pip show openai-whisper &>/dev/null; then
-  skip "openai-whisper"
-else
-  sudo -H -u "$USERNAME" "$TOOLS_PYTHON" -m pip install -q "openai-whisper==$WHISPER_VERSION"
-  pass "Whisper installed"
-fi
-
-# DuckDB
-if sudo -H -u "$USERNAME" "$TOOLS_PYTHON" -c 'import duckdb' &>/dev/null; then
-  skip "DuckDB $(sudo -H -u "$USERNAME" "$TOOLS_PYTHON" -c 'import duckdb; print(duckdb.__version__)')"
-else
-  sudo -H -u "$USERNAME" "$TOOLS_PYTHON" -m pip install -q "duckdb==$DUCKDB_VERSION"
-  pass "DuckDB installed"
-fi
+# Install the pinned build backend first, then install runtime packages with
+# build isolation disabled so pip cannot resolve unpinned build dependencies.
+PYTHON_TOOLS_DIR="$SCRIPT_DIR/tooling/python-tools"
+sudo -H -u "$USERNAME" "$TOOLS_PYTHON" -m pip install -q --require-hashes -r "$PYTHON_TOOLS_DIR/build-requirements.txt"
+sudo -H -u "$USERNAME" "$TOOLS_PYTHON" -m pip install -q --require-hashes --no-build-isolation -r "$PYTHON_TOOLS_DIR/requirements.txt"
+pass "Hash-locked Python tools installed"
 
 # Mermaid CLI (needs npm)
 TOOLS_NPM_PREFIX="$TOOLS_VENV/npm"

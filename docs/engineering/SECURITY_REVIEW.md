@@ -673,18 +673,17 @@ state must be checked separately.
 Confirmed supply-chain exposure: a fresh `setup-tools.sh` run installed
 yt-dlp, OpenAI Whisper, DuckDB, and Mermaid CLI from unversioned registry
 specifiers, allowing a registry publication or compromised account to change
-the direct package selected by a later install. The installer now pins direct
-versions to yt-dlp 2026.10.21, OpenAI Whisper 20250625, and DuckDB 1.5.6;
-existing Python installations continue to be detected and left untouched.
-Regression coverage rejects unversioned direct installs. The Mermaid direct
-pin was replaced by the integrity-bearing lock described in SK-055. Python
-transitive dependencies are still resolved at install time without artifact
-hash verification, and no clean-host installation was run. Those remain
-explicit supply-chain risks. Python version selection was checked against the
+the direct package selected by a later install. Direct versions for yt-dlp,
+OpenAI Whisper, and DuckDB are now recorded in the hash lock described in
+SK-059; Mermaid's direct pin was replaced by the integrity-bearing lock in
+SK-055. Regression coverage rejects installer paths that bypass these locks.
+The original Python transitive-resolution risk was addressed in SK-059. No
+clean-host Python tools installation has been run, so installation behavior
+on a fresh supported host remains unverified. Python version selection was checked against the
 upstream [PyPI project pages](https://pypi.org/project/yt-dlp/),
 [Whisper](https://pypi.org/project/openai-whisper/), and
 [DuckDB](https://pypi.org/project/duckdb/) on 2026-10-24; exact versions are
-recorded in `scripts/setup-tools.sh`.
+recorded in `scripts/tooling/python-tools/requirements.in`.
 
 ### Locked Mermaid CLI runtime (2026-10-24, SK-055)
 
@@ -699,8 +698,29 @@ minimum. Existing global Mermaid installations are detected without being
 replaced. The focused regression validates all lock entries and the installer
 path, and `npm ci --dry-run --ignore-scripts` validates manifest/lock
 consistency. A real clean install was not run, so Puppeteer's lifecycle browser
-download and end-to-end rendering remain unverified. The Python package
-transitives remain unlocked as noted in SK-054.
+download and end-to-end rendering remain unverified.
+
+### Python tools artifact hash locking (2026-10-24, SK-059)
+
+Confirmed supply-chain gap: `setup-tools.sh` pinned the three optional Python
+tool versions but allowed pip to resolve transitive dependencies and select
+artifacts at installation time. The direct requirements and full dependency
+closure are now committed in a universal Python 3.10+ lock with SHA-256
+artifact hashes. Setup reports that Python 3.10 is required before attempting
+installation. This minimum is required by the pinned yt-dlp release and DuckDB
+version. Setup installs the pinned setuptools build backend from its
+own hash lock, then installs the Python tools from the runtime lock with hash
+checking and build isolation disabled; both steps run as the `sidekick`
+service user. Existing tool environments are reconciled to the lock on setup
+rather than skipped by package-presence checks. This verifies downloaded
+artifact bytes against committed hashes; it does not provide independent
+provenance for hashes originally fetched from PyPI, and a clean-host install has
+not been executed. The lock is generated with uv using:
+
+```sh
+uv pip compile scripts/tooling/python-tools/build-requirements.in --universal --generate-hashes --python-version 3.10 --output-file scripts/tooling/python-tools/build-requirements.txt
+uv pip compile scripts/tooling/python-tools/requirements.in --universal --generate-hashes --python-version 3.10 --output-file scripts/tooling/python-tools/requirements.txt
+```
 
 ### Database backup temporary-path hard links (2026-10-24, SK-056)
 
