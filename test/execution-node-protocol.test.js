@@ -190,7 +190,11 @@ async function waitForExit(child, timeoutMs = 5000) {
     requests.jobById = new Map([first, second, third].map(job => [job.jobId, job]));
 
     nodeProcess = startNode(port);
-    await waitFor(() => first.outcome, "successful completion");
+    try {
+      await waitFor(() => first.outcome, "successful completion");
+    } catch (error) {
+      throw new Error(`${error.message}; worker output: ${nodeProcess.output()}`);
+    }
     await waitFor(() => second.outcome, "failure delivery");
     await waitFor(() => third.outcome, "cancellation delivery", 20000);
 

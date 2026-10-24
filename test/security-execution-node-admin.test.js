@@ -164,6 +164,31 @@ test("execution node enforces its local workspace write grant for file writes", 
   );
 });
 
+test("execution node enforces its local execute grant and binds bash cwd to its workspace", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-node-local-execute-"));
+  const bash = getCanonicalRegistry({ includeActiveModules: false }).get("bash");
+  assert.ok(bash, "canonical bash descriptor is available");
+  const readOnlyWorkspace = createWorkspace({ name: "no-execute", root, permissions: { read: true, write: false, execute: false } });
+  assert.throws(
+    () => validateLocalArguments(bash, { command: "npm test" }, readOnlyWorkspace),
+    /does not permit execute/,
+    "read access to a workspace must not imply shell execution authority"
+  );
+
+  const executableWorkspace = createWorkspace({ name: "execute", root, permissions: { read: true, write: false, execute: true } });
+  assert.deepEqual(
+    validateLocalArguments(bash, { command: "npm test" }, executableWorkspace),
+    { command: "npm test", cwd: root },
+    "an omitted shell working directory is bound to the authorized workspace"
+  );
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-node-outside-execute-"));
+  assert.throws(
+    () => validateLocalArguments(bash, { command: "npm test", cwd: outside }, executableWorkspace),
+    /outside the authorized workspace/,
+    "shell execution cannot select a directory outside its workspace"
+  );
+});
+
 test("execution node applies workspace concurrency and output limits", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-node-local-limits-"));
   const limitedWorkspace = createWorkspace({ name: "bounded", root, limits: { maxConcurrent: 1, maxOutputBytes: 2048 } });

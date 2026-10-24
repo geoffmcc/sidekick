@@ -73,6 +73,7 @@ manager.ensureSchema();
 assert.strictEqual(manager.workspacePermissionForTool("git", { action: "branch" }), "read");
 assert.strictEqual(manager.workspacePermissionForTool("git", { action: "branch", args: "-D feature" }), "write");
 assert.strictEqual(manager.workspacePermissionForTool("write", { path: path.join(root, "file") }), "write", "Core and node share the workspace write classification");
+assert.strictEqual(manager.workspacePermissionForTool("bash", { command: "npm test" }), "execute", "Core and node require an explicit execute grant for shell jobs");
 const db = require("../src/db").getDb();
 db.prepare("INSERT INTO compute_workers (worker_id, node_id, display_name, platform, state, connection_state, credential_state) VALUES (?, ?, ?, ?, 'online', 'online', 'active')").run("wk_test_node", "node_test", "test", "linux");
 const identity = require("../src/core/identity");

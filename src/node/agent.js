@@ -165,6 +165,9 @@ function validateLocalArguments(descriptor, args, workspaceOverride = workspace)
     && typeof rawArgs.path !== "string" && !(descriptor.name === "git" && parsed.data.action === "clone")) {
     parsed.data.path = workspaceOverride.root;
   }
+  if (descriptor.name === "bash" && workspaceOverride?.root && typeof parsed.data.cwd !== "string") {
+    parsed.data.cwd = workspaceOverride.root;
+  }
   const safetyArguments = {
     dev_verify: ["dry_run"],
     dev_change_summary: ["include_ignored"],
@@ -185,8 +188,10 @@ function validateLocalArguments(descriptor, args, workspaceOverride = workspace)
     throw new Error(`execution node workspace does not permit ${requiredPermission}`);
   }
   for (const [key, value] of pathFields(parsed.data)) {
-    const operation = requiredPermission === "write" || ["destination", "output", "path_a", "path_b"].includes(key) ? "write" : "read";
-    workspaceForPath(value, operation === "write" ? "write" : "read", workspaceOverride);
+    const operation = requiredPermission === "write" || ["destination", "output", "path_a", "path_b"].includes(key)
+      ? "write"
+      : requiredPermission === "execute" && descriptor.name === "bash" && key === "cwd" ? "execute" : "read";
+    workspaceForPath(value, operation, workspaceOverride);
   }
   return parsed.data;
 }
