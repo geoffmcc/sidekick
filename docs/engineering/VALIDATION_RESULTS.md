@@ -744,3 +744,25 @@ about current lockfile vulnerability status.
   --concurrency=1 --overall-timeout-ms=300000 --json` passed (1 suite, 33
   Agent Bridge API/security assertions, 0 failures, 150.1 seconds). No bypass
   was confirmed; no production state was involved.
+
+## Scheduled command identity and crontab preservation: 2026-10-24 (SK-039)
+
+- Added HMAC-bound cron definitions and current-principal/credential/critical
+  permission revalidation for OS-launched and manual runs. Unsigned legacy jobs
+  are rejected until explicitly authorized; runner context keeps the creator's
+  source policy. Cron creation rejects principals without critical-command
+  permission and refuses Agent envelopes requiring future approval.
+- Crontab reconciliation now replaces only Sidekick-marked entries, preserves
+  unrelated jobs, and gives the runner an allowlist of non-secret runtime paths
+  and policy settings. No secret values are written to crontab.
+- Validation: `node --test test/scheduled-authority.test.js` passed (10 tests);
+  `node test/scheduler-platform.test.js` passed on Windows for the applicable
+  identity, migration, scope, and preservation assertions; its shell boundary
+  correctly refused execution on Windows. The full scheduler suite then passed
+  in WSL on Linux, including successful OS cron runner dispatch and real
+  Bubblewrap command execution. The first WSL run installed three synthetic
+  test entries; they were removed by exact Sidekick markers, the resulting
+  crontab read was empty, and test mode now prevents OS crontab writes.
+  `npm.cmd run check:tests`, `npm.cmd run check:docs`, `node --check` on changed
+  JavaScript, and `git diff --check` passed. No production crontab or database
+  was accessed.

@@ -2,6 +2,7 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { execFileSync } = require('child_process');
 
 const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sidekick-scheduler-platform-'));
 const RB_FILE = path.join(TEST_DATA_DIR, 'runbooks.json');
@@ -22,6 +23,7 @@ const tools = require('../src/tools');
 const db = require('../src/db');
 const scheduledExecution = require('../src/tools/scheduled-execution');
 const { createDelayScheduler } = require('../src/agent/delay-scheduler');
+const { mergeCrontabEntries } = require('../src/tools/families/scheduling');
 const { verifyScheduledWatchAuthority } = require('../src/security/scheduled-authority');
 const toolContext = require('../src/tools/context');
 const { createOwnerContext, createServiceContext } = require('./helpers/authorized-context');
@@ -38,6 +40,18 @@ function latestExecution(whereSql, params = []) {
 }
 
 console.log('Running Scheduler Platform Tests...\n');
+
+console.log('Test SP.0z: Sidekick cron reconciliation preserves unrelated user jobs');
+{
+  const merged = mergeCrontabEntries([
+    '15 3 * * * /usr/local/bin/backup # operator-backup',
+    '* * * * * /usr/bin/node old-runner.js old-id # sidekick:old-id',
+  ].join('\n'), ['0 2 * * * /usr/bin/node new-runner.js new-id # sidekick:new-id']);
+  assert.equal(merged, '15 3 * * * /usr/local/bin/backup # operator-backup\n0 2 * * * /usr/bin/node new-runner.js new-id # sidekick:new-id\n');
+  assert.equal(mergeCrontabEntries('0 3 * * * /usr/local/bin/backup', []).includes('backup'), true);
+  assert.equal(mergeCrontabEntries('* * * * * /usr/bin/node old.js # sidekick:old', []), '');
+}
+console.log('Passed\n');
 
 console.log('Test SP.0a: delay reloads replace and release timeout handles');
 {
@@ -182,6 +196,72 @@ console.log('Passed\n');
     assert.match(credentialDelayAfterRun.result, /Authorization denied/);
     console.log('Passed\n');
 
+    console.log('Test SP.0e: OS cron runner restores the signed creator principal before dispatch');
+    let result = await TOOLS.cron({ action: 'add', name: 'runner identity fixture', schedule: '* * * * *', command: 'printf cron-runner-ok' });
+    assert.strictEqual(result.isError, undefined, result.content?.[0]?.text);
+    const runnerJob = db.loadDocument('cron', []).find(item => item.name === 'runner identity fixture');
+    assert.ok(runnerJob?.scheduled_authority, 'new cron definitions must carry signed execution authority');
+    let runnerFailed = false;
+    try {
+      execFileSync(process.execPath, [path.join(__dirname, '..', 'scripts', 'run-cron-job.js'), runnerJob.id], {
+        cwd: path.join(__dirname, '..'), env: { ...process.env }, timeout: 30000, encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    } catch (error) {
+      runnerFailed = true;
+      if (process.platform === 'linux') throw error;
+    }
+    const afterRunner = db.loadDocument('cron', []).find(item => item.id === runnerJob.id);
+    if (process.platform === 'linux') {
+      assert.equal(runnerFailed, false);
+      assert.equal(afterRunner.lastResult, 'success');
+    } else {
+      assert.equal(runnerFailed, true, 'unsupported platforms must fail at the isolation boundary');
+      assert.equal(afterRunner.lastResult, 'error', 'runner must pass identity authorization before the OS isolation refusal');
+    }
+    const legacyJob = db.loadDocument('cron', []).find(item => item.id === runnerJob.id);
+    delete legacyJob.scheduled_authority;
+    db.setDocument('cron', [legacyJob]);
+    let legacyRunnerFailed = false;
+    try {
+      execFileSync(process.execPath, [path.join(__dirname, '..', 'scripts', 'run-cron-job.js'), legacyJob.id], {
+        cwd: path.join(__dirname, '..'), env: { ...process.env }, timeout: 30000, encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    } catch { legacyRunnerFailed = true; }
+    assert.equal(legacyRunnerFailed, true, 'legacy cron records must not receive implicit execution authority');
+    assert.equal(db.loadDocument('cron', []).find(item => item.id === runnerJob.id).lastResult, afterRunner.lastResult, 'unsigned jobs must be rejected before command dispatch');
+    result = await TOOLS.cron({ action: 'authorize', id: runnerJob.id });
+    assert.equal(result.isError, undefined, result.content?.[0]?.text);
+    assert.ok(db.loadDocument('cron', []).find(item => item.id === runnerJob.id).scheduled_authority);
+
+    console.log('Test SP.0f: scheduled cron revalidates current critical scope');
+    const identity = require('../src/core/identity');
+    const authentication = require('../src/core/authentication');
+    const servicePrincipal = identity.createPrincipal({ type: 'service', displayName: 'Cron scope regression', actorIdentity: ownerContext.authIdentity });
+    identity.grantPrincipalPermission(servicePrincipal.principal_id, 'tools.execute_high', ownerContext.authIdentity);
+    identity.grantPrincipalPermission(servicePrincipal.principal_id, 'tools.execute_critical', ownerContext.authIdentity);
+    const cronCredential = authentication.createCredential({
+      principalId: servicePrincipal.principal_id,
+      displayName: 'Cron scope regression',
+      scopes: ['tools.execute_high', 'tools.execute_critical'],
+      createdByPrincipalId: ownerContext.authIdentity.principal_id,
+      actorContext: ownerContext.authIdentity,
+    });
+    const cronIdentity = authentication.authenticateCredential(cronCredential.token);
+    const cronContext = toolContext.createInternalExecutionContext({ source: 'mcp', authIdentity: cronIdentity });
+    const scopedAdd = await toolContext.runWithContext(cronContext, () => TOOLS.cron({
+      action: 'add', name: 'revoked cron authority fixture', schedule: '* * * * *', command: 'printf must-not-run',
+    }));
+    assert.equal(scopedAdd.isError, undefined, scopedAdd.content?.[0]?.text);
+    const scopedJob = db.loadDocument('cron', []).find(item => item.name === 'revoked cron authority fixture');
+    db.getDb().prepare("UPDATE identity_credentials SET scopes_json = '[\"tools.execute_high\"]' WHERE credential_id = ?").run(cronCredential.credential.credential_id);
+    const revokedRun = await toolContext.runWithContext(ownerContext, () => TOOLS.cron({ action: 'run', id: scopedJob.id }));
+    assert.equal(revokedRun.isError, true);
+    assert.equal(revokedRun.code, 'cron_command_authority_denied');
+    assert.match(revokedRun.content?.[0]?.text || '', /critical command authority/);
+    console.log('Passed\n');
+
     if (process.platform !== 'linux') {
       console.log('Shell-backed scheduler integration scenarios skipped: this platform has no OS-enforced command isolation backend.');
       db.getDb().close();
@@ -190,16 +270,16 @@ console.log('Passed\n');
     }
 
     console.log('Test SP.1: cron add/run mirrors platform executions');
-    let result = await TOOLS.cron({ action: 'add', name: 'platform cron', schedule: '* * * * *', command: 'printf cron-ok' });
+    result = await TOOLS.cron({ action: 'add', name: 'platform cron', schedule: '* * * * *', command: 'printf cron-ok' });
     assert.strictEqual(result.isError, undefined);
-    const cronJob = db.loadDocument('cron', [])[0];
+    const cronJob = db.loadDocument('cron', []).find(item => item.name === 'platform cron');
     assert.ok(cronJob.platform_execution_id);
     let cronDefinition = db.getDb().prepare('SELECT * FROM platform_executions WHERE execution_id = ?').get(cronJob.platform_execution_id);
     assert.strictEqual(cronDefinition.operation_type, 'cron_job');
     assert.strictEqual(cronDefinition.state, 'queued');
     result = await TOOLS.cron({ action: 'run', id: cronJob.id });
     assert.strictEqual(result.isError, undefined);
-    assert.ok(result.content[0].text.includes('cron-ok'));
+    assert.ok(result.content[0].text.includes('cron-ok'), result.content[0].text);
     const cronRun = latestExecution("operation_type = 'cron_run'");
     assert.strictEqual(cronRun.state, 'completed');
     assert.strictEqual(cronRun.result_status, 'success');
@@ -493,7 +573,7 @@ console.log('Passed\n');
     console.log('Passed\n');
 
     console.log('Test SP.13: cron run backs off while the job execution is claimed');
-    const cronJobForClaim = db.loadDocument('cron', [])[0];
+    const cronJobForClaim = db.loadDocument('cron', []).find(item => item.name === 'platform cron');
     assert.ok(cronJobForClaim.platform_execution_id);
     const cronHeld = platformKernel.claimExecution({ execution_id: cronJobForClaim.platform_execution_id, claimed_by: 'other-cron-runner' });
     assert.strictEqual(cronHeld.ok, true);

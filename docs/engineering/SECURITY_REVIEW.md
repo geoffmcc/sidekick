@@ -360,3 +360,39 @@ then verifies a second principal cannot pause or cancel it and that its durable
 state remains unchanged. This confirms the shared enforcement boundary for
 these current routes; new task-id routes must remain under the middleware mounts.
 No control-route authorization bypass was confirmed.
+
+### Scheduled command identity, authority, and crontab ownership (2026-10-24, SK-039)
+
+The OS cron launcher dispatched `cron run` with only the literal actor label
+`cron-runner`; it carried no authenticated principal. The canonical dispatcher
+now requires a principal for this high-risk tool, so unattended runs were
+rejected before reaching the handler. At the same time, the cron record held a
+raw command without a signed binding to its creator or current critical-command
+scope. The existing crontab reconciliation also replaced the account's entire
+crontab and used `crontab -r` when no Sidekick jobs remained, which could erase
+unrelated operator jobs. Cron's subprocess environment did not inherit the
+systemd service's database, secret-file locator, or source-policy settings.
+
+New cron jobs now carry an HMAC-signed creator identity and a binding to the
+job ID, platform execution ID, name, schedule, and command digest. Creation and
+execution both require current `tools.execute_critical` authority; execution
+revalidates the principal and credential, intersects current credential
+scopes, and reevaluates any captured Agent envelope. Agent commands requiring
+an approval that cannot be obtained during unattended execution are refused.
+Legacy unsigned jobs remain dormant until an authenticated principal
+explicitly invokes `cron action="authorize"`. The runner verifies the signed
+context before canonical dispatch and retains the initiating source policy.
+Crontab reconciliation now replaces only lines marked as Sidekick-owned,
+preserves unrelated entries, and passes only an allowlisted set of non-secret
+runtime paths and policy settings to the runner.
+
+Validation: `test/scheduled-authority.test.js` verifies the signature binds
+command and schedule; `test/scheduler-platform.test.js` verifies the OS runner
+reaches dispatch with signed identity, rejects legacy unsigned records, permits
+explicit authorization, rejects reduced critical scope, and preserves
+unrelated crontab entries. A Linux WSL run now proves a scheduled command
+executes successfully through Bubblewrap. During the first WSL integration run,
+test mode wrote three synthetic Sidekick entries to the WSL user's crontab.
+Inspection showed only those three entries; they were removed by their exact
+Sidekick markers, and a subsequent read confirmed no entries remained. Test
+mode now skips OS crontab writes. No production crontab or job was accessed.

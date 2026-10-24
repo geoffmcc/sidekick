@@ -3,7 +3,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
-const { createScheduledAuthority, verifyScheduledAuthority, createScheduledWatchAuthority, verifyScheduledWatchAuthority } = require("../src/security/scheduled-authority");
+const { createScheduledAuthority, verifyScheduledAuthority, createScheduledWatchAuthority, verifyScheduledWatchAuthority, createScheduledCronAuthority, verifyScheduledCronAuthority } = require("../src/security/scheduled-authority");
 const { createDelayExecution } = require("../src/agent/delay-execution");
 
 const secret = "synthetic-scheduled-authority-key-32-bytes";
@@ -83,6 +83,37 @@ test("scheduled watch authority binds its trigger and action definition", () => 
   runtimeOnlyChange.triggerCount = 1;
   runtimeOnlyChange.lastCheck = "2030-01-01T00:00:00.000Z";
   assert.ok(verifyScheduledWatchAuthority({ watch: runtimeOnlyChange, secret }), "mutable scheduler status does not invalidate authority");
+});
+
+test("scheduled cron authority binds the exact recurring command and restores its initiating principal", () => {
+  const { context } = fixture();
+  const job = {
+    id: "cron_test_1", platform_execution_id: "exec_cron_1", name: "nightly task",
+    schedule: "0 2 * * *", command: "printf safe", enabled: true,
+  };
+  job.scheduled_authority = createScheduledCronAuthority({ job, context, secret });
+  const restored = verifyScheduledCronAuthority({ job, secret });
+  assert.equal(restored.authIdentity.principal_id, "principal-a");
+  assert.equal(restored.authIdentity.credential_id, "cred_a");
+  assert.equal(restored.agentAuthorityContext.principal_ref, "principal-a");
+  assert.equal(restored.project, "project-a");
+
+  for (const mutate of [
+    value => { value.command = "printf changed"; },
+    value => { value.schedule = "* * * * *"; },
+    value => { value.platform_execution_id = "exec_other"; },
+    value => { value.id = "cron_other"; },
+    value => { value.name = "changed name"; },
+  ]) {
+    const changed = structuredClone(job);
+    mutate(changed);
+    assert.equal(verifyScheduledCronAuthority({ job: changed, secret }), null);
+  }
+
+  const runtimeOnlyChange = structuredClone(job);
+  runtimeOnlyChange.enabled = false;
+  runtimeOnlyChange.lastRun = "2030-01-01T00:00:00.000Z";
+  assert.ok(verifyScheduledCronAuthority({ job: runtimeOnlyChange, secret }), "scheduler runtime metadata does not alter command authority");
 });
 
 test("delay arguments, target, time, and execution binding cannot change after signing", () => {

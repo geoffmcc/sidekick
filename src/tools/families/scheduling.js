@@ -28,8 +28,9 @@ const { childProcessEnv } = require("../../security/child-process");
 const { runBoundedShell } = require("../../security/command-execution");
 const { generateId } = require("../../core/ids");
 const { readSecret } = require("../../core/runtime-secrets");
-const { createScheduledAuthority, verifyScheduledAuthority, createScheduledWatchAuthority, verifyScheduledWatchAuthority } = require("../../security/scheduled-authority");
+const { createScheduledAuthority, verifyScheduledAuthority, createScheduledWatchAuthority, verifyScheduledWatchAuthority, createScheduledCronAuthority, verifyScheduledCronAuthority } = require("../../security/scheduled-authority");
 const { restoreScheduledContext, authorizeScheduledAgentDelay } = require("../../agent/delay-policy");
+const authorization = require("../../core/authorization");
 const { resolveOutboundUrl } = require("../../security/outbound-url");
 const { checkEndpoint } = require("../../security/endpoint-probe");
 const networkScopes = require("../../security/network-scopes");
@@ -79,10 +80,46 @@ function saveCronJobs(jobs) {
   dbStore.setDocument("cron", jobs);
 }
 
+function authorizeCronCommand(job, context) {
+  const authIdentity = context?.authIdentity;
+  if (!authIdentity?.principal_id) return { ok: false, reason: "an authenticated principal is required" };
+  const decision = authorization.authorize({
+    principalId: authIdentity.principal_id,
+    credentialScopes: authIdentity.scopes,
+    delegationId: authIdentity.delegation_id || authIdentity.delegationId || null,
+    permission: "tools.execute_critical",
+    resource: { tool: "bash", source: "cron" },
+  });
+  if (!decision.ok) return { ok: false, reason: `current principal lacks critical command authority (${decision.code})` };
+
+  if (context.agentAuthorityContext) {
+    const authority = authorizeScheduledAgentDelay(
+      { tool: "bash", args: { command: job?.command || "" } },
+      context,
+      { getDescriptor: getScheduledAgentDescriptor },
+    );
+    if (!authority.ok) return { ok: false, reason: "agent task authority does not permit this scheduled command" };
+    // A cron runner cannot pause for a later approval. Approval records only
+    // authorize the scheduling operation, never every future command run.
+    if (authority.authorityApprovalRequired) return { ok: false, reason: "scheduled command requires an approval that cannot be carried into future runs" };
+  }
+  return { ok: true };
+}
+
+function scheduledCronContext(job) {
+  const signed = verifyScheduledCronAuthority({ job, secret: readSecret("SIDEKICK_SECRET_KEY", { required: true }) });
+  if (!signed) return { ok: false, reason: "scheduled command authority is missing or no longer matches the job definition" };
+  const context = restoreScheduledContext(signed);
+  if (!context?.authIdentity?.principal_id) return { ok: false, reason: "scheduled command identity is revoked, expired, disabled, or no longer valid" };
+  const authority = authorizeCronCommand(job, context);
+  if (!authority.ok) return authority;
+  return { ok: true, context };
+}
+
 async function sidekick_cron({ action, name, schedule, command, id }) {
   const authorizationError = requireToolExecution({ tool: "cron", action: action || null, id: id || null }, "tools.execute_high", "cron");
   if (authorizationError) return authorizationError;
-  const allowedActions = ["add", "list", "remove", "run"];
+  const allowedActions = ["add", "authorize", "list", "remove", "run"];
   if (!allowedActions.includes(action)) {
     return { content: [{ type: "text", text: "Invalid action. Allowed: " + allowedActions.join(", ") }], isError: true };
   }
@@ -96,6 +133,12 @@ async function sidekick_cron({ action, name, schedule, command, id }) {
     if (name.length > 200 || schedule.length > 100 || command.length > 8192 || /[\u0000\r\n]/.test(schedule) || /[\u0000\r\n]/.test(command) || !isSafeCronSchedule(schedule)) {
       return { content: [{ type: "text", text: "cron name, schedule, or command exceeds its safe size or contains a control character" }], isError: true };
     }
+    const context = toolContext.getExecutionContext();
+    const commandAuthority = authorizeCronCommand({ command }, context);
+    if (!commandAuthority.ok) return { content: [{ type: "text", text: `Cron command not authorized: ${commandAuthority.reason}` }], isError: true, code: "cron_command_authority_denied" };
+    let authoritySecret;
+    try { authoritySecret = readSecret("SIDEKICK_SECRET_KEY", { required: true }); }
+    catch { return { content: [{ type: "text", text: "Cron scheduling requires the protected SIDEKICK_SECRET_KEY to sign its execution authority" }], isError: true, code: "scheduled_authority_unavailable" }; }
     const newJob = {
       id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
       name,
@@ -113,11 +156,38 @@ async function sidekick_cron({ action, name, schedule, command, id }) {
       metadata: { schedule: newJob.schedule },
       reason: "cron job scheduled",
     });
+    try {
+      newJob.scheduled_authority = createScheduledCronAuthority({ job: newJob, context, secret: authoritySecret });
+    } catch {
+      transitionScheduledPlatformExecution("cron", newJob, "failed", {
+        reason: "cron execution authority could not be established",
+        result_status: "failure",
+      });
+      return { content: [{ type: "text", text: "Cron job was not saved because its execution authority could not be established" }], isError: true, code: "scheduled_authority_unavailable" };
+    }
     jobs.push(newJob);
     saveCronJobs(jobs);
     syncCrontab(jobs);
     appendScheduledPlatformEvent("cron", newJob, "schedule.cron.added", { schedule: newJob.schedule });
     return { content: [{ type: "text", text: "Added cron job: " + name + " (id: " + newJob.id + ")" }] };
+  }
+
+  if (action === "authorize") {
+    if (!id && !name) return { content: [{ type: "text", text: "id or name required" }], isError: true };
+    const job = jobs.find(item => item.id === id || item.name === name);
+    if (!job) return { content: [{ type: "text", text: "Job not found" }], isError: true };
+    const context = toolContext.getExecutionContext();
+    const commandAuthority = authorizeCronCommand(job, context);
+    if (!commandAuthority.ok) return { content: [{ type: "text", text: `Cron command not authorized: ${commandAuthority.reason}` }], isError: true, code: "cron_command_authority_denied" };
+    try {
+      job.scheduled_authority = createScheduledCronAuthority({ job, context, secret: readSecret("SIDEKICK_SECRET_KEY", { required: true }) });
+    } catch {
+      return { content: [{ type: "text", text: "Cron job authority could not be signed; the existing job was left unchanged" }], isError: true, code: "scheduled_authority_unavailable" };
+    }
+    saveCronJobs(jobs);
+    syncCrontab(jobs);
+    appendScheduledPlatformEvent("cron", job, "schedule.cron.authorized", { principal_id: context.authIdentity.principal_id });
+    return { content: [{ type: "text", text: `Cron job ${job.id} is now authorized under the current principal's critical command scope` }] };
   }
 
   if (action === "list") {
@@ -175,6 +245,8 @@ async function sidekick_cron({ action, name, schedule, command, id }) {
     if (!job) {
       return { content: [{ type: "text", text: "Job not found" }], isError: true };
     }
+    const scheduledAuthority = scheduledCronContext(job);
+    if (!scheduledAuthority.ok) return { content: [{ type: "text", text: `Cron job cannot run: ${scheduledAuthority.reason}` }], isError: true, code: "cron_command_authority_denied" };
     // Fenced claim (Phase 4/B): sidekick-initiated runs of the same job are
     // serialized on the job's definition execution; crontab-fired commands
     // bypass sidekick entirely and cannot carry the contract. A cancel
@@ -243,19 +315,57 @@ async function sidekick_cron({ action, name, schedule, command, id }) {
 }
 
 function syncCrontab(jobs) {
+  // The scheduler integration suite invokes this family with disposable data;
+  // never let a test process rewrite the developer or CI user's crontab.
+  if (process.env.NODE_ENV === "test") return;
   try {
-    const enabledJobs = jobs.filter(j => j.enabled);
-    if (enabledJobs.length === 0) {
-      try { execFileSync("crontab", ["-r"], { encoding: "utf-8", env: childProcessEnv() }); } catch {}
-      return;
-    }
+    const authoritySecret = readSecret("SIDEKICK_SECRET_KEY");
+    const enabledJobs = jobs.filter(j => j.enabled && authoritySecret && verifyScheduledCronAuthority({ job: j, secret: authoritySecret }));
     const runner = path.resolve(__dirname, "../../../scripts/run-cron-job.js");
-    const lines = enabledJobs.map(j => `${j.schedule} ${shellQuote(process.execPath)} ${shellQuote(runner)} ${shellQuote(j.id)} >> ${shellQuote(path.join(DATA_DIR, `cron-${j.id}.log`))} 2>&1 # sidekick:${j.id}`);
-    const crontabContent = lines.join("\n") + "\n";
+    const lines = enabledJobs.map(j => {
+      const source = j.scheduled_authority.payload.source || "mcp";
+      const envPrefix = cronRunnerEnvironment(source).map(([key, value]) => `${key}=${shellQuote(value)}`).join(" ");
+      return `${j.schedule} ${envPrefix ? `${envPrefix} ` : ""}${shellQuote(process.execPath)} ${shellQuote(runner)} ${shellQuote(j.id)} >> ${shellQuote(path.join(DATA_DIR, `cron-${j.id}.log`))} 2>&1 # sidekick:${j.id}`;
+    });
+
+    let current = "";
+    try {
+      current = execFileSync("crontab", ["-l"], { encoding: "utf-8", env: childProcessEnv(), maxBuffer: 1024 * 1024 });
+    } catch (error) {
+      const detail = `${error.stderr || ""} ${error.stdout || ""}`;
+      if (error.status !== 1 || !/no crontab/i.test(detail)) throw error;
+    }
+    const crontabContent = mergeCrontabEntries(current, lines);
+    if (!crontabContent) return;
     execFileSync("crontab", ["-"], { input: crontabContent, encoding: "utf-8", env: childProcessEnv() });
   } catch (e) {
     // Silently fail if crontab not available
   }
+}
+
+function mergeCrontabEntries(current, sidekickEntries) {
+  const preserved = String(current || "").split(/\r?\n/)
+    .filter(line => line && !/# sidekick:[A-Za-z0-9_-]+\s*$/.test(line));
+  const generated = Array.isArray(sidekickEntries) ? sidekickEntries.filter(line => typeof line === "string" && line.length > 0) : [];
+  const merged = [...preserved, ...generated];
+  return merged.length ? `${merged.join("\n")}\n` : "";
+}
+
+function cronRunnerEnvironment(source) {
+  const suffixes = ["TOOL_POLICY", "ALLOWED_TOOLS", "DISABLED_TOOLS", "BLOCKED_TOOLS", "APPROVAL_MODE", "APPROVAL_REQUIRED_TOOLS", "APPROVAL_EXEMPT_TOOLS"];
+  const keys = new Set([
+    "NODE_ENV",
+    "SIDEKICK_DATA_DIR",
+    "SIDEKICK_DB_FILE",
+    "SIDEKICK_SECRET_DIR",
+    "SIDEKICK_SECRET_KEY_FILE",
+    "SIDEKICK_TOOL_POLICY",
+    "SIDEKICK_APPROVAL_MODE",
+    "SIDEKICK_APPROVAL_REQUIRED_TOOLS",
+    "SIDEKICK_APPROVAL_EXEMPT_TOOLS",
+    ...suffixes.map(suffix => `SIDEKICK_${String(source || "mcp").toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_${suffix}`),
+  ]);
+  return [...keys].filter(key => typeof process.env[key] === "string" && process.env[key] !== "").map(key => [key, process.env[key]]);
 }
 
 function isSafeCronSchedule(schedule) {
@@ -1074,11 +1184,11 @@ async function sidekick_watch({ action, id, name, source, target, condition, val
 
 const SCHEMAS = {
   cron: z.object({
-    action: z.enum(["add", "list", "remove", "run"]).describe("Cron action to perform"),
+    action: z.enum(["add", "authorize", "list", "remove", "run"]).describe("Cron action to perform; authorize signs a legacy job under the current principal's critical command scope"),
     name: z.string().max(200).optional().describe("Job name (required for add, optional for remove/run)"),
     schedule: z.string().max(100).optional().describe("Cron schedule expression (e.g. '0 * * * *' for hourly)"),
     command: z.string().max(8192).optional().describe("Command to execute (required for add)"),
-    id: z.string().optional().describe("Job ID (for remove/run)")
+    id: z.string().optional().describe("Job ID (for authorize/remove/run)")
   }),
   delay: z.object({
     action: z.enum(["add", "list", "cancel", "run"]).describe("Delay action: add (schedule new), list (show all), cancel (remove pending), run (execute immediately)"),
@@ -1109,7 +1219,7 @@ const descriptors = Object.freeze([
     name: "cron",
     description: "Schedule recurring tasks (add, list, remove, run jobs)",
     schema: SCHEMAS.cron,
-    args: { action: "string", name: "string (optional)", schedule: "string (optional)", command: "string (optional)", id: "string (optional)" },
+    args: { action: "string (add|authorize|list|remove|run)", name: "string (optional)", schedule: "string (optional)", command: "string (optional)", id: "string (optional)" },
     risk: "high",
     category: "Scheduling",
     source: "builtin",
@@ -1144,5 +1254,5 @@ module.exports = {
   descriptors,
   sidekick_cron, sidekick_delay, sidekick_watch,
   loadDelays, saveDelays, recoverStrandedDelays, pauseWatchForCancel,
-  loadWatches, saveWatches,
+  loadWatches, saveWatches, mergeCrontabEntries,
 };
