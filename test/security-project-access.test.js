@@ -834,6 +834,45 @@ test("DuckDB analytics disables external access before caller SQL and bounds fil
   }
 });
 
+test("media tools reject protocol URLs and resolve only scoped regular file paths", async () => {
+  const media = require("../src/tools/families/media");
+  for (const url of ["http://127.0.0.1/latest/meta-data/", "file:///etc/passwd", "concat:/etc/passwd", "pipe:1", "data:text/plain,secret"]) {
+    assert.throws(() => media.assertLocalMediaPath(url), /local filesystem path/);
+  }
+
+  const inputPath = path.join(dataDir, "local-media-input.mp4");
+  const outputPath = path.join(dataDir, "local-media-output.mp4");
+  const outputTargetPath = path.join(dataDir, "local-media-output-target.mp4");
+  const symlinkOutputPath = path.join(dataDir, "local-media-output-link.mp4");
+  fs.writeFileSync(inputPath, "synthetic local media");
+  fs.writeFileSync(outputTargetPath, "preserve output target");
+  fs.symlinkSync(outputTargetPath, symlinkOutputPath);
+  const priorAllowedPaths = process.env.SIDEKICK_MCP_ALLOWED_PATHS;
+  process.env.SIDEKICK_MCP_ALLOWED_PATHS = dataDir;
+  try {
+    const resolvedInput = toolContext.runWithContext({ source: "mcp" }, () => media.resolveMediaInputPath(inputPath));
+    assert.equal(resolvedInput, fs.realpathSync(inputPath));
+    const resolvedOutput = toolContext.runWithContext({ source: "mcp" }, () => media.resolveMediaOutputPath(outputPath));
+    assert.equal(resolvedOutput, outputPath);
+    assert.throws(() => toolContext.runWithContext({ source: "mcp" }, () => media.resolveMediaOutputPath(symlinkOutputPath)), /symlink/);
+    assert.equal(fs.readFileSync(outputTargetPath, "utf8"), "preserve output target");
+
+    const remoteInput = await dispatcher.callMcpTool("media", { action: "info", input: "http://127.0.0.1/latest/meta-data/" }, {
+      authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+    });
+    assert.equal(remoteInput.isError, true);
+    assert.match(remoteInput.content[0].text, /URL and device protocols are not accepted/);
+    const remoteOutput = await dispatcher.callMcpTool("media", { action: "convert", input: inputPath, output: "http://attacker.invalid/upload" }, {
+      authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+    });
+    assert.equal(remoteOutput.isError, true);
+    assert.match(remoteOutput.content[0].text, /URL and device protocols are not accepted/);
+  } finally {
+    if (priorAllowedPaths === undefined) delete process.env.SIDEKICK_MCP_ALLOWED_PATHS;
+    else process.env.SIDEKICK_MCP_ALLOWED_PATHS = priorAllowedPaths;
+  }
+});
+
 test("database exports atomically replace the output leaf instead of following symlinks", () => {
   const databaseAdmin = require("../src/tools/families/database-admin");
   const outputPath = path.join(dataDir, "database-export.json");

@@ -292,13 +292,66 @@ function mediaContentType(filePath, audioOnly) {
   return types[path.extname(filePath).toLowerCase()] || "application/octet-stream";
 }
 
+function assertLocalMediaPath(filePath, label = "Media path") {
+  if (typeof filePath !== "string" || !filePath || filePath.length > 4096 || filePath.includes("\0")) {
+    throw new Error(`${label} is invalid`);
+  }
+  const windowsDrivePath = process.platform === "win32" && /^[A-Za-z]:[\\/]/.test(filePath);
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(filePath) && !windowsDrivePath) {
+    throw new Error(`${label} must be a local filesystem path; URL and device protocols are not accepted`);
+  }
+  return path.resolve(filePath);
+}
+
+function resolveMediaInputPath(filePath) {
+  const normalized = assertLocalMediaPath(filePath, "Media input");
+  const policyError = enforcePathPolicy(filePath, "read");
+  if (policyError) throw new Error(policyError.content?.[0]?.text || "Media input is outside the configured read scope");
+  let canonicalPath;
+  try { canonicalPath = fs.realpathSync(normalized); }
+  catch (error) {
+    if (error.code === "ENOENT") throw new Error("Media input file is unavailable");
+    throw error;
+  }
+  const canonicalPolicyError = enforcePathPolicy(canonicalPath, "read");
+  if (canonicalPolicyError) throw new Error(canonicalPolicyError.content?.[0]?.text || "Media input is outside the configured read scope");
+  let opened;
+  try { opened = openRegularFile(canonicalPath, { noFollow: true }); }
+  catch (error) {
+    if (error.code === "ENOENT") throw new Error("Media input file changed or is unavailable");
+    throw error;
+  }
+  fs.closeSync(opened.fd);
+  return canonicalPath;
+}
+
+function resolveMediaOutputPath(filePath) {
+  const normalized = assertLocalMediaPath(filePath, "Media output");
+  const policyError = enforcePathPolicy(filePath, "write");
+  if (policyError) throw new Error(policyError.content?.[0]?.text || "Media output is outside the configured write scope");
+  const parentPath = path.dirname(normalized);
+  let canonicalParent;
+  try { canonicalParent = fs.realpathSync(parentPath); }
+  catch (error) {
+    if (error.code === "ENOENT") throw new Error("Media output parent does not exist or is inaccessible");
+    throw error;
+  }
+  if (!fs.statSync(canonicalParent).isDirectory()) throw new Error("Media output parent must be a directory");
+  const canonicalOutput = path.join(canonicalParent, path.basename(normalized));
+  const canonicalPolicyError = enforcePathPolicy(canonicalOutput, "write");
+  if (canonicalPolicyError) throw new Error(canonicalPolicyError.content?.[0]?.text || "Media output is outside the configured write scope");
+  try {
+    const stat = fs.lstatSync(canonicalOutput);
+    if (stat.isSymbolicLink() || !stat.isFile()) throw new Error("Media output must be a regular, non-symlink file");
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  return canonicalOutput;
+}
+
 async function runOcr({ path: imagePath, language, psm }) {
   try {
-    const policyError = enforcePathPolicy(imagePath, "read");
-    if (policyError) return policyError;
-    if (!fs.existsSync(imagePath)) {
-      return { content: [{ type: "text", text: `Error: File not found: ${imagePath}` }], isError: true };
-    }
+    imagePath = resolveMediaInputPath(imagePath);
 
     const lang = validLangCode(language, "eng");
     const args = [imagePath, "stdout", "-l", lang];
@@ -331,12 +384,8 @@ async function sidekick_media({ action, input, output, options }) {
     if (!input) {
       return { content: [{ type: "text", text: "Error: input is required" }], isError: true };
     }
-    const inputPolicyError = enforcePathPolicy(input, "read");
-    if (inputPolicyError) return inputPolicyError;
-    if (output) {
-      const outputPolicyError = enforcePathPolicy(output, "write");
-      if (outputPolicyError) return outputPolicyError;
-    }
+    input = resolveMediaInputPath(input);
+    if (output) output = resolveMediaOutputPath(output);
 
     if (action === "info") {
       const result = safeExecFileSync("ffprobe", ["-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", input], { timeout: 15000 });
@@ -410,11 +459,7 @@ async function sidekick_transcribe({ path: audioPath, model, language, async: ru
       return { content: [{ type: "text", text: JSON.stringify(publicJob) }] };
     }
     if (!audioPath) return { content: [{ type: "text", text: "Error: path is required" }], isError: true };
-    const policyError = enforcePathPolicy(audioPath, "read");
-    if (policyError) return policyError;
-    if (!fs.existsSync(audioPath)) {
-      return { content: [{ type: "text", text: `Error: File not found: ${audioPath}` }], isError: true };
-    }
+    audioPath = resolveMediaInputPath(audioPath);
 
     const m = validWhisperModel(model);
     const lang = language ? validLangCode(language, "eng") : undefined;
@@ -1051,4 +1096,4 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_ocr, sidekick_media, sidekick_transcribe, sidekick_analytics, sidekick_insight_report, sidekick_download, localCudaAvailable, localVulkanAvailable, readTranscriptionText, transcriptionOutputPath, transcriptionJobPath, transcriptionJobBelongsToPrincipal, countActiveTranscriptionJobs, assertTranscriptionCapacity, removeTranscriptionOutput, copyAnalyticsInput, buildAnalyticsScript, saveTranscriptionJob, MAX_TRANSCRIPTION_OUTPUT_BYTES, MAX_ACTIVE_TRANSCRIPTION_JOBS, MAX_ANALYTICS_FILE_BYTES, MAX_ANALYTICS_QUERY_CHARS, MAX_ANALYTICS_RESULT_ROWS };
+module.exports = { descriptors, sidekick_ocr, sidekick_media, sidekick_transcribe, sidekick_analytics, sidekick_insight_report, sidekick_download, localCudaAvailable, localVulkanAvailable, readTranscriptionText, transcriptionOutputPath, transcriptionJobPath, transcriptionJobBelongsToPrincipal, countActiveTranscriptionJobs, assertTranscriptionCapacity, removeTranscriptionOutput, assertLocalMediaPath, resolveMediaInputPath, resolveMediaOutputPath, copyAnalyticsInput, buildAnalyticsScript, saveTranscriptionJob, MAX_TRANSCRIPTION_OUTPUT_BYTES, MAX_ACTIVE_TRANSCRIPTION_JOBS, MAX_ANALYTICS_FILE_BYTES, MAX_ANALYTICS_QUERY_CHARS, MAX_ANALYTICS_RESULT_ROWS };
