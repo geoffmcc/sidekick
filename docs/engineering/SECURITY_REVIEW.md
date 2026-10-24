@@ -795,3 +795,19 @@ the write, and the Sidekick regression confirms all forms are rejected and no
 output file is created. Normal diff output remains available. This finding is
 limited to Git-helper argument-mediated file writes; it does not establish
 general filesystem isolation for trusted in-process tools.
+
+### web_fetch protocol mismatch with network scopes (2026-10-24, SK-062)
+
+Confirmed protocol-authorization mismatch: the shared network-scope resolver
+supports `ws` and `wss` for browser/network use, while `web_fetch` only selects
+Node's HTTP or HTTPS request library and does not implement WebSocket. When a
+scope allowed `ws`, `web_fetch` accepted a `ws://` URL and sent an ordinary
+HTTP request to that host and port. A local synthetic HTTP server and
+ws-only scope reproduced the request. This could cross a protocol boundary
+where an operator intended to permit only WebSocket traffic. `web_fetch` now
+rejects non-HTTP(S) schemes before scope resolution or socket creation; tests
+cover ws-only and wss-only scopes and assert no HTTP request reaches the
+fixture. Ordinary HTTP(S) requests remain available under matching scopes.
+This finding concerns the `web_fetch` protocol dispatch and does not imply
+that the network-scope resolver is unsuitable for its other protocol-aware
+callers.

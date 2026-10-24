@@ -1113,3 +1113,19 @@ about current lockfile vulnerability status.
 - `npm.cmd run check:docs`, `check:architecture`, `check:tests`, and
   `git diff --check` passed. The finding is limited to this argument-mediated
   write path; no general filesystem isolation claim is made.
+
+## web_fetch network-scope protocol matching: 2026-10-24 (SK-062)
+
+- `node test/network-scope-fetch.test.js` passed. A local HTTP fixture and
+  synthetic `ws`-only scope reproduced the previous mismatch; the fixed
+  handler rejects both ws and wss URLs before the fixture receives a request.
+  Existing scoped HTTP request, denied metadata target, DNS failure/rebinding,
+  unreachable target, and timeout cases also passed.
+- `node --test test/outbound-url-security.test.js
+  test/security-net-fetch-bounds.test.js` passed (6 tests). In the same
+  combined invocation, `test/security-invariants.test.js` had one unrelated
+  Windows environment failure: its deployment-secret test could not verify
+  temporary-directory ACLs and failed before reaching the expected missing
+  API-key assertion. The remaining 40 invariant cases passed.
+- `npm.cmd run check:docs`, `check:architecture`, `check:tests`, and
+  `git diff --check` passed after the implementation and report updates.

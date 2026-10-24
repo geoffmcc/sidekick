@@ -83,6 +83,13 @@ async function sidekick_web_fetch({ url: targetUrl, method, headers, body, netwo
   const https = require("https");
   const http = require("http");
 
+  let requestedUrl;
+  try { requestedUrl = new URL(String(targetUrl)); }
+  catch { return errorText("Invalid url: not a valid URL", "invalid_url"); }
+  if (requestedUrl.protocol !== "http:" && requestedUrl.protocol !== "https:") {
+    return errorText(`Invalid url scheme "${requestedUrl.protocol}": web_fetch supports only http and https`, "invalid_url_scheme");
+  }
+
   const payload = validateRequestPayload(headers, body);
   if (payload.error) return payload.error;
 
