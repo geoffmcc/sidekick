@@ -97,8 +97,13 @@ function registerStreamableHttpRoutes({ app, sessionManager, createMcpServer, lo
   const modernMcpHandler = createModernMcpHandler(createMcpServer);
 
   function logSession(method, headers, body) {
-    const sessionId = headers["mcp-session-id"] || headers["Mcp-Session-Id"] || "none";
-    const methodType = body ? (typeof body === "object" ? body.method : "unknown") : "unknown";
+    const rawSessionId = headers["mcp-session-id"] || headers["Mcp-Session-Id"] || "none";
+    const rawMethod = body && typeof body === "object" ? body.method : "unknown";
+    const safeLabel = value => typeof value === "string"
+      ? value.replace(/[^\x20-\x7E]/g, "?").slice(0, 128)
+      : "invalid";
+    const sessionId = safeLabel(rawSessionId);
+    const methodType = safeLabel(rawMethod);
     console.log(`[MCP ${method}] session=${sessionId} method=${methodType}`);
   }
 

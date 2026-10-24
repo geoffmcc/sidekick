@@ -20,10 +20,34 @@ function createApp() {
 function createResponse() {
   return {
     statusCode: 200,
+    headers: {},
     status(code) { this.statusCode = code; return this; },
+    setHeader(name, value) { this.headers[name.toLowerCase()] = value; },
     json(value) { this.body = value; return this; },
   };
 }
+
+test("MCP request logs bound and sanitize client-controlled labels", async t => {
+  const manager = createSessionManager({ createMcpServer: () => ({}), logDebug() {} });
+  t.after(() => manager.dispose());
+  const app = createApp();
+  registerStreamableHttpRoutes({ app, sessionManager: manager, createMcpServer: () => ({}), logDebug() {} });
+  const lines = [];
+  const originalLog = console.log;
+  console.log = (...args) => lines.push(args.join(" "));
+  t.after(() => { console.log = originalLog; });
+
+  const response = createResponse();
+  await app.routes.get("GET /mcp")({
+    headers: { "mcp-session-id": `${"x".repeat(200)}\r\nforged log entry` },
+    authIdentity: { principal_id: "prn_test" },
+  }, response);
+
+  assert.equal(response.statusCode, 404);
+  assert.equal(lines.length, 1);
+  assert.doesNotMatch(lines[0], /[\r\n]/, "untrusted values cannot forge additional log lines");
+  assert.ok(lines[0].length < 200, "untrusted log labels have a strict length bound");
+});
 
 test("MCP session identity rejects a different principal without rebinding the session", async t => {
   const manager = createSessionManager({ createMcpServer: () => ({}), logDebug() {} });
