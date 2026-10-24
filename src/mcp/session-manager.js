@@ -125,7 +125,14 @@ function createSessionManager({ createMcpServer, logDebug, now = () => Date.now(
     sessions.delete(sessionId);
     for (const resource of [entry.transport, entry.server]) {
       if (!resource || typeof resource.close !== "function") continue;
-      try { await resource.close(); } catch (error) { logDebug("SESSION_CLOSE_ERROR", { sessionId, error: error.message }); }
+      try {
+        await resource.close();
+      } catch {
+        const safeSessionId = typeof sessionId === "string" && /^[A-Za-z0-9._:-]{1,128}$/.test(sessionId)
+          ? sessionId
+          : null;
+        try { logDebug("SESSION_CLOSE_ERROR", { sessionId: safeSessionId, error: "internal_error" }); } catch {}
+      }
     }
   }
 

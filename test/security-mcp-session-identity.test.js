@@ -162,6 +162,24 @@ test("legacy-key MCP sessions remain bound to the same identityless authenticati
   assert.equal(scopedPrincipal.identityMismatch, true);
 });
 
+test("MCP session cleanup logs do not expose close exception details", async () => {
+  const events = [];
+  const manager = createSessionManager({
+    createMcpServer: () => ({}),
+    logDebug: (event, details) => events.push({ event, details }),
+  });
+  const secretDiagnostic = "synthetic-secret /srv/sidekick/private/config.json";
+  manager.registerSession("cleanup-session", {}, {
+    async close() { throw new Error(secretDiagnostic); },
+  }, { authIdentity: { principal_id: "prn_service" } });
+  await manager.dispose();
+
+  const failures = events.filter(event => event.event === "SESSION_CLOSE_ERROR");
+  assert.equal(failures.length, 1);
+  assert.deepEqual(failures[0].details, { sessionId: "cleanup-session", error: "internal_error" });
+  assert.doesNotMatch(JSON.stringify(events), /synthetic-secret|private|stack/);
+});
+
 test("MCP session capacity limits individual identities and the whole server", async t => {
   const perIdentity = createSessionManager({ createMcpServer: () => ({}), logDebug() {}, maxSessions: 2, maxSessionsPerIdentity: 1 });
   t.after(() => perIdentity.dispose());
