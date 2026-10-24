@@ -1181,3 +1181,17 @@ about current lockfile vulnerability status.
   both suites passed all 3 repetitions at alternating runner concurrency
   settings (2 and 4). This lowers reproducibility concern but does not explain
   the earlier failure during the full-suite run; that remains recorded above.
+
+## Compute provider bootstrap state preservation: 2026-10-24 (SK-065)
+
+- Source review found that protected-file cloud providers are tagged
+  `file-bootstrap`, but the startup idempotency lookup recognized only
+  `env-bootstrap`. A restart could therefore seed a second enabled provider
+  after an operator disabled the first one.
+- The lookup now recognizes both bootstrap-managed sources. The regression
+  verifies there remains exactly one cloud provider and its disabled state
+  survives a second bootstrap. The test fixture now uses the runner-owned
+  temporary data root instead of deleting a fixed repository test-data path.
+- `node test/run-all.js test/compute-provider-bootstrap.test.js --json` passed
+  (10 assertions in the suite, 0 failures). Full required-suite verification
+  after this change is pending.

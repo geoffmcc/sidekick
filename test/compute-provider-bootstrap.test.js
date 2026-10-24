@@ -11,11 +11,15 @@
 
 const assert = require("assert");
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 
-const TEST_DATA_DIR = path.join(__dirname, "test-data-provider-bootstrap");
-fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+const runnerDataRoot = process.env.SIDEKICK_TEST_DATA_DIR;
+const TEST_DATA_DIR = runnerDataRoot
+  ? path.join(runnerDataRoot, "provider-bootstrap")
+  : fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-provider-bootstrap-"));
 fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
+if (!runnerDataRoot) process.once("exit", () => fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true }));
 process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
 process.env.SIDEKICK_API_KEY = "sk-sidekick-test-key";
 
@@ -153,6 +157,28 @@ test("cloud provider is seeded public/internal only, lower priority than local",
     assert.strictEqual(groq.providerType, "openai-compatible");
     assert.deepStrictEqual(groq.dataClassifications.sort(), ["internal", "public"], "cloud excludes private/sensitive/restricted");
     assert.ok(groq.priority < managed("ollama").priority, "cloud ranks below local");
+  } finally {
+    delete process.env.GROQ_API_KEY;
+    delete process.env.SIDEKICK_SECRET_KEY;
+  }
+});
+
+test("protected-file cloud bootstrap is idempotent and preserves operator disable", () => {
+  resetRegistry();
+  process.env.SIDEKICK_SECRET_KEY = "test-master-key";
+  process.env.GROQ_API_KEY = "gsk_test_secret_value";
+  try {
+    bootstrapProviders();
+    const initial = providerRegistry.listProviders().filter(provider => provider.metadata?.bootstrapKey === "groq");
+    assert.strictEqual(initial.length, 1, "one protected-file Groq provider is created");
+    assert.strictEqual(initial[0].metadata.managed, "file-bootstrap");
+
+    providerRegistry.updateProvider(initial[0].providerId, { enabled: false });
+    bootstrapProviders();
+
+    const after = providerRegistry.listProviders().filter(provider => provider.metadata?.bootstrapKey === "groq");
+    assert.strictEqual(after.length, 1, "re-bootstrap does not create a replacement provider");
+    assert.strictEqual(after[0].enabled, false, "operator disable survives process restart bootstrap");
   } finally {
     delete process.env.GROQ_API_KEY;
     delete process.env.SIDEKICK_SECRET_KEY;

@@ -47,7 +47,12 @@ function configuredModel(value) {
 
 function findManaged(bootstrapKey) {
   return providerRegistry.listProviders().find(
-    p => p.metadata && p.metadata.managed === "env-bootstrap" && p.metadata.bootstrapKey === bootstrapKey
+    // Cloud providers are seeded from protected secret files, while local
+    // providers are seeded from ordinary environment configuration. Both are
+    // bootstrap-managed and must retain operator edits across restart.
+    p => p.metadata
+      && ["env-bootstrap", "file-bootstrap"].includes(p.metadata.managed)
+      && p.metadata.bootstrapKey === bootstrapKey
   ) || null;
 }
 
