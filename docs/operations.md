@@ -135,6 +135,8 @@ Every Git deploy that advances `main` also creates a pre-deploy snapshot under `
 
 Keep backup purposes separate: `/home/sidekick/backups/` is for deployment snapshots; `${SIDEKICK_DATA_DIR}/backups/` (normally `/home/sidekick/sidekick/data/backups/`) is for application database backups created by `db_backup`. Do not create new deployment snapshots in the repository-level `backups/` directory.
 
+The `db_backup` and `db_restore` tools stream files through private temporary files and enforce a 2 GiB default limit on both backup input and restored database output. This bounds temporary disk use without buffering whole databases in process memory. If a legitimate database or compressed archive is larger, set `SIDEKICK_DB_BACKUP_MAX_BYTES` in the Sidekick service environment to the desired positive byte limit, then restart the services. The compressed input and expanded database are each checked independently, so a small gzip file cannot expand past the configured limit.
+
 Rollback after conversion:
 
 ```bash

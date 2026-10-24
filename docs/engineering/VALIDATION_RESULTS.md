@@ -1031,5 +1031,21 @@ about current lockfile vulnerability status.
 - After normalizing the new test file to the repository's required LF endings,
   `npm.cmd test` passed all 380 unit, contract, integration, and security
   suites in 472.935 seconds, with 0 failures and 0 skips.
-- Backup input and decompressed database contents are currently buffered in
-  memory; large-file resource bounds are not established by these tests.
+
+## Database backup and restore resource bounds: 2026-10-24 (SK-057)
+
+- `node test/run-all.js test/security-db-backup-paths.test.js test/db-tools.test.js
+  test/static-code-quality.test.js --concurrency=1 --overall-timeout-ms=900000
+  --json` passed all 3 suites. Six database path regressions cover private
+  hard-link handling, streamed backup size enforcement, raw restore limits,
+  gzip expansion limits, and preserving an integrity-valid live database
+  after rejected restores. Existing database authorization and tool behavior
+  and static source quality checks also passed.
+- The configured default byte ceiling is 2 GiB; `SIDEKICK_DB_BACKUP_MAX_BYTES`
+  can be set by administrators for larger installations. CPU-time bounds for
+  compression and decompression are not provided.
+- `npm.cmd run check:docs`, `npm.cmd run check:architecture`,
+  `npm.cmd run check:tests`, and `git diff --check` passed.
+- After the streaming implementation, `npm.cmd test` passed all 380 unit,
+  contract, integration, and security suites in 463.763 seconds, with 0
+  failures and 0 skips.

@@ -3,6 +3,8 @@ const path = require("path");
 const zlib = require("zlib");
 const crypto = require("crypto");
 const { execFileSync } = require("child_process");
+const { Transform } = require("stream");
+const { pipeline } = require("stream/promises");
 const { childProcessEnv } = require("./security/child-process");
 const { createMemoryDomain } = require("./db/memory-domain");
 const { createMemoryMaintenance } = require("./db/memory-maintenance");
@@ -23,6 +25,15 @@ const DB_FILE = process.env.SIDEKICK_DB_FILE || path.join(DATA_DIR, "sidekick.db
 const BACKUP_DIR = process.env.SIDEKICK_BACKUP_DIR || path.join(DATA_DIR, "backups");
 const MIGRATIONS_DIR = process.env.SIDEKICK_MIGRATIONS_DIR || path.join(__dirname, "..", "migrations");
 const MAX_LOG = Number(process.env.SIDEKICK_MAX_LOG || 1000);
+const DEFAULT_DB_BACKUP_MAX_BYTES = 2 * 1024 * 1024 * 1024;
+const MAX_DB_BACKUP_MAX_BYTES = Number.MAX_SAFE_INTEGER;
+const configuredBackupLimit = process.env.SIDEKICK_DB_BACKUP_MAX_BYTES;
+const MAX_DB_BACKUP_BYTES = configuredBackupLimit === undefined
+  ? DEFAULT_DB_BACKUP_MAX_BYTES
+  : Number(configuredBackupLimit);
+if (!Number.isSafeInteger(MAX_DB_BACKUP_BYTES) || MAX_DB_BACKUP_BYTES < 1 || MAX_DB_BACKUP_BYTES > MAX_DB_BACKUP_MAX_BYTES) {
+  throw new Error("SIDEKICK_DB_BACKUP_MAX_BYTES must be a positive safe integer");
+}
 
 fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o750 });
 fs.mkdirSync(BACKUP_DIR, { recursive: true, mode: 0o750 });
@@ -1555,7 +1566,7 @@ function createPrivateTempDirectory(parentPath, prefix) {
   return tempDirectory;
 }
 
-function readRegularBackupNoFollow(filePath) {
+function openRegularBackupNoFollow(filePath) {
   let before;
   try { before = fs.lstatSync(filePath); }
   catch (error) {
@@ -1580,13 +1591,28 @@ function readRegularBackupNoFollow(filePath) {
         && (opened.dev !== current.dev || opened.ino !== current.ino))) {
       throw new Error("Backup path changed while it was being opened");
     }
-    return fs.readFileSync(fd);
-  } finally {
+    return { fd, size: opened.size };
+  } catch (error) {
     fs.closeSync(fd);
+    throw error;
   }
 }
 
-function createBackup(destPath = null, compress = true) {
+function createByteLimit(maxBytes, label) {
+  let bytes = 0;
+  return new Transform({
+    transform(chunk, encoding, callback) {
+      bytes += chunk.length;
+      if (bytes > maxBytes) {
+        callback(new Error(`${label} exceeds the configured ${maxBytes}-byte limit`));
+        return;
+      }
+      callback(null, chunk);
+    },
+  });
+}
+
+async function createBackup(destPath = null, compress = true) {
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
   const backupName = `sidekick-backup-${timestamp}.db`;
   const backupPath = destPath || path.join(BACKUP_DIR, backupName);
@@ -1598,7 +1624,11 @@ function createBackup(destPath = null, compress = true) {
     // files live in a new private directory beside the requested destination,
     // never at a predictable attacker-controlled sibling path.
     db.pragma("wal_checkpoint(TRUNCATE)");
-    fs.copyFileSync(DB_FILE, temporaryPath, fs.constants.COPYFILE_EXCL);
+    await pipeline(
+      fs.createReadStream(DB_FILE),
+      createByteLimit(MAX_DB_BACKUP_BYTES, "Database backup"),
+      fs.createWriteStream(temporaryPath, { flags: "wx", mode: 0o600 }),
+    );
     fs.chmodSync(temporaryPath, 0o600);
     const backupDb = new Database(temporaryPath, { readonly: true });
     try {
@@ -1607,8 +1637,12 @@ function createBackup(destPath = null, compress = true) {
 
     if (compress) {
       const compressedPath = path.join(tempDirectory, "backup.db.gz");
-      const compressed = zlib.gzipSync(fs.readFileSync(temporaryPath));
-      fs.writeFileSync(compressedPath, compressed, { flag: "wx", mode: 0o600 });
+      await pipeline(
+        fs.createReadStream(temporaryPath),
+        zlib.createGzip(),
+        createByteLimit(MAX_DB_BACKUP_BYTES, "Compressed database backup"),
+        fs.createWriteStream(compressedPath, { flags: "wx", mode: 0o600 }),
+      );
       fs.chmodSync(compressedPath, 0o600);
       fs.renameSync(compressedPath, `${backupPath}.gz`);
       return { path: `${backupPath}.gz`, size: fs.statSync(`${backupPath}.gz`).size, compressed: true };
@@ -1622,14 +1656,23 @@ function createBackup(destPath = null, compress = true) {
   }
 }
 
-function restoreBackup(backupPath, verify = true) {
+async function restoreBackup(backupPath, verify = true) {
   const restoreDirectory = createPrivateTempDirectory(path.dirname(DB_FILE), ".sidekick-restore-");
   const tempPath = path.join(restoreDirectory, "restored.db");
 
   try {
-    const backupBytes = readRegularBackupNoFollow(backupPath);
-    const databaseBytes = backupPath.endsWith(".gz") ? zlib.gunzipSync(backupBytes) : backupBytes;
-    fs.writeFileSync(tempPath, databaseBytes, { flag: "wx", mode: 0o600 });
+    const backup = openRegularBackupNoFollow(backupPath);
+    if (backup.size > MAX_DB_BACKUP_BYTES) {
+      fs.closeSync(backup.fd);
+      throw new Error(`Backup input exceeds the configured ${MAX_DB_BACKUP_BYTES}-byte limit`);
+    }
+    const source = fs.createReadStream(backupPath, { fd: backup.fd, autoClose: true, start: 0 });
+    const stages = [source, createByteLimit(MAX_DB_BACKUP_BYTES, "Backup input")];
+    if (backupPath.endsWith(".gz")) {
+      stages.push(zlib.createGunzip(), createByteLimit(MAX_DB_BACKUP_BYTES, "Restored database"));
+    }
+    stages.push(fs.createWriteStream(tempPath, { flags: "wx", mode: 0o600 }));
+    await pipeline(...stages);
     fs.chmodSync(tempPath, 0o600);
 
     if (verify) {
@@ -1645,7 +1688,7 @@ function restoreBackup(backupPath, verify = true) {
 
     // Create a verified pre-restore backup before replacing the live database.
     const preBackupPath = path.join(BACKUP_DIR, `pre-restore-${Date.now()}.db`);
-    createBackup(preBackupPath, false);
+    await createBackup(preBackupPath, false);
 
     // Replace the live file only while the process-owned SQLite handle is closed,
     // then reopen and reapply connection pragmas. Existing callers use the
@@ -2493,6 +2536,7 @@ module.exports = {
   getTableList,
   getTableInfo,
   getDatabaseStats,
+  MAX_DB_BACKUP_BYTES,
   createBackup,
   restoreBackup,
   queryToolLogs,

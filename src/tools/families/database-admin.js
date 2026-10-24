@@ -35,7 +35,7 @@ async function sidekick_db_backup({ path: destPath, compress }) {
       const policyError = enforcePathPolicy(destPath, "write");
       if (policyError) return policyError;
     }
-    const result = dbStore.createBackup(destPath, compress !== false);
+    const result = await dbStore.createBackup(destPath, compress !== false);
     return { content: [{ type: "text", text: `Backup created: ${result.path} (${result.size} bytes, compressed: ${result.compressed})` }] };
   } catch (e) {
     return { content: [{ type: "text", text: "Error: " + e.message }], isError: true };
@@ -48,7 +48,7 @@ async function sidekick_db_restore({ path: backupPath, verify }) {
   try {
     const policyError = enforcePathPolicy(backupPath, "read");
     if (policyError) return policyError;
-    const result = dbStore.restoreBackup(backupPath, verify !== false);
+    const result = await dbStore.restoreBackup(backupPath, verify !== false);
     return { content: [{ type: "text", text: `Restored from: ${backupPath}\nPre-restore backup: ${result.preBackupPath}` }] };
   } catch (e) {
     return { content: [{ type: "text", text: "Error: " + e.message }], isError: true };

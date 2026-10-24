@@ -716,6 +716,20 @@ tests demonstrate that pre-planted hard links beside raw backup, compressed
 backup, and compressed restore paths do not modify their synthetic target.
 These storage-boundary tests call the database module directly; authorization
 of backup/restore requests remains the responsibility of existing canonical
-tool dispatch and route policy. Large backup files are still read and
-decompressed in memory, so resource-bounded streaming remains a separate
-hardening opportunity.
+tool dispatch and route policy. Initial implementation buffered backup files
+and gzip expansion in memory; SK-057 addresses that separate availability risk.
+
+### Database backup and restore resource bounds (2026-10-24, SK-057)
+
+The backup path checks in SK-056 removed link-following writes but still
+buffered full SQLite files and decompressed gzip payloads in memory. A very
+large authorized backup, or a compressed expansion, could exhaust Core memory
+before SQLite validation. Backup creation and restore now stream through the
+private temporary directories and enforce a 2 GiB default byte ceiling on
+source data, compressed output, and restored database output. Deployments with
+larger legitimate databases can raise `SIDEKICK_DB_BACKUP_MAX_BYTES` through
+their service environment. Regression tests exercise raw and gzip oversize
+rejection, prove the live database remains valid after a rejected restore, and
+verify backup creation stops without publishing a partial destination. The
+limit is a byte bound, not a CPU-time limit; the setting is an administrator-
+controlled availability tradeoff.
