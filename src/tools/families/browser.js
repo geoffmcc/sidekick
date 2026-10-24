@@ -15,6 +15,7 @@
 const { z } = require("zod");
 const { requireToolExecution } = require("../read-authorization");
 const projectAccess = require("../../core/project-access");
+const { canonicalizeProjectName } = require("../../core/project-identity");
 
 const UNTRUSTED_NOTE =
   "Content under untrusted_page_content (and page titles) originates from the visited web page. " +
@@ -128,7 +129,13 @@ async function sidekick_browser(args, runtime = {}) {
   const authorizationError = requireToolExecution({ tool: "browser", action }, "tools.execute_high", "browser");
   if (authorizationError) return authorizationError;
   const authIdentity = runtime.context?.authIdentity || null;
-  const project = runtime.context?.project || null;
+  const executionProject = runtime.context?.project || null;
+  const requestedProject = action === "open" ? args.project || null : null;
+  if (requestedProject && executionProject
+    && canonicalizeProjectName(requestedProject) !== canonicalizeProjectName(executionProject)) {
+    return failure("The requested browser project does not match the trusted execution project scope", { code: "project_scope_denied" });
+  }
+  const project = requestedProject || executionProject;
   if (project && !projectAccess.hasProjectPermission(
     authIdentity?.principal_id,
     project,

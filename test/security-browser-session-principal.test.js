@@ -87,6 +87,20 @@ test("browser sessions are principal-owned and project access is rechecked on re
     authIdentity: { principal_id: peer.principal_id, principal_type: "service", scopes: null },
     project,
   };
+  const mismatchedProject = await tools.callMcpTool("browser", {
+    action: "open",
+    project: "browser_session_foreign",
+  }, peerContext);
+  assert.equal(mismatchedProject.isError, true);
+  assert.equal(mismatchedProject.code, "project_scope_denied");
+
+  const ungrantedProject = await tools.callMcpTool("browser", {
+    action: "open",
+    project: "browser_session_foreign",
+  }, { authIdentity: peerContext.authIdentity });
+  assert.equal(ungrantedProject.isError, true);
+  assert.equal(ungrantedProject.code, "project_access_denied");
+
   const listed = await tools.callMcpTool("browser", { action: "list", project }, peerContext);
   assert.equal(listed.isError, undefined, listed.content?.[0]?.text);
   assert.ok(!JSON.parse(listed.content[0].text).sessions.some(session => session.id === sessionId));
