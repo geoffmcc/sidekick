@@ -47,7 +47,7 @@ const TRANSCRIPTION_JOB_ID_PATTERN = /^tr_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0
 const transcriptionJobs = new Map();
 
 function readTranscriptionText(filePath, maxBytes = MAX_TRANSCRIPTION_OUTPUT_BYTES) {
-  const result = readTextBounded(filePath, { maxBytes });
+  const result = readTextBounded(filePath, { maxBytes, noFollow: true });
   const text = result.content.trim();
   return result.truncated ? `${text}\n[transcript truncated at ${maxBytes} bytes]` : text;
 }

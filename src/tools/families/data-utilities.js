@@ -74,7 +74,7 @@ async function sidekick_extract({ path: filePath, fields }) {
     return { content: [{ type: "text", text: redactSensitive("File not found: " + filePath) }], isError: true };
   }
   let content;
-  try { content = readTextBounded(filePath, { maxBytes: MAX_EXTRACT_FILE_BYTES, requireComplete: true }).content; }
+  try { content = readTextBounded(filePath, { maxBytes: MAX_EXTRACT_FILE_BYTES, requireComplete: true, noFollow: true }).content; }
   catch (error) {
     const message = error.code === "FILE_READ_TOO_LARGE"
       ? `File exceeds the ${MAX_EXTRACT_FILE_BYTES}-byte extraction limit`

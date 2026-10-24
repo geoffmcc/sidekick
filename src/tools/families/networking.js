@@ -100,7 +100,7 @@ async function sidekick_tunnel({ action, url, port, name }) {
       await new Promise(resolve => setTimeout(resolve, 3000));
       // Try to get the tunnel URL from logs
       try {
-        const logContent = readTextBounded(logPath, { maxBytes: MAX_TUNNEL_LOG_READ_BYTES }).content;
+        const logContent = readTextBounded(logPath, { maxBytes: MAX_TUNNEL_LOG_READ_BYTES, noFollow: true }).content;
         const urlMatch = logContent.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
         const tunnelUrl = urlMatch ? urlMatch[0] : null;
         return { content: [{ type: "text", text: JSON.stringify({

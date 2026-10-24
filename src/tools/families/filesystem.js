@@ -59,7 +59,7 @@ async function sidekick_read({ path: filePath, offset = 0 }) {
     return { content: [{ type: "text", text: "File not found: " + filePath }], isError: true };
   }
   try {
-    const read = readTextBounded(filePath, { maxBytes: MAX_READ_OUTPUT_BYTES, offset });
+    const read = readTextBounded(filePath, { maxBytes: MAX_READ_OUTPUT_BYTES, offset, noFollow: true });
     const truncationNotice = read.truncated
       ? `\n\n[truncated: returned ${read.bytesRead} bytes at offset ${offset} of ${read.size}; continue with offset ${offset + read.bytesRead}]`
       : "";
@@ -231,7 +231,7 @@ async function sidekick_summarize({ path: filePath, max_lines, strategy, pattern
     return { content: [{ type: "text", text: "File not found: " + filePath }], isError: true };
   }
   let read;
-  try { read = readTextBounded(filePath, { maxBytes: MAX_FILE_CONTENT_BYTES, requireComplete: true }); }
+  try { read = readTextBounded(filePath, { maxBytes: MAX_FILE_CONTENT_BYTES, requireComplete: true, noFollow: true }); }
   catch (error) {
       return { content: [{ type: "text", text: error.code === "FILE_READ_TOO_LARGE" ? `File too large to summarize (>50MB): ${filePath}` : `Unable to read file: ${error.message}` }], isError: true };
   }
@@ -300,7 +300,7 @@ async function sidekick_filter({ path: targetPath, pattern, after, before, max_r
   const results = [];
   if (stat.isFile()) {
     let content;
-    try { content = readTextBounded(targetPath, { maxBytes: MAX_FILE_CONTENT_BYTES, requireComplete: true }).content; }
+    try { content = readTextBounded(targetPath, { maxBytes: MAX_FILE_CONTENT_BYTES, requireComplete: true, noFollow: true }).content; }
     catch (error) {
       return { content: [{ type: "text", text: error.code === "FILE_READ_TOO_LARGE" ? `File exceeds the ${MAX_FILE_CONTENT_BYTES}-byte filter limit` : `Unable to read file: ${error.message}` }], isError: true };
     }
@@ -371,8 +371,8 @@ async function sidekick_diff_files({ path_a, path_b, format }) {
   let contentA;
   let contentB;
   try {
-    contentA = readTextBounded(path_a, { maxBytes: MAX_FILE_CONTENT_BYTES, requireComplete: true }).content;
-    contentB = readTextBounded(path_b, { maxBytes: MAX_FILE_CONTENT_BYTES, requireComplete: true }).content;
+    contentA = readTextBounded(path_a, { maxBytes: MAX_FILE_CONTENT_BYTES, requireComplete: true, noFollow: true }).content;
+    contentB = readTextBounded(path_b, { maxBytes: MAX_FILE_CONTENT_BYTES, requireComplete: true, noFollow: true }).content;
   } catch (error) {
     return { content: [{ type: "text", text: error.code === "FILE_READ_TOO_LARGE" ? `Files exceed the ${MAX_FILE_CONTENT_BYTES}-byte per-file diff limit` : `Unable to read files: ${error.message}` }], isError: true };
   }
@@ -489,7 +489,7 @@ async function sidekick_find({ path: searchPath, name, modified_after, modified_
           if (s.size < sizeMin || s.size > sizeMax) continue;
           if (contentRe) {
             try {
-              const fileContent = readTextBounded(fullPath, { maxBytes: DEFAULT_FILE_READ_BYTES }).content;
+              const fileContent = readTextBounded(fullPath, { maxBytes: DEFAULT_FILE_READ_BYTES, noFollow: true }).content;
               if (!contentRe.test(fileContent)) continue;
             } catch (e) { continue; }
           }

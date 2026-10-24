@@ -363,6 +363,18 @@ test("filesystem text reads enforce byte limits and support bounded continuation
   assert.equal(descriptor.schema.safeParse({ path: file, offset: -1 }).success, false);
 });
 
+test("bounded no-follow reads reject symlinks", t => {
+  const target = path.join(dataDir, "no-follow-target.txt");
+  const link = path.join(dataDir, "no-follow-link.txt");
+  fs.writeFileSync(target, "target contents");
+  try { fs.symlinkSync(target, link, "file"); }
+  catch (error) {
+    if (["EPERM", "EACCES", "ENOTSUP"].includes(error.code)) return t.skip(`symlink creation is unavailable: ${error.code}`);
+    throw error;
+  }
+  assert.throws(() => readTextBounded(link, { maxBytes: 100, noFollow: true }), error => ["ELOOP", "FILE_READ_SYMLINK"].includes(error.code));
+});
+
 test("workflow definitions reject forward references, executable syntax, and duplicate steps", () => {
   const base = { name: "boundary/workflow", version: "1.0.0", title: "Boundary", description: "Boundary test", steps: [{ name: "first", tool: "respond", args: {} }] };
   assert.throws(() => normalizeDefinition({ ...base, steps: [{ name: "first", tool: "respond", args: { value: "${steps.second.text}" } }, { name: "second", tool: "respond" }] }), /before it runs/);

@@ -323,6 +323,11 @@ test("filesystem directory and content reads reject identityless callers before 
       });
       assert.equal(symlinkWrite.code, "invalid_path");
       assert.equal(fs.readFileSync(symlinkTarget, "utf8"), "target must remain unchanged");
+      const symlinkRead = await dispatcher.callMcpTool("read", { path: symlink }, {
+        authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+      });
+      assert.equal(symlinkRead.isError, true, "filesystem reads reject even allowed-root symlinks at the file-open boundary");
+      assert.doesNotMatch(JSON.stringify(symlinkRead), /target must remain unchanged/, "a path swap cannot expose the linked file contents");
     }
   } finally {
     if (priorAllowedPaths === undefined) delete process.env.SIDEKICK_MCP_ALLOWED_PATHS;

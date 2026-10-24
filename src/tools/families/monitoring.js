@@ -58,7 +58,7 @@ async function sidekick_tail({ source, pattern, lines, since }) {
     if (!fs.existsSync(source)) {
       return { content: [{ type: "text", text: "File not found: " + source }], isError: true };
     }
-    try { content = readTextBounded(source, { maxBytes: MAX_MONITORING_FILE_BYTES, requireComplete: true }).content; }
+    try { content = readTextBounded(source, { maxBytes: MAX_MONITORING_FILE_BYTES, requireComplete: true, noFollow: true }).content; }
     catch (error) {
       const message = error.code === "FILE_READ_TOO_LARGE"
         ? `Log file exceeds the ${MAX_MONITORING_FILE_BYTES}-byte tail limit`

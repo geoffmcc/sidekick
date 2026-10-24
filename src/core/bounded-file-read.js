@@ -11,6 +11,11 @@ function fileReadError(message, code) {
   return error;
 }
 
+function sameFileIdentity(left, right) {
+  return Number.isFinite(left.dev) && Number.isFinite(left.ino) && left.ino !== 0
+    && left.dev === right.dev && left.ino === right.ino;
+}
+
 function readTextBounded(filePath, { maxBytes = DEFAULT_FILE_READ_BYTES, offset = 0, requireComplete = false, noFollow = false } = {}) {
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > MAX_BOUNDED_FILE_READ_BYTES) {
     throw fileReadError("File read limit is invalid", "FILE_READ_LIMIT_INVALID");
@@ -20,11 +25,28 @@ function readTextBounded(filePath, { maxBytes = DEFAULT_FILE_READ_BYTES, offset 
   }
 
   const nonBlocking = fs.constants.O_NONBLOCK || 0;
-  const followFlag = noFollow && typeof fs.constants.O_NOFOLLOW === "number" ? fs.constants.O_NOFOLLOW : 0;
+  const hasNoFollow = noFollow && typeof fs.constants.O_NOFOLLOW === "number";
+  let pathStat = null;
+  if (noFollow && !hasNoFollow) {
+    try { pathStat = fs.lstatSync(filePath); }
+    catch { throw fileReadError("Path could not be safely inspected", "FILE_READ_NOT_REGULAR"); }
+    if (pathStat.isSymbolicLink() || !pathStat.isFile()) {
+      throw fileReadError("Path must be a regular, non-symlink file", "FILE_READ_SYMLINK");
+    }
+  }
+  const followFlag = hasNoFollow ? fs.constants.O_NOFOLLOW : 0;
   const fd = fs.openSync(filePath, fs.constants.O_RDONLY | nonBlocking | followFlag);
   try {
     const stat = fs.fstatSync(fd);
     if (!stat.isFile()) throw fileReadError("Path does not refer to a regular file", "FILE_READ_NOT_REGULAR");
+    if (pathStat) {
+      let currentPathStat;
+      try { currentPathStat = fs.lstatSync(filePath); }
+      catch { throw fileReadError("Path changed while it was being opened", "FILE_READ_SYMLINK"); }
+      if (currentPathStat.isSymbolicLink() || !sameFileIdentity(pathStat, stat) || !sameFileIdentity(stat, currentPathStat)) {
+        throw fileReadError("Path changed while it was being opened", "FILE_READ_SYMLINK");
+      }
+    }
 
     const bytesAvailable = Math.max(0, stat.size - offset);
     if (requireComplete && bytesAvailable > maxBytes) {
