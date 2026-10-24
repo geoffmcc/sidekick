@@ -367,3 +367,23 @@ final document. After the fix, `node test/run-all.js test/handoff-reliability.te
   three suites passed with no failures, skips, cancellations, or cleanup errors.
   Syntax, docs, architecture, test-architecture, and diff checks passed. Full
   required tiers were not run.
+
+## Security hardening follow-up: 2026-10-24
+
+- `node test/run-all.js --tier=security --concurrency=4
+  --overall-timeout-ms=300000 --json` passed: 165 suites, 0 failures, 0 skips,
+  88.692 seconds. This run includes JSON-text credential redaction and the
+  systemd file-mode assertions.
+- Focused redaction and log suites passed (3 suites); the systemd hardening
+  suite passed (2 tests). `node scripts/check-docs.js` and `git diff --check`
+  passed.
+- The combined required tiers (unit, contract, integration, security) completed
+  twice with one failure each and no skipped, cancelled, timed-out, or unrun
+  suites. The first failure was `tool-family-data-utilities.test.cjs`, which
+  caught a JSON formatting regression; the redactor now preserves indentation
+  and the failing suite passes in isolation. The second run failed
+  `compute-worker-resilience.test.js` under full-suite load; its isolated rerun
+  passed all seven internal assertions. Therefore the combined required tiers
+  are not claimed passing.
+- No deployment, live-service change, production data access, or dependency
+  update was performed.
