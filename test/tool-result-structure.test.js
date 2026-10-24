@@ -34,4 +34,24 @@ const result = normalizeResult({
 const parsed = JSON.parse(result.content[0].text);
 assert.strictEqual(parsed.credential_ref, "[REDACTED]");
 assert.strictEqual(parsed.schema.pattern, "^secret=[REDACTED]\n");
+
+const syntheticCredential = "synthetic-result-credential-9d73";
+const structuredLeak = normalizeResult({
+  content: [{ type: "text", text: JSON.stringify({
+    ok: true,
+    result_status: "succeeded",
+    credential: syntheticCredential,
+    nested: { access_token: syntheticCredential, message: `token=${syntheticCredential}` },
+  }) }],
+});
+assert.strictEqual(structuredLeak.credential, "[REDACTED]", "structured fields must be sanitized with their displayed text");
+assert.strictEqual(structuredLeak.nested.access_token, "[REDACTED]");
+assert.ok(!JSON.stringify(structuredLeak).includes(syntheticCredential), "normalized top-level fields must not bypass text redaction");
+
+const metadataLeak = errorResult("operation failed", "handler_error", {
+  details: { api_key: syntheticCredential },
+  warnings: [{ message: `Authorization: Bearer ${syntheticCredential}` }],
+  recovery: { next_step: `token=${syntheticCredential}` },
+});
+assert.ok(!JSON.stringify(metadataLeak).includes(syntheticCredential), "error metadata must pass through the same redaction boundary");
 console.log("Structured result redaction preserves valid JSON");
