@@ -1,4 +1,4 @@
-# Synthetic test fixtures and manifest checksum flagged by Gitleaks v8.30.1.
+# Synthetic test fixtures and verified SHA-256 integrity pins flagged by Gitleaks v8.30.1.
 # These fingerprints are commit-specific; new findings remain blocking.
 8c69c61ae0905228b73c98984f14720aa9c5702d:test/security-dashboard-direct-routes.test.js:generic-api-key:485
 8c69c61ae0905228b73c98984f14720aa9c5702d:test/security-dashboard-direct-routes.test.js:generic-api-key:494
@@ -14,3 +14,4 @@
 50585a8d00b25e517d8c9040fb76b4255c74d777:test/security.test.js:generic-api-key:102
 50585a8d00b25e517d8c9040fb76b4255c74d777:test/security.test.js:generic-api-key:153
 d6b31c34623abdc512d5f7cf2b2082ec8c4b5349:test/security/security-boundaries.test.js:private-key:213
+ef94283ae651809f432748359a5c541478d511a2:src/packs/bundled-attestations.js:generic-api-key:12

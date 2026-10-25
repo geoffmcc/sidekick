@@ -32,6 +32,10 @@ async function test(name, fn) {
   const projectA = dbStore.upsertMemory({ type: "decision", project: "alpha", content: "Alpha uses the governed dispatcher", summary: "Alpha dispatcher decision", confidence: 0.95, source: "user_correction", source_authority: 10 });
   const projectB = dbStore.upsertMemory({ type: "decision", project: "beta", content: "Beta secret project decision", summary: "Beta-only decision", confidence: 1, source: "user_correction", source_authority: 10 });
   const stale = dbStore.upsertMemory({ type: "observation", project: "alpha", content: "The server currently runs version 1", summary: "Old current version", confidence: 0.6, source: "agent", revalidate_after: "2000-01-01T00:00:00.000Z" });
+  // This fixture represents an agent observation that a user reviewed. Until
+  // confirmation, agent-authored memories are intentionally excluded from
+  // automatic context recall.
+  dbStore.confirmMemory(stale.id, "test-reviewer");
   const superseded = dbStore.upsertMemory({ type: "fact", project: "alpha", content: "Superseded alpha fact", summary: "Superseded", confidence: 0.9, source: "agent" });
   db.prepare("UPDATE memories SET supersedes_id = ?, current = 0, state = 'superseded' WHERE id = ?").run(projectA.id, superseded.id);
 

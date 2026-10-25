@@ -76,9 +76,12 @@ assert.ok(ctx.sessions.some(s => s.taskId === "task123"), "Agent task should cre
 
 const recalled = recallMemoryForText("sidekick service health", { limit: 5 });
 assert.ok(recalled.length > 0, "Recall should return relevant memories");
-assert.ok(recalled.some(item => item.structured), "Recall should include table-backed structured memories");
+assert.ok(!recalled.some(item => item.structured), "Unreviewed agent-authored task memories must stay out of automatic recall");
+assert.strictEqual(dbStore.confirmMemory(taskMemory.memory.id, "test-reviewer"), true, "The test reviewer can confirm the task memory");
+const reviewedRecall = recallMemoryForText("sidekick service health", { limit: 5 });
+assert.ok(reviewedRecall.some(item => item.structured), "Recall should include reviewed table-backed structured memories");
 
-const formatted = formatMemoryRecall(recalled);
+const formatted = formatMemoryRecall(reviewedRecall);
 assert.ok(formatted.includes("sidekick"), "Formatted recall should include relevant text");
 
 recordToolCallMemory({
@@ -134,6 +137,7 @@ assert.strictEqual(sqlitePreference.enabled, false, "Conflicting older memory sh
 assert.strictEqual(sqlitePreference.metadata.state, "superseded", "Superseded memory should be marked in metadata");
 assert.strictEqual(sqlitePreference.metadata.superseded_by, postgresPreference.id, "Superseded row should point to replacement");
 assert.strictEqual(postgresPreference.enabled, true, "Replacement memory should remain enabled");
+assert.strictEqual(dbStore.confirmMemory(postgresPreference.id, "test-reviewer"), true, "The test reviewer can confirm the replacement preference");
 
 console.log("Test confidence-aware conflict detection");
 
