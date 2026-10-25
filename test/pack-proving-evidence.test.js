@@ -27,6 +27,16 @@ const receiptStore = require("../src/agent/receipt-store");
 
 const installed = bundled.installBundledPack("api-engineering");
 
+test("pack verification requires an attributable project", () => {
+  assert.throws(
+    () => lifecycle.recordVerification(installed.pack.name, {
+      actor_ref: "test-principal",
+      evidence_refs: [{ type: "execution", id: "unresolved-test-evidence", role: "canonical_dispatch" }],
+    }),
+    error => error.code === "verification_project_required"
+  );
+});
+
 test("capability verification cannot claim another actor or self-attested evidence roles", async () => {
   const verifier = identity.bootstrapOwner({
     username: "pack_verifier",
