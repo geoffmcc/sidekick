@@ -374,12 +374,18 @@ test("database query, search, log, and diff handlers reject direct calls before 
 
 test("database schema and statistics handlers reject calls without an authorized dispatch context", async () => {
   const family = require("../src/tools/families/database-inspection");
+  const dbStore = require("../src/db");
+  dbStore.runPendingMigrations();
+  assert.equal(require("../src/core/authorization").authorize({ permission: "database.inspect" }).code, "unauthenticated");
   const { runWithContext, createTestExecutionContext } = require("../src/tools/context");
   const unauthenticatedContext = Object.freeze({ ...createTestExecutionContext(), authIdentity: null });
-  const results = await runWithContext(unauthenticatedContext, () => Promise.all([
-    family.sidekick_db_schema({ verbose: true }),
-    family.sidekick_db_stats({ detailed: false }),
-  ]));
+  const results = await runWithContext(unauthenticatedContext, () => {
+    assert.equal(require("../src/tools/context").getExecutionContext().authIdentity, null);
+    return Promise.all([
+      family.sidekick_db_schema({ verbose: true }),
+      family.sidekick_db_stats({ detailed: false }),
+    ]);
+  });
   for (const result of results) {
     assert.equal(result.isError, true);
     assert.equal(result.code, "unauthenticated");
