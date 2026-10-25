@@ -57,6 +57,7 @@ test("sandbox applies an explicit per-process address-space ceiling", () => {
   const args = executor.buildPrlimitArgs("true");
   const memoryLimit = `--as=${executor.COMMAND_LIMITS.addressSpaceBytes}:${executor.COMMAND_LIMITS.addressSpaceBytes}`;
   assert.ok(args.includes(memoryLimit), "prlimit must cap soft and hard address-space limits");
+  assert.ok(!args.some(arg => arg.startsWith("--nproc=")), "process limits belong to the service cgroup, not the shared service UID");
   assert.equal(executor.COMMAND_LIMITS.addressSpaceBytes, 8 * 1024 * 1024 * 1024);
   assert.throws(() => executor.buildPrlimitArgs(""), error => error.code === "command_invalid");
 
@@ -64,6 +65,13 @@ test("sandbox applies an explicit per-process address-space ceiling", () => {
   const prlimitIndex = invocation.args.indexOf("/usr/bin/prlimit");
   assert.notEqual(prlimitIndex, -1, "Bubblewrap must invoke the trusted resource limiter");
   assert.ok(invocation.args.slice(prlimitIndex + 1).includes(memoryLimit), "the actual sandbox invocation must carry the address-space limit");
+});
+
+test("installer smoke test avoids a shared-UID process limit", () => {
+  const smokeTest = fs.readFileSync(path.resolve(__dirname, "../../scripts/lib/bubblewrap.sh"), "utf8");
+  assert.match(smokeTest, /--cpu=300:300/);
+  assert.match(smokeTest, /--nofile=1024:1024/);
+  assert.doesNotMatch(smokeTest, /--nproc=/);
 });
 
 test("missing Linux isolation backend fails closed", () => {
@@ -141,14 +149,14 @@ test("legacy bounded-shell callers get the OS boundary, no host filesystem, and 
   }
 });
 
-test("command resource limits are kernel-enforced and cannot be raised by the sandbox child", { skip: process.platform !== "linux" || !fs.existsSync(executor.DEFAULT_BWRAP) }, async () => {
+test("per-process command resource limits are kernel-enforced and cannot be raised by the sandbox child", { skip: process.platform !== "linux" || !fs.existsSync(executor.DEFAULT_BWRAP) }, async () => {
   const result = await executor.runBubblewrap({
-    command: '/usr/bin/prlimit --pid $$ --output RESOURCE,SOFT,HARD --noheadings; if /usr/bin/prlimit --nproc=65 --pid $$ >/dev/null 2>&1; then printf "raise-succeeded"; exit 9; else printf "raise-denied"; fi',
+    command: '/usr/bin/prlimit --pid $$ --output RESOURCE,SOFT,HARD --noheadings; if /usr/bin/prlimit --cpu=301:301 --pid $$ >/dev/null 2>&1; then printf "raise-succeeded"; exit 9; else printf "raise-denied"; fi',
     source: "mcp",
   });
   assert.equal(result.exitCode, 0, result.stderr);
   assert.match(result.stdout, /CPU\s+300\s+300/);
-  assert.match(result.stdout, /NPROC\s+64\s+64/);
+  assert.match(result.stdout, /AS\s+8589934592\s+8589934592/);
   assert.match(result.stdout, /NOFILE\s+1024\s+1024/);
   assert.match(result.stdout, /FSIZE\s+268435456\s+268435456/);
   assert.match(result.stdout, /CORE\s+0\s+0/);

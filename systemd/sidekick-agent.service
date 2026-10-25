@@ -21,6 +21,8 @@ ProtectControlGroups=true
 RestrictSUIDSGID=true
 LockPersonality=true
 RestrictRealtime=true
+# Bound process and thread creation per service cgroup; RLIMIT_NPROC is UID-wide.
+TasksMax=256
 User=sidekick
 Group=sidekick
 UMask=0077
