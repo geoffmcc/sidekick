@@ -24,6 +24,7 @@ const platformKernel = require("../src/platform/kernel");
 const taskModel = require("../src/agent/task-model");
 const taskStore = require("../src/agent/task-store");
 const receiptStore = require("../src/agent/receipt-store");
+const packRepository = require("../src/packs/repository");
 
 const installed = bundled.installBundledPack("api-engineering");
 
@@ -34,6 +35,25 @@ test("pack verification requires an attributable project", () => {
       evidence_refs: [{ type: "execution", id: "unresolved-test-evidence", role: "canonical_dispatch" }],
     }),
     error => error.code === "verification_project_required"
+  );
+});
+
+test("pack upgrades reject configuration that violates the new manifest schema", () => {
+  const current = packRepository.getPack(installed.pack.name);
+  assert.throws(
+    () => packRepository.updatePackPackage(installed.pack.name, {
+      ...current.manifest,
+      version: "99.0.0",
+      configuration: {
+        schema: {
+          type: "object",
+          required: ["token"],
+          properties: { token: { type: "string" } },
+        },
+        defaults: {},
+      },
+    }, { config: {} }),
+    /configuration is not valid for version 99\.0\.0/
   );
 });
 
