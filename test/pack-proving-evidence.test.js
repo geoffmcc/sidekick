@@ -291,3 +291,21 @@ test("provider integration cannot be self-attested with a caller-supplied boolea
   assert.equal(maturity.provider_verified, false);
   assert.equal(maturity.optional_provider_integration, "not_verified");
 });
+
+test("pack deletion rolls back component ownership when pack removal fails", () => {
+  const testDb = db.getDb();
+  testDb.exec(`
+    CREATE TRIGGER test_block_pack_delete
+    BEFORE DELETE ON platform_capability_packs
+    WHEN OLD.name = 'api-engineering'
+    BEGIN
+      SELECT RAISE(ABORT, 'synthetic pack delete failure');
+    END;
+  `);
+  try {
+    assert.throws(() => packRepository.deletePack(installed.pack.name), /synthetic pack delete failure/);
+    assert.ok(packRepository.getPack(installed.pack.name), "failed deletion must preserve the pack record");
+  } finally {
+    testDb.exec("DROP TRIGGER IF EXISTS test_block_pack_delete");
+  }
+});
