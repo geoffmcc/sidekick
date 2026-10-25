@@ -390,6 +390,7 @@
               "test/campaign-packs-6-10.test.js",
               "test/dashboard-api.test.js",
               "test/dashboard-capability-action.test.js",
+              "test/pack-proving-evidence.test.js",
               "test/proving-runner.test.js",
               "test/target-pack-buildout.test.js",
               "test/workflow-effects.test.js"
