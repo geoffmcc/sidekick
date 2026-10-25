@@ -28,6 +28,7 @@ test("Core systemd units apply host filesystem and kernel hardening without bloc
     "RestrictSUIDSGID=true",
     "LockPersonality=true",
     "RestrictRealtime=true",
+    "TasksMax=256",
   ];
 
   for (const relativePath of CORE_UNITS) {
@@ -44,6 +45,8 @@ test("Core systemd units apply host filesystem and kernel hardening without bloc
       `${relativePath} must preserve authorized project and runtime writes under /home`);
     assert.doesNotMatch(unit, /^RestrictAddressFamilies=/m,
       `${relativePath} must preserve legitimate outbound integrations and local IPC`);
+    assert.doesNotMatch(unit, /^LimitNPROC=/m,
+      `${relativePath} must use its service cgroup task limit instead of a shared-UID process limit`);
   }
 });
 

@@ -15,12 +15,15 @@ const COMMAND_LIMITS = Object.freeze({
   cpuSeconds: 300,
   // Bound virtual address space per process while leaving room for Node/V8,
   // JVM and ordinary build tools. This is a per-process ceiling; aggregate
-  // cgroup accounting remains a separate deployment-level control.
+  // cgroup memory accounting remains a separate deployment-level control.
   addressSpaceBytes: 8 * 1024 * 1024 * 1024,
-  processes: 64,
   openFiles: 1024,
   fileBytes: 256 * 1024 * 1024,
 });
+
+// Do not set RLIMIT_NPROC here: Linux accounts it per real UID (including
+// threads), so one Sidekick service can exhaust another service's allowance.
+// Core systemd units instead enforce an aggregate TasksMax cgroup boundary.
 const SANDBOX_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 const SYSTEM_MOUNTS = ["/usr", "/bin", "/lib", "/lib64", "/sbin"];
 const PRLIMIT = "/usr/bin/prlimit";
@@ -189,7 +192,6 @@ function buildPrlimitArgs(command) {
   return [
     `--cpu=${COMMAND_LIMITS.cpuSeconds}:${COMMAND_LIMITS.cpuSeconds}`,
     `--as=${COMMAND_LIMITS.addressSpaceBytes}:${COMMAND_LIMITS.addressSpaceBytes}`,
-    `--nproc=${COMMAND_LIMITS.processes}:${COMMAND_LIMITS.processes}`,
     `--nofile=${COMMAND_LIMITS.openFiles}:${COMMAND_LIMITS.openFiles}`,
     `--fsize=${COMMAND_LIMITS.fileBytes}:${COMMAND_LIMITS.fileBytes}`,
     "--core=0:0",

@@ -20,7 +20,6 @@ sidekick_bubblewrap_smoke_test() {
   runuser -u "$username" -- /usr/bin/setpriv --no-new-privs -- \
     /usr/bin/prlimit \
     --cpu=300:300 \
-    --nproc=64:64 \
     --nofile=1024:1024 \
     --fsize=268435456:268435456 \
     --core=0:0 \
