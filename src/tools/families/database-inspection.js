@@ -84,7 +84,7 @@ async function sidekick_db_stats({ detailed, database }) {
   const authError = requireToolExecution({ tool: "db_stats", database: database || "sqlite" }, "database.inspect", "db_stats");
   if (authError) return authError;
   try {
-    const stats = database === "postgres" ? await pgStore.getDatabaseStats() : dbStore.getDatabaseStats();
+    const stats = database === "postgres" ? await pgStore.getDatabaseStats() : dbStore.getDatabaseStats({ detailed: detailed === true });
     if (!detailed) delete stats.tables;
     return jsonResult(stats);
   } catch (e) { return errorResult(e); }

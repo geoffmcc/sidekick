@@ -345,6 +345,7 @@ test("scheduled endpoint policy denial is audited and never dispatches its actio
     appendScheduledPlatformEvent: (...args) => events.push(args),
     transitionExecution: (...args) => transitions.push(args),
     executeWatchAction: async () => { actionCalls += 1; },
+    authorizeWatch: async () => ({ ok: true, context: { authIdentity: { principal_id: "principal-watch" } } }),
     checkService: () => ({}),
     checkProcess: () => ({}),
     checkEndpoint: async (_target, scope, revision) => {
@@ -406,7 +407,8 @@ test("Agent watch scheduler only persists and dispatches bounded file metadata",
     startScheduledLeaseRenewal: () => null, releaseScheduledClaim: () => {},
     createScheduledPlatformExecution: () => ({ execution_id: "watch-file-check" }),
     appendScheduledPlatformEvent: (...args) => events.push(args), transitionExecution: () => {},
-    executeWatchAction: async (_watch, checkResult) => { dispatched = checkResult; return {}; },
+    executeWatchAction: async (_watch, checkResult, metadata) => { dispatched = { checkResult, metadata }; return {}; },
+    authorizeWatch: async () => ({ ok: true, context: { project: "project-watch", taskId: "task-watch", authIdentity: { principal_id: "principal-watch", scopes: ["comms.notify"] }, agentAuthorityContext: { envelope: { allowed_effects: ["read_only"] } } } }),
     checkService: () => ({}), checkProcess: () => ({}), checkEndpoint: async () => ({}),
     checkFile: (filePath, pattern) => runtime.checkFile(filePath, pattern),
     evaluateWatchCondition: (_watch, checkResult) => checkResult.matches,
@@ -416,6 +418,33 @@ test("Agent watch scheduler only persists and dispatches bounded file metadata",
   await scheduler.checkWatch(watch);
   const trigger = events.find(event => event[2] === "schedule.watch.triggered");
   assert.deepEqual(trigger[3].check_result, { exists: true, matches: true });
-  assert.deepEqual(dispatched, { exists: true, matches: true });
+  assert.deepEqual(dispatched.checkResult, { exists: true, matches: true });
+  assert.equal(dispatched.metadata.authIdentity.principal_id, "principal-watch", "watch actions retain the signed initiating identity");
+  assert.equal(dispatched.metadata.project, "project-watch");
+  assert.equal(dispatched.metadata.agentAuthorityContext.envelope.allowed_effects[0], "read_only");
   assert.equal(JSON.stringify(trigger[3]).includes("SYNTHETIC_EVENT_SECRET"), false);
+});
+
+test("watch without current signed authority pauses before checking or dispatching", async () => {
+  const watch = { id: "watch-no-authority", status: "active", platform_execution_id: "watch-no-authority-execution" };
+  const events = [];
+  const transitions = [];
+  let checks = 0;
+  let actions = 0;
+  const scheduler = createWatchScheduler({
+    loadWatches: () => [watch], saveWatches: () => {},
+    claimScheduledDefinition: () => ({ ok: true, claim: null }), pauseWatchForCancel: () => {},
+    startScheduledLeaseRenewal: () => null, releaseScheduledClaim: () => {},
+    createScheduledPlatformExecution: () => ({ execution_id: "unused" }),
+    appendScheduledPlatformEvent: (...args) => events.push(args), transitionExecution: (...args) => transitions.push(args),
+    executeWatchAction: async () => { actions += 1; },
+    checkService: () => { checks += 1; return {}; }, checkProcess: () => ({}), checkEndpoint: async () => ({}), checkFile: () => ({}),
+    evaluateWatchCondition: () => true, processId: 42,
+  });
+  await scheduler.checkWatch(watch);
+  assert.equal(watch.status, "paused");
+  assert.equal(checks, 0, "the condition is not evaluated after authority failure");
+  assert.equal(actions, 0, "the action is not dispatched after authority failure");
+  assert.equal(transitions[0][1], "blocked");
+  assert.equal(events.some(event => event[2] === "schedule.watch.authorization_denied"), true);
 });

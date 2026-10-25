@@ -152,16 +152,61 @@ test("security audit records server-derived provenance without password material
 
 test("redaction covers nested credentials, encoded tokens, and structured result content", () => {
   const secret = ["boundary", "-secret-", "value"].join("");
-  const nested = redactSensitiveKeysDeep({ config: { password: secret }, headers: { Authorization: `Bearer ${secret}` }, safe: "visible" });
+  const nested = redactSensitiveKeysDeep({
+    config: { password: secret },
+    headers: { Authorization: `Bearer ${secret}` },
+    signed: { sig: secret, signature: secret, xGoogSignature: secret },
+    signal: "visible",
+    safe: "visible",
+  });
   assert.equal(nested.config.password, "[REDACTED]");
   assert.doesNotMatch(nested.headers.Authorization, new RegExp(secret));
+  assert.deepEqual(nested.signed, { sig: "[REDACTED]", signature: "[REDACTED]", xGoogSignature: "[REDACTED]" });
+  assert.equal(nested.signal, "visible", "signature matching must not redact the ordinary signal key");
   assert.equal(nested.safe, "visible");
   assert.doesNotMatch(redactSensitive(`token=${encodeURIComponent(secret)}`), new RegExp(secret));
+
+  const serialized = redactSensitive(JSON.stringify({
+    nested: { sig: secret, xGoogSignature: secret, password: secret },
+    signal: "visible",
+    safe: "visible",
+  }));
+  const parsedSerialized = JSON.parse(serialized);
+  assert.deepEqual(parsedSerialized.nested, {
+    sig: "[REDACTED]",
+    xGoogSignature: "[REDACTED]",
+    password: "[REDACTED]",
+  });
+  assert.equal(parsedSerialized.signal, "visible", "JSON signature matching must not redact signal");
+  assert.equal(parsedSerialized.safe, "visible");
+  const prettySerialized = redactSensitive(JSON.stringify({ password: secret, signal: "visible" }, null, 2));
+  assert.match(prettySerialized, /\n  "password": "\[REDACTED\]"/,
+    "JSON redaction must preserve pretty-print indentation");
+  const oversizedJson = JSON.stringify({ filler: "x".repeat(1024 * 1024), signed: { sig: secret } });
+  assert.doesNotMatch(redactSensitive(oversizedJson), new RegExp(secret),
+    "large JSON text must retain key-aware redaction without parsing the whole document");
+  const malformedJson = redactSensitive(`{"sig":"${secret}",`);
+  assert.match(malformedJson, /"sig":"\[REDACTED\]"/,
+    "malformed JSON must fall back to text redaction");
+  const malformedLargeJson = `{"filler":"${"x".repeat(1024 * 1024)}","bad\\x":"visible"}`;
+  assert.match(redactSensitive(malformedLargeJson), /visible/,
+    "oversized malformed JSON keys must not break the bounded field scan");
 
   const remoteInput = ["https:", "//", "deploy-user:ordinary-password@git.example.test/team/repository.git"].join("");
   const remote = redactSensitive(remoteInput);
   assert.doesNotMatch(remote, /deploy-user|ordinary-password/);
   assert.match(remote, /\[REDACTED\]@git\.example\.test\/team\/repository\.git/);
+  const sasUrl = "https://example.invalid/blob?sv=2026-01-01&sig=synthetic-sas-signature&sp=read";
+  assert.equal(redactSensitive(sasUrl), "https://example.invalid/blob?sv=2026-01-01&sig=[REDACTED]&sp=read");
+  const googleSignedUrl = "https://example.invalid/object?X-Goog-Signature=synthetic-object-signature&generation=42";
+  assert.equal(redactSensitive(googleSignedUrl), "https://example.invalid/object?X-Goog-Signature=[REDACTED]&generation=42");
+  const callbackUrl = "https://example.invalid/callback#access_token=synthetic-fragment-token&sig=synthetic-fragment-signature&state=fixture";
+  assert.equal(redactSensitive(callbackUrl), "https://example.invalid/callback#access_token=[REDACTED]&sig=[REDACTED]&state=fixture");
+  assert.equal(redactSensitive("https://example.invalid/path?state="), "https://example.invalid/path?state=");
+  assert.equal(redactSensitive("https://example.invalid/path?%ZZ=value"), "https://example.invalid/path?%ZZ=value");
+  const jdbcUrl = "jdbc:sqlserver://db.internal;password=synthetic-jdbc-password;database=app";
+  assert.equal(redactSensitive(jdbcUrl), "jdbc:sqlserver://db.internal;password=[REDACTED];database=app");
+  assert.equal(redactSensitive("https://example.invalid/object?version=3&mode=read"), "https://example.invalid/object?version=3&mode=read");
   const longSchemeRemote = `${"a".repeat(80)}://deploy-user:ordinary-password@git.example.test/team/repository.git`;
   const redactedLongSchemeRemote = redactSensitive(longSchemeRemote);
   assert.doesNotMatch(redactedLongSchemeRemote, /deploy-user|ordinary-password/);

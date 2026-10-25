@@ -49,6 +49,33 @@ test("caller-supplied memory source cannot promote authority", async () => {
   assert.equal(stored.metadata.requested_source, "user_correction");
 });
 
+test("Agent Bridge memory writes remain pending until authenticated confirmation", async () => {
+  const result = await dispatcher.dispatchTestTool({
+    descriptor: memory,
+    args: { action: "remember", project: "memory_authority_project", type: "decision", content: "synthetic agent-authored decision" },
+    context: { authIdentity: { principal_id: operator.principal_id, principal_type: "human" }, project: "memory_authority_project", source: "agent", taskId: "agt_memory_authority" },
+  });
+  assert.notEqual(result.isError, true, JSON.stringify(result));
+  const payload = JSON.parse(result.content[0].text);
+  const stored = db.getMemoryById(payload.memory.id, { includeDisabled: true });
+  assert.equal(stored.source, "agent");
+  assert.equal(stored.state, "pending");
+  assert.equal(stored.requires_confirmation, true);
+  assert.equal(stored.metadata.user_controlled, false);
+  assert.equal(requiresMemoryConfirmation(stored), true);
+});
+
+test("legacy handoff and task-session memories of every type remain untrusted until confirmed", () => {
+  for (const source of ["handoff", "task_session"]) {
+    for (const type of ["fact", "decision", "procedure", "negative", "session", "open_thread", "observation"]) {
+      assert.equal(requiresMemoryConfirmation({ source, type, state: "active", requires_confirmation: false }), true,
+        `${source}/${type} legacy memory must not become trusted by omission`);
+      assert.equal(requiresMemoryConfirmation({ source, type, state: "confirmed", requires_confirmation: false }), false,
+        `${source}/${type} memory may enter trusted context after explicit confirmation`);
+    }
+  }
+});
+
 test("project write access cannot correct or confirm high-authority memory", async () => {
   const original = db.upsertMemory({ type: "fact", project: "memory_authority_project", content: "original synthetic fact", summary: "original synthetic fact", source: "explicit", source_authority: 5, requires_confirmation: true });
   assert.equal(dispatcher.requiredToolPermission(memory, { action: "correct" }), "tools.execute_critical");
@@ -124,6 +151,102 @@ test("memory imports stay untrusted and cannot rewrite trusted duplicate metadat
   assert.equal(after.source_authority, before.source_authority);
   assert.equal(after.times_confirmed, before.times_confirmed);
   assert.equal(after.last_confirmed_at, before.last_confirmed_at);
+});
+
+test("memory writes and imports redact credential-shaped content and metadata before persistence", () => {
+  const marker = "SYNTHETIC_MEMORY_PERSISTENCE_SECRET";
+  const direct = db.upsertMemory({
+    type: "fact",
+    project: "memory_authority_project",
+    content: `Connection uses api_key=${marker}`,
+    summary: `Summary password=${marker}`,
+    source: `credential=${marker}`,
+    source_ref: `https://example.invalid/resource?access_token=${marker}`,
+    evidence_excerpt: `token=${marker}`,
+    metadata: { password: marker, note: `secret=${marker}` },
+  });
+  const directRow = db.getDb().prepare("SELECT content, summary, source, source_ref, evidence_excerpt, metadata_json FROM memories WHERE id = ?").get(direct.id);
+  assert.equal(JSON.stringify(directRow).includes(marker), false, "direct write must not persist synthetic credential values");
+  assert.equal(JSON.stringify(db.getMemoryById(direct.id, { includeDisabled: true })).includes(marker), false);
+
+  const imported = db.importMemories({ memories: [{
+    type: "observation",
+    project: "memory_authority_project",
+    content: `Imported token=${marker}`,
+    summary: `Imported password=${marker}`,
+    source: `api_key=${marker}`,
+    source_ref: `https://example.invalid/import?token=${marker}`,
+    evidence_excerpt: `credential=${marker}`,
+    metadata: { access_key: marker, note: `password=${marker}` },
+  }] });
+  assert.equal(imported.imported, 1);
+  const importedRow = db.getDb().prepare("SELECT content, summary, source_ref, metadata_json FROM memories WHERE source = 'import' AND content LIKE '%Imported%' ORDER BY created_at DESC LIMIT 1").get();
+  assert.ok(importedRow);
+  assert.equal(JSON.stringify(importedRow).includes(marker), false, "imported memory must not persist synthetic credential values");
+
+  const lifecycle = db.upsertMemory({ type: "fact", project: "memory_authority_project", content: "synthetic lifecycle reason fixture", summary: "synthetic lifecycle reason fixture" });
+  db.softDeleteMemory(lifecycle.id, `api_key=${marker}`);
+  const lifecycleRow = db.getDb().prepare("SELECT metadata_json FROM memories WHERE id = ?").get(lifecycle.id);
+  assert.equal(lifecycleRow.metadata_json.includes(marker), false, "lifecycle reason must not persist synthetic credentials");
+
+  db.getDb().prepare("UPDATE memories SET content = ?, summary = ?, source_ref = ?, metadata_json = ? WHERE id = ?").run(
+    `Legacy raw token=${marker}`,
+    `Legacy api_key=${marker}`,
+    `https://example.invalid/legacy?password=${marker}`,
+    JSON.stringify({ password: marker, note: `secret=${marker}` }),
+    direct.id,
+  );
+  const legacyProjection = db.getMemoryById(direct.id, { includeDisabled: true });
+  assert.equal(JSON.stringify(legacyProjection).includes(marker), false, "memory projections must redact known credential shapes in legacy rows");
+  const legacyRaw = db.getDb().prepare("SELECT content, metadata_json FROM memories WHERE id = ?").get(direct.id);
+  assert.equal(JSON.stringify(legacyRaw).includes(marker), true, "read sanitization must not silently rewrite historical database rows");
+});
+
+test("legacy context documents are redacted on write and projection without rewriting legacy rows", () => {
+  const marker = "SYNTHETIC_CONTEXT_PERSISTENCE_SECRET";
+  db.setDocument("context", { decisions: [{ context: `api_key=${marker}`, decision: "Use a governed tool" }] });
+  const stored = db.getDb().prepare("SELECT data_json FROM json_documents WHERE name = 'context'").get();
+  assert.equal(stored.data_json.includes(marker), false, "new context documents must be sanitized before storage");
+  assert.equal(JSON.stringify(db.loadDocument("context", {})).includes(marker), false);
+
+  db.getDb().prepare("UPDATE json_documents SET data_json = ? WHERE name = 'context'").run(
+    JSON.stringify({ problems: [{ description: `password=${marker}` }] }),
+  );
+  const legacyProjection = db.loadDocument("context", {});
+  assert.equal(JSON.stringify(legacyProjection).includes(marker), false, "known credential patterns in old context rows must be sanitized on read");
+  assert.equal(db.getDb().prepare("SELECT data_json FROM json_documents WHERE name = 'context'").get().data_json.includes(marker), true,
+    "read sanitization must not silently rewrite historical rows");
+});
+
+test("legacy vector context payloads are redacted before recall", async () => {
+  const marker = "SYNTHETIC_VECTOR_CONTEXT_SECRET";
+  const qdrant = require("../src/qdrant");
+  const inference = require("../src/compute/inference-service");
+  const contextFamily = require("../src/tools/families/context");
+  const originalAvailable = qdrant.isAvailable;
+  const originalSearch = qdrant.search;
+  const originalEmbed = inference.embed;
+  try {
+    qdrant.isAvailable = async () => true;
+    qdrant.search = async () => [{
+      payload: { type: "problem", data: { id: "legacy_vector_problem", project: "memory_authority_project", description: `Security review api_key=${marker}` } },
+      score: 0.9,
+    }];
+    inference.embed = async () => ({ embedding: [0.1, 0.2] });
+    const contextApi = require("../src/tools/context");
+    const executionContext = contextApi.createTestExecutionContext({
+      authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+      project: "memory_authority_project",
+    });
+    const results = await contextApi.runWithContext(executionContext,
+      () => contextFamily.searchContext({}, "Security review", "all", 10, "memory_authority_project"));
+    assert.ok(results.some(result => result.item.id === "legacy_vector_problem"));
+    assert.equal(JSON.stringify(results).includes(marker), false, "legacy vector payload must be sanitized before context recall");
+  } finally {
+    qdrant.isAvailable = originalAvailable;
+    qdrant.search = originalSearch;
+    inference.embed = originalEmbed;
+  }
 });
 
 test("failed replacement persistence rolls back the old-memory deletion", async () => {

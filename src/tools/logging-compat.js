@@ -10,6 +10,17 @@ function logToolCall(name, args, duration, success, summary, metadata = {}) {
     // plaintext in args.value. Pattern redaction cannot recognize arbitrary
     // secret values, so scrub these before any persistence below.
     const canonical = stripSidekickPrefix(String(name || ""));
+    if (canonical === "download" && typeof args?.url === "string") {
+      // Signed media URLs may carry credentials in opaque path segments or
+      // unconventional query parameters that key-based redaction cannot know.
+      // Persist the origin for attribution; never retain the caller URL.
+      let safeOrigin = "[URL redacted]";
+      try {
+        const parsed = new URL(args.url);
+        if (parsed.origin !== "null") safeOrigin = parsed.origin;
+      } catch { /* malformed input is still never persisted verbatim */ }
+      args = { ...args, url: safeOrigin };
+    }
     if (canonical === "secret") {
       if (args && typeof args === "object" && args.value !== undefined) {
         args = { ...args, value: "[REDACTED]" };

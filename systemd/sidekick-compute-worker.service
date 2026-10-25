@@ -15,6 +15,7 @@ Restart=on-failure
 RestartSec=10
 User=sidekick-worker
 Group=sidekick-worker
+UMask=0077
 # Non-secret configuration only. The credential lives in a 0600 file referenced
 # by path here; the enrollment token is NEVER placed in the unit.
 Environment=NODE_ENV=production

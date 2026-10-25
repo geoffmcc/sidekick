@@ -15,10 +15,12 @@
 const fs = require("fs");
 const path = require("path");
 const { PACK_MANIFEST_FILENAME, parsePackManifestFile, checkPackCompatibility } = require("./manifest");
+const { hashInstalledPack } = require("./packaging");
 const repository = require("./repository");
 const lifecycle = require("./lifecycle");
 const { sidekickVersion } = require("../modules/packaging");
 const { compareVersions } = require("../modules/manifest");
+const { EXPECTED_PACKAGE_HASHES, verifyBundledPackageHash } = require("./bundled-attestations");
 
 /** True when the bundled version is semver-newer than the installed one. */
 function bundledVersionIsNewer(bundledVersion, installedVersion) {
@@ -50,6 +52,13 @@ function listBundledPacks() {
     if (!fs.existsSync(manifestPath)) continue;
     try {
       const manifest = parsePackManifestFile(manifestPath);
+      const actualPackageHash = hashInstalledPack(packRoot).package_hash;
+      if (!EXPECTED_PACKAGE_HASHES[manifest.name]) {
+        throw new Error(`Bundled pack "${manifest.name}" has no release package hash attestation`);
+      }
+      if (!verifyBundledPackageHash(manifest.name, actualPackageHash)) {
+        throw new Error(`Bundled pack "${manifest.name}" integrity check failed (expected ${EXPECTED_PACKAGE_HASHES[manifest.name].slice(0, 12)}…, found ${actualPackageHash.slice(0, 12)}…)`);
+      }
       const compatibility = checkPackCompatibility(manifest, sidekickVersion());
       const installed = repository.getPack(manifest.name);
       results.push({
@@ -59,6 +68,8 @@ function listBundledPacks() {
         description: manifest.description,
         publisher: manifest.publisher,
         path: packRoot,
+        package_hash: actualPackageHash,
+        integrity_verified: true,
         bundled: true,
         provenance: "first_party",
         compatible: compatibility.ok,

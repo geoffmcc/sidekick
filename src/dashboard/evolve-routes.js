@@ -33,7 +33,7 @@ function registerEvolveRoutes({
   app.post("/api/evolve/:id/validate", guarded((req, res) => evolveDashboardAction(req, res, "validate")));
   // Approval must carry the authenticated principal, never the dashboard actor.
   app.post("/api/evolve/:id/approve", guarded((req, res) =>
-    evolveDashboardAction(req, res, "approve", { approver: authenticatedUser(req) || undefined })));
+    evolveDashboardAction(req, res, "approve")));
   app.post("/api/evolve/:id/promote", guarded((req, res) => evolveDashboardAction(req, res, "promote")));
   app.post("/api/evolve/:id/reject", guarded((req, res) => evolveDashboardAction(req, res, "reject")));
   app.post("/api/evolve/:id/deprecate", guarded((req, res) => evolveDashboardAction(req, res, "deprecate")));

@@ -3,7 +3,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
-const { createScheduledAuthority, verifyScheduledAuthority } = require("../src/security/scheduled-authority");
+const { createScheduledAuthority, verifyScheduledAuthority, createScheduledWatchAuthority, verifyScheduledWatchAuthority, createScheduledCronAuthority, verifyScheduledCronAuthority } = require("../src/security/scheduled-authority");
 const { createDelayExecution } = require("../src/agent/delay-execution");
 
 const secret = "synthetic-scheduled-authority-key-32-bytes";
@@ -52,6 +52,68 @@ test("signed scheduled authority restores authenticated and Agent-scoped context
   assert.equal(restored.agentAuthorityContext.principal_ref, "principal-a");
   assert.equal(restored.project, "project-a");
   assert.equal(restored.taskId, "task-a");
+});
+
+test("scheduled watch authority binds its trigger and action definition", () => {
+  const { context } = fixture();
+  const watch = {
+    id: "watch_test_1", platform_execution_id: "exec_watch_1", source: "file",
+    target: "workspace:project/repo/ready", condition: "content_matches", value: "ready",
+    interval: "60s", action_tool: "notify", action_args: { message: "ready" },
+    status: "active", triggerCount: 0,
+  };
+  watch.scheduled_authority = createScheduledWatchAuthority({ watch, context, secret });
+  const restored = verifyScheduledWatchAuthority({ watch, secret });
+  assert.equal(restored.authIdentity.principal_id, "principal-a");
+  assert.equal(restored.project, "project-a");
+  assert.equal(restored.agentAuthorityContext.principal_ref, "principal-a");
+
+  for (const mutate of [
+    value => { value.action_tool = "bash"; },
+    value => { value.action_args.message = "changed"; },
+    value => { value.target = "workspace:other/private"; },
+    value => { value.condition = "exists"; },
+    value => { value.network_scope_revision = 9; },
+  ]) {
+    const changed = structuredClone(watch);
+    mutate(changed);
+    assert.equal(verifyScheduledWatchAuthority({ watch: changed, secret }), null);
+  }
+  const runtimeOnlyChange = structuredClone(watch);
+  runtimeOnlyChange.triggerCount = 1;
+  runtimeOnlyChange.lastCheck = "2030-01-01T00:00:00.000Z";
+  assert.ok(verifyScheduledWatchAuthority({ watch: runtimeOnlyChange, secret }), "mutable scheduler status does not invalidate authority");
+});
+
+test("scheduled cron authority binds the exact recurring command and restores its initiating principal", () => {
+  const { context } = fixture();
+  const job = {
+    id: "cron_test_1", platform_execution_id: "exec_cron_1", name: "nightly task",
+    schedule: "0 2 * * *", command: "printf safe", enabled: true,
+  };
+  job.scheduled_authority = createScheduledCronAuthority({ job, context, secret });
+  const restored = verifyScheduledCronAuthority({ job, secret });
+  assert.equal(restored.authIdentity.principal_id, "principal-a");
+  assert.equal(restored.authIdentity.credential_id, "cred_a");
+  assert.equal(restored.agentAuthorityContext.principal_ref, "principal-a");
+  assert.equal(restored.project, "project-a");
+
+  for (const mutate of [
+    value => { value.command = "printf changed"; },
+    value => { value.schedule = "* * * * *"; },
+    value => { value.platform_execution_id = "exec_other"; },
+    value => { value.id = "cron_other"; },
+    value => { value.name = "changed name"; },
+  ]) {
+    const changed = structuredClone(job);
+    mutate(changed);
+    assert.equal(verifyScheduledCronAuthority({ job: changed, secret }), null);
+  }
+
+  const runtimeOnlyChange = structuredClone(job);
+  runtimeOnlyChange.enabled = false;
+  runtimeOnlyChange.lastRun = "2030-01-01T00:00:00.000Z";
+  assert.ok(verifyScheduledCronAuthority({ job: runtimeOnlyChange, secret }), "scheduler runtime metadata does not alter command authority");
 });
 
 test("delay arguments, target, time, and execution binding cannot change after signing", () => {

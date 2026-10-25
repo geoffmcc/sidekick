@@ -17,6 +17,24 @@ const db = dbStore.getDb();
 
 const owner = identity.bootstrapOwner({ username: "atomic_owner", password: "synthetic sufficiently long owner password" });
 
+test("identity audit sink recursively redacts secrets and bounds details", () => {
+  const syntheticCredential = "synthetic-audit-credential-that-must-never-be-stored";
+  identity.recordAuditEvent("security.audit.redaction_test", owner.principal_id, owner.principal_id, {
+    nested: { api_key: syntheticCredential, label: "safe" },
+    items: [{ authorization: `Bearer ${syntheticCredential}` }],
+  });
+  const row = db.prepare("SELECT details_json FROM identity_audit_events WHERE event_type = 'security.audit.redaction_test'").get();
+  assert.ok(row.details_json.includes("[REDACTED]"));
+  assert.ok(!row.details_json.includes(syntheticCredential));
+
+  const eventCount = db.prepare("SELECT COUNT(*) AS count FROM identity_audit_events WHERE event_type = 'security.audit.oversized_test'").get().count;
+  assert.throws(() => identity.recordAuditEvent("security.audit.oversized_test", owner.principal_id, owner.principal_id, {
+    summary: "x".repeat(40 * 1024),
+  }), /identity audit details exceed the safe size limit/);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM identity_audit_events WHERE event_type = 'security.audit.oversized_test'").get().count, eventCount,
+    "oversized details must not be persisted");
+});
+
 function rejectAudit(eventType, triggerName, callback) {
   db.exec(`CREATE TRIGGER ${triggerName} BEFORE INSERT ON identity_audit_events
     WHEN NEW.event_type = '${eventType}'

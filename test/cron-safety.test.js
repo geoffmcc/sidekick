@@ -8,6 +8,6 @@ const runner = fs.readFileSync(path.join(__dirname, "../scripts/run-cron-job.js"
 assert.ok(source.includes("run-cron-job.js"), "system cron must invoke the fixed Sidekick runner");
 assert.ok(!source.includes("${j.command}"), "caller command must never be written into crontab");
 assert.ok(source.includes("isSafeCronSchedule"), "cron schedules must be structurally validated");
-assert.ok(runner.includes('callTool("cron"'), "the cron runner must use canonical dispatch");
+assert.ok(runner.includes('callInternalTool("cron"'), "the cron runner must use canonical internal dispatch");
 
 console.log("Cron safety tests passed");

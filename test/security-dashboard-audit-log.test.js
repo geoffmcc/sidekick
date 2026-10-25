@@ -45,3 +45,13 @@ test("audit append tightens permissions on an existing regular file", { skip: pr
     assert.equal(fs.statSync(file).mode & 0o777, 0o600);
   });
 });
+
+test("audit append rejects an oversized event without changing history", () => {
+  withTempDir(dir => {
+    const file = path.join(dir, "audit.jsonl");
+    appendAuditLine(file, '{"action":"retained"}\n');
+    const before = fs.readFileSync(file, "utf8");
+    assert.throws(() => appendAuditLine(file, `${"x".repeat(32 * 1024)}\n`), /dashboard audit event exceeds the safe size limit/);
+    assert.equal(fs.readFileSync(file, "utf8"), before);
+  });
+});

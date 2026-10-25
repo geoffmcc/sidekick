@@ -8,11 +8,15 @@
 
 const assert = require('assert');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
-const TEST_DATA_DIR = path.join(__dirname, 'test-data-capability-packs');
-fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+const runnerDataRoot = process.env.SIDEKICK_TEST_DATA_DIR;
+const TEST_DATA_DIR = runnerDataRoot
+  ? path.join(runnerDataRoot, 'capability-packs')
+  : fs.mkdtempSync(path.join(os.tmpdir(), 'sidekick-test-capability-packs-'));
 fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
+if (!runnerDataRoot) process.once('exit', () => fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true }));
 process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
 process.env.SIDEKICK_DB_FILE = path.join(TEST_DATA_DIR, 'sidekick.db');
 process.env.SIDEKICK_TOOL_POLICY = 'open';
@@ -320,47 +324,35 @@ function buildUpgradeCandidate() {
   });
 
   // --- CP.13 upgrade -------------------------------------------------------
-  test('CP.13: upgrade replaces components, removes obsolete ones, and creates no duplicate ownership', () => {
+  await asyncTest('CP.13: a caller-supplied package hash cannot promote modified first-party code into Core', async () => {
     const candidate = buildUpgradeCandidate();
-    const before = packRepository.listComponents(PACK);
-    assert.strictEqual(before.filter(c => c.kind === 'workflow').length, 7);
-
-    const result = packLifecycle.upgrade(PACK, candidate);
-    assert.strictEqual(result.previous_version, '1.0.1');
-    assert.strictEqual(result.version, '1.1.0');
-    assert.strictEqual(result.health.status, 'healthy');
-
-    const pack = packRepository.getPack(PACK);
-    assert.strictEqual(pack.state, 'enabled', 'an enabled pack stays enabled across an upgrade');
-    assert.strictEqual(pack.install_path, packStore.versionDir(PACK, '1.1.0'));
-    assert.strictEqual(fs.existsSync(packStore.versionDir(PACK, '1.0.1')), false, 'superseded pack version removed');
-    assert.strictEqual(pack.config.verification_mode, 'quick', 'compatible configuration is preserved');
-
-    // The dropped workflow is gone from ownership AND from the definition registry.
-    const components = packRepository.listComponents(PACK);
-    assert.strictEqual(components.filter(c => c.kind === 'workflow').length, 6);
-    assert.strictEqual(workflowRepository.getWorkflowDefinition('developer/release-preparation'), null);
-    assert.ok(workflowRepository.getWorkflowDefinition('developer/repository-recon'));
-
-    // No duplicate ownership rows.
-    const refs = components.map(c => `${c.kind}:${c.ref}`);
-    assert.strictEqual(new Set(refs).size, refs.length, 'component ownership is unique');
-    for (const component of components) {
-      assert.strictEqual(component.pack_version, '1.1.0', `${component.ref} ownership follows the new version`);
-    }
-
-    // The owned module went through the module upgrade path.
+    const sentinel = path.join(TEST_DATA_DIR, 'first-party-upgrade-executed.txt');
+    const entryPath = path.join(candidate, 'modules', 'developer-tools', 'entry.js');
+    fs.appendFileSync(entryPath, `\nrequire('fs').writeFileSync(${JSON.stringify(sentinel)}, 'executed');\n`);
+    const candidateHash = packLifecycle.inspect(candidate).package_hash;
+    const beforePack = packRepository.getPack(PACK);
     const module = moduleRepository.getModule('developer-tools');
-    assert.strictEqual(module.version, '1.1.0');
+    const result = await callInternalTool('capability', {
+      action: 'upgrade', name: PACK, path: candidate, expected_package_hash: candidateHash,
+    }, authorizedContext);
+    assert.match(result.content[0].text, /first_party_source_required/);
+    assert.strictEqual(fs.existsSync(sentinel), false, 'candidate module entry never executes');
+    const afterPack = packRepository.getPack(PACK);
+    assert.strictEqual(afterPack.package_hash, beforePack.package_hash);
+    assert.strictEqual(afterPack.install_path, beforePack.install_path);
+    assert.strictEqual(afterPack.provenance, 'first_party');
+    assert.strictEqual(moduleRepository.getModule('developer-tools').package_hash, module.package_hash);
     assert.strictEqual(moduleLoader.isModuleActive('developer-tools'), true);
     assert.ok(registry().has('dev_verify'));
   });
 
-  test('CP.14: ambiguous replacement is refused unless explicitly allowed', () => {
-    assert.throws(() => packLifecycle.upgrade(PACK, UPGRADE_DIR), /already at version 1\.1\.0/);
-    assert.throws(() => packLifecycle.upgrade(PACK, BUNDLED_PATH), /must increase version/);
-    assert.strictEqual(packRepository.getPack(PACK).version, '1.1.0', 'a refused upgrade leaves the installation alone');
+  test('CP.14: only a matching bundled artifact can retain first-party trust', () => {
+    assert.throws(() => packLifecycle.upgrade(PACK, BUNDLED_PATH), /already at version 1\.0\.1/);
+    const result = bundled.upgradeBundledPack(PACK, { allowSameVersion: true });
+    assert.strictEqual(result.version, '1.0.1');
+    assert.strictEqual(packRepository.getPack(PACK).provenance, 'first_party');
     assert.strictEqual(packLifecycle.health(PACK).status, 'healthy');
+    assert.strictEqual(packRepository.getPack(PACK).version, '1.0.1', 'a refused replacement leaves the release version installed');
   });
 
   // --- CP.15 uninstall -----------------------------------------------------
@@ -372,7 +364,7 @@ function buildUpgradeCandidate() {
 
     const result = packLifecycle.uninstall(PACK);
     assert.deepStrictEqual(result.removed.modules, ['developer-tools']);
-    assert.strictEqual(result.removed.workflows.length, 6);
+    assert.strictEqual(result.removed.workflows.length, 7);
     assert.strictEqual(result.removed.knowledge.length, 10);
     assert.strictEqual(result.package_removed, true);
     assert.strictEqual(result.audit_preserved, true);
@@ -470,42 +462,39 @@ function buildUpgradeCandidate() {
     assert.strictEqual(packRepository.getPack(PACK), null);
   });
 
-  test('CP.19: failed removal of a dropped first-party component restores pack metadata', () => {
-    bundled.installBundledPack(PACK, { enable: true });
-    copyTree(BUNDLED_PATH, UPGRADE_DIR);
-    const manifestPath = path.join(UPGRADE_DIR, 'sidekick.pack.json');
+  test('CP.19: failed third-party component removal restores pack metadata', () => {
+    const fixture = path.resolve(__dirname, 'fixtures', 'third-party-pack');
+    packLifecycle.install(fixture);
+    copyTree(fixture, FIXTURE_UPGRADE_DIR);
+    const manifestPath = path.join(FIXTURE_UPGRADE_DIR, 'sidekick.pack.json');
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
-    manifest.version = '1.0.2';
+    manifest.version = '1.1.0';
     manifest.modules = [];
-    manifest.workflows = [];
-    manifest.requires.tools = [];
-    manifest.requires.optional_tools = [];
-    manifest.permissions = [];
     fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-    fs.rmSync(path.join(UPGRADE_DIR, 'modules'), { recursive: true, force: true });
-    fs.rmSync(path.join(UPGRADE_DIR, 'workflows'), { recursive: true, force: true });
+    fs.rmSync(path.join(FIXTURE_UPGRADE_DIR, 'modules'), { recursive: true, force: true });
 
-    const before = packRepository.getPack(PACK);
+    const before = packRepository.getPack('fixture-observatory');
     const originalUninstall = moduleLifecycle.uninstall;
     moduleLifecycle.uninstall = () => { throw new Error('simulated component removal failure'); };
     try {
       assert.throws(
-        () => packLifecycle.upgrade(PACK, UPGRADE_DIR),
+        () => packLifecycle.upgrade('fixture-observatory', FIXTURE_UPGRADE_DIR),
         /simulated component removal failure/
       );
     } finally {
       moduleLifecycle.uninstall = originalUninstall;
     }
 
-    const restored = packRepository.getPack(PACK);
+    const restored = packRepository.getPack('fixture-observatory');
     assert.strictEqual(restored.version, before.version);
     assert.strictEqual(restored.install_path, before.install_path);
+    assert.strictEqual(restored.package_hash, before.package_hash);
     assert.ok(fs.existsSync(restored.install_path), 'rollback keeps the previous package installed');
-    assert.ok(moduleRepository.getModule('developer-tools'), 'dropped module ownership remains after failed cleanup');
-    assert.strictEqual(moduleLoader.isModuleActive('developer-tools'), true);
+    assert.ok(moduleRepository.getModule('observatory-tools'), 'owned module remains registered');
+    assert.strictEqual(packRepository.listComponents('fixture-observatory').length, 1);
 
-    packLifecycle.uninstall(PACK);
-    fs.rmSync(UPGRADE_DIR, { recursive: true, force: true });
+    packLifecycle.uninstall('fixture-observatory');
+    fs.rmSync(FIXTURE_UPGRADE_DIR, { recursive: true, force: true });
   });
 
   console.log(`\n${failures === 0 ? 'All Capability Packs v1 tests passed.' : `${failures} capability-pack test(s) FAILED.`}`);

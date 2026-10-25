@@ -21,7 +21,7 @@ function request(method, route, body, headers = {}) {
       res.on('end', () => {
         let parsed = {};
         try { parsed = text ? JSON.parse(text) : {}; } catch { parsed = { raw: text }; }
-        resolve({ status: res.statusCode, data: parsed });
+        resolve({ status: res.statusCode, headers: res.headers, data: parsed });
       });
     });
     req.setTimeout(5000, () => req.destroy(new Error(`timeout: ${method} ${route}`)));
@@ -117,6 +117,7 @@ async function main() {
 
     const tokenRes = await request('POST', '/compute/enrollment/tokens', { displayName: 'http-worker', allowedDataClassifications: ['public', 'internal', 'private'], expiresInMs: 600000, maxConcurrentJobs: 1 }, admin);
     assert.strictEqual(tokenRes.status, 200, 'admin can create enrollment token');
+    assert.strictEqual(tokenRes.headers['cache-control'], 'no-store', 'enrollment token responses must not be cached');
     assert.ok(tokenRes.data.token && tokenRes.data.token.startsWith('enroll_'), 'token returned once');
 
     const enrollRes = await request('POST', '/compute/enrollment/exchange', {
@@ -132,6 +133,7 @@ async function main() {
       protocolVersion: '1',
     });
     assert.strictEqual(enrollRes.status, 200, 'worker enrolls');
+    assert.strictEqual(enrollRes.headers['cache-control'], 'no-store', 'worker enrollment credentials must not be cached');
     assert.ok(enrollRes.data.credential, 'persistent credential returned');
     const workerId = enrollRes.data.worker.workerId;
     const credential = enrollRes.data.credential;
@@ -378,6 +380,7 @@ async function main() {
 
     const rotateRes = await request('POST', `/compute/admin/workers/${workerId}/credentials/rotate`, {}, admin);
     assert.strictEqual(rotateRes.status, 200, 'admin can rotate worker credential');
+    assert.strictEqual(rotateRes.headers['cache-control'], 'no-store', 'rotated worker credentials must not be cached');
     assert.ok(rotateRes.data.credential && rotateRes.data.credential !== activeCredential, 'rotation returns a new credential once');
     assert.strictEqual((await request('POST', '/compute/worker/heartbeat', { currentJobs: 0 }, workerAuth)).status, 401, 'old worker credential rejected after rotation');
     activeCredential = rotateRes.data.credential;

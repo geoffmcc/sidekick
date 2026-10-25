@@ -79,6 +79,37 @@ test("checkpoint and journal roll back together when event persistence fails", (
   assert.equal(store.listHandoffEvents(h.id).filter(e => e.event_type === "checkpoint_captured").length, 1);
 });
 
+test("handoff journal redacts sensitive metadata, reasons, actor and source before hashing", () => {
+  const h = create();
+  const marker = "SYNTHETIC_HANDOFF_JOURNAL_SECRET";
+  store.captureHandoffCheckpoint(h.id, {
+    working_directory: repo,
+    actor: `api_key=${marker}`,
+    source: `password=${marker}`,
+    metadata: { access_token: marker, note: `credential=${marker}` },
+  });
+  store.transitionHandoff(h.id, "active", { reason: `token=${marker}` });
+
+  const events = store.listHandoffEvents(h.id);
+  const serialized = JSON.stringify(events);
+  assert.equal(serialized.includes(marker), false, "journal API output must not expose synthetic credentials");
+  const rows = store.getDb().prepare("SELECT actor, source, payload_json FROM memory_handoff_events WHERE handoff_id = ?").all(h.id);
+  assert.equal(JSON.stringify(rows).includes(marker), false, "stored journal rows must not expose synthetic credentials");
+  assert.equal(store.getHandoffReadiness(h.id).journal.valid, true, "hash chain must verify over the redacted event representation");
+});
+
+test("memory audit redacts synthetic credentials in details and actor before persistence", () => {
+  const marker = "SYNTHETIC_MEMORY_AUDIT_SECRET";
+  const id = store.auditMemoryEvent("synthetic.redaction.test", "fixture", "redaction-fixture", {
+    api_key: marker,
+    note: `password=${marker}`,
+  }, `token=${marker}`);
+  const row = store.getDb().prepare("SELECT actor, details_json FROM memory_audit_events WHERE id = ?").get(Number(id));
+  assert.ok(row);
+  assert.equal(JSON.stringify(row).includes(marker), false, "raw audit storage must not expose synthetic credentials");
+  assert.match(row.details_json, /\[REDACTED\]/);
+});
+
 test("handoff creation and version updates roll back when journal persistence fails", () => {
   const db = store.getDb();
   const original = create();

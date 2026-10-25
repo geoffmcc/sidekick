@@ -81,7 +81,7 @@ sudo systemctl restart sidekick-mcp sidekick-dashboard sidekick-agent
 
 ### Dashboard loads but API calls fail
 
-Check whether dashboard Basic Auth is enabled, whether the browser request is hitting the right host/port, and whether origin checks are rejecting mutating requests. Check `dashboard-errors.log` and `audit.jsonl` in the data directory.
+Check whether dashboard Basic Auth is enabled, whether the browser request is hitting the right host/port, and whether origin checks are rejecting mutating requests. Check `dashboard-errors.log` (and its one rotated file, `dashboard-errors.log.1`) and `audit.jsonl` in the data directory. Dashboard diagnostic files rotate at 5 MiB and retain at most 10 MiB total.
 
 ### MCP stale or invalid session
 
@@ -134,6 +134,8 @@ The first conversion from a non-Git deployment uses a deployment lock, clones in
 Every Git deploy that advances `main` also creates a pre-deploy snapshot under `/home/sidekick/backups/deploy-<UTC timestamp>/`. The deploy temporarily stops the Sidekick services, copies `.env` and `data/`, records the previous commit and backup manifest, then resumes the deployment. The newest five deploy snapshots are retained by default; set `SIDEKICK_DEPLOY_BACKUP_RETENTION` to change that policy. Git rollback protects tracked code, while these snapshots protect mutable configuration and runtime data.
 
 Keep backup purposes separate: `/home/sidekick/backups/` is for deployment snapshots; `${SIDEKICK_DATA_DIR}/backups/` (normally `/home/sidekick/sidekick/data/backups/`) is for application database backups created by `db_backup`. Do not create new deployment snapshots in the repository-level `backups/` directory.
+
+The `db_backup` and `db_restore` tools stream files through private temporary files and enforce a 2 GiB default limit on both backup input and restored database output. This bounds temporary disk use without buffering whole databases in process memory. If a legitimate database or compressed archive is larger, set `SIDEKICK_DB_BACKUP_MAX_BYTES` in the Sidekick service environment to the desired positive byte limit, then restart the services. The compressed input and expanded database are each checked independently, so a small gzip file cannot expand past the configured limit.
 
 Rollback after conversion:
 

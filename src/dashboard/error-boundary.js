@@ -2,6 +2,7 @@
 
 const crypto = require("crypto");
 const { redactSensitiveKeysDeep } = require("../redact");
+const { appendAuditLine } = require("./audit-log");
 
 const PUBLIC_ERRORS = Object.freeze({
   invalid_request: { status: 400, message: "Request could not be processed." },
@@ -40,6 +41,37 @@ const STATUS_CODES = Object.freeze({
 const CORRELATION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/;
 const SAFE_PUBLIC_MESSAGE_RE = /^[A-Za-z0-9][A-Za-z0-9 .,;:'()?!_-]{0,199}$/;
 const SAFE_EXTRA_KEYS = new Set(["approvalRequired", "connector_id", "deleted", "limit", "probe_execution", "windowMs"]);
+const MAX_DIAGNOSTIC_LOG_BYTES = 5 * 1024 * 1024;
+const MAX_DIAGNOSTIC_ENTRY_BYTES = 8 * 1024;
+
+function appendBoundedDiagnostic(fs, logFile, serializedEntry, { maxLogBytes, maxEntryBytes }) {
+  const line = `${serializedEntry}\n`;
+  const lineBytes = Buffer.byteLength(line, "utf8");
+  if (lineBytes > maxEntryBytes || lineBytes > maxLogBytes) {
+    throw new Error("dashboard diagnostic entry exceeds the safe size limit");
+  }
+
+  let currentBytes = 0;
+  try {
+    currentBytes = fs.statSync(logFile).size;
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+
+  if (currentBytes + lineBytes > maxLogBytes) {
+    const rotatedFile = `${logFile}.1`;
+    try { fs.unlinkSync(rotatedFile); } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+    if (currentBytes > maxLogBytes) {
+      fs.unlinkSync(logFile);
+    } else {
+      fs.renameSync(logFile, rotatedFile);
+    }
+  }
+
+  appendAuditLine(logFile, line, fs);
+}
 
 function requestCorrelationId(req) {
   if (req && req.dashboardCorrelationId) return req.dashboardCorrelationId;
@@ -87,15 +119,16 @@ function safeRoute(req, fallback = "dashboard") {
   return fallback;
 }
 
-function writeDiagnostic({ fs, logFile, req, error, status, code, component, url }) {
+function writeDiagnostic({ fs, logFile, req, error, status, code, component, url, maxLogBytes, maxEntryBytes }) {
   const rawMessage = error instanceof Error ? error.message : String(error || "");
   const rawStack = error instanceof Error ? error.stack : "";
+  const safeComponent = typeof component === "string" && /^[A-Za-z0-9_.:-]{1,80}$/.test(component) ? component : "dashboard";
   const entry = redactSensitiveKeysDeep({
     timestamp: new Date().toISOString(),
     correlation_id: requestCorrelationId(req),
     method: req?.method || null,
-    route: safeRoute(req, component || "dashboard"),
-    component: component || "dashboard",
+    route: safeRoute(req, safeComponent),
+    component: safeComponent,
     status,
     code,
     error_type: error?.name || typeof error,
@@ -104,16 +137,16 @@ function writeDiagnostic({ fs, logFile, req, error, status, code, component, url
     message_digest: digest(rawMessage),
     stack: "[REDACTED]",
     stack_digest: digest(rawStack),
-    source_url: typeof url === "string" && !url.includes("?") ? safeRoute({ route: { path: url } }, component || "dashboard") : null,
+    source_url: typeof url === "string" && !url.includes("?") ? safeRoute({ route: { path: url } }, safeComponent) : null,
   });
-  fs.appendFileSync(logFile, JSON.stringify(entry) + "\n");
+  appendBoundedDiagnostic(fs, logFile, JSON.stringify(entry), { maxLogBytes, maxEntryBytes });
   return entry;
 }
 
-function createDashboardErrorBoundary({ fs, logFile }) {
+function createDashboardErrorBoundary({ fs, logFile, maxLogBytes = MAX_DIAGNOSTIC_LOG_BYTES, maxEntryBytes = MAX_DIAGNOSTIC_ENTRY_BYTES }) {
   function logError(req, error, options = {}) {
     try {
-      return writeDiagnostic({ fs, logFile, req, error, status: options.status || 500, code: publicErrorCode(options.code, options.status || 500), component: options.component, url: options.url });
+      return writeDiagnostic({ fs, logFile, req, error, status: options.status || 500, code: publicErrorCode(options.code, options.status || 500), component: options.component, url: options.url, maxLogBytes, maxEntryBytes });
     } catch {
       return null;
     }
@@ -149,6 +182,8 @@ function addCorrelationMiddleware(req, res, next) {
 
 module.exports = {
   CORRELATION_ID_RE,
+  MAX_DIAGNOSTIC_ENTRY_BYTES,
+  MAX_DIAGNOSTIC_LOG_BYTES,
   PUBLIC_ERRORS,
   STATUS_CODES,
   addCorrelationMiddleware,

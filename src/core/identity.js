@@ -2,6 +2,7 @@
 
 const crypto = require("crypto");
 const dbStore = require("../db");
+const { redactSensitiveKeysDeep } = require("../redact");
 
 const PRINCIPAL_TYPES = Object.freeze(["human", "agent", "service", "automation", "system"]);
 const ROLE_NAMES = Object.freeze(["owner", "administrator", "operator", "viewer", "auditor"]);
@@ -9,6 +10,7 @@ const PASSWORD_SCHEME = ["scrypt", "v1"].join("_");
 const SCRYPT_OPTIONS = Object.freeze({ N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 });
 const PASSWORD_BYTES = 64;
 const MIN_PASSWORD_LENGTH = 12;
+const MAX_IDENTITY_AUDIT_DETAILS_BYTES = 32 * 1024;
 
 function now() { return new Date().toISOString(); }
 function requiredText(value, field, max = 160) {
@@ -71,7 +73,12 @@ function getRoles(principalIdValue) {
 }
 
 function audit(eventType, principalIdValue, actorPrincipalId, details = {}) {
-  dbStore.getDb().prepare(`INSERT INTO identity_audit_events (event_id, event_type, principal_id, actor_principal_id, details_json, created_at) VALUES (?, ?, ?, ?, ?, ?)`).run(eventId(), eventType, principalIdValue || null, actorPrincipalId || null, JSON.stringify(details), now());
+  const safeDetails = redactSensitiveKeysDeep(details);
+  const serializedDetails = JSON.stringify(safeDetails);
+  if (typeof serializedDetails !== "string" || Buffer.byteLength(serializedDetails, "utf8") > MAX_IDENTITY_AUDIT_DETAILS_BYTES) {
+    throw new Error("identity audit details exceed the safe size limit");
+  }
+  dbStore.getDb().prepare(`INSERT INTO identity_audit_events (event_id, event_type, principal_id, actor_principal_id, details_json, created_at) VALUES (?, ?, ?, ?, ?, ?)`).run(eventId(), eventType, principalIdValue || null, actorPrincipalId || null, serializedDetails, now());
 }
 
 function identityAuthority(actorIdentity) {

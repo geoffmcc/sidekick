@@ -54,7 +54,41 @@ function containsCredentialUrl(value) {
   if (typeof value !== "string" || !value.includes("://")) return false;
   try {
     const parsed = new URL(value);
-    return Boolean(parsed.username || parsed.password);
+    if (parsed.username || parsed.password) return true;
+    const hasCredentialParameter = (name, parameterValue) => {
+      const key = String(name || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      const signedUrlParameter = key === "sig" || key.endsWith("signature");
+      return Boolean(parameterValue) && (key === "key" || signedUrlParameter || /(?:password|passwd|passphrase|pwd|token|secret|credential|authorization|auth|apikey|accesskey|privatekey|bearer|jwt)/i.test(key));
+    };
+    // Credentials are also commonly carried in URL query strings, especially
+    // by database, cache, and identity-provider connection URLs. These env
+    // variable names often look harmless (DATABASE_URL, REDIS_URL), so inspect
+    // parameter names without logging or retaining any parameter values.
+    for (const [name, parameterValue] of parsed.searchParams) {
+      if (hasCredentialParameter(name, parameterValue)) return true;
+    }
+    // OAuth implicit-flow and callback URLs may carry bearer material in the
+    // fragment. Fragments are not sent in HTTP requests, but they are still
+    // copied into child environments and must not cross that boundary.
+    const fragment = parsed.hash.slice(1);
+    for (const match of fragment.matchAll(/(?:^|[&;])([^=&#;]+)=([^&#;]*)/g)) {
+      let name = match[1];
+      let parameterValue = match[2];
+      try { name = decodeURIComponent(name.replace(/\+/g, " ")); } catch {}
+      try { parameterValue = decodeURIComponent(parameterValue.replace(/\+/g, " ")); } catch {}
+      if (hasCredentialParameter(name, parameterValue)) return true;
+    }
+    // JDBC and other semicolon-style connection strings keep credentials in
+    // the URL path instead of searchParams (for example, `jdbc:sqlserver://host;password=...`).
+    const withoutFragment = value.split("#", 1)[0];
+    for (const match of withoutFragment.matchAll(/;([^=?&#;]+)=([^&#;]*)/g)) {
+      let name = match[1];
+      let parameterValue = match[2];
+      try { name = decodeURIComponent(name.replace(/\+/g, " ")); } catch {}
+      try { parameterValue = decodeURIComponent(parameterValue.replace(/\+/g, " ")); } catch {}
+      if (hasCredentialParameter(name, parameterValue)) return true;
+    }
+    return false;
   } catch {
     return false;
   }

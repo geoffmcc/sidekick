@@ -15,7 +15,8 @@ tests all three terminal states plus real second-process mutations. Raw claim
 tokens are not persisted by the fix. The crash fixture sends its synthetic token
 over stdin. Existing dispatcher, project isolation, memory-data security, and
 all 19 template-security tests pass in the final focused run. No dependency or
-policy changes; current dependency advisory status remains unverified.
+policy changes were made in that milestone. The later 2026-10-24 advisory
+review is recorded below.
 
 The bounded unchanged-code broad run also contains failed security suites:
 some report Windows cleanup errors, while security-research-pack reports
@@ -32,7 +33,17 @@ Project mismatch in stored resume links is a confirmed fail-open validation defe
 
 Stale/future evidence (SK-002) and undetected workspace changes (SK-004) can mislead a receiving agent. These checks must fail closed and must never imply current approvals. Secret redaction, scope authorization, dispatcher schema/policy and execution receipts remain required.
 
-Remaining review: identity/ownership matrix across MCP, Dashboard, Agent and resume; handoff path authorization and Git helper execution; symlink/SSRF redirects; pack code privilege boundaries; retrieval injection; redaction by sensitive key; claim token exposure; CI/dependency advisories. No dependency changes or new external services are introduced in this milestone.
+Remaining review: complete identity/ownership matrix across MCP, Dashboard,
+Agent and resume; handoff path authorization and Git helper execution; browser
+and downloader redirect/egress behavior; pack code privilege boundaries; and
+retrieval injection resistance. Structured memory, legacy context, handoff,
+journal, and memory-audit redaction now have focused synthetic coverage for
+known credential patterns and sensitive field names; arbitrary secrets in
+ordinary values and unmodified historical database contents remain residual
+risks. The MCP claim-token boundary now has an integration regression proving
+the authenticated caller receives the one-time bearer token while tool logs
+and identityless retries do not. CI and dependency state remain subject to
+continuous verification.
 
 Confirmed P1 project-scope leak (SK-020): through canonical MCP dispatch, a
 valid operator bound to one project could list its own handoff from another
@@ -71,3 +82,895 @@ evidence of an external attacker or production exploit.
 ## Fix and validation status
 
 SK-001 through SK-004 are fixed for the demonstrated cases. The final 12-case continuity suite passes; all 19 template security assertions and cleanup pass. Dispatcher behavior and cleanup pass after explicitly closing its owned database. Project context, project identity and memory data-isolation regressions pass. This does not close the untested authorization, injection, supply-chain or live-configuration items above.
+
+### Dashboard memory-evidence project scope (2026-10-24, SK-025)
+
+Confirmed authorization defect: `GET /api/memories/:id/evidence` used the
+linked handoff's access check instead of also checking the memory's own project.
+A persisted memory in project B that referenced a readable handoff in project A
+could therefore disclose its contents to a principal authorized only for A.
+A synthetic direct-route regression reproduced the leak (HTTP 200) before the
+fix. The route now requires read access to the memory project, requires access
+to any linked handoff, and rejects mismatched memory/handoff project scopes.
+Same-project linked reads remain allowed. The memory and handoff are test
+fixtures; review found no public import path that accepts a caller-supplied
+`source_ref` (imports set it to null and trusted extraction creates same-project
+links), so exploitability depends on malformed or otherwise inconsistent
+persisted state. This is a verified authorization logic flaw under that
+precondition, not evidence of an ordinary-user route to create the state.
+
+Focused validation after the fix: `test/security-project-access.test.js` and
+`test/security-dashboard-direct-routes.test.js` passed (2 suites, 0 failures).
+The broader authorization matrix and live deployment behavior remain open.
+
+An online `npm audit --json` request on 2026-10-24 succeeded and returned zero
+vulnerabilities across 219 dependencies. A subsequent request in the same
+session failed because the npm advisory endpoint was unavailable. Treat the
+successful result as a point-in-time snapshot, not continuous verification.
+The report does not cover non-NPM assets.
+
+### Dependency peer-range inconsistency (2026-10-24, SK-049)
+
+Local `npm ls --all` exits with `ELSPROBLEMS`: root `tree-sitter@0.25.1` is
+deduplicated into the optional peer slots of the pinned Java, Perl, Ruby, Rust,
+and TypeScript grammar packages even though their locked manifests declare
+older peer ranges. Current registry metadata shows no newer Java, Ruby, Rust,
+or TypeScript grammar release that raises those peer ranges; the newest Perl
+release does, but is not in the lock. The focused `semantic-repository` suite
+passes and exercises AST parsing across all seven supported languages, so this
+review did not establish an observed parser failure or exploitable
+vulnerability. The installed dependency tree still is not semver-consistent
+with all declared peers. No packages were upgraded or downgraded because a
+clean peer resolution requires an upstream-compatible parser/runtime set and
+controlled validation across supported platforms.
+
+### Handoff-linked memory scope (2026-10-24, SK-026)
+
+Confirmed scope disclosure in the Dashboard handoff detail route: its memory
+query uses the database's compatibility semantics `(project = ? OR project IS
+NULL)`, then selects rows whose `source_ref` or `metadata.handoff_id` matches
+the handoff. A project-only reader could therefore receive an unscoped memory
+when inconsistent persisted state linked it to that project handoff. The
+synthetic regression failed before remediation because the global memory was
+included. Dashboard and canonical MCP handoff inspection now additionally
+require exact equality of memory and handoff project scopes, preserving
+same-project linked results and excluding global or foreign-scope rows. The
+condition is malformed/inconsistent persisted linkage; no public writer that
+accepts a caller-supplied `source_ref` was identified. This is verified under
+that precondition, not proof of an ordinary user route to create it.
+
+Focused validation: `test/security-project-access.test.js` and
+`test/security-dashboard-direct-routes.test.js` pass (2 suites, 0 failures).
+
+### Handoff packet credential redaction (2026-10-24, SK-027)
+
+Confirmed persistence leak: handoff packet sanitization recursively applied
+pattern-only text redaction, so arbitrary values under credential-named fields
+such as `api_key`, `token`, and `password` survived in the current packet,
+version history, and first-class evidence/artifact links. Synthetic values
+reproduced this across those storage representations. Packet persistence now
+uses the shared key-aware recursive redactor, replacing values under sensitive
+field names while preserving surrounding handoff content. This applies to new
+packet writes and versions. Existing deployed database rows were not inspected
+or rewritten; any historical sensitive values remain an unverified residual
+risk requiring a separately backed-up, operator-approved remediation plan.
+
+Validation: the packet regression and `test/handoff-reliability.test.js` pass;
+the regression confirms synthetic values are absent from current rows, version
+history, and linked payloads. No production database was accessed.
+
+### Handoff text persistence (2026-10-24, SK-028)
+
+Confirmed secret persistence gap: the current `memory_handoffs.content` and
+`title` columns retained credential-shaped text even when the separate
+`redacted_content` field had removed it. Version snapshots also copied raw
+content. A synthetic test reproduced this for JSON `password` values and
+`api_key`/`token` assignments. New saves now persist the redacted content,
+title, and source; an explicitly updated legacy row is snapshotted only after
+redacting its content, title, source, and packet. The versioning test now
+asserts credential values are absent from persistent text columns.
+
+This is write-time enforcement, not a bulk database migration. Existing
+untouched rows and their prior history may still contain sensitive text; no
+production database was inspected or changed. Review and remediation of
+historical deployments requires a separate backup and approved operation.
+
+Validation: `test/security-project-access.test.js`,
+`test/handoff-versioning.test.js`, `test/handoff-reliability.test.js`, and
+`test/security-phase-07-secrets-redaction.test.js` passed (4 suites, 0 failures).
+
+### Handoff journal field redaction (2026-10-24, SK-029)
+
+Confirmed that checkpoint metadata, lifecycle reasons, actor labels, and source
+labels could be persisted in `memory_handoff_events` without passing through
+the shared redactor. Since handoff events are returned by the events API, this
+was a persistent disclosure path. The common journal writer now recursively
+redacts structured payloads and pattern-redacts actor/source strings before
+computing the event hash and inserting the row. The integrity chain therefore
+covers the exact sanitized representation that is persisted and returned.
+
+Validation: `test/handoff-reliability.test.js` checks synthetic sensitive
+values are absent from both stored rows and API results and that the sanitized
+journal chain verifies. This does not retroactively sanitize existing event
+rows; historical database contents remain an unverified residual risk.
+
+### Memory audit detail redaction (2026-10-24, SK-030)
+
+The shared memory audit writer persisted arbitrary structured details and actor
+labels unchanged. Memory management and handoff operations can carry
+caller-provided reasons, so credential-shaped values could enter audit rows.
+The writer now applies recursive key-aware redaction to details and pattern
+redaction to actor labels before persistence. Handoff atomic-audit validation
+compares the persisted sanitized representation, so failed or altered audit
+writes still roll back their associated mutation.
+
+Validation: `test/handoff-reliability.test.js` checks synthetic credentials are
+absent from stored audit rows; its atomic archive, restore, purge, session, and
+handoff tests also exercise audit transaction behavior. Historical audit rows
+were not migrated or inspected.
+
+### Persistent memory field redaction (2026-10-24, SK-031)
+
+Confirmed that direct structured-memory writes and import/sync admission paths
+could persist credential-shaped strings in memory metadata, summaries,
+evidence excerpts, source references, and lifecycle reasons. The shared memory
+write/admission boundary now pattern-redacts textual fields and recursively
+redacts metadata and tags before persistent writes; supersession and delete/
+expire reasons are also sanitized. This is pattern/key-aware protection and
+cannot detect a secret supplied as an ordinary-looking value under an ordinary
+field name. Normalized memory reads also redact known sensitive patterns and
+keyed values from legacy rows without rewriting them. Existing database rows
+were not inspected or migrated.
+
+Validation: `test/security-memory-authority.test.js` uses synthetic markers to
+verify direct writes and imported records do not retain known credential
+shapes. The authoritative runner also passed automatic-memory, memory-sync,
+handoff reliability, project-access, and phase-7 secret-redaction suites
+(6 suites, 0 failures); a legacy-row projection check confirms read-time
+redaction while leaving its synthetic raw fixture unchanged in SQLite. No live
+database or service was used.
+
+### Legacy context document persistence (2026-10-24, SK-032)
+
+Confirmed that the legacy context tool could persist caller-provided decision,
+problem, pattern, and session text without consistent key-aware redaction; some
+of these objects are also passed to the embedding store. Context document reads
+and writes now use the shared recursive redactor, and decision/problem/pattern/
+session objects are sanitized before any embedding call. Legacy non-memory
+Qdrant payloads are also redacted before context recall, preventing known
+credential patterns and sensitive-key values from being returned through the
+vector path. Normalized reads redact known credential patterns in historical
+context rows without rewriting those rows. This remains pattern/key-based
+detection and cannot identify an ordinary-looking generic secret value.
+
+Validation: the memory-authority regression writes a synthetic credential to a
+new context document and a legacy fixture, verifies sanitized reads, and
+confirms the legacy raw row remains untouched. A mocked vector search regression
+also verifies legacy payload redaction before recall. `test/context-engine.test.js`,
+`test/security-memory-authority.test.js`, and `test/security-project-access.test.js`
+passed (3 suites, 0 failures); no live vector store was used.
+
+### Handoff repository path-policy enforcement (2026-10-24, SK-033)
+
+Confirmed that handoff provenance verification and repository checkpoint,
+readiness, and preflight operations could invoke Git against a caller-supplied
+or persisted `working_directory` without first applying the filesystem path
+policy. MCP handoff create/update now reject packet repository paths outside
+the active MCP path policy, and Git-backed operations recheck the effective
+path immediately before use. Dashboard readiness, start-here,
+and preflight routes apply the Dashboard path policy before reading checkpoint
+or provenance repositories. Out-of-policy paths fail closed with a policy
+error; list projections omit repository-backed readiness details and show a
+blocked state.
+
+Validation: `test/security-project-access.test.js` passes all 74 assertions.
+The regression confirms an out-of-policy handoff path is not persisted, then
+dispatches authenticated MCP verification and Dashboard preflight against
+synthetic outside paths and confirms both are rejected before repository
+evidence is returned.
+The canonical session tool also checks an explicit workspace at session begin
+and rechecks persisted workspaces before checkpoint, finalization, or partial-
+session resume. Agent task attachment, restart recovery, and automatic
+continuity checkpoints now recheck the Agent filesystem path policy before
+reading or persisting repository state. A call-site audit found the MCP
+`claim` action was missing a check even though `claimHandoff` internally
+evaluates repository-backed readiness. The action now checks the persisted
+checkpoint workspace before calling the store, even when the caller also
+supplies an allowed workspace path. The remaining production
+callers are service-internal and their HTTP/MCP/session/Agent entry paths
+perform the corresponding source policy check. Tests may call the database
+store directly for isolated fixtures; that API is not exposed to network
+clients.
+
+### Retrieved context trust-label hardening (2026-10-24)
+
+Model-facing context projection previously copied an arbitrary
+`provenance.trust` value into a `Trust:` label. This was a trust-confusion risk,
+not a demonstrated authorization bypass: the dispatcher independently checks
+the current principal, permission, policy, and approval before tool execution.
+The projection now omits trust metadata and uniformly presents retrieved
+summaries and content inside the caller's untrusted-context boundary. Evidence
+and audit manifests retain their provenance outside this model-facing label.
+
+Validation: `test/evidence-projector.test.js` supplies synthetic provenance
+claiming `SYSTEM-TRUSTED` and verifies that neither the trust label nor its
+value reaches the projection. This does not prove models cannot be influenced
+by malicious content; prompt-injection resistance remains an open platform
+risk and must continue to rely on independently enforced execution authority.
+
+### Scheduled watch authority and recovery (2026-10-24, SK-034)
+
+Timer-driven watch checks previously dispatched their configured action without
+the initiating principal context. The canonical dispatcher denied privileged
+actions without identity, so this was a fail-closed unattended-functionality
+gap rather than a demonstrated privilege escalation. Watch creation now signs
+the principal and immutable watch/action definition with the scheduled
+authority key. Every timer tick verifies that signature, revalidates current
+principal and credential state, checks the current action permission, and
+rechecks a signed Agent authority envelope when present. The action receives
+only this current, narrowed context. Invalid or changed authority pauses the
+watch and records a denial; it does not run an identityless fallback.
+
+Existing watch records without a signed principal are intentionally paused at
+their next timer check and must be recreated by an authenticated operator.
+Validation: `test/security-scheduled-watch-authority.test.js` covers modified
+definitions, disabled principals, revoked credentials, permission revocation,
+current credential-scope narrowing, and denied Agent envelopes.
+`test/security-watch-endpoint-egress.test.js` proves the scheduler stops before
+checking or dispatching when authority is absent and passes current identity
+and Agent scope to an authorized action. No production watch store was read or
+migrated.
+
+### Browser E2E runtime propagation (2026-10-24, SK-036)
+
+The authoritative suite runner intentionally scrubs ambient environment from
+child processes. Its browser resource provisioner previously forwarded only the
+disposable browser profile root, not the separately installed Chromium runtime.
+As a result, the required real-browser suite could exit successfully without
+running its E2E scenarios when its browser binary was not visible. The runner
+now forwards only the absolute, configured browser runtime path (or the normal
+repository-managed runtime when present), while preserving the separate
+per-suite browser profile and credential scrubbing. Missing runtime now emits
+the runner skip code, which fails this required suite; an explicitly configured
+but unavailable runtime fails directly.
+
+### Agent follow-up authority preservation (2026-10-24, SK-037)
+
+The follow-up route creates a distinct governed child task and carries forward
+the parent's authority envelope while decrementing its child depth and count.
+The current implementation also intersects that inherited envelope with the
+current authenticated principal's effective permissions when the durable child
+is created. Review did not find an authority-expansion path in this route. The
+follow-up API regression now creates a deliberately read-only parent, rejects a
+caller-supplied replacement envelope, and verifies the resulting child remains
+read-only with change, external, and production effects disabled. This verifies
+the persisted child projection and route input boundary; it does not prove every
+Agent dispatch path or recovery path is covered by this single test.
+
+### Fractional Agent quota limits (2026-10-24, SK-038)
+
+Confirmed quota-enforcement defect: authority-envelope child depth, child count,
+and work-package concurrency were clamped to numeric ranges but not to integer
+counts. An authenticated caller could request a fractional child count such as
+`1.9`; atomic reservation compared integer usage against the fraction and
+admitted two reservations. The durable work-package lease check similarly
+admitted a second active package under a `1.9` concurrency limit. This exceeded
+the stated task quotas by one; it did not expand the permitted effect classes
+or project/resource scopes. Envelope creation now floors count limits, and the
+SQLite reservation/lease boundaries independently floor persisted values.
+Agent and approval-resume concurrency consumers use integer limits as well.
+Regression coverage proves the pre-fix normalizer retained `1.9`, then verifies
+normalization and direct enforcement against deliberately fractional persisted
+records. No production task records were read or changed.
+
+### Agent task-control route ownership boundary (2026-10-24)
+
+A route audit initially flagged `pause` and `cancel` because their handlers do not
+repeat an inline owner check. The shared `enforceTaskRouteAccess` middleware is
+mounted on both `/api/agent/tasks/:taskId` and `/api/agent/run/:taskId` before
+route dispatch, checks the durable task owner and current project access, and
+returns a uniform not-found response for unauthorized principals. An
+integration regression now waits for an authenticated task to be running,
+then verifies a second principal cannot pause or cancel it and that its durable
+state remains unchanged. This confirms the shared enforcement boundary for
+these current routes; new task-id routes must remain under the middleware mounts.
+No control-route authorization bypass was confirmed.
+
+### Scheduled command identity, authority, and crontab ownership (2026-10-24, SK-039)
+
+The OS cron launcher dispatched `cron run` with only the literal actor label
+`cron-runner`; it carried no authenticated principal. The canonical dispatcher
+now requires a principal for this high-risk tool, so unattended runs were
+rejected before reaching the handler. At the same time, the cron record held a
+raw command without a signed binding to its creator or current critical-command
+scope. The existing crontab reconciliation also replaced the account's entire
+crontab and used `crontab -r` when no Sidekick jobs remained, which could erase
+unrelated operator jobs. Cron's subprocess environment did not inherit the
+systemd service's database, secret-file locator, or source-policy settings.
+
+New cron jobs now carry an HMAC-signed creator identity and a binding to the
+job ID, platform execution ID, name, schedule, and command digest. Creation and
+execution both require current `tools.execute_critical` authority; execution
+revalidates the principal and credential, intersects current credential
+scopes, and reevaluates any captured Agent envelope. Agent commands requiring
+an approval that cannot be obtained during unattended execution are refused.
+Legacy unsigned jobs remain dormant until an authenticated principal
+explicitly invokes `cron action="authorize"`. The runner verifies the signed
+context before canonical dispatch and retains the initiating source policy.
+Crontab reconciliation now replaces only lines marked as Sidekick-owned,
+preserves unrelated entries, and passes only an allowlisted set of non-secret
+runtime paths and policy settings to the runner. Values containing NUL or line
+break characters are omitted so they cannot create additional cron records.
+
+Validation: `test/scheduled-authority.test.js` verifies the signature binds
+command and schedule; `test/scheduler-platform.test.js` verifies the OS runner
+reaches dispatch with signed identity, rejects legacy unsigned records, permits
+explicit authorization, rejects reduced critical scope, and preserves
+unrelated crontab entries. A Linux WSL run now proves a scheduled command
+executes successfully through Bubblewrap. During the first WSL integration run,
+test mode wrote three synthetic Sidekick entries to the WSL user's crontab.
+Inspection showed only those three entries; they were removed by their exact
+Sidekick markers, and a subsequent read confirmed no entries remained. Test
+mode now skips OS crontab writes. No production crontab or job was accessed.
+
+### Inbound MCP, Compute, and execution-node identity boundary review (2026-10-24)
+
+Reviewed the inbound bearer-authentication path, MCP session creation and reuse,
+identity replacement at the MCP handler boundary, Compute worker/enrollment
+routes, scoped Compute administration routes, and execution-node administration
+routes. MCP requests use the authenticated session provider's principal rather
+than transport-supplied identity, and session reuse is bound to the established
+principal. Worker and enrollment routes apply their local token or one-time
+enrollment checks; administration routes require their scoped credentials.
+
+No identity-spoofing or route-bypass defect was confirmed in the reviewed paths.
+This is a source review with targeted regression evidence, not proof that every
+Dashboard, CLI, Agent Bridge, or future route shares the same enforcement. New
+routes and changes to authentication middleware must be checked against these
+boundaries.
+
+### Dashboard memory, handoff, and Agent Bridge read-boundary review (2026-10-24)
+
+Reviewed the Dashboard project, memory, handoff, memory-evidence, and Agent
+Bridge proxy routes. These project-backed reads require an authenticated
+principal and reevaluate current project membership; handoff ownership does not
+survive project-access revocation. Memory evidence checks both the memory's
+project and any linked handoff project. The Agent Bridge relay signs each
+proxied request with the Dashboard-authenticated principal and current scope
+context, leaving task ownership enforcement to the Agent service.
+
+No cross-project read or identity propagation bypass was confirmed in the
+reviewed routes. Targeted integration regressions cover revoked project grants,
+linked memory/handoff scope, unauthenticated memory access, Agent proxy scope
+propagation, and resource concealment. This review does not cover every
+Dashboard endpoint or every Agent Bridge operation.
+
+### Dashboard session, CSRF, and proxy-trust boundary review (2026-10-24)
+
+Reviewed Dashboard session issuance, mutation Origin and Fetch Metadata checks,
+trusted reverse-proxy parsing, and bootstrap exposure. Mutations reject an
+Origin whose exact host or effective scheme differs from the request; an
+originless request with an authenticated session cookie is rejected, and
+originless requests marked cross-site are rejected. Successful HTTPS Basic
+authentication establishes a revocable server-side identity session and sets a
+Secure, HttpOnly, SameSite=Lax cookie. Proxy trust is disabled by default; the
+legacy `true` setting trusts loopback only, while remote proxy addresses must be
+listed as explicit IPs or CIDRs. Network-facing bootstrap requires an
+out-of-band token.
+
+No CSRF or forwarded-header trust bypass was confirmed in the reviewed paths.
+Legacy Basic-auth API clients without a session cookie retain compatibility
+when they omit browser Origin/Fetch Metadata headers; this behavior remains a
+known compatibility boundary and should be reconsidered if browser clients
+continue to rely on Basic auth directly.
+
+### Generic credential response caching (2026-10-24, SK-040)
+
+The generic Dashboard credential creation and rotation routes returned newly
+minted bearer tokens in JSON without an explicit no-store response policy. The
+parallel managed service-credential flow already marked its token response
+`Cache-Control: no-store`, but the generic endpoints did not. A browser cache or
+intermediary retaining either response could extend exposure beyond the
+intended one-time display.
+
+Both generic credential issuance paths now set `Cache-Control: no-store` and
+`Pragma: no-cache` before returning token material. Existing ownership,
+scope-attenuation, and revocation checks are unchanged. Regressions assert both
+headers on successful create and rotation responses, assert rotation invalidates
+the previous credential, and retain negative tests for cross-principal and
+out-of-scope credential operations.
+
+### Core API response caching (2026-10-24, SK-041)
+
+A source sweep after SK-040 found that the Core HTTP app did not establish a
+response cache policy. This included MCP tool results, Compute enrollment
+credentials, and worker protocol responses. Added a Core-wide `Cache-Control:
+no-store` and `Pragma: no-cache` policy. MCP transport header forwarding now
+prevents the SDK response from overriding that policy. The legacy MCP SSE
+transport sets `no-cache, no-transform` itself; its streaming response cannot
+be changed after headers are sent, so it retains the SDK's no-cache behavior.
+
+Live integration regressions verify no-store on Streamable HTTP MCP
+initialization and tool-call responses and on Compute enrollment token
+issuance. No functional changes to request authentication, credential scope,
+or tool dispatch were made.
+
+### Agent Bridge response caching (2026-10-24, SK-042)
+
+The separate Agent Bridge HTTP process served authenticated task projections,
+transcripts, artifacts, and operation results without an explicit cache policy.
+Added `Cache-Control: no-store` and `Pragma: no-cache` to its HTTP responses.
+The task SSE route intentionally sets `no-cache` for streaming behavior; dashboard
+proxy responses preserve the Agent response headers.
+
+The live Agent Bridge regression asserts no-store on a task-creation response
+and reruns project membership, task ownership, pause/cancel, delegation,
+recovery, lineage, and SSE boundary checks. No authorization behavior changed.
+
+### Executable packs and declarative workflows (2026-10-24, SK-043)
+
+Reviewed pack installation, module entry resolution, activation and restore,
+first-party provenance, workflow enablement, and workflow tool dispatch.
+Third-party executable module entries fail closed before package code is
+required or descriptor builders are called. Integrity hashes and package
+provenance do not substitute for isolation. No supported OS isolation backend
+is currently present, so third-party executable modules remain unavailable.
+Bundled first-party modules are a documented trusted in-process exception and
+share Core's privileges; they are not sandboxed.
+
+Pack workflows are declarative definitions, installed disabled and only made
+runnable when their pack is explicitly enabled. Each step is routed through the
+canonical dispatcher using the current execution identity, permission,
+project, policy, and approval context. Workflow tests verify that a misleading
+`read_only` label cannot authorize mutation, nested workflows retain parent
+authority, and resume options cannot manufacture identity. No executable-pack
+isolation bypass or workflow authority bypass was confirmed in the reviewed
+paths. This does not establish that untrusted executable packs are contained;
+they are blocked from execution until OS-enforced isolation exists.
+
+### Generated workflow cancellation propagation (2026-10-24, SK-044)
+
+Generated capabilities are declarative sequences of tool calls, rather than
+generated JavaScript. Each step is dispatched again through the canonical tool
+dispatcher, where the current identity, permission, policy, and approval are
+checked. Review found that the outer dispatch cancellation signal was not
+forwarded to this nested dispatcher. As a result, a generated workflow could
+continue starting later steps after the parent request had timed out or been
+cancelled.
+
+The generated-tool handler now forwards its signal to each nested dispatch and
+checks cancellation both before and after each step. A cancellation after a
+step completes leaves that completed step recorded, marks the parent workflow
+cancelled, and prevents any subsequent step from starting. This cannot stop an
+individual underlying handler that ignores its own cancellation signal; such
+operations may still complete, and the dispatcher reports timeout semantics
+accordingly. This change does not weaken authorization or add a generated-code
+execution path.
+
+`test/evolve.test.js` verifies signal propagation through canonical dispatch,
+that a cancelled generated workflow does not start its next step, and that its
+terminal state is persisted. The focused suite passed on 2026-10-24. Residual
+limitation: cancellation is cooperative at the individual tool boundary, so
+non-cooperative in-flight operations still require idempotency and state
+verification before a retry.
+
+### Generated capability approval attribution (2026-10-24, SK-045)
+
+The Evolve approval action was authorization-gated, but it accepted an
+`approver` string from its arguments and persisted that value as the approver
+and lifecycle-history actor. An authenticated caller could therefore record a
+misleading identity in the capability itself. The dispatcher audit remained
+attributable, but the capability record did not reliably identify the actual
+principal.
+
+Approval attribution now comes from the authenticated principal in the
+canonical execution context. The approval fails closed if that principal is
+missing, and the caller-supplied `approver` field is no longer part of the tool
+schema or documentation. Dashboard and MCP approvals use the same principal
+source. A regression submits a spoofed approver label and verifies that the
+persisted approver matches the authenticated owner principal instead.
+
+This closes caller-controlled attribution for this lifecycle action. It does
+not mean all audit storage is independently tamper-resistant against a host or
+database administrator; that remains a deployment-level residual risk.
+
+### Knowledge promotion attribution boundary (2026-10-24, SK-046)
+
+Reviewed knowledge promotion after the Evolve attribution finding. The
+promotion handler already requires dispatcher-approved execution and records
+the authenticated principal from the canonical execution context; its
+`approver` argument is not used to grant authority or set the recorded
+principal. `test/knowledge-promotion.test.js` verifies a forged caller label
+cannot authorize promotion, a separate dispatcher approval is required, and
+the persisted `approved_by` value matches the authenticated reviewing
+principal. No authorization bypass was confirmed. Removed the unused caller
+field from the schema and corrected the tools reference and seeded guidance so
+the documented contract matches implementation.
+
+### Workflow resume project-scope continuity (2026-10-24, SK-047)
+
+Workflow resume compared projects only when the caller supplied a current
+project. A project-bound run resumed without that field proceeded, while its
+nested tool dispatch omitted the recorded project. Current identity and
+per-tool authorization still applied, but the run did not consistently retain
+its original resource scope. Resume now canonicalizes the current project,
+rejects a mismatch, and uses the run's recorded project when the caller omits
+one. That stored value is scope metadata only: current identity is preserved,
+and every resumed step still goes through the canonical dispatcher for fresh
+authorization, policy, and approval checks. Invalid recorded project values
+fail closed. Regression coverage verifies omission retains scope and an
+explicit conflicting project is denied before dispatch.
+
+### Dashboard frontend error-log write amplification (2026-10-24, SK-048)
+
+The authenticated `/api/internal/error-log` endpoint appends a durable
+diagnostic record per request but had only the broad Dashboard request limit.
+An authenticated client could repeatedly submit telemetry and grow the error
+log without a route-specific bound. Added in-memory limits of 30 reports per
+principal and 120 per client IP per minute. These limits apply only to the
+frontend telemetry endpoint; normal error handling and authentication remain
+unchanged. The limits reset on process restart and do not replace a bounded log
+retention policy, which remains an operational hardening item.
+
+### Identity audit detail redaction and size boundary (2026-10-24, SK-050)
+
+The shared identity audit writer serialized caller-provided event details
+directly. Existing call sites mostly construct small summaries, but the sink
+itself did not prevent a future caller from persisting sensitive values or
+oversized data. The sink now applies the repository's recursive key and token
+redactor and rejects serialized detail payloads larger than 32 KiB before
+insertion. Existing identity mutation transactions continue to roll back when
+the audit insert fails. Synthetic regressions verify nested sensitive-field
+redaction and that oversized details create no audit row. This does not make
+SQLite audit rows tamper-resistant against a host or database administrator,
+and it cannot identify an arbitrary secret placed under an innocuous key unless
+the common value-pattern redactor recognizes it.
+
+### Dashboard diagnostic file retention boundary (2026-10-24, SK-051)
+
+Dashboard error handling and the frontend telemetry route shared a JSONL file
+that had no retention bound. The writer now limits each serialized diagnostic
+record to 8 KiB and retains at most a 5 MiB active file plus one 5 MiB rotated
+file, removing older history when rotation occurs. Component labels are
+restricted before they can enter the record. The rotation is synchronous and
+is bounded for the single Dashboard process used by the supported service
+deployment. It is not a cross-process quota if operators run multiple
+Dashboard instances against the same data directory. Logging failures remain
+best-effort and are not returned to clients; host administrators can still
+modify or delete these diagnostic files.
+
+### Dashboard audit detail redaction and size boundary (2026-10-24, SK-052)
+
+Dashboard audit entries preserve identity and mutation context in a private,
+fsynced JSONL file. Review found that nested details were serialized without a
+central recursive redaction boundary, and the append helper accepted lines of
+unbounded size. Entry construction now applies the shared sensitive-key and
+token redactor to the complete audit record, and the file sink rejects any
+line larger than 32 KiB before opening the file. The existing append-only
+history, symlink/hardlink checks, private permissions, and fsync behavior remain
+in force. Rejected oversized events do not modify prior history; callers retain
+their existing fail/continue behavior, so each route's handling of audit
+failure remains a separate review concern. Host administrators can still
+modify or delete the audit file.
+
+### Quick-action restart request audit gate (2026-10-24, SK-053)
+
+The authenticated Dashboard `restart-agent` route required
+`dashboard.operations.manage` and used the canonical dispatcher, but its
+Dashboard audit event was written only after the service restart. If the
+Dashboard audit sink was unavailable, the restart could already have occurred
+before the route returned an error. The route now writes a fixed,
+principal-attributed request event before creating the execution record or
+calling the service tool; audit failure returns 503 without starting the
+restart. The canonical dispatcher tool log and post-action status audit remain
+in place. A later failure of the completion audit can still leave the request
+record as evidence that an operation was attempted while its final service
+state must be checked separately.
+
+### Optional host-tool package version drift (2026-10-24, SK-054)
+
+Confirmed supply-chain exposure: a fresh `setup-tools.sh` run installed
+yt-dlp, OpenAI Whisper, DuckDB, and Mermaid CLI from unversioned registry
+specifiers, allowing a registry publication or compromised account to change
+the direct package selected by a later install. Direct versions for yt-dlp,
+OpenAI Whisper, and DuckDB are now recorded in the hash lock described in
+SK-059; Mermaid's direct pin was replaced by the integrity-bearing lock in
+SK-055. Regression coverage rejects installer paths that bypass these locks.
+The original Python transitive-resolution risk was addressed in SK-059. No
+clean-host Python tools installation has been run, so installation behavior
+on a fresh supported host remains unverified. Python version selection was checked against the
+upstream [PyPI project pages](https://pypi.org/project/yt-dlp/),
+[Whisper](https://pypi.org/project/openai-whisper/), and
+[DuckDB](https://pypi.org/project/duckdb/) on 2026-10-24; exact versions are
+recorded in `scripts/tooling/python-tools/requirements.in`.
+
+### Locked Mermaid CLI runtime (2026-10-24, SK-055)
+
+The optional Mermaid CLI install previously selected a registry version at
+setup time. It now uses a dedicated committed npm manifest and lockfile for
+Mermaid CLI 11.17.0, including exact transitive versions, HTTPS registry
+locations, and SHA-512 integrity values for every resolved package. Setup
+copies that lock into the sidekick-owned tools directory and runs `npm ci` as
+the `sidekick` user; lifecycle scripts are therefore not run as root. The
+selected CLI supports Node 18.19 or 20+, preserving Sidekick's Node 22.0
+minimum. Existing global Mermaid installations are detected without being
+replaced. The focused regression validates all lock entries and the installer
+path, and `npm ci --dry-run --ignore-scripts` validates manifest/lock
+consistency. A real clean install was not run, so Puppeteer's lifecycle browser
+download and end-to-end rendering remain unverified.
+
+### Python tools artifact hash locking (2026-10-24, SK-059)
+
+Confirmed supply-chain gap: `setup-tools.sh` pinned the three optional Python
+tool versions but allowed pip to resolve transitive dependencies and select
+artifacts at installation time. The direct requirements and full dependency
+closure are now committed in a universal Python 3.10+ lock with SHA-256
+artifact hashes. Setup reports that Python 3.10 is required before attempting
+installation. This minimum is required by the pinned yt-dlp release and DuckDB
+version. Setup installs the pinned setuptools build backend from its
+own hash lock, then installs the Python tools from the runtime lock with hash
+checking and build isolation disabled; both steps run as the `sidekick`
+service user. Existing tool environments are reconciled to the lock on setup
+rather than skipped by package-presence checks. This verifies downloaded
+artifact bytes against committed hashes; it does not provide independent
+provenance for hashes originally fetched from PyPI, and a clean-host install has
+not been executed. The lock is generated with uv using:
+
+```sh
+uv pip compile scripts/tooling/python-tools/build-requirements.in --universal --generate-hashes --python-version 3.10 --output-file scripts/tooling/python-tools/build-requirements.txt
+uv pip compile scripts/tooling/python-tools/requirements.in --universal --generate-hashes --python-version 3.10 --output-file scripts/tooling/python-tools/requirements.txt
+```
+
+### Database backup temporary-path hard links (2026-10-24, SK-056)
+
+Confirmed local filesystem boundary issue: backup and restore previously wrote
+to predictable sibling temporary paths with APIs that followed pre-existing
+hard links. A party able to plant a link in an allowed backup directory could
+redirect a privileged backup or restore write into another file writable by
+the Sidekick service identity. Backup and restore now use fresh private
+temporary directories, exclusive temporary-file creation, and atomic renames;
+restore also rejects symlink and special-file inputs and validates the opened
+file identity where the platform exposes stable device/inode values. Regression
+tests demonstrate that pre-planted hard links beside raw backup, compressed
+backup, and compressed restore paths do not modify their synthetic target.
+These storage-boundary tests call the database module directly; authorization
+of backup/restore requests remains the responsibility of existing canonical
+tool dispatch and route policy. Initial implementation buffered backup files
+and gzip expansion in memory; SK-057 addresses that separate availability risk.
+
+### Database backup and restore resource bounds (2026-10-24, SK-057)
+
+The backup path checks in SK-056 removed link-following writes but still
+buffered full SQLite files and decompressed gzip payloads in memory. A very
+large authorized backup, or a compressed expansion, could exhaust Core memory
+before SQLite validation. Backup creation and restore now stream through the
+private temporary directories and enforce a 2 GiB default byte ceiling on
+source data, compressed output, and restored database output. Deployments with
+larger legitimate databases can raise `SIDEKICK_DB_BACKUP_MAX_BYTES` through
+their service environment. Regression tests exercise raw and gzip oversize
+rejection, prove the live database remains valid after a rejected restore, and
+verify backup creation stops without publishing a partial destination. The
+limit is a byte bound, not a CPU-time limit; the setting is an administrator-
+controlled availability tradeoff.
+
+### Media download URL credential persistence (2026-10-24, SK-058)
+
+The governed downloader correctly routes all HTTP traffic through the
+per-download egress proxy, but it also persisted the caller's complete source
+URL in artifact metadata and verification evidence, returned that URL, and
+logged the original `download` argument. Signed URLs can carry credentials in
+path segments or nonstandard query names that generic key-based redaction does
+not recognize. Download artifacts, results, diagnostics, and persisted tool
+arguments now retain only the parsed origin; downloader log/error URLs are
+also reduced to their origin. Synthetic regression coverage uses an
+unrecognized `download_ticket` credential and checks both artifact rows,
+tool-log arguments, success output, and failure output. The actual URL remains
+available to the authorized downloader for the duration of the request and is
+not persisted by these paths.
+
+### Dashboard diagnostic log path integrity (2026-10-24, SK-060)
+
+Confirmed local filesystem write-boundary issue: bounded Dashboard diagnostics
+used `stat` followed by `appendFileSync`, which follows a symlink or hard link
+at the log path. A local actor able to plant an entry in the Dashboard data
+directory could redirect diagnostic appends into another file writable by the
+service identity. Diagnostic writes now use the existing no-follow append
+helper, which validates regular-file type, link count, opened-file identity,
+permissions, and durability. Synthetic hard-link regression coverage confirms
+the target remains unchanged; the symlink case is skipped on Windows because
+the test environment does not provide a dependable symlink privilege. This
+does not address concurrent rotation races when multiple Dashboard processes
+share one data directory.
+
+### Git output-file path authorization (2026-10-24, SK-061)
+
+Confirmed local path-boundary issue: the canonical Git helper checked the
+repository path against the caller's read/write allowlist but passed arbitrary
+Git extra arguments through. A read-authorized `diff --output=<path>` therefore
+wrote output outside the allowed repository root. A disposable repository
+reproduced the write to a synthetic out-of-scope file. The Git argument parser
+now rejects `--output`, `--output=<path>`, `-o <path>`, and attached `-o<path>`
+forms before execution. A direct Git control confirms the fixture can perform
+the write, and the Sidekick regression confirms all forms are rejected and no
+output file is created. Normal diff output remains available. This finding is
+limited to Git-helper argument-mediated file writes; it does not establish
+general filesystem isolation for trusted in-process tools.
+
+### web_fetch protocol mismatch with network scopes (2026-10-24, SK-062)
+
+Confirmed protocol-authorization mismatch: the shared network-scope resolver
+supports `ws` and `wss` for browser/network use, while `web_fetch` only selects
+Node's HTTP or HTTPS request library and does not implement WebSocket. When a
+scope allowed `ws`, `web_fetch` accepted a `ws://` URL and sent an ordinary
+HTTP request to that host and port. A local synthetic HTTP server and
+ws-only scope reproduced the request. This could cross a protocol boundary
+where an operator intended to permit only WebSocket traffic. `web_fetch` now
+rejects non-HTTP(S) schemes before scope resolution or socket creation; tests
+cover ws-only and wss-only scopes and assert no HTTP request reaches the
+fixture. Ordinary HTTP(S) requests remain available under matching scopes.
+This finding concerns the `web_fetch` protocol dispatch and does not imply
+that the network-scope resolver is unsuitable for its other protocol-aware
+callers.
+
+### Extension-derived tool catalog prompt boundary (2026-10-24, SK-064)
+
+Confirmed prompt-boundary defect in both Agent planners: enabled tool
+descriptions, argument labels, registered action hints, and capability
+shortlists were interpolated into system prompts. These fields can be
+extension-derived, so hostile prose could enter the highest-priority model
+instruction channel. Brain and the regular Agent loop now pass their bounded
+catalogs, pack inventory, and task shortlist as separate user messages marked
+as untrusted reference data. Their system prompts contain only static
+instructions and explicitly identify the catalog as data. Regression tests
+inspect the actual Brain planner model request and the regular Agent request
+assembly. Dispatcher schema, authorization, risk, and approval checks remain
+the enforcement boundary; moving content to user messages is not a prompt
+injection guarantee.
+
+### Planner pack metadata prompt boundary (2026-10-24, SK-063)
+
+Confirmed prompt-boundary defect: installed capability pack descriptions,
+workflow names, and pack-generated guidance were interpolated into the Brain
+planner's system prompt. Pack metadata can originate from installed extension
+content, so malicious prose entered the model's highest-priority instruction
+channel even though the surrounding text said to treat it as data. The planner
+now receives bounded pack context as a separate user message marked with the
+same explicit untrusted-context header used for retrieved memory. A model-call
+regression injects a synthetic instruction and verifies it is absent from the
+system prompt and present only in the labeled user message. This reduces the
+instruction-channel exposure; it is not a guarantee that a model will resist
+prompt injection. Plan schema validation, current dispatcher policy, and
+approval remain the enforcement boundaries for proposed actions.
+
+### Configured remote Ollama data scope (2026-10-24, SK-066)
+
+Confirmed trust-default mismatch: bootstrap described loopback Ollama as the
+private-data provider but granted `public`/`internal`/`private` classifications
+to every `OLLAMA_URL`, including a separately hosted desktop or GPU node. The
+provider HTTP layer intentionally permits administrator-configured private
+network endpoints, so network address validation did not provide a data-scope
+boundary. New bootstrap rows now grant private-data eligibility only to
+loopback Ollama. A remote endpoint remains usable for public/internal inference
+and requires an explicit `compute_providers` update to receive private data.
+The display name distinguishes local and remote endpoints. Regressions verify
+remote private placement is denied, public placement remains available, and an
+explicit promotion survives re-bootstrap. Existing provider rows preserve
+operator edits; legacy remote rows therefore require operator review and are a
+deployment migration residual until checked. This review did not inspect a live
+database or infer whether any existing promotion was intentional.
+
+### npm dependency advisory snapshot (2026-10-24)
+
+The complete locked npm dependency graph was checked against the npm advisory
+service with `npm audit --json`: 0 reported vulnerabilities across 219
+dependencies (131 production, 87 development, 3 optional). The production-only
+scan also reported zero. This is a time-specific registry advisory result; it
+does not prove package provenance, protect against a compromised registry or
+maintainer, cover optional host-installed binaries or Python packages, or
+replace CI rescanning. No dependency versions or lockfiles were changed.
+
+### First-party pack upgrade trust binding (2026-10-24, SK-067)
+
+Confirmed trust-provenance bypass: the canonical high-risk `capability upgrade`
+tool accepted a server-local package path and a caller-supplied hash, while the
+pack repository retained the installed row's `first_party` label. Owned module
+provenance was then refreshed against the modified package hash, allowing its
+code and permissions to satisfy the in-process first-party exception. A
+synthetic modified copy of the bundled Developer pack reproduced the path; the
+candidate entry contained a test-only file-write sentinel. First-party upgrades
+now require a package hash equal to the exact bundled artifact in the running
+release. A follow-up review found that comparing only with the on-disk bundle
+was insufficient if the bundle itself changed. Each bundled package now also
+has a separate release-committed hash attestation, checked before listing or
+installing it as first-party. Regressions verify the actual upgrade tool path,
+all current bundled hashes, a synthetic wrong hash, and no test-only entry
+execution. Third-party upgrades retain their local-path lifecycle but executable
+modules still fail closed. This finding requires an identity authorized to
+manage packs and a server-local candidate path; it is not an unauthenticated
+route. The attestation protects against package-content drift while its source
+remains trusted; it does not protect against an actor who can alter both Core
+source and the attestation in a new release.
+
+### Pack maturity evidence attribution (2026-10-24, SK-068)
+
+Confirmed evidence-attribution defect: pack verification accepted terminal
+receipt, workflow, and execution references without checking that their stored
+principal and project matched the verifier and project recorded for the
+verification. A verifier could therefore associate another principal's or
+another project's work with its pack maturity result. Verification now requires
+a project attribution, binds each referenced record to the authenticated
+verifier, and compares projects using Sidekick's canonical project identity.
+Focused regressions cover valid same-verifier/project evidence and mismatched
+receipt, workflow, and execution records. Existing evidence rows are not
+rewritten. This does not yet prove that an evidence reference's claimed role
+matches the behavior performed; role-specific evidence semantics remain open
+under SK-007.
+
+### Pack provider self-attestation (2026-10-24, SK-069)
+
+Confirmed integrity weakness: `record_verification` accepted a caller-supplied
+`provider.verified: true` value with any completed record labeled
+`provider_integration`, and maturity exposed that value as provider
+verification. No server-side provider receipt existed. The handler now rejects
+provider-integration claims with an actionable `provider_evidence_unavailable`
+code until a trusted receipt producer is implemented. Maturity always reports
+provider integration as unverified, including historical evidence that lacks
+such a receipt. This does not disable local pack operation or other maturity
+levels; live-provider certification remains unavailable and is a known limit.
+
+### Pack maturity role self-attestation (2026-10-24, SK-070)
+
+Confirmed integrity weakness: `record_verification` accepted caller-selected
+role labels on terminal receipts, workflows, and executions. One unrelated
+operation could therefore be labeled as canonical dispatch, discovery,
+workflow, single-pack, cross-pack, and skeptical-verification evidence and
+promote a pack to `certified`. Verification now accepts canonical-dispatch
+evidence only from an attributable receipt for a tool owned by that pack, and
+workflow evidence only from a completed workflow owned by that pack. Other
+roles fail closed until trusted producers can substantiate them. Evidence
+records carry contract version 2; maturity treats older caller-labeled rows as
+malformed, so they cannot remain current. Packs remain operable at their
+observed operational level. Server-side producers for all six certification
+roles remain open; certification is intentionally unavailable until that
+evidence path exists.
+
+### Capability read permission parity (2026-10-24, SK-071)
+
+An authorization matrix regression exposed a read-permission mismatch:
+`capability maturity` was classified as `packs.manage` by both the dispatcher
+and the handler even though it only returns the maturity projection. It also
+found that the dispatcher's permission gate could reject authenticated callers
+for catalog actions that the handler explicitly treats as public. A shared
+action-permission function now keeps dispatcher and handler policy aligned,
+returns no permission requirement for public catalog actions, and requires
+`packs.read` for detailed reads. The regression exercises four tool names
+through MCP, Dashboard, and Agent dispatch, including public access, scoped
+reads, and denied lifecycle mutations. This closes only the capability action
+slice; equivalent coverage for all tools and direct routes remains open under
+SK-008.
+
+### Handoff-derived memory trust (2026-10-24, SK-072)
+
+Confirmed persistence trust gap: handoff extraction required confirmation only
+for entries classified as facts. The same untrusted handoff could label
+instruction-like content as a decision, procedure, negative, session, or open
+thread; those records were stored as active memories and were eligible for
+automatic recall. Agent Bridge calls to `memory remember` were also stored as
+`explicit` user memories and entered recall immediately. Legacy `agent`,
+`handoff`, and `task_session` memories could bypass confirmation when their
+rows predated the explicit confirmation flag.
+
+Agent-originated memory writes and all extracted memories from `handoff` and
+`task_session` now require explicit confirmation, regardless of memory type.
+Existing legacy rows receive the same protection during recall without
+rewriting stored data. Direct authenticated user writes retain their current
+workflow; an authenticated confirmation restores agent-authored content to
+automatic recall. This limits memory trust promotion; it does not claim that
+confirmed content is factually correct or eliminate prompt injection from
+other untrusted sources.
+
+Validation: `test/security-memory-authority.test.js` checks Agent Bridge writes,
+direct user writes, legacy and current memory types. `test/memory-intelligence.test.js`
+exercises extraction, automatic-recall exclusion, and post-confirmation use. The
+canonical security tier passes 168/168 suites. No production database was
+accessed or changed.

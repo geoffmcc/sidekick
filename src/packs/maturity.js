@@ -46,8 +46,8 @@ function classifyEvidence(entry, record, now) {
   const observed = parseTime(entry.observed_at);
   const hasExpiry = Object.prototype.hasOwnProperty.call(entry, "expires_at");
   const expires = hasExpiry ? parseTime(entry.expires_at) : Infinity;
-  const required = ["observed_at", "pack_version", "config_fingerprint", "lifecycle_epoch", "health_fingerprint", "checks"];
-  if (!required.every(field => Object.prototype.hasOwnProperty.call(entry, field)) || !Number.isFinite(observed) || (hasExpiry && !Number.isFinite(expires)) || !entry.checks || typeof entry.checks !== "object" || Array.isArray(entry.checks)) return "malformed";
+  const required = ["observed_at", "pack_version", "config_fingerprint", "lifecycle_epoch", "health_fingerprint", "checks", "evidence_contract_version"];
+  if (!required.every(field => Object.prototype.hasOwnProperty.call(entry, field)) || entry.evidence_contract_version !== 2 || !Number.isFinite(observed) || (hasExpiry && !Number.isFinite(expires)) || !entry.checks || typeof entry.checks !== "object" || Array.isArray(entry.checks)) return "malformed";
   if (hasExpiry && now > expires) return "expired";
   if (now < observed || now - observed > MAX_EVIDENCE_AGE_MS) return "stale";
   if (entry.pack_version !== record.version
@@ -99,7 +99,7 @@ function evaluate(record, { now = Date.now() } = {}) {
         ? "Repair the reported health prerequisite and run a health check."
         : current
           ? `Run verification for the missing checks: ${missingChecks.join(", ") || "none"}.`
-          : "Run the server-side pack verification recipe to create current evidence.";
+          : "Certification is unavailable until server-side evidence producers support every required verification role.";
   return {
     level,
     levels: { foundation: true, operational, integrated, certified },
@@ -117,6 +117,7 @@ function evaluate(record, { now = Date.now() } = {}) {
       checks: entry.checks || {},
       evidence_refs: entry.evidence_refs || [],
       result_digest: entry.result_digest || null,
+      evidence_contract_version: entry.evidence_contract_version || null,
       recipe_version: entry.recipe_version || null,
       provider: entry.provider || null,
       state,
@@ -126,8 +127,10 @@ function evaluate(record, { now = Date.now() } = {}) {
     evidence_freshness: current ? "fresh" : evidence.malformed ? "malformed" : classified.some(item => item.state === "malformed") ? "malformed" : classified.some(item => item.state === "expired") ? "expired" : classified.some(item => item.state === "dirty") ? "dirty" : classified.length ? "stale" : "missing",
     evidence_states: Object.fromEntries(EVIDENCE_STATES.map(state => [state, classified.filter(item => item.state === state).length])),
     reasons,
-    optional_provider_integration: has("provider_integration") && current?.provider?.verified === true ? "verified" : "not_verified",
-    provider_verified: has("provider_integration") && current?.provider?.verified === true,
+    // No server-generated provider receipt exists today. Historical or
+    // caller-supplied `provider.verified` metadata is not proof of integration.
+    optional_provider_integration: "not_verified",
+    provider_verified: false,
     evaluated_at: new Date(now).toISOString(),
   };
 }

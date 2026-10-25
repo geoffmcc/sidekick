@@ -82,5 +82,32 @@ function response() {
   });
 }
 
+{
+  const boundedFile = path.join(tempDir, "bounded-dashboard-errors.jsonl");
+  const boundedBoundary = createDashboardErrorBoundary({ fs, logFile: boundedFile, maxLogBytes: 1400, maxEntryBytes: 1024 });
+  for (let index = 0; index < 12; index += 1) {
+    const req = { method: "GET", headers: { "x-request-id": `bounded-${index}` }, route: { path: "/api/test" } };
+    assert.ok(boundedBoundary.logError(req, new Error("synthetic diagnostic"), { status: 500, component: "test" }));
+  }
+
+  const rotatedFile = `${boundedFile}.1`;
+  assert.ok(fs.statSync(boundedFile).size <= 1400, "active diagnostic log must stay within its cap");
+  assert.ok(fs.statSync(rotatedFile).size <= 1400, "retained rotated diagnostic log must stay within its cap");
+  for (const file of [boundedFile, rotatedFile]) {
+    const lines = fs.readFileSync(file, "utf8").trim().split("\n");
+    for (const line of lines) assert.doesNotThrow(() => JSON.parse(line), "rotation must preserve complete JSONL records");
+  }
+
+  assert.ok(boundedBoundary.logError({ method: "GET", headers: {} }, new Error("synthetic"), {
+    component: "x".repeat(5000),
+  }), "untrusted component labels must be normalized before persistence");
+
+  const strictFile = path.join(tempDir, "strict-dashboard-errors.jsonl");
+  const strictBoundary = createDashboardErrorBoundary({ fs, logFile: strictFile, maxLogBytes: 1400, maxEntryBytes: 128 });
+  assert.equal(strictBoundary.logError({ method: "GET", headers: {} }, new Error("synthetic")), null,
+    "a diagnostic record above the per-entry limit must not be persisted");
+  assert.equal(fs.existsSync(strictFile), false);
+}
+
 fs.rmSync(tempDir, { recursive: true, force: true });
 console.log("Dashboard error boundary tests passed");

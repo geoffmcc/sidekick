@@ -8,6 +8,10 @@ function registerQuickActionsRoute({
     const action = req.params.action;
     const permission = action === "restart-agent" ? "dashboard.operations.manage" : "dashboard.operations.read";
     if (!requireIdentityPermission(req, res, permission)) return;
+    if (action === "restart-agent") {
+      try { auditLog(req, "quick-action.restart-agent.requested", { service: "sidekick-agent" }); }
+      catch (error) { return errorResponse(req, res, error, { status: 503, code: "audit_unavailable", component: "service_restart" }); }
+    }
     const execution = startDashboardExecution(req, action);
     try {
       if (action === "health-check") {

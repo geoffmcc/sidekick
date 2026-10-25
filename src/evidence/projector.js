@@ -142,9 +142,12 @@ function projectContextEntries(entries, { totalChars = EVIDENCE_BUDGETS.MAX_CONT
   const parts = list.map(entry => {
     const summary = projectText(redact(entry.summary || ""), Math.floor(perItem * 0.25));
     const content = projectText(redact(entry.content || ""), Math.floor(perItem * 0.65));
-    const provenance = entry.provenance && entry.provenance.trust ? `\nTrust: ${projectText(entry.provenance.trust, 120)}` : "";
     const source = `[${entry.source || "context"}/${entry.type || "entry"}]`;
-    return `${source}${entry.sourceId != null ? ` (${String(entry.sourceId)})` : ""}${provenance}\nSummary: ${summary || "(none)"}\nContent: ${content || "(none)"}`;
+    // Provenance is useful for evidence and audit, but must not assign a
+    // trust tier in model-facing text. The source and stored trust metadata
+    // may be influenced by imported or retrieved data; callers wrap this
+    // entire projection as untrusted context.
+    return `${source}${entry.sourceId != null ? ` (${String(entry.sourceId)})` : ""}\nSummary: ${summary || "(none)"}\nContent: ${content || "(none)"}`;
   });
   const text = parts.map(part => projectText(part, perItem)).join("\n\n");
   const omitted = parts.filter(part => /characters omitted|additional .* omitted|maximum depth reached/.test(part)).length;

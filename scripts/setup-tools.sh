@@ -14,6 +14,8 @@ NC='\033[0m'
 USERNAME="sidekick"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+# Optional Python tools and their transitive dependencies are pinned in a
+# platform-aware, hash-locked requirements file.
 source "$SCRIPT_DIR/lib/apt-repository.sh"
 source "$SCRIPT_DIR/lib/install-ollama.sh"
 source "$SCRIPT_DIR/lib/polkit.sh"
@@ -293,47 +295,50 @@ if [ ! -x "$TOOLS_PYTHON" ]; then
   err "Python tools venv has no safe interpreter: $TOOLS_PYTHON"
   exit 1
 fi
-
-# yt-dlp
-if sudo -H -u "$USERNAME" "$TOOLS_PYTHON" -m pip show yt-dlp &>/dev/null; then
-  skip "yt-dlp $(sudo -H -u "$USERNAME" "$TOOLS_VENV/bin/yt-dlp" --version)"
-else
-  sudo -H -u "$USERNAME" "$TOOLS_PYTHON" -m pip install -q yt-dlp
-  pass "yt-dlp installed"
+if ! sudo -H -u "$USERNAME" "$TOOLS_PYTHON" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)'; then
+  err "Optional Python tools require Python 3.10 or newer; found $(sudo -H -u "$USERNAME" "$TOOLS_PYTHON" --version 2>&1)"
+  exit 1
 fi
 
-# Whisper
-if sudo -H -u "$USERNAME" "$TOOLS_PYTHON" -m pip show openai-whisper &>/dev/null; then
-  skip "openai-whisper"
-else
-  sudo -H -u "$USERNAME" "$TOOLS_PYTHON" -m pip install -q openai-whisper
-  pass "Whisper installed"
-fi
-
-# DuckDB
-if sudo -H -u "$USERNAME" "$TOOLS_PYTHON" -c 'import duckdb' &>/dev/null; then
-  skip "DuckDB $(sudo -H -u "$USERNAME" "$TOOLS_PYTHON" -c 'import duckdb; print(duckdb.__version__)')"
-else
-  sudo -H -u "$USERNAME" "$TOOLS_PYTHON" -m pip install -q duckdb
-  pass "DuckDB installed"
-fi
+# Install the pinned build backend first, then install runtime packages with
+# build isolation disabled so pip cannot resolve unpinned build dependencies.
+PYTHON_TOOLS_DIR="$SCRIPT_DIR/tooling/python-tools"
+sudo -H -u "$USERNAME" "$TOOLS_PYTHON" -m pip install -q --require-hashes -r "$PYTHON_TOOLS_DIR/build-requirements.txt"
+sudo -H -u "$USERNAME" "$TOOLS_PYTHON" -m pip install -q --require-hashes --no-build-isolation -r "$PYTHON_TOOLS_DIR/requirements.txt"
+pass "Hash-locked Python tools installed"
 
 # Mermaid CLI (needs npm)
 TOOLS_NPM_PREFIX="$TOOLS_VENV/npm"
-TOOLS_MMDC="$TOOLS_NPM_PREFIX/bin/mmdc"
+TOOLS_MMDC="$TOOLS_NPM_PREFIX/node_modules/.bin/mmdc"
+TOOLS_MMDC_LEGACY="$TOOLS_NPM_PREFIX/bin/mmdc"
 if [ -x "$TOOLS_MMDC" ]; then
   skip "mermaid-cli"
+elif [ -x "$TOOLS_MMDC_LEGACY" ]; then
+  skip "mermaid-cli (existing global install)"
 elif command -v mmdc &>/dev/null; then
   skip "mermaid-cli"
 else
-  sudo -H -u "$USERNAME" env NPM_CONFIG_PREFIX="$TOOLS_NPM_PREFIX" npm install --global @mermaid-js/mermaid-cli
+  if [ -L "$TOOLS_NPM_PREFIX" ] || { [ -e "$TOOLS_NPM_PREFIX" ] && [ ! -d "$TOOLS_NPM_PREFIX" ]; }; then
+    err "Mermaid CLI install directory is not a safe directory: $TOOLS_NPM_PREFIX"
+    exit 1
+  fi
+  sudo -H -u "$USERNAME" mkdir -p -- "$TOOLS_NPM_PREFIX"
+  install -o "$USERNAME" -g "$USERNAME" -m 0644 \
+    "$SCRIPT_DIR/tooling/mermaid-cli/package.json" "$TOOLS_NPM_PREFIX/package.json"
+  install -o "$USERNAME" -g "$USERNAME" -m 0644 \
+    "$SCRIPT_DIR/tooling/mermaid-cli/package-lock.json" "$TOOLS_NPM_PREFIX/package-lock.json"
+  sudo -H -u "$USERNAME" npm ci --prefix "$TOOLS_NPM_PREFIX" --no-audit --no-fund
   pass "mermaid-cli installed"
 fi
 
 # Expose the sidekick-owned CLI to system tools without running its install
 # hooks or package code as root.
-if [ -x "$TOOLS_MMDC" ] && [ ! -e /usr/local/bin/mmdc ] && [ ! -L /usr/local/bin/mmdc ]; then
-  ln -s "$TOOLS_MMDC" /usr/local/bin/mmdc
+TOOLS_MMDC_LINK_TARGET="$TOOLS_MMDC"
+if [ ! -x "$TOOLS_MMDC_LINK_TARGET" ] && [ -x "$TOOLS_MMDC_LEGACY" ]; then
+  TOOLS_MMDC_LINK_TARGET="$TOOLS_MMDC_LEGACY"
+fi
+if [ -x "$TOOLS_MMDC_LINK_TARGET" ] && [ ! -e /usr/local/bin/mmdc ] && [ ! -L /usr/local/bin/mmdc ]; then
+  ln -s "$TOOLS_MMDC_LINK_TARGET" /usr/local/bin/mmdc
 fi
 
 # Symlink tools venv binaries to a shared location
@@ -413,11 +418,11 @@ if [ -f "$ENV_FILE" ]; then
   chown "$USERNAME:$USERNAME" "$ENV_FILE"
   pass "Compose bind-mount identity configured ($SIDEKICK_UID_VALUE:$SIDEKICK_GID_VALUE)"
 fi
-if [ -f "$ENV_FILE" ] && grep -q '^SIDEKICK_INFLUX_TOKEN=.' "$ENV_FILE" && ! grep -q '^SIDEKICK_INFLUX_TOKEN=sidekick-influx-token$' "$ENV_FILE"; then
+if sudo -u "$USERNAME" node "$SCRIPT_DIR/verify-runtime-secret.js" SIDEKICK_INFLUX_TOKEN /etc/sidekick/secrets >/dev/null 2>&1; then
   systemctl enable --now sidekick-metrics.timer 2>/dev/null
   pass "sidekick-metrics.timer enabled"
 else
-  warn "sidekick-metrics.timer installed but not enabled; set SIDEKICK_INFLUX_TOKEN first"
+  warn "sidekick-metrics.timer installed but not enabled; provision a valid SIDEKICK_INFLUX_TOKEN secret file first"
 fi
 
 echo ""

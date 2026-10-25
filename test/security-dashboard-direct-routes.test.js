@@ -444,6 +444,34 @@ test("quick actions require read/manage permissions before execution, logs, or s
   assert.equal(calls, 0, "denied operations must stop before execution, system, log, or tool calls");
 });
 
+test("quick-action restart does not execute when its attributable request audit cannot be written", async () => {
+  const handlers = new Map();
+  const calls = [];
+  const app = { post: (route, handler) => handlers.set(route, handler) };
+  registerQuickActionsRoute({
+    app,
+    requireIdentityPermission: (_req, _res, permission) => { calls.push(["authorize", permission]); return true; },
+    authenticatedUser: () => "principal-operator",
+    auditLog: (_req, action, details) => { calls.push(["audit", action, details]); throw new Error("audit storage unavailable"); },
+    startDashboardExecution: () => { calls.push("start_execution"); return { execution_id: "exec-test" }; },
+    finishDashboardExecution: (_execution, state) => calls.push(["finish_execution", state]),
+    callDashboardTool: async () => { calls.push("restart_service"); return { isError: false }; },
+    dashboardExecutionMetadata: () => ({}),
+    systemctlStatus: () => { calls.push("read_service_status"); return "active"; },
+    systemSnapshot: () => ({}), dbStore: { readToolLogs: () => [] }, logError() {},
+    fs: {}, path: { join: (...parts) => parts.join("/") }, rootDir: "root",
+    errorResponse: (_req, res, _error, options) => res.status(options.status).json({ code: options.code }),
+  });
+
+  const response = await invoke(handlers.get("/api/quick-actions/:action"), { params: { action: "restart-agent" }, body: {} });
+  assert.equal(response.statusCode, 503);
+  assert.equal(response.body.code, "audit_unavailable");
+  assert.deepEqual(calls, [
+    ["authorize", "dashboard.operations.manage"],
+    ["audit", "quick-action.restart-agent.requested", { service: "sidekick-agent" }],
+  ], "the service restart must not start without a durable request audit");
+});
+
 test("scope snapshots require scope permission and active project membership", () => {
   const handlers = new Map();
   const calls = [];
@@ -837,11 +865,18 @@ test("database backup requires an attributable audit record before export", asyn
     json(body) { this.body = body; return this; },
   };
   const request = { body: {}, params: {}, query: {}, authPrincipal: { principal_id: "backup-actor" } };
+  let dispatchResult = { content: [{ type: "text", text: "Backup created" }] };
   const register = auditLog => registerDatabaseRoutes({
-    app, dbStore: { getDb: () => ({ backup: async () => { events.push("backup"); backups++; } }) },
+    app, dbStore: { getDb: () => ({ backup: async () => { assert.fail("backup route must use the canonical dispatcher"); } }) },
     dataDir: "C:/sidekick-test-data", path: require("node:path"), fs: { mkdirSync() {} },
-    callDashboardTool: async () => ({}), dashboardExecutionMetadata: () => ({}), authenticatedUser: () => "backup-actor",
-    requireDashboardTool: () => true, auditLog,
+    callDashboardTool: async (tool, args) => {
+      assert.equal(tool, "db_backup");
+      assert.equal(args.compress, false);
+      events.push("dispatch");
+      if (!dispatchResult.isError) backups++;
+      return dispatchResult;
+    }, dashboardExecutionMetadata: () => ({}), authenticatedUser: () => "backup-actor",
+    requireDashboardTool: () => true, requireIdentityPermission: () => true, auditLog,
     errorResponse: (_req, res, error, options) => res.status(options.status).json({ error: error?.message || "audit failed", code: options.code }),
   });
   register((req, action) => { events.push(action); if (action === "db.backup.requested") throw new Error("audit unavailable"); });
@@ -855,7 +890,7 @@ test("database backup requires an attributable audit record before export", asyn
   register((req, action) => events.push(action));
   await handlers.get("/api/db/backup")(request, response);
   assert.equal(response.statusCode, 200);
-  assert.deepEqual(events, ["db.backup.requested", "backup", "db.backup.completed"]);
+  assert.deepEqual(events, ["db.backup.requested", "dispatch", "db.backup.completed"]);
   assert.equal(backups, 1);
 
   events.length = 0;
@@ -864,6 +899,111 @@ test("database backup requires an attributable audit record before export", asyn
   await handlers.get("/api/db/backup")(request, response);
   assert.equal(response.statusCode, 200);
   assert.equal(response.body.audit_status, "degraded");
-  assert.deepEqual(events, ["db.backup.requested", "backup", "db.backup.completed"]);
+  assert.deepEqual(events, ["db.backup.requested", "dispatch", "db.backup.completed"]);
   assert.equal(backups, 2);
+
+  events.length = 0;
+  response.statusCode = 200;
+  response.body = undefined;
+  dispatchResult = { isError: true, approvalRequired: true, approvalId: "approval-1" };
+  register((req, action) => events.push(action));
+  await handlers.get("/api/db/backup")(request, response);
+  assert.equal(response.statusCode, 202);
+  assert.deepEqual(response.body, { ok: false, code: "approval_required", approval_id: "approval-1" });
+  assert.deepEqual(events, ["db.backup.requested", "dispatch"]);
+  assert.equal(backups, 2, "a queued backup must not create the artifact before approval");
+});
+
+test("direct database routes enforce their identity permission before accessing state", async () => {
+  const handlers = new Map();
+  const app = {
+    get: (route, handler) => handlers.set(route, handler),
+    post: (route, handler) => handlers.set(route, handler),
+  };
+  const permissions = [];
+  let stateReads = 0;
+  registerDatabaseRoutes({
+    app,
+    dbStore: { getDb: () => { stateReads++; throw new Error("database must not be touched"); } },
+    dataDir: "C:/sidekick-test-data", path: require("node:path"), fs: { mkdirSync: () => { stateReads++; } },
+    callDashboardTool: async () => { stateReads++; return {}; },
+    dashboardExecutionMetadata: () => ({}), authenticatedUser: () => "low-privilege-user",
+    requireDashboardTool: () => { stateReads++; return true; },
+    requireIdentityPermission: (_req, res, permission) => {
+      permissions.push(permission);
+      res.status(403).json({ error: "Forbidden", code: "forbidden", permission });
+      return false;
+    },
+    auditLog: () => { stateReads++; },
+    errorResponse: (_req, res, _error, options) => res.status(options.status).json({ code: options.code }),
+  });
+
+  const invoke = async route => {
+    const response = {
+      statusCode: 200,
+      status(code) { this.statusCode = code; return this; },
+      json(body) { this.body = body; return this; },
+    };
+    await handlers.get(route)({ body: {}, params: {}, query: {} }, response);
+    assert.equal(response.statusCode, 403, route);
+    assert.equal(response.body.code, "forbidden", route);
+  };
+  await invoke("/api/db/schema");
+  await invoke("/api/db/stats");
+  await invoke("/api/db/backup");
+  await invoke("/api/db/migrations");
+
+  assert.deepEqual(permissions, ["database.inspect", "database.inspect", "tools.execute", "tools.execute_high"]);
+  assert.equal(stateReads, 0, "denied callers must not reach direct database/filesystem operations or policy checks");
+});
+
+test("authorized database read routes use canonical dispatcher tools and preserve response shapes", async () => {
+  const handlers = new Map();
+  const app = {
+    get: (route, handler) => handlers.set(`GET ${route}`, handler),
+    post: (route, handler) => handlers.set(`POST ${route}`, handler),
+  };
+  const dispatches = [];
+  registerDatabaseRoutes({
+    app,
+    dbStore: { getDb: () => { throw new Error("direct DB reads must not run"); } },
+    dataDir: "C:/sidekick-test-data", path: require("node:path"), fs: { statSync: () => { throw new Error("direct filesystem reads must not run"); } },
+    callDashboardTool: async (name, args) => {
+      dispatches.push({ name, args });
+      const values = {
+        db_schema: [{ name: "memories", columns: [{ name: "id" }], indexes: [], rowCount: 12 }],
+        db_stats: { dbSize: 100, totalTables: 1, journalMode: "wal", pageCount: 1, pageSize: 4096 },
+        db_migrate: { currentVersion: 4, migrations: [{ file: "004_test.sql", version: 4, applied: true }] },
+      };
+      return { content: [{ type: "text", text: JSON.stringify(values[name]) }] };
+    },
+    dashboardExecutionMetadata: (_req, actor) => ({ actor, authIdentity: { principal_id: "db-reader" } }),
+    authenticatedUser: () => "db-reader", requireDashboardTool: () => true,
+    requireIdentityPermission: () => true, auditLog: () => {},
+    errorResponse: (_req, res, _error, options) => res.status(options.status).json({ code: options.code }),
+  });
+  const invoke = async (method, route) => {
+    const response = {
+      statusCode: 200,
+      status(code) { this.statusCode = code; return this; },
+      json(body) { this.body = body; return this; },
+    };
+    await handlers.get(`${method} ${route}`)({ query: {}, params: {}, body: {} }, response);
+    assert.equal(response.statusCode, 200, route);
+    return response.body;
+  };
+
+  assert.deepEqual((await invoke("GET", "/api/db/schema")).schema, {
+    memories: { columns: [{ name: "id" }], indexes: [], rowCount: 12 },
+  });
+  assert.deepEqual(await invoke("GET", "/api/db/stats"), {
+    ok: true, size: 100, tableCount: 1, walMode: "wal", dbSize: 4096,
+  });
+  assert.deepEqual(await invoke("GET", "/api/db/migrations"), {
+    ok: true, currentVersion: 4, migrations: [{ file: "004_test.sql", version: 4, applied: true }],
+  });
+  assert.deepEqual(dispatches.map(call => call.name), ["db_schema", "db_stats", "db_migrate"]);
+  assert.equal(dispatches[0].args.verbose, true);
+  assert.equal(dispatches[1].args.detailed, false);
+  assert.equal(dispatches[2].args.action, "status");
 });

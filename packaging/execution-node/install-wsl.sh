@@ -5,7 +5,7 @@ PREFIX="${SIDEKICK_NODE_PREFIX:-$HOME/.local/lib/sidekick-execution-node}"
 CONFIG_DIR="${SIDEKICK_NODE_CONFIG_DIR:-$HOME/.config/sidekick}"
 STATE_DIR="${SIDEKICK_NODE_STATE_DIR:-$HOME/.local/state/sidekick}"
 CACHE_DIR="${SIDEKICK_NODE_CACHE_DIR:-$HOME/.cache/sidekick}"
-ROOT="${SIDEKICK_NODE_WORKSPACE_ROOT:-/home/geoffrey/Projects/security-research}"
+ROOT="${SIDEKICK_NODE_WORKSPACE_ROOT:-$HOME/Projects/security-research}"
 
 if [[ ! -d "$ROOT" ]]; then
   printf 'Workspace root does not exist: %s\n' "$ROOT" >&2
@@ -27,6 +27,8 @@ if [[ ! -f "$CONFIG_DIR/node.json" ]]; then
   printf '{\n  "workspace": "%s",\n  "packs": ["developer"]\n}\n' "$ROOT" > "$CONFIG_DIR/node.json"
 fi
 chmod 600 "$CONFIG_DIR/node.json"
+
+node "$(dirname "$0")/configure-systemd-workspace.js" "$CONFIG_DIR/node.json" "$HOME" "$HOME/.config/systemd/user"
 
 if command -v systemctl >/dev/null 2>&1 && systemctl --user is-system-running >/dev/null 2>&1; then
   systemctl --user daemon-reload

@@ -103,6 +103,16 @@ async function ok(name, fn) {
     assert.strictEqual(res.data, "");
   });
 
+  await ok("error-log telemetry is tightly rate limited per principal", async () => {
+    for (let i = 0; i < 29; i++) {
+      const res = await makeRequest("POST", "/api/internal/error-log", { status: 500 });
+      assert.strictEqual(res.status, 204, `report ${i + 2} should remain within the burst limit`);
+    }
+    const limited = await makeRequest("POST", "/api/internal/error-log", { status: 500 });
+    assert.strictEqual(limited.status, 429);
+    assert.strictEqual(limited.data.code, "rate_limited");
+  });
+
   await ok("/api/system reports load average honestly (no fake cpu percent)", async () => {
     const res = await makeRequest("GET", "/api/system");
     assert.strictEqual(res.status, 200);

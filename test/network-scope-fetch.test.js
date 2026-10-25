@@ -23,7 +23,11 @@ const scopePolicy = require("../src/security/network-scope");
 const authContext = createOwnerContext({ project: "network-fetch-test" });
 
 (async () => {
-  const server = http.createServer((req, res) => res.end(`scoped-fetch:${req.headers["x-trace"] || "none"}`));
+  let receivedRequests = 0;
+  const server = http.createServer((req, res) => {
+    receivedRequests += 1;
+    res.end(`scoped-fetch:${req.headers["x-trace"] || "none"}`);
+  });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   const port = server.address().port;
   const scope = scopes.create({ name: "fetch_fixture", allowed_cidrs: ["127.0.0.0/8"], allowed_protocols: ["http"], allowed_ports: [port], allow_private_addresses: true }, "test-operator");
@@ -32,6 +36,15 @@ const authContext = createOwnerContext({ project: "network-fetch-test" });
     assert.strictEqual(directCall.code, "canonical_dispatch_required", "raw handler calls must not bypass outbound policy or audit");
     const allowed = await callInternalTool("web_fetch", { url: `http://127.0.0.1:${port}/`, headers: JSON.stringify({ "X-Trace": "trace-1" }), network_scope: "fetch_fixture", network_scope_revision: scope.revision }, authContext);
     assert.match(allowed.content[0].text, /scoped-fetch:trace-1/, "bounded request policy preserves ordinary caller headers");
+    const wsOnlyScope = scopes.create({ name: "fetch_ws_fixture", allowed_cidrs: ["127.0.0.0/8"], allowed_protocols: ["ws"], allowed_ports: [port], allow_private_addresses: true }, "test-operator");
+    const beforeWsAttempt = receivedRequests;
+    const wsAsHttp = await callInternalTool("web_fetch", { url: `ws://127.0.0.1:${port}/`, network_scope: "fetch_ws_fixture", network_scope_revision: wsOnlyScope.revision }, authContext);
+    assert.strictEqual(wsAsHttp.isError, true, "web_fetch must reject WebSocket URLs even when an outbound scope permits ws");
+    assert.strictEqual(receivedRequests, beforeWsAttempt, "a ws-only network grant must not authorize an ordinary HTTP request");
+    const wssOnlyScope = scopes.create({ name: "fetch_wss_fixture", allowed_cidrs: ["127.0.0.0/8"], allowed_protocols: ["wss"], allowed_ports: [port], allow_private_addresses: true }, "test-operator");
+    const wssAsHttp = await callInternalTool("web_fetch", { url: `wss://127.0.0.1:${port}/`, network_scope: "fetch_wss_fixture", network_scope_revision: wssOnlyScope.revision }, authContext);
+    assert.strictEqual(wssAsHttp.isError, true, "web_fetch must reject secure WebSocket URLs even when an outbound scope permits wss");
+    assert.strictEqual(receivedRequests, beforeWsAttempt, "a wss-only network grant must not authorize an ordinary HTTP request");
     const denied = await callInternalTool("web_fetch", { url: "http://169.254.169.254/", network_scope: "fetch_fixture", network_scope_revision: scope.revision }, authContext);
     assert.strictEqual(denied.isError, true);
     assert.match(denied.content[0].text, /network scope|permanent|denied/i);

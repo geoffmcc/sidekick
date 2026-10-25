@@ -432,6 +432,26 @@ function upgrade(name, sourcePath, { allowSameVersion = false, allowDowngrade = 
   if (!inspection.installable) {
     throw new Error(`Capability pack upgrade candidate cannot be installed: ${inspection.problems.join("; ")}`);
   }
+  if (record.provenance === "first_party") {
+    // First-party provenance is an execution trust grant: owned modules may
+    // run in Core. A caller-supplied package path plus its own expected hash
+    // proves only that the bytes did not change after inspection; it does not
+    // prove the bytes came from Sidekick's signed bundled release. Keep that
+    // trust anchored to the exact package shipped in this checkout.
+    const bundled = require("./bundled").getBundledPack(name);
+    let trustedInspection = null;
+    if (bundled && !bundled.error) {
+      try {
+        trustedInspection = inspectPackPackage(bundled.path, { replacingPack: name, installedModules: [] });
+      } catch { /* A broken bundled release cannot authorize a trust upgrade. */ }
+    }
+    if (!trustedInspection || inspection.package_hash !== trustedInspection.package_hash) {
+      throw Object.assign(
+        new Error(`First-party capability pack "${name}" may only be upgraded from the exact bundled release package`),
+        { code: "first_party_source_required" }
+      );
+    }
+  }
   assertNoForeignOwnership(inspection, { allowPack: name });
 
   // Upgrade compatibility: every installed dependent's declared range must

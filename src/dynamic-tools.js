@@ -231,7 +231,7 @@ async function callDynamicTool(name, args, deps) {
   try {
     for (let i = 0; i < cap.steps.length; i++) {
       const current = dbStore.getGeneratedToolExecution(id);
-      if (current?.cancelRequested || current?.state === "cancelled") {
+      if (deps.signal?.aborted || current?.cancelRequested || current?.state === "cancelled") {
         const cancelled = dbStore.updateGeneratedToolExecution(id, {
           state: "cancelled",
           completedAt: new Date().toISOString(),
@@ -263,6 +263,7 @@ async function callDynamicTool(name, args, deps) {
         parentId: id,
         executionId: id,
         stepNumber: i + 1,
+        signal: deps.signal,
       }), timeoutMs);
       const summary = redactSummaryWithInputs(result.content?.[0]?.text || "", args || {});
       const durationMs = Date.now() - Date.parse(stepStartedAt);
@@ -278,6 +279,23 @@ async function callDynamicTool(name, args, deps) {
       finishPlatformExecution(platformStepId, state, { source, rootExecutionId: id, reason: "generated tool step completed", summary, errorCategory: result.isError ? (result.timedOut ? "timeout" : errorCategory(summary)) : null });
       results.push({ step: i + 1, tool: step.tool, success: !result.isError, summary, retry_count: 0, error_category: result.isError ? (result.timedOut ? "timeout" : errorCategory(summary)) : null });
       emitExecution(dbStore.getGeneratedToolExecution(id));
+      // A parent dispatch can be cancelled or timed out while this nested
+      // operation is running. Never start another generated step after that
+      // boundary, even when the just-finished step returned successfully.
+      const cancellation = dbStore.getGeneratedToolExecution(id);
+      if (deps.signal?.aborted || cancellation?.cancelRequested || cancellation?.state === "cancelled") {
+        const cancelled = dbStore.updateGeneratedToolExecution(id, {
+          state: "cancelled",
+          completedAt: new Date().toISOString(),
+          finalSummary: "Execution cancelled after step " + (i + 1),
+          successCriteriaSatisfied: false,
+          errorCategory: "cancelled",
+        });
+        finishPlatformExecution(id, "cancelled", { source, reason: "generated tool execution cancelled", summary: "Execution cancelled after step " + (i + 1), errorCategory: "cancelled" });
+        emitExecution(cancelled);
+        syncStats(cap.id);
+        return { content: [{ type: "text", text: JSON.stringify({ execution_id: id, generated_tool: cap.name, state: "cancelled", success: false, results }, null, 2) }], isError: true };
+      }
       if (result.isError) {
         const finalState = result.timedOut ? "timed_out" : "failed";
         const execution = dbStore.updateGeneratedToolExecution(id, {

@@ -19,6 +19,10 @@ process.env.NODE_ENV = "test";
 process.env.SIDEKICK_TOOL_POLICY = "open";
 process.env.SIDEKICK_APPROVAL_MODE = "off";
 process.env.SIDEKICK_ENVIRONMENT = "test";
+// Durable handoffs use process.cwd() as their repository provenance when a
+// task has no explicit workspace. Allow only this fixture repository so
+// checkpoint tests exercise the intended path-policy success case.
+process.env.SIDEKICK_ALLOWED_PATHS = process.cwd();
 process.env.SIDEKICK_API_KEY = "agent-bridge-followup-test-api-key";
 process.env.SIDEKICK_AGENT_PROXY_KEY = "agent-bridge-followup-dedicated-proxy-key";
 // Set a fake Groq key so the module-load ollama warmup path is skipped.
@@ -88,7 +92,7 @@ function request(method, urlPath, body, extraHeaders = {}, signed = true, signin
       res.on("end", () => {
         let parsed = out;
         try { parsed = JSON.parse(out); } catch {}
-        resolve({ status: res.statusCode, data: parsed });
+        resolve({ status: res.statusCode, headers: res.headers, data: parsed });
       });
     });
     req.on("error", reject);
@@ -141,6 +145,16 @@ async function waitForTranscript(id, timeoutMs = 60000) {
   }
   throw new Error("timed out waiting for transcript " + id);
 }
+async function waitForTaskState(id, state, timeoutMs = 5000) {
+  const taskStore = require("../src/agent/task-store");
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const task = taskStore.getTask(id);
+    if (task?.state === state) return task;
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  throw new Error(`timed out waiting for task ${id} to reach ${state}`);
+}
 async function runRootTask(goal) {
   const res = await request("POST", "/api/agent/run", { goal });
   assert.strictEqual(res.status, 200);
@@ -159,6 +173,7 @@ let server;
     fake = fakeDirect("hello there");
     const res = await request("POST", "/api/agent/run", { goal: "Say hello" });
     assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.headers["cache-control"], "no-store", "Agent task responses must not be cached");
     assert.match(res.data.taskId, /^[0-9a-f]{8}$/);
     assert.strictEqual(res.data.parentTaskId, undefined, "root task has no parent field");
     await waitForTranscript(res.data.taskId);
@@ -287,6 +302,24 @@ let server;
     assert.strictEqual(followupDenied.status, 404, "follow-up must retain principal scoping");
   });
 
+  await ok("1c-control) another principal cannot pause or cancel an active task", async () => {
+    fake = () => new Promise(() => {});
+    const created = await request("POST", "/api/agent/run", {
+      goal: "Keep this authenticated task active for a control authorization check",
+      project: "agent_test_project",
+    }, authenticatedTestHeaders);
+    assert.strictEqual(created.status, 200);
+    const activeTask = await waitForTaskState(created.data.taskId, "running");
+
+    const pauseDenied = await request("POST", "/api/agent/tasks/" + created.data.taskId + "/pause", {}, otherTestHeaders);
+    const cancelDenied = await request("POST", "/api/agent/run/" + created.data.taskId + "/cancel", {}, otherTestHeaders);
+    const task = require("../src/agent/task-store").getTask(created.data.taskId);
+    assert.strictEqual(pauseDenied.status, 404, "pause must not reveal or mutate another principal's task");
+    assert.strictEqual(cancelDenied.status, 404, "cancel must not reveal or mutate another principal's task");
+    assert.notStrictEqual(Boolean(task.control?.pause_requested), true, "unauthorized pause leaves durable control state unchanged");
+    assert.notStrictEqual(Boolean(task.control?.cancel_requested), true, "unauthorized cancel leaves durable control state unchanged");
+    assert.equal(task.state, activeTask.state, "unauthorized controls leave the running task state unchanged");
+  });
   // 2/3) A valid follow-up creates a distinct child with correct parent/root ids.
   let rootId, childId;
   await ok("2/3) follow-up creates a distinct child with correct parent+root ids", async () => {
@@ -312,6 +345,49 @@ let server;
     const res = await request("POST", "/api/agent/tasks/" + rootId + "/act-on", { kind: "continue", goal: "broaden budget", profile: "persistent" });
     assert.strictEqual(res.status, 403);
     assert.match(JSON.stringify(res.data), /broaden|profile/i);
+  });
+
+  await ok("2c) follow-up preserves the parent's narrower effect envelope and rejects envelope injection", async () => {
+    fake = fakeDirect("narrow parent completed");
+    const created = await request("POST", "/api/agent/run", {
+      goal: "Read-only parent task",
+      project: "agent_test_project",
+      authority_envelope: {
+        allowed_effects: ["read_only"],
+        changes_allowed: false,
+        external_effects_allowed: false,
+        production_allowed: false,
+        child_task_depth: 2,
+        child_task_count: 2,
+      },
+    }, authenticatedTestHeaders);
+    assert.strictEqual(created.status, 200, JSON.stringify(created.data));
+    await waitForTranscript(created.data.taskId);
+    const broaden = await request("POST", "/api/agent/run/" + created.data.taskId + "/follow-up", {
+      goal: "Try to broaden the task",
+      authority_envelope: { allowed_effects: ["read_only", "production"], production_allowed: true },
+    }, authenticatedTestHeaders);
+    assert.strictEqual(broaden.status, 400, "follow-up cannot accept a caller-supplied replacement authority envelope");
+
+    fake = fakeDirect("bounded child completed");
+    const followUp = await request("POST", "/api/agent/run/" + created.data.taskId + "/follow-up", { goal: "Summarize the parent task" }, authenticatedTestHeaders);
+    assert.strictEqual(followUp.status, 200, JSON.stringify(followUp.data));
+    await waitForTranscript(followUp.data.taskId);
+    const [parent, child] = await Promise.all([
+      request("GET", "/api/agent/tasks/" + created.data.taskId, null, authenticatedTestHeaders),
+      request("GET", "/api/agent/tasks/" + followUp.data.taskId, null, authenticatedTestHeaders),
+    ]);
+    assert.strictEqual(parent.status, 200);
+    assert.strictEqual(child.status, 200);
+    for (const effect of child.data.task.authority_envelope.allowed_effects) {
+      assert.ok(parent.data.task.authority_envelope.allowed_effects.includes(effect), `child effect ${effect} must be within the parent envelope`);
+    }
+    assert.deepStrictEqual(child.data.task.authority_envelope.allowed_effects, ["read_only"]);
+    assert.strictEqual(child.data.task.authority_envelope.changes_allowed, false);
+    assert.strictEqual(child.data.task.authority_envelope.external_effects_allowed, false);
+    assert.strictEqual(child.data.task.authority_envelope.production_allowed, false);
+    assert.strictEqual(child.data.task.authority_envelope.child_task_depth, 1);
+    assert.strictEqual(child.data.task.authority_envelope.child_task_count, 1);
   });
 
   // 4) The parent transcript remains byte-for-byte unchanged.

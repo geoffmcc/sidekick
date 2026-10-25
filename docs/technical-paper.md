@@ -328,7 +328,7 @@ SQLite is the primary state store, but file artifacts remain where appropriate:
 - `data/procedures.json`: learned procedures dynamically registered as tools after restart.
 - `data/secrets.enc`: encrypted secrets managed by `secret`.
 - `data/audit.jsonl`: dashboard mutation audit log.
-- `data/dashboard-errors.log`: dashboard/frontend error log.
+- `data/dashboard-errors.log` and its one rotated file: bounded Dashboard/frontend diagnostics (5 MiB per file).
 - snapshots, queues, evolve proposals, orchestrations, predictions, health history, circuits, baselines, runbooks, black-box captures, sandbox metadata, and anonymization patterns.
 
 The rule of thumb for new features is:

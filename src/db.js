@@ -3,6 +3,8 @@ const path = require("path");
 const zlib = require("zlib");
 const crypto = require("crypto");
 const { execFileSync } = require("child_process");
+const { Transform } = require("stream");
+const { pipeline } = require("stream/promises");
 const { childProcessEnv } = require("./security/child-process");
 const { createMemoryDomain } = require("./db/memory-domain");
 const { createMemoryMaintenance } = require("./db/memory-maintenance");
@@ -16,12 +18,22 @@ const { createGeneratedExecutionRowMappers } = require("./db/generated-execution
 const { createDatabaseInspection } = require("./db/inspection");
 const { createDatabaseQuery } = require("./db/query");
 const { collectSnapshotRows } = require("./db/snapshot-bounds");
+const { redactSensitive, redactSensitiveKeysDeep } = require("./redact");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const DB_FILE = process.env.SIDEKICK_DB_FILE || path.join(DATA_DIR, "sidekick.db");
 const BACKUP_DIR = process.env.SIDEKICK_BACKUP_DIR || path.join(DATA_DIR, "backups");
 const MIGRATIONS_DIR = process.env.SIDEKICK_MIGRATIONS_DIR || path.join(__dirname, "..", "migrations");
 const MAX_LOG = Number(process.env.SIDEKICK_MAX_LOG || 1000);
+const DEFAULT_DB_BACKUP_MAX_BYTES = 2 * 1024 * 1024 * 1024;
+const MAX_DB_BACKUP_MAX_BYTES = Number.MAX_SAFE_INTEGER;
+const configuredBackupLimit = process.env.SIDEKICK_DB_BACKUP_MAX_BYTES;
+const MAX_DB_BACKUP_BYTES = configuredBackupLimit === undefined
+  ? DEFAULT_DB_BACKUP_MAX_BYTES
+  : Number(configuredBackupLimit);
+if (!Number.isSafeInteger(MAX_DB_BACKUP_BYTES) || MAX_DB_BACKUP_BYTES < 1 || MAX_DB_BACKUP_BYTES > MAX_DB_BACKUP_MAX_BYTES) {
+  throw new Error("SIDEKICK_DB_BACKUP_MAX_BYTES must be a positive safe integer");
+}
 
 fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o750 });
 fs.mkdirSync(BACKUP_DIR, { recursive: true, mode: 0o750 });
@@ -262,18 +274,20 @@ function tableColumns(table) {
 function getDocument(name, fallback) {
   const row = db.prepare("SELECT data_json FROM json_documents WHERE name = ?").get(name);
   if (!row) return fallback;
-  return parseJson(row.data_json, fallback);
+  const value = parseJson(row.data_json, fallback);
+  return name === "context" ? redactSensitiveKeysDeep(value) : value;
 }
 
 function setDocument(name, data) {
   const ts = nowIso();
+  const safeData = name === "context" ? redactSensitiveKeysDeep(data) : data;
   db.prepare(`
     INSERT INTO json_documents (name, data_json, created_at, updated_at)
     VALUES (?, ?, ?, ?)
     ON CONFLICT(name) DO UPDATE SET
       data_json = excluded.data_json,
       updated_at = excluded.updated_at
-  `).run(name, JSON.stringify(data, null, 2), ts, ts);
+  `).run(name, JSON.stringify(safeData, null, 2), ts, ts);
 }
 
 function loadDocument(name, fallback) {
@@ -489,19 +503,20 @@ const MEMORY_STOP_WORDS = new Set([
 
 function normalizeMemoryRow(row) {
   if (!row) return null;
-  const metadata = parseJson(row.metadata_json, {});
+  const metadata = redactSensitiveKeysDeep(parseJson(row.metadata_json, {}));
+  const tags = redactSensitiveKeysDeep(parseJson(row.tags, []));
   return {
     id: row.id,
     type: row.type,
     project: row.project,
-    content: row.content,
-    summary: row.summary,
-    tags: parseJson(row.tags, []),
+    content: redactSensitive(String(row.content || "")),
+    summary: redactSensitive(String(row.summary || "")),
+    tags,
     confidence: row.confidence,
-    source: row.source,
+    source: row.source == null ? null : redactSensitive(String(row.source)),
     source_tool: row.source_tool,
     source_task_id: row.source_task_id,
-    source_ref: row.source_ref,
+    source_ref: row.source_ref == null ? null : redactSensitive(String(row.source_ref)),
     metadata,
     enabled: !!row.enabled,
     automatic: !!row.automatic,
@@ -523,12 +538,12 @@ function normalizeMemoryRow(row) {
     memory_class: row.memory_class || metadata.memory_class || "semantic",
     primary_scope_type: row.primary_scope_type || metadata.primary_scope_type || (row.project ? "project" : "global"),
     primary_scope_id: row.primary_scope_id || row.project || metadata.primary_scope_id || null,
-    source_type: row.source_type || row.source || null,
-    evidence_excerpt: row.evidence_excerpt || metadata.evidence_excerpt || null,
+    source_type: (row.source_type || row.source) == null ? null : redactSensitive(String(row.source_type || row.source)),
+    evidence_excerpt: (row.evidence_excerpt || metadata.evidence_excerpt) == null ? null : redactSensitive(String(row.evidence_excerpt || metadata.evidence_excerpt)),
     extraction_method: row.extraction_method || metadata.extraction_method || null,
     directness: row.directness || metadata.directness || "direct",
     source_authority: row.source_authority ?? metadata.source_authority ?? null,
-    confidence_components: parseJson(row.confidence_json, metadata.confidence_components || {}),
+    confidence_components: redactSensitiveKeysDeep(parseJson(row.confidence_json, metadata.confidence_components || {})),
     recorded_at: row.recorded_at || row.created_at,
     source_timestamp: row.source_timestamp || null,
     observed_at: row.observed_at || row.last_seen_at,
@@ -574,7 +589,7 @@ function readMemoryMetadata(row) {
 }
 
 function supersedeMemoryRow(row, replacementId, reason, similarity, ts) {
-  const metadata = readMemoryMetadata(row);
+  const metadata = redactSensitiveKeysDeep(readMemoryMetadata(row));
   metadata.state = "superseded";
   metadata.superseded_by = replacementId;
   metadata.superseded_at = ts;
@@ -589,7 +604,7 @@ function supersedeMemoryRow(row, replacementId, reason, similarity, ts) {
         updated_at = ?,
         last_seen_at = ?
     WHERE id = ?
-  `).run(JSON.stringify(metadata), ts, ts, row.id);
+  `).run(JSON.stringify(redactSensitiveKeysDeep(metadata)), ts, ts, row.id);
 
   return normalizeMemoryRow(db.prepare("SELECT * FROM memories WHERE id = ?").get(row.id));
 }
@@ -738,6 +753,16 @@ function isTelemetryMemoryType(type) {
   return TELEMETRY_MEMORY_TYPES.has(String(type || "").toLowerCase());
 }
 
+function sanitizeMemoryForPersistence(memory) {
+  const safe = { ...(memory || {}) };
+  for (const field of ["content", "summary", "source", "source_ref", "evidence_excerpt"]) {
+    if (safe[field] !== undefined && safe[field] !== null) safe[field] = redactSensitive(String(safe[field]));
+  }
+  if (safe.metadata !== undefined && safe.metadata !== null) safe.metadata = redactSensitiveKeysDeep(safe.metadata);
+  if (safe.tags !== undefined && safe.tags !== null) safe.tags = redactSensitiveKeysDeep(safe.tags);
+  return safe;
+}
+
 /**
  * Normalizes an inbound memory for durable storage, or returns null when it
  * must not be stored. Applies to every write path: direct upsert, import, and
@@ -747,14 +772,15 @@ function admitMemory(memory) {
   const rawType = String(memory && memory.type || "observation").toLowerCase();
   if (isTelemetryMemoryType(rawType)) return null;
   const type = KNOWN_MEMORY_TYPES.has(rawType) ? rawType : "observation";
-  const content = String(memory && (memory.content || memory.summary) || "").trim();
+  const safeMemory = sanitizeMemoryForPersistence(memory);
+  const content = String(safeMemory.content || safeMemory.summary || "").trim();
   if (!content) return null;
   // Confidence is caller-supplied on the import paths; clamp it so an import
   // cannot rank its rows above everything the system learned first-hand.
   const confidence = Number.isFinite(memory.confidence)
     ? Math.min(1, Math.max(0, memory.confidence))
     : 0.5;
-  return { ...memory, type, content, confidence };
+  return { ...safeMemory, type, content, confidence };
 }
 
 function upsertMemory(memory) {
@@ -762,6 +788,8 @@ function upsertMemory(memory) {
   // Reject telemetry before any table work so the exclusion cannot be bypassed
   // by calling upsertMemory directly.
   if (isTelemetryMemoryType(memory && memory.type)) return null;
+
+  memory = sanitizeMemoryForPersistence(memory);
 
   const ts = nowIso();
   const type = memory.type || "observation";
@@ -790,7 +818,7 @@ function upsertMemory(memory) {
     });
     if (rowKey === dedupKey) {
       const rowMetadata = readMemoryMetadata(row);
-      const mergedMetadata = { ...rowMetadata, ...metadata };
+      const mergedMetadata = redactSensitiveKeysDeep({ ...rowMetadata, ...metadata });
       mergedMetadata.state = rowMetadata.state || "active";
       db.prepare(`
         UPDATE memories
@@ -1154,6 +1182,7 @@ function setMemoryRequiresConfirmation(id, requires = true) {
 function softDeleteMemory(id, reason = "user_deleted") {
   if (!hasMemoriesTable()) return false;
   const ts = nowIso();
+  const safeReason = redactSensitive(String(reason || "user_deleted"));
   const result = db.prepare(`
     UPDATE memories
     SET state = 'deleted',
@@ -1162,13 +1191,14 @@ function softDeleteMemory(id, reason = "user_deleted") {
         metadata_json = json_set(COALESCE(metadata_json, '{}'), '$.delete_reason', ?),
         updated_at = ?
     WHERE id = ?
-  `).run(ts, reason, ts, id);
+  `).run(ts, safeReason, ts, id);
   return result.changes > 0;
 }
 
 function expireMemory(id, reason = "manual_expire") {
   if (!hasMemoriesTable()) return false;
   const ts = nowIso();
+  const safeReason = redactSensitive(String(reason || "manual_expire"));
   const result = db.prepare(`
     UPDATE memories
     SET state = 'expired',
@@ -1177,7 +1207,7 @@ function expireMemory(id, reason = "manual_expire") {
         metadata_json = json_set(COALESCE(metadata_json, '{}'), '$.expire_reason', ?),
         updated_at = ?
     WHERE id = ? AND state != 'deleted'
-  `).run(ts, reason, ts, id);
+  `).run(ts, safeReason, ts, id);
   return result.changes > 0;
 }
 
@@ -1268,10 +1298,12 @@ function processAutoExpirations(options = {}) {
 
 function auditMemoryEvent(eventType, targetType, targetId, details = {}, actor = "system") {
   if (!hasTable("memory_audit_events")) return null;
+  const safeActor = redactSensitive(String(actor || "system"));
+  const safeDetails = redactSensitiveKeysDeep(details || {});
   const result = db.prepare(`
     INSERT INTO memory_audit_events (event_type, target_type, target_id, actor, details_json, created_at)
     VALUES (?, ?, ?, ?, ?, ?)
-  `).run(eventType, targetType, targetId || null, actor || "system", JSON.stringify(details || {}), nowIso());
+  `).run(eventType, targetType, targetId || null, safeActor, JSON.stringify(safeDetails), nowIso());
   return result.lastInsertRowid;
 }
 
@@ -1528,78 +1560,139 @@ const { clampLimit, isReadonlySql, quoteIdentifier, executeQuery } = databaseQue
 
 const { getTableList, getTableInfo, getDatabaseStats, formatBytes } = databaseInspection;
 
-function createBackup(destPath = null, compress = true) {
+function createPrivateTempDirectory(parentPath, prefix) {
+  const tempDirectory = fs.mkdtempSync(path.join(parentPath, prefix));
+  fs.chmodSync(tempDirectory, 0o700);
+  return tempDirectory;
+}
+
+function openRegularBackupNoFollow(filePath) {
+  let before;
+  try { before = fs.lstatSync(filePath); }
+  catch (error) {
+    if (error && error.code === "ENOENT") throw new Error(`Backup file not found: ${filePath}`);
+    throw error;
+  }
+  if (before.isSymbolicLink() || !before.isFile()) {
+    throw new Error("Backup path must be a regular file, not a symlink or special file");
+  }
+
+  const flags = fs.constants.O_RDONLY
+    | (fs.constants.O_NONBLOCK || 0)
+    | (fs.constants.O_NOFOLLOW || 0);
+  const fd = fs.openSync(filePath, flags);
+  try {
+    const opened = fs.fstatSync(fd);
+    const current = fs.lstatSync(filePath);
+    if (!opened.isFile() || current.isSymbolicLink() || !current.isFile()
+      || (Number.isFinite(before.dev) && Number.isFinite(before.ino) && before.ino !== 0
+        && (before.dev !== opened.dev || before.ino !== opened.ino))
+      || (Number.isFinite(opened.dev) && Number.isFinite(opened.ino) && opened.ino !== 0
+        && (opened.dev !== current.dev || opened.ino !== current.ino))) {
+      throw new Error("Backup path changed while it was being opened");
+    }
+    return { fd, size: opened.size };
+  } catch (error) {
+    fs.closeSync(fd);
+    throw error;
+  }
+}
+
+function createByteLimit(maxBytes, label) {
+  let bytes = 0;
+  return new Transform({
+    transform(chunk, encoding, callback) {
+      bytes += chunk.length;
+      if (bytes > maxBytes) {
+        callback(new Error(`${label} exceeds the configured ${maxBytes}-byte limit`));
+        return;
+      }
+      callback(null, chunk);
+    },
+  });
+}
+
+async function createBackup(destPath = null, compress = true) {
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
   const backupName = `sidekick-backup-${timestamp}.db`;
   const backupPath = destPath || path.join(BACKUP_DIR, backupName);
-  
-  const temporaryPath = `${backupPath}.tmp`;
+  const tempDirectory = createPrivateTempDirectory(path.dirname(backupPath), ".sidekick-backup-");
+  const temporaryPath = path.join(tempDirectory, "backup.db");
+
   try {
-    // Checkpoint before copying and validate the resulting artifact. Never
-    // open the destination before replacing it: an open SQLite handle can keep
-    // writing to the old inode and make the backup appear valid while it is
-    // being overwritten.
+    // Checkpoint before copying and validate the resulting artifact. Temporary
+    // files live in a new private directory beside the requested destination,
+    // never at a predictable attacker-controlled sibling path.
     db.pragma("wal_checkpoint(TRUNCATE)");
-    fs.copyFileSync(DB_FILE, temporaryPath);
+    await pipeline(
+      fs.createReadStream(DB_FILE),
+      createByteLimit(MAX_DB_BACKUP_BYTES, "Database backup"),
+      fs.createWriteStream(temporaryPath, { flags: "wx", mode: 0o600 }),
+    );
+    fs.chmodSync(temporaryPath, 0o600);
     const backupDb = new Database(temporaryPath, { readonly: true });
     try {
       if (backupDb.pragma("integrity_check", { simple: true }) !== "ok") throw new Error("backup integrity check failed");
     } finally { backupDb.close(); }
-    fs.renameSync(temporaryPath, backupPath);
-    
+
     if (compress) {
-      const input = fs.readFileSync(backupPath);
-      const compressed = zlib.gzipSync(input);
-      fs.writeFileSync(backupPath + ".gz", compressed);
-      fs.unlinkSync(backupPath);
-      return { path: backupPath + ".gz", size: compressed.length, compressed: true };
+      const compressedPath = path.join(tempDirectory, "backup.db.gz");
+      await pipeline(
+        fs.createReadStream(temporaryPath),
+        zlib.createGzip(),
+        createByteLimit(MAX_DB_BACKUP_BYTES, "Compressed database backup"),
+        fs.createWriteStream(compressedPath, { flags: "wx", mode: 0o600 }),
+      );
+      fs.chmodSync(compressedPath, 0o600);
+      fs.renameSync(compressedPath, `${backupPath}.gz`);
+      return { path: `${backupPath}.gz`, size: fs.statSync(`${backupPath}.gz`).size, compressed: true };
     }
-    
+
+    fs.renameSync(temporaryPath, backupPath);
+    fs.chmodSync(backupPath, 0o600);
     return { path: backupPath, size: fs.statSync(backupPath).size, compressed: false };
-  } catch (err) {
-    try { if (fs.existsSync(temporaryPath)) fs.unlinkSync(temporaryPath); } catch {}
-    throw err;
+  } finally {
+    fs.rmSync(tempDirectory, { recursive: true, force: true });
   }
 }
 
-function restoreBackup(backupPath, verify = true) {
-  if (!fs.existsSync(backupPath)) {
-    throw new Error(`Backup file not found: ${backupPath}`);
-  }
-  
-  let tempPath = backupPath;
-  if (backupPath.endsWith(".gz")) {
-    tempPath = backupPath.replace(".gz", ".tmp");
-    const compressed = fs.readFileSync(backupPath);
-    const decompressed = zlib.gunzipSync(compressed);
-    fs.writeFileSync(tempPath, decompressed);
-  }
-  
-  if (verify) {
-    const testDb = new Database(tempPath);
-    try {
-      if (testDb.pragma("integrity_check", { simple: true }) !== "ok") throw new Error("integrity check did not return ok");
-    } catch (e) {
-      testDb.close();
-      if (tempPath !== backupPath) fs.unlinkSync(tempPath);
-      throw new Error("Backup integrity check failed: " + e.message);
+async function restoreBackup(backupPath, verify = true) {
+  const restoreDirectory = createPrivateTempDirectory(path.dirname(DB_FILE), ".sidekick-restore-");
+  const tempPath = path.join(restoreDirectory, "restored.db");
+
+  try {
+    const backup = openRegularBackupNoFollow(backupPath);
+    if (backup.size > MAX_DB_BACKUP_BYTES) {
+      fs.closeSync(backup.fd);
+      throw new Error(`Backup input exceeds the configured ${MAX_DB_BACKUP_BYTES}-byte limit`);
     }
-    testDb.close();
-  }
-  
-  // Create a verified pre-restore backup before replacing the live database.
-  const preBackupPath = path.join(BACKUP_DIR, `pre-restore-${Date.now()}.db`);
-  try {
-    createBackup(preBackupPath, false);
-  } catch (err) {
-    if (tempPath !== backupPath) fs.unlinkSync(tempPath);
-    throw err;
-  }
-  
-  // Replace the live file only while the process-owned SQLite handle is closed,
-  // then reopen and reapply connection pragmas. Existing callers use the
-  // shared `db` binding, so they see the restored connection immediately.
-  try {
+    const source = fs.createReadStream(backupPath, { fd: backup.fd, autoClose: true, start: 0 });
+    const stages = [source, createByteLimit(MAX_DB_BACKUP_BYTES, "Backup input")];
+    if (backupPath.endsWith(".gz")) {
+      stages.push(zlib.createGunzip(), createByteLimit(MAX_DB_BACKUP_BYTES, "Restored database"));
+    }
+    stages.push(fs.createWriteStream(tempPath, { flags: "wx", mode: 0o600 }));
+    await pipeline(...stages);
+    fs.chmodSync(tempPath, 0o600);
+
+    if (verify) {
+      const testDb = new Database(tempPath);
+      try {
+        if (testDb.pragma("integrity_check", { simple: true }) !== "ok") throw new Error("integrity check did not return ok");
+      } catch (e) {
+        throw new Error("Backup integrity check failed: " + e.message);
+      } finally {
+        if (testDb.open) testDb.close();
+      }
+    }
+
+    // Create a verified pre-restore backup before replacing the live database.
+    const preBackupPath = path.join(BACKUP_DIR, `pre-restore-${Date.now()}.db`);
+    await createBackup(preBackupPath, false);
+
+    // Replace the live file only while the process-owned SQLite handle is closed,
+    // then reopen and reapply connection pragmas. Existing callers use the
+    // shared `db` binding, so they see the restored connection immediately.
     db.close();
     for (const sidecar of [`${DB_FILE}-wal`, `${DB_FILE}-shm`]) { try { fs.unlinkSync(sidecar); } catch {} }
     fs.renameSync(tempPath, DB_FILE);
@@ -1607,11 +1700,9 @@ function restoreBackup(backupPath, verify = true) {
     configureDatabase(db);
     module.exports.db = db;
     runPendingMigrations();
-    if (tempPath !== backupPath) fs.unlinkSync(tempPath);
     return { success: true, preBackupPath };
-  } catch (err) {
-    if (tempPath !== backupPath) fs.unlinkSync(tempPath);
-    throw err;
+  } finally {
+    fs.rmSync(restoreDirectory, { recursive: true, force: true });
   }
 }
 
@@ -2445,6 +2536,7 @@ module.exports = {
   getTableList,
   getTableInfo,
   getDatabaseStats,
+  MAX_DB_BACKUP_BYTES,
   createBackup,
   restoreBackup,
   queryToolLogs,

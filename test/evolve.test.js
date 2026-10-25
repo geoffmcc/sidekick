@@ -20,6 +20,7 @@ const { refreshCandidates } = require('../src/evolve');
 const dynamicTools = require('../src/dynamic-tools');
 const { TOOLS: rawTools, TOOL_DEFS, callTool, setSource, loadProcedures } = require('../src/tools');
 const TOOLS = require('./helpers/authorized-context').withOwnerToolContext(rawTools, { source: 'test' });
+const expectedApproverPrincipal = require('./helpers/authorized-context').createOwnerContext({ source: 'test' }).authIdentity.principal_id;
 
 function log({ t, n, src = 'mcp', session = 's1', task = 'task1', ok = true, shape = {}, args = null, retry = false, generated = false, summary = 'ok' }) {
   dbStore.appendToolLog({
@@ -180,6 +181,7 @@ function seedServiceDiagnosis({ session = 's1', task = 'task1', src = 'mcp', sta
     const approved = await TOOLS.evolve({ action: 'approve', id, approver: 'test' });
     assert.ok(!approved.isError, approved.content[0].text);
     assert.strictEqual(dbStore.getGeneratedCapability(id).state, 'trial');
+    assert.strictEqual(dbStore.getGeneratedCapability(id).approver, expectedApproverPrincipal, 'approval attribution must come from the authenticated principal, not the caller-provided label');
     assert.strictEqual(dbStore.getGeneratedCapability(id).useCount, 0, 'approval must not execute or increment use count');
     assert.strictEqual(dbStore.listGeneratedToolExecutions({ capabilityId: id }).length, 0, 'approval must not create executions');
     const promoteBeforeUse = await TOOLS.evolve({ action: 'promote', id });
@@ -299,6 +301,36 @@ function seedServiceDiagnosis({ session = 's1', task = 'task1', src = 'mcp', sta
     assert.strictEqual(dbStore.getGeneratedToolExecution('gte_observed_cancel').state, 'cancelled');
     assert.strictEqual(dbStore.getDb().prepare('SELECT state FROM platform_executions WHERE execution_id = ?').get('gte_observed_cancel').state, 'cancelled');
 
+    const abortController = new AbortController();
+    const postAbortCalls = [];
+    const abortRun = await dynamicTools.callDynamicTool('sidekick_generated_observed_test', { text: 'abort' }, {
+      source: 'dashboard', executionId: 'gte_observed_abort', signal: abortController.signal,
+      callTool: async (tool, args, options) => {
+        postAbortCalls.push({ tool, signal: options.signal });
+        abortController.abort();
+        return { content: [{ type: 'text', text: 'first step completed' }] };
+      },
+    });
+    assert.ok(abortRun.isError, 'an aborted parent execution must terminate the generated workflow');
+    assert.strictEqual(postAbortCalls.length, 1, 'no subsequent generated step may start after parent cancellation');
+    assert.strictEqual(postAbortCalls[0].signal, abortController.signal, 'nested dispatch must receive the parent cancellation signal');
+    assert.strictEqual(dbStore.getGeneratedToolExecution('gte_observed_abort').state, 'cancelled');
+
+    const dispatcher = require('../src/tools/dispatcher');
+    const originalDynamicCall = dynamicTools.callDynamicTool;
+    let dispatcherSignal = null;
+    const dispatcherAbort = new AbortController();
+    dynamicTools.callDynamicTool = async (_name, _args, deps) => {
+      dispatcherSignal = deps.signal;
+      return { content: [{ type: 'text', text: 'captured' }] };
+    };
+    try {
+      await dispatcher.callTool('sidekick_generated_observed_test', { text: 'dispatch' }, { signal: dispatcherAbort.signal });
+    } finally {
+      dynamicTools.callDynamicTool = originalDynamicCall;
+    }
+    assert.strictEqual(dispatcherSignal, dispatcherAbort.signal, 'canonical dispatch must pass its cancellation signal to generated execution');
+
     const timeoutRun = await dynamicTools.callDynamicTool('sidekick_generated_observed_test', { text: 'slow' }, { source: 'dashboard', executionId: 'gte_observed_timeout', timeoutMs: 1, callTool: () => new Promise(resolve => setTimeout(() => resolve({ content: [{ type: 'text', text: 'late' }] }), 30)) });
     assert.ok(timeoutRun.isError, 'timed out step should fail execution');
     assert.strictEqual(dbStore.getGeneratedToolExecution('gte_observed_timeout').state, 'timed_out');
@@ -307,9 +339,9 @@ function seedServiceDiagnosis({ session = 's1', task = 'task1', src = 'mcp', sta
     delete require.cache[require.resolve('../src/dynamic-tools')];
     assert.strictEqual(dbStore.getGeneratedToolExecution('gte_observed_success').state, 'succeeded', 'completed executions should persist across module reload');
     const stats = dbStore.syncGeneratedCapabilityStats('cand_observed_test');
-    assert.strictEqual(stats.useCount, 4, 'trial stats should come from completed executions');
+    assert.strictEqual(stats.useCount, 5, 'trial stats should include terminal generated executions');
     assert.strictEqual(stats.successCount, 1);
-    assert.strictEqual(stats.failureCount, 3);
+    assert.strictEqual(stats.failureCount, 4);
 
     console.log('Test: feedback usefulness scoring');
     const feedback = await TOOLS.evolve({ action: 'feedback', id: 'cand_dynamic_test', useful: true, notes: 'worked' });

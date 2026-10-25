@@ -69,7 +69,7 @@ function claimWorkPackage(packageId,owner,leaseMs=300000){
   db.transaction(() => {
     const pkgRow=db.prepare("SELECT * FROM agent_work_packages WHERE package_id=?").get(packageId); if(!pkgRow)throw new Error("work package not found");
     const task=db.prepare("SELECT task_id,root_task_id,authority_envelope_json FROM agent_tasks WHERE task_id=?").get(pkgRow.task_id); if(!task)throw new Error("work package task not found");
-    const rootId=task.root_task_id||task.task_id, envelope=parse(task.authority_envelope_json,"{}"), limit=Math.max(1,Math.min(16,Number(envelope.concurrency_limit)||1)), t=now();
+    const rootId=task.root_task_id||task.task_id, envelope=parse(task.authority_envelope_json,"{}"), limit=Math.floor(Math.max(1,Math.min(16,Number(envelope.concurrency_limit)||1))), t=now();
     const active=db.prepare("SELECT COUNT(*) count FROM agent_work_packages p JOIN agent_tasks t ON t.task_id=p.task_id WHERE (t.root_task_id=? OR t.task_id=?) AND p.state='running' AND (p.lease_expires_at IS NULL OR p.lease_expires_at>?) AND p.package_id<>?").get(rootId,rootId,t,packageId).count;
     if(active>=limit)throw new Error("root task concurrency limit reached");
     if(pkgRow.mutation_target){const conflict=db.prepare("SELECT p.package_id FROM agent_work_packages p JOIN agent_tasks t ON t.task_id=p.task_id WHERE (t.root_task_id=? OR t.task_id=?) AND p.mutation_target=? AND p.state='running' AND (p.lease_expires_at IS NULL OR p.lease_expires_at>?) AND p.package_id<>? LIMIT 1").get(rootId,rootId,pkgRow.mutation_target,t,packageId);if(conflict)throw new Error("mutation target is already leased by another work package");}

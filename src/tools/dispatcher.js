@@ -19,6 +19,7 @@ const {
 } = require("./context");
 const { normalizeResult, errorResult, sanitizeText } = require("./result");
 const authorization = require("../core/authorization");
+const { capabilityPermission } = require("./action-permissions");
 const { recordSecurityEvent } = require("../core/security-audit");
 const { performance } = require("perf_hooks");
 const { AsyncLocalStorage } = require("async_hooks");
@@ -100,6 +101,7 @@ function resolveDynamicDescriptor(name) {
       source: runtime.context.source,
       executionId: runtime.context.executionId,
       timeoutMs: runtime.context.timeoutMs,
+      signal: runtime.signal,
     }),
   };
 }
@@ -136,8 +138,7 @@ function requiredToolPermission(descriptor, args = {}) {
     // executable module code.  That risk must not make harmless inventory and
     // inspection unavailable to administrators, who are explicitly granted
     // packs.read.  Keep lifecycle changes behind the stronger manage grant.
-    const readActions = new Set(["list", "available", "show", "inspect", "validate", "health", "doctor"]);
-    return readActions.has(args.action || "list") ? "packs.read" : "packs.manage";
+    return capabilityPermission(args.action);
   }
   if (descriptor.name === "project_registry") {
     return ["list", "get", "sources"].includes(args.action) ? "memory.read" : "projects.access.manage";
@@ -342,7 +343,7 @@ async function executeResolvedTool(descriptor, args, context, requestedName = de
   // legacy API-key compatibility remains transitional and is intentionally
   // visible as a separate authentication method.
   let nodeAuthorization = null;
-  if (authIdentity?.principal_id) {
+  if (authIdentity?.principal_id && permission) {
     const decision = authorization.authorize({
       principalId: authIdentity.principal_id,
       permission,

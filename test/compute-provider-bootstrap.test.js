@@ -11,18 +11,22 @@
 
 const assert = require("assert");
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 
-const TEST_DATA_DIR = path.join(__dirname, "test-data-provider-bootstrap");
-fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+const runnerDataRoot = process.env.SIDEKICK_TEST_DATA_DIR;
+const TEST_DATA_DIR = runnerDataRoot
+  ? path.join(runnerDataRoot, "provider-bootstrap")
+  : fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-provider-bootstrap-"));
 fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
+if (!runnerDataRoot) process.once("exit", () => fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true }));
 process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
 process.env.SIDEKICK_API_KEY = "sk-sidekick-test-key";
 
 // Start from a clean env so host configuration cannot influence the scenarios.
 for (const k of [
   "GROQ_API_KEY", "GROQ_MODEL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_API_BASE",
-  "OPENAI_MODEL", "OPENAI_EMBEDDING_MODEL", "OLLAMA_MODEL", "SIDEKICK_AGENT_MODEL",
+  "OPENAI_MODEL", "OPENAI_EMBEDDING_MODEL", "OLLAMA_URL", "OLLAMA_MODEL", "SIDEKICK_AGENT_MODEL",
   "SIDEKICK_EMBEDDING_MODEL", "SIDEKICK_DISABLE_PROVIDER_BOOTSTRAP",
   "SIDEKICK_DISABLE_OLLAMA_BOOTSTRAP", "SIDEKICK_SECRET_KEY",
 ]) delete process.env[k];
@@ -95,6 +99,29 @@ test("seeds a trusted local Ollama provider with chat+embedding models", () => {
   assert.ok(models.some(m => m.supportsEmbedding), "has an embedding model");
 });
 
+test("remote configured Ollama gets no private-data authority until explicit promotion", () => {
+  resetRegistry();
+  process.env.OLLAMA_URL = "http://192.168.1.50:11434";
+  try {
+    bootstrapProviders();
+    const ollama = managed("ollama");
+    assert.ok(ollama, "configured remote Ollama remains available");
+    assert.strictEqual(ollama.displayName, "Ollama (remote)");
+    assert.deepStrictEqual(ollama.dataClassifications.sort(), ["internal", "public"]);
+    assert.ok(!eligibleFor("private").some(candidate => candidate.provider.providerId === ollama.providerId),
+      "private data is not sent to a remote Ollama endpoint by default");
+    assert.ok(eligibleFor("public").some(candidate => candidate.provider.providerId === ollama.providerId),
+      "remote Ollama remains eligible for public inference");
+
+    providerRegistry.updateProvider(ollama.providerId, { dataClassifications: ["public", "internal", "private"] });
+    bootstrapProviders();
+    assert.deepStrictEqual(providerRegistry.getProvider(ollama.providerId).dataClassifications.sort(), ["internal", "private", "public"],
+      "an explicit operator promotion survives subsequent bootstrap");
+  } finally {
+    delete process.env.OLLAMA_URL;
+  }
+});
+
 test("bootstrap is idempotent (no duplicate managed rows)", () => {
   resetRegistry();
   bootstrapProviders();
@@ -153,6 +180,28 @@ test("cloud provider is seeded public/internal only, lower priority than local",
     assert.strictEqual(groq.providerType, "openai-compatible");
     assert.deepStrictEqual(groq.dataClassifications.sort(), ["internal", "public"], "cloud excludes private/sensitive/restricted");
     assert.ok(groq.priority < managed("ollama").priority, "cloud ranks below local");
+  } finally {
+    delete process.env.GROQ_API_KEY;
+    delete process.env.SIDEKICK_SECRET_KEY;
+  }
+});
+
+test("protected-file cloud bootstrap is idempotent and preserves operator disable", () => {
+  resetRegistry();
+  process.env.SIDEKICK_SECRET_KEY = "test-master-key";
+  process.env.GROQ_API_KEY = "gsk_test_secret_value";
+  try {
+    bootstrapProviders();
+    const initial = providerRegistry.listProviders().filter(provider => provider.metadata?.bootstrapKey === "groq");
+    assert.strictEqual(initial.length, 1, "one protected-file Groq provider is created");
+    assert.strictEqual(initial[0].metadata.managed, "file-bootstrap");
+
+    providerRegistry.updateProvider(initial[0].providerId, { enabled: false });
+    bootstrapProviders();
+
+    const after = providerRegistry.listProviders().filter(provider => provider.metadata?.bootstrapKey === "groq");
+    assert.strictEqual(after.length, 1, "re-bootstrap does not create a replacement provider");
+    assert.strictEqual(after[0].enabled, false, "operator disable survives process restart bootstrap");
   } finally {
     delete process.env.GROQ_API_KEY;
     delete process.env.SIDEKICK_SECRET_KEY;

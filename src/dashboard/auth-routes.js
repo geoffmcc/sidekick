@@ -343,6 +343,8 @@ function registerAuthRoutes({
         }
         created = authentication.createCredential({ principalId: actorId, displayName: req.body?.display_name, scopes: uniqueScopes, expiresAt: req.body?.expires_at, createdByPrincipalId: actorId, actorContext: req.authPrincipal });
       })();
+      res.set("Cache-Control", "no-store");
+      res.set("Pragma", "no-cache");
       res.status(201).json({ credential: created.credential, token: created.token });
     } catch (error) {
       return errorResponse(req, res, error, { status: 400, code: "invalid_request", component: "auth" });
@@ -502,6 +504,8 @@ function registerAuthRoutes({
     }
     try {
       const replacement = authentication.rotateCredential(req.params.id, req.authPrincipal);
+      res.set("Cache-Control", "no-store");
+      res.set("Pragma", "no-cache");
       res.status(201).json({ credential: replacement.credential, token: replacement.token });
     } catch (error) {
       return errorResponse(req, res, error, { status: 400, code: "invalid_request", component: "auth" });

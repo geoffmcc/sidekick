@@ -1,10 +1,14 @@
 const assert = require('assert');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
-const TEST_DATA_DIR = path.join(__dirname, 'test-data-modules-installation');
-fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+const runnerDataRoot = process.env.SIDEKICK_TEST_DATA_DIR;
+const TEST_DATA_DIR = runnerDataRoot
+  ? path.join(runnerDataRoot, 'modules-installation')
+  : fs.mkdtempSync(path.join(os.tmpdir(), 'sidekick-test-modules-installation-'));
 fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
+if (!runnerDataRoot) process.once('exit', () => fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true }));
 process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
 process.env.SIDEKICK_TOOL_POLICY = 'open';
 process.env.SIDEKICK_APPROVAL_MODE = 'off';
@@ -18,9 +22,8 @@ const { assertExecutionIsolation, LOAD_FAILURES } = require('../src/modules/entr
 const loader = require('../src/modules/loader');
 const repository = require('../src/modules/repository');
 
-const root = path.join(process.cwd(), 'test', 'test-data-discovered-module');
-fs.rmSync(root, { recursive: true, force: true });
-fs.mkdirSync(root, { recursive: true });
+const root = fs.mkdtempSync(path.join(__dirname, 'test-data-discovered-module-'));
+process.once('exit', () => fs.rmSync(root, { recursive: true, force: true }));
 fs.writeFileSync(path.join(root, 'manifest.json'), JSON.stringify({
   name: 'installed-module',
   version: '1.0.0',
@@ -35,7 +38,7 @@ const installed = installDiscoveredModule(candidate);
 assert.strictEqual(installed.state, 'validated');
 assert.strictEqual(installed.source, 'discovered');
 assert.ok(installed.entry_hash);
-assert.strictEqual(installed.entry_point, 'test/test-data-discovered-module/entry.js');
+assert.strictEqual(installed.entry_point, path.relative(process.cwd(), path.join(root, 'entry.js')).replace(/\\/g, '/'));
 const installedState = repository.transitionModule('installed-module', 'installed');
 assert.strictEqual(installedState.state, 'installed');
 assert.throws(() => configureInstalledModule('installed-module', { retention_days: 0 }), /config is invalid/);
@@ -61,5 +64,6 @@ assert.strictEqual(loader.isModuleActive('installed-module'), false);
 assert.strictEqual(repository.getModule('installed-module').state, 'configured');
 assert.throws(() => installDiscoveredModule(candidate), /already registered/);
 fs.rmSync(root, { recursive: true, force: true });
+try { require('../src/db').closeDatabase(); } catch {}
 
 console.log('Module installation tests passed');

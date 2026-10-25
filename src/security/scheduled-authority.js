@@ -47,6 +47,107 @@ function safeAgentAuthority(authority) {
   };
 }
 
+function watchDefinition(watch) {
+  return {
+    id: watch?.id || null,
+    execution_id: watch?.platform_execution_id || null,
+    source: watch?.source || null,
+    target: watch?.target || null,
+    network_scope: watch?.network_scope || null,
+    network_scope_revision: watch?.network_scope_revision || null,
+    condition: watch?.condition || null,
+    value_digest: digest(watch?.value == null ? null : watch.value),
+    interval: watch?.interval || null,
+    action_tool: watch?.action_tool || null,
+    action_args_digest: digest(watch?.action_args || {}),
+  };
+}
+
+function cronDefinition(job) {
+  return {
+    id: job?.id || null,
+    execution_id: job?.platform_execution_id || null,
+    name: job?.name || null,
+    schedule: job?.schedule || null,
+    command_digest: digest(job?.command || null),
+  };
+}
+
+function verifySignature(signed, expectedKind, secret) {
+  const payload = signed?.payload;
+  if (!payload || payload.version !== 1 || payload.kind !== expectedKind || typeof signed.signature !== "string") return null;
+  let expected;
+  try { expected = signature(payload, secret); } catch { return null; }
+  const actualBytes = Buffer.from(signed.signature, "hex");
+  const expectedBytes = Buffer.from(expected, "hex");
+  if (actualBytes.length !== expectedBytes.length || !crypto.timingSafeEqual(actualBytes, expectedBytes)) return null;
+  return payload;
+}
+
+function createScheduledCronAuthority({ job, context, secret }) {
+  const authIdentity = safeIdentity(context?.authIdentity);
+  if (!authIdentity?.principal_id) throw new Error("scheduled cron job requires an authenticated principal");
+  const payload = {
+    version: 1,
+    kind: "cron",
+    definition: cronDefinition(job),
+    project: context.project || null,
+    task_id: context.taskId || null,
+    source: context.source || null,
+    auth_identity: authIdentity,
+    agent_authority: safeAgentAuthority(context.agentAuthorityContext),
+  };
+  return { payload, signature: signature(payload, secret) };
+}
+
+function verifyScheduledCronAuthority({ job, secret }) {
+  const payload = verifySignature(job?.scheduled_authority, "cron", secret);
+  if (!payload || canonical(payload.definition) !== canonical(cronDefinition(job)) || !payload.auth_identity?.principal_id) return null;
+  return Object.freeze({
+    source: payload.source || "cron",
+    taskId: payload.task_id,
+    project: payload.project,
+    authIdentity: payload.auth_identity,
+    agentAuthorityContext: payload.agent_authority,
+  });
+}
+
+function createScheduledWatchAuthority({ watch, context, secret }) {
+  const authIdentity = safeIdentity(context?.authIdentity);
+  if (!authIdentity?.principal_id) throw new Error("scheduled watch requires an authenticated principal");
+  const payload = {
+    version: 1,
+    kind: "watch",
+    definition: watchDefinition(watch),
+    project: context.project || null,
+    task_id: context.taskId || null,
+    source: context.source || null,
+    auth_identity: authIdentity,
+    agent_authority: safeAgentAuthority(context.agentAuthorityContext),
+  };
+  return { payload, signature: signature(payload, secret) };
+}
+
+function verifyScheduledWatchAuthority({ watch, secret }) {
+  const signed = watch?.scheduled_authority;
+  const payload = signed?.payload;
+  if (!payload || payload.version !== 1 || payload.kind !== "watch" || typeof signed.signature !== "string") return null;
+  let expected;
+  try { expected = signature(payload, secret); } catch { return null; }
+  const actualBytes = Buffer.from(signed.signature, "hex");
+  const expectedBytes = Buffer.from(expected, "hex");
+  if (actualBytes.length !== expectedBytes.length || !crypto.timingSafeEqual(actualBytes, expectedBytes)) return null;
+  if (canonical(payload.definition) !== canonical(watchDefinition(watch)) || !payload.auth_identity?.principal_id) return null;
+  return Object.freeze({
+    source: "agent",
+    taskId: payload.task_id,
+    project: payload.project,
+    authIdentity: payload.auth_identity,
+    agentAuthorityContext: payload.agent_authority,
+    initiatingSource: payload.source,
+  });
+}
+
 function createScheduledAuthority({ delay, context, secret }) {
   const payload = {
     version: 1,
@@ -84,4 +185,4 @@ function verifyScheduledAuthority({ delay, secret }) {
   });
 }
 
-module.exports = Object.freeze({ createScheduledAuthority, verifyScheduledAuthority, digest });
+module.exports = Object.freeze({ createScheduledAuthority, verifyScheduledAuthority, createScheduledWatchAuthority, verifyScheduledWatchAuthority, createScheduledCronAuthority, verifyScheduledCronAuthority, digest });

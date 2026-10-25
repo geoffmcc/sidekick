@@ -32,6 +32,12 @@ InfluxDB metrics requests reject redirects, abort after 15 seconds, and stream
 responses through a 5 MiB bound (error bodies are limited to 64 KiB). The
 configured Influx URL must still pass the explicit host allowlist, and metrics
 operations retain their action-specific identity and risk checks.
+The optional systemd metrics collector reads its Influx token from the
+protected `SIDEKICK_SECRET_DIR`; installer checks validate that file before
+enabling the timer. The collector unit runs as `sidekick` with a restrictive
+umask, read-only home access, and systemd filesystem and kernel protections.
+It loads non-secret settings from `/etc/sidekick/sidekick.env` rather than the
+repository `.env`.
 
 Qdrant memory requests reject redirects and abort after 15 seconds. Semantic
 search responses are streamed through an 8 MiB bound, with oversized response
@@ -108,9 +114,38 @@ The dashboard includes:
 
 ## Command safety
 
+Host utility subprocesses launched through Sidekick's filtered environment omit
+credential-named variables, known credential-file locators, runtime loader and
+injection hooks, and URL values with credentials in userinfo, query parameters,
+fragments, signed-URL signatures, or semicolon-style connection parameters.
+This applies to both inherited environment values and explicit overrides. It
+is a defense-in-depth filter, not general secret discovery: arbitrary values
+may still contain sensitive data, so credentials should be retrieved through the
+governed secret store only for the operation that needs them.
+
 `bash` blocks commands matching known dangerous patterns, including examples such as recursive root deletion, common flag-order and case variants, block-device writes, filesystem creation, fork-bomb pattern, curl/wget piped to shell, and recursive `chmod 777 /`.
 
 This is a guardrail, not a full sandbox. It will not detect every destructive command. Avoid granting Sidekick broader sudo access than necessary.
+
+## Retrieved content and agent authority
+
+Retrieved memories, handoffs, repository search results, tool output, and other
+context are untrusted reference data. The Agent labels the assembled context as
+untrusted and does not copy stored provenance trust claims into the model-facing
+projection. This reduces trust confusion but does not prevent a model from
+being influenced by malicious text. Tool execution therefore remains subject
+to current dispatcher authorization, source policy, and approval checks; context
+text cannot grant permissions or approvals. Continue to treat prompt-injection
+resistance as a residual risk rather than a model guarantee.
+
+Scheduled watch definitions are signed with the initiating principal and the
+watch/action configuration. Before each timer check, the Agent verifies that
+record, reloads current principal and credential state, checks current action
+permissions, and revalidates any Agent authority envelope. Invalid, expired,
+revoked, or modified watch authority pauses the watch and is audited; it never
+falls back to an identityless action. Watches created before this protection
+have no signed principal and are paused on their next scheduled check. Recreate
+those watches under an authenticated identity after upgrading.
 
 ## Tool permission policy
 
@@ -305,7 +340,7 @@ SIDEKICK_AGENT_APPROVAL_MODE=strict
 
 Pending requests appear in the dashboard Approvals tab with structurally redacted argument previews. Full arguments are encrypted with `SIDEKICK_SECRET_KEY`, never returned by the approval-list API, and discarded after approval, rejection, failure, or expiry. Pending approvals expire after `SIDEKICK_APPROVAL_TTL_SECONDS` (default: one hour). If the secret key is missing, Sidekick refuses to queue the action instead of storing its arguments in plaintext.
 
-Delayed tool executions also require `SIDEKICK_SECRET_KEY`. Core signs the exact tool, arguments, deadline, execution ID, and authority context; Agent verifies the signature at dispatch, rechecks current principal/credential state, intersects current credential scopes with the original grant, and re-evaluates the Agent authority envelope. Both services must use the same key file. Unsigned delays from older versions fail closed; review and recreate still-authorized delays after upgrade. Key rotation invalidates outstanding signed delays.
+Delayed tool executions and scheduled watches also require `SIDEKICK_SECRET_KEY`. Core signs delay tool arguments, deadline, execution ID, and authority context; watch signatures bind the initiating principal to the action and trigger definition. Agent verifies these records, rechecks current principal/credential state, intersects current credential scopes with the original grant, and re-evaluates any Agent authority envelope. Both services must use the same key file. Unsigned delays and watches from older versions fail closed; review and recreate still-authorized work after upgrade. Key rotation invalidates outstanding signed delays and watches.
 
 Approving a request executes it under the original source and reuses current tool-policy enforcement while bypassing only the approval check. A tool blocked after it was queued therefore remains blocked at execution time.
 
@@ -349,6 +384,59 @@ path, traversal target, or unrestricted inherited workspace.
 
 Residual risk, stated plainly: this provides neither exactly-once dispatch nor exclusion of concurrent *effects*. Writes are fenced by a claim epoch so a superseded runner cannot corrupt state, but nothing stops a stalled runner from dispatching a tool after its lease has been reclaimed — that is prevented today only by the single-process deployment, and introducing a second runner process would make it reachable. `SIDEKICK_SECRET_KEY` becomes a resumption dependency: losing or rotating it strands parked tasks, which must then be failed explicitly.
 
+## Memory evidence project scope
+
+The Dashboard endpoint for memory evidence authorizes the memory's own project
+and, when the memory links to a handoff, separately authorizes that handoff.
+The two records must have matching project scopes. A readable handoff does not
+grant access to a memory in another project. Global memories require the
+principal's global memory-read permission. Missing or mismatched access returns
+the same not-found response used for absent memories. Dashboard handoff detail
+and canonical MCP handoff inspection apply the same exact-scope rule when
+including extracted memories; compatibility queries that also return legacy
+unscoped rows do not broaden a handoff reader's scope. New packet saves apply
+the shared recursive key-aware redactor before packet, history, and linked
+payload persistence. Existing handoff packet rows are not retroactively changed
+by this write-time control unless an operator explicitly updates that handoff;
+there is no bulk database migration in this change. New handoff content, titles,
+and source labels are also pattern-redacted before current or historical text
+storage. This does not prove that untouched historical records are free of
+credentials. Handoff journal payloads use recursive key-aware redaction, and
+actor/source labels use pattern redaction, before event hashing and persistence;
+the tamper-evident chain verifies the sanitized representation. Previously
+stored journal rows are not retroactively rewritten.
+Memory audit records also recursively redact structured details and
+pattern-redact actor labels before persistence. Existing historical audit rows
+are not retroactively rewritten. Structured memory admission and direct writes
+pattern-redact content, summary, source, source reference, and evidence text,
+and recursively redact tags and metadata before storage. Memory lifecycle and
+supersession reasons receive the same text redaction. This cannot identify a
+secret represented as a generic value in an ordinary field, and no bulk cleanup
+of historical memory rows is performed. Normalized memory reads redact known
+credential patterns and keyed values in legacy records without changing the
+stored row. Legacy context JSON documents are similarly sanitized on write and
+read, and the context tool sanitizes decision, problem, pattern, and session
+records before sending their content to the embedding store. Legacy non-memory
+vector payloads are also sanitized before context recall; existing stored
+payloads are not rewritten.
+Handoff provenance verification and repository-backed checkpoint, readiness,
+preflight, and claim operations apply the MCP or Dashboard filesystem path policy
+before Git reads a workspace named by a request or persisted handoff. The MCP
+handoff tool also refuses to persist a packet repository path outside its
+configured allow-list. Session
+workspaces are checked by the session tool before they are persisted or reused
+for Git-backed checkpoints. Agent workspaces are rechecked during task
+attachment, recovery, and automatic continuity checkpoints. The database
+handoff store is internal to trusted Sidekick services; production callers that
+can trigger Git-backed operations check the relevant MCP, Dashboard, or Agent
+path policy first. The claim path checks both a supplied workspace and the
+saved checkpoint workspace before the store performs its internal
+readiness/Git check; a caller-supplied path cannot mask the persisted path.
+Handoff claim tokens are one-time bearer capabilities: dispatcher exposure is
+allowlisted for authenticated sessions, while generic results and persisted
+tool logs redact them. An integration regression covers token delivery, log
+exclusion, and denial of identityless retries.
+
 ## Database query safety
 
 The database query tool and dashboard query endpoint default to read-only mode. In that mode they allow single-statement row-returning SQL only (`SELECT`, `WITH`, `EXPLAIN`, and non-mutating `PRAGMA`), reject multi-statement input, and apply bounded row limits. Use `readonly=false` only for deliberate maintenance.
@@ -359,15 +447,24 @@ The supplied sudoers file allows the `sidekick` user to run specific systemctl a
 
 ## Redaction
 
-`src/redact.js` redacts sensitive output patterns before data is returned or logged. The tests cover private keys, GitHub tokens, and other secret-like values. Redaction reduces accidental leakage but cannot guarantee every secret in every format is removed.
+`src/redact.js` redacts sensitive output patterns before data is returned or
+logged, including credential parameters and signed-URL signatures in query
+strings or fragments, semicolon-style connection strings, and structured
+`sig`/`signature` fields. JSON object and array text up to 1 MiB is parsed and
+redacted by key; larger JSON text uses a bounded key/value scan for string
+fields. The tests cover private keys, GitHub tokens, and other secret-like
+values. Redaction reduces accidental leakage but cannot guarantee every secret
+in every format is removed.
 
 ## Secret storage
 
-`secret` provides AES-256-GCM encrypted credential management and requires `SIDEKICK_SECRET_KEY`. Store the secret key outside the repository and include it in your host secret management or systemd environment strategy. API tokens such as the GitHub PAT used by `github` belong in `secret` as encrypted secrets, not in KV memory.
+`secret` provides AES-256-GCM encrypted credential management and requires `SIDEKICK_SECRET_KEY`. Production runtime credentials, including the encryption key, are read from protected files under `SIDEKICK_SECRET_DIR`; raw environment values are supported only by test fixtures. API tokens such as the GitHub PAT used by `github` belong in `secret` as encrypted secrets, not in KV memory.
 
 ## Dashboard permissions
 
 Dashboard sign-in establishes identity; it does not by itself grant access to every operation. Sync identity reads and changes always require `sync.read` and `sync.manage`. Unscoped sync import, export, and diff also require those dedicated grants. A project-scoped transfer instead requires `memory.read` or `memory.write` and current membership in that project; the dispatcher tools and Dashboard routes enforce the same split. Migration `081_dashboard_sync_event_permissions.sql` grants global sync permissions to owners and administrators; auditors receive event-read access only. Direct event delivery endpoints enforce `events.read` for listing and `events.manage` for subscription and delivery mutations. Other Dashboard routes continue to use their dispatcher or route-specific authorization and remain subject to the platform authorization review.
+
+Dashboard database schema and statistics reads require `database.inspect`; migration status requires `tools.execute_high`. Schema, statistics, migration status, search, query, and backup requests all route through the canonical dispatcher, preserving consistent authorization, policy, and tool auditing. Backups require `tools.execute` and preserve dispatcher approval enforcement. Direct-route permission checks run before dispatch and resource access.
 
 Direct connector endpoints enforce `connectors.read` for connector records, health probes, and lifecycle events, and `connectors.manage` for registration, configuration, and lifecycle changes. Migration `084_dashboard_connector_permissions.sql` grants these permissions to owners and administrators. Connector routes check permission before accessing the platform kernel or starting a health probe.
 

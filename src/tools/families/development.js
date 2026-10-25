@@ -25,6 +25,7 @@ const { childProcessEnv } = require("../../security/child-process");
 const { requireToolExecution, requireCanonicalInvocation } = require("../read-authorization");
 
 const GIT_EXTERNAL_EXECUTION_OPTIONS = /^(?:-c(?:$|=)|--config(?:=|-env(?:=|$))|--(?:exec-path|upload-pack|receive-pack|git-dir|work-tree)(?:=|$)|--(?:ext-diff|paginate)(?:=|$))/;
+const GIT_OUTPUT_FILE_OPTIONS = /^(?:-o(?:.+)?|--output(?:=|$))/;
 const GIT_CLONE_TIMEOUT_MS = 120000;
 const GIT_CLONE_MAX_OUTPUT = 2 * 1024 * 1024;
 const MAX_CHANGELOG_BYTES = 5 * 1024 * 1024;
@@ -166,6 +167,9 @@ function parseGitExtraArgs(extraArgs) {
   if (current) parsed.push(current);
   if (parsed.some(arg => GIT_EXTERNAL_EXECUTION_OPTIONS.test(arg))) {
     throw new Error("Git arguments that alter configuration, helpers, execution paths, or pagers are not permitted");
+  }
+  if (parsed.some(arg => GIT_OUTPUT_FILE_OPTIONS.test(arg))) {
+    throw new Error("Git output-file arguments are not permitted because they bypass path authorization");
   }
   return parsed;
 }

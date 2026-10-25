@@ -55,17 +55,20 @@ Model inference is routed by **Compute**. On startup Sidekick registers managed
 providers from the environment (see `docs/compute.md` → *Providers and
 credentials*):
 
-- `OLLAMA_URL` (default `http://127.0.0.1:11434`) → local Ollama, trusted for all
-  data classifications, preferred over cloud.
+- `OLLAMA_URL` (default `http://127.0.0.1:11434`) → Ollama, preferred over
+  cloud. Loopback endpoints are trusted for all data classifications; remote
+  endpoints default to `public`/`internal` only. Promote a remote endpoint to
+  private data only after verifying its destination and access controls.
 - `groq_api_key` (+ optional `GROQ_MODEL`) → Groq as an OpenAI-compatible cloud
   provider.
 - `openai_api_key` (+ optional `OPENAI_BASE_URL`, `OPENAI_MODEL`,
   `OPENAI_EMBEDDING_MODEL`) → OpenAI-compatible cloud provider.
 
-Cloud providers are seeded **secure by default**: they serve `public`/`internal`
-data only and rank below local, so private inference stays local and fails closed
-rather than silently egressing to the cloud. Promote a cloud provider to private
-data explicitly via the `compute` tool (`action=update`, `data_classifications`).
+Remote Ollama and cloud providers are seeded **secure by default**: they serve
+`public`/`internal` data only, so private inference fails closed rather than
+silently sending content to a separately hosted endpoint. Promote a provider to
+private data explicitly via `compute_providers` (`action=update`,
+`data_classifications`) after verifying the destination.
 
 Cloud provider credentials are file-backed and the provider record keeps only a
 reference (never the plaintext). Set `SIDEKICK_DISABLE_PROVIDER_BOOTSTRAP=1` to
@@ -212,7 +215,7 @@ SIDEKICK_AGENT_APPROVAL_MODE=strict
 Approval variables support the same source prefixes as tool policy: `SIDEKICK_MCP_APPROVAL_MODE`, `SIDEKICK_DASHBOARD_APPROVAL_REQUIRED_TOOLS`, `SIDEKICK_AGENT_APPROVAL_EXEMPT_TOOLS`, and related required/exempt lists.
 Queued arguments are encrypted with the file-backed `SIDEKICK_SECRET_KEY_FILE` secret, removed after approval, rejection, failure, or expiry, and never returned by the approval-list API. Pending approvals expire after `SIDEKICK_APPROVAL_TTL_SECONDS` (default: `3600`). If the secret key file is missing or an unsupported raw environment value is supplied, Sidekick refuses to queue the action instead of storing its arguments in plaintext.
 
-The same file-backed `SIDEKICK_SECRET_KEY` protects durable scheduled-delay authority records. Both Core and Agent must have access to the same secret file. Delays created without the key are refused; delays created before signed authority records were introduced have no valid signature and will not execute after upgrade. Review pending delays before upgrading and recreate only the work that remains authorized. Rotating the key invalidates pending signed delays as well as parked encrypted approvals/checkpoints.
+The same file-backed `SIDEKICK_SECRET_KEY` protects durable scheduled-delay and watch authority records. Core and Agent must have access to the same secret file. Delays and watches created without the key are refused; delays and watches created before signed authority records were introduced have no valid signature and will not execute after upgrade. Review pending delays before upgrading and recreate only work that remains authorized. Existing unsigned watches pause at their next timer check and must be recreated under an authenticated identity. Rotating the key invalidates pending signed delays and watches as well as parked encrypted approvals/checkpoints.
 
 ### Approval continuation (Brain tasks)
 
@@ -243,10 +246,13 @@ Use lifecycle actions instead of deleting records:
 ```javascript
 evolve({ action: "analyze" })
 evolve({ action: "validate", id: "cand_..." })
-evolve({ action: "approve", id: "cand_...", approver: "operator" })
+evolve({ action: "approve", id: "cand_..." })
 evolve({ action: "promote", id: "cand_..." })
 evolve({ action: "deprecate", id: "cand_...", reason: "unused" })
 ```
+
+Approval attribution is taken from the authenticated principal on the current
+execution context; callers cannot choose the approver label.
 
 Trial and active generated tools are discoverable as `generated_<name>` after registry sync and MCP server startup (the older `sidekick_generated_<name>` alias form also resolves). Deprecated or rejected generated tools are removed from discovery but retain audit history.
 

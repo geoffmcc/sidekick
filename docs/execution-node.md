@@ -63,8 +63,14 @@ remain unavailable on the node until a scoped egress broker enforces the
 destination, protocol, and port. Do not treat a configured scope label as a
 firewall rule.
 
-Writes and execution are disabled by default. They require explicit local
-configuration and the workspace permission granted by the server. Sensitive
+Writes and execution are disabled by default. To enable workspace writes,
+set `"permissions": { "write": true }` in `~/.config/sidekick/node.json` and
+rerun the installer. It grants the systemd service write access only to the
+configured real workspace under `~/Projects`; the application still requires
+the workspace permission granted by the server. Without that local setting,
+the user service keeps the home tree read-only. Execution additionally
+requires the local execute grant and the workspace permission granted by the
+server. Sensitive
 locations such as `.ssh`, `.config`, `.local/share/opencode`, `.sidekick`, and
 environment files are never workspace targets.
 
@@ -80,8 +86,8 @@ The installer uses user-owned locations: `~/.config/sidekick` for configuration
 and credentials, `~/.local/state/sidekick` for state, and `~/.cache/sidekick`
 for caches. When `systemd --user` is available it installs
 `sidekick-execution-node.service`; otherwise run the packaged binary in the
-foreground. The installer creates a config with the security-research workspace
-and the Developer pack selected. It does not enroll automatically.
+foreground. The installer creates a config with the `~/Projects/security-research`
+workspace and the Developer pack selected. It does not enroll automatically.
 
 Useful commands:
 

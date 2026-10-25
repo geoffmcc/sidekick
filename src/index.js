@@ -88,6 +88,15 @@ const serverStartTime = Date.now();
 
 const app = express();
 
+// Core HTTP responses may contain one-time enrollment credentials, worker
+// secrets, or tool results derived from sensitive state. Do not let browsers
+// or intermediaries retain them.
+app.use((req, res, next) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Pragma", "no-cache");
+  next();
+});
+
 function getBearerToken(req) {
   const authHeader = req.headers["authorization"];
   if (typeof authHeader === "string") {

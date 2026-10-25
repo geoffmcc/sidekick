@@ -195,10 +195,11 @@ function reserveChildTask(taskId) {
     const ledger = parse(rootRow.usage_ledger_json, { version: 1, root_task_id: rootId });
     const budget = parse(rootRow.budget_json, {});
     const envelope = parse(row.authority_envelope_json, {});
-    const fanoutLimit = Math.max(0, Math.min(32, Number(envelope.child_task_count) || 0));
+    const fanoutLimit = Math.floor(Math.max(0, Math.min(32, Number(envelope.child_task_count) || 0)));
+    const childDepthLimit = Math.floor(Math.max(0, Math.min(8, Number(envelope.child_task_depth) || 0)));
     const fanoutKey = `authority_children:${String(taskId).slice(0, 120)}`;
     const fanoutUsed = Number(ledger[fanoutKey] || 0);
-    if (Number(envelope.child_task_depth || 0) <= 0 || fanoutUsed >= fanoutLimit) throw new Error("child-task envelope limit reached");
+    if (childDepthLimit <= 0 || fanoutUsed >= fanoutLimit) throw new Error("child-task envelope limit reached");
     const nextChildUsage = Number(ledger.child_tasks || 0) + 1;
     if (Number.isFinite(Number(budget.child_tasks)) && nextChildUsage > Number(budget.child_tasks)) throw new Error("child_tasks budget exhausted");
     usage.child_tasks = Number(usage.child_tasks || 0) + 1;

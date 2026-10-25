@@ -23,6 +23,7 @@ LockPersonality=true
 RestrictRealtime=true
 User=sidekick
 Group=sidekick
+UMask=0077
 Environment=NODE_ENV=production
 Environment=SIDEKICK_SECRET_DIR=/etc/sidekick/secrets
 

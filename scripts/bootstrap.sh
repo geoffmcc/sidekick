@@ -284,12 +284,11 @@ if [ "$INSTALL_SERVICES" = true ]; then
   for unit in sidekick-mcp.service sidekick-dashboard.service sidekick-agent.service sidekick-metrics.timer; do
     if [ -f "/etc/systemd/system/$unit" ]; then
       if [ "$unit" = "sidekick-metrics.timer" ]; then
-        ENV_FILE="$USER_HOME/sidekick/.env"
-        if [ -f "$ENV_FILE" ] && grep -q '^SIDEKICK_INFLUX_TOKEN=.' "$ENV_FILE" && ! grep -q '^SIDEKICK_INFLUX_TOKEN=sidekick-influx-token$' "$ENV_FILE"; then
+        if sudo -u "$USERNAME" node "$SCRIPT_DIR/verify-runtime-secret.js" SIDEKICK_INFLUX_TOKEN /etc/sidekick/secrets >/dev/null 2>&1; then
           systemctl enable --now "$unit"
           log "  Enabled and started $unit"
         else
-          warn "  Installed $unit but did not enable it; set SIDEKICK_INFLUX_TOKEN first"
+          warn "  Installed $unit but did not enable it; provision a valid SIDEKICK_INFLUX_TOKEN secret file first"
         fi
       else
         systemctl enable "$unit"

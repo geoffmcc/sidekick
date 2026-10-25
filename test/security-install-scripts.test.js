@@ -3,7 +3,9 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
+const { spawnSync } = require("node:child_process");
 
 const root = path.resolve(__dirname, "..");
 const read = relative => fs.readFileSync(path.join(root, relative), "utf8");
@@ -27,10 +29,56 @@ test("setup-tools uses a fingerprint-pinned Docker APT source", () => {
 
 test("setup-tools runs third-party Python and npm package hooks as sidekick", () => {
   const setup = read("scripts/setup-tools.sh");
-  assert.match(setup, /sudo -H -u "\$USERNAME" "\$TOOLS_PYTHON" -m pip install -q yt-dlp/);
-  assert.match(setup, /sudo -H -u "\$USERNAME" "\$TOOLS_PYTHON" -m pip install -q openai-whisper/);
-  assert.match(setup, /sudo -H -u "\$USERNAME" "\$TOOLS_PYTHON" -m pip install -q duckdb/);
-  assert.match(setup, /sudo -H -u "\$USERNAME" env NPM_CONFIG_PREFIX="\$TOOLS_NPM_PREFIX" npm install --global @mermaid-js\/mermaid-cli/);
+  const pythonRequirements = read("scripts/tooling/python-tools/requirements.in");
+  const pythonLock = read("scripts/tooling/python-tools/requirements.txt");
+  const pythonBuildRequirements = read("scripts/tooling/python-tools/build-requirements.in");
+  const pythonBuildLock = read("scripts/tooling/python-tools/build-requirements.txt");
+  const mermaidManifest = JSON.parse(read("scripts/tooling/mermaid-cli/package.json"));
+  const mermaidLock = JSON.parse(read("scripts/tooling/mermaid-cli/package-lock.json"));
+  const mermaidCliPackage = mermaidLock.packages["node_modules/@mermaid-js/mermaid-cli"];
+  const lockedNpmArtifacts = Object.entries(mermaidLock.packages)
+    .filter(([name, pkg]) => name && pkg.resolved);
+  assert.match(pythonRequirements, /^yt-dlp==2026\.10\.21$/m);
+  assert.match(pythonRequirements, /^openai-whisper==20250625$/m);
+  assert.match(pythonRequirements, /^duckdb==1\.5\.6$/m);
+  assert.match(pythonBuildRequirements, /^setuptools==84\.2\.1$/m);
+  assert.match(setup, /sys\.version_info >= \(3, 10\)/,
+    "setup must give an actionable failure before installing locks on unsupported Python versions");
+  for (const [name, lock] of [["Python tools", pythonLock], ["Python build dependencies", pythonBuildLock]]) {
+    const requirementStarts = [...lock.matchAll(/^[A-Za-z0-9_.-]+==[^\s\\;]+.*$/gm)];
+    assert.ok(requirementStarts.length > 0, `${name} lock must contain resolved packages`);
+    for (let index = 0; index < requirementStarts.length; index++) {
+      const start = requirementStarts[index].index;
+      const end = requirementStarts[index + 1]?.index ?? lock.length;
+      assert.match(lock.slice(start, end), /--hash=sha256:[a-f0-9]{64}/,
+        `${name} lock entry ${requirementStarts[index][0]} must be artifact-hash pinned`);
+    }
+    assert.doesNotMatch(lock, /^\s*(?:-e\s|https?:|git\+)/m,
+      `${name} lock must not introduce editable or unreviewed URL dependencies`);
+  }
+  assert.match(setup, /pip install -q --require-hashes -r "\$PYTHON_TOOLS_DIR\/build-requirements\.txt"/,
+    "Python build backend must be installed from the hash-locked build requirements");
+  assert.match(setup, /pip install -q --require-hashes --no-build-isolation -r "\$PYTHON_TOOLS_DIR\/requirements\.txt"/,
+    "Python runtime dependencies must use the committed hash lock without resolving build dependencies");
+  assert.equal(mermaidManifest.dependencies["@mermaid-js/mermaid-cli"], "11.17.0");
+  assert.deepEqual(mermaidLock.packages[""].dependencies, mermaidManifest.dependencies);
+  assert.match(mermaidCliPackage.engines.node, /\^18\.19/);
+  assert.match(mermaidCliPackage.engines.node, />=20\.0/,
+    "locked Mermaid CLI must support Sidekick's Node 22 runtime floor");
+  assert.ok(lockedNpmArtifacts.length > 0, "Mermaid runtime lock must contain resolved registry artifacts");
+  for (const [name, pkg] of lockedNpmArtifacts) {
+    assert.match(pkg.resolved, /^https:\/\/registry\.npmjs\.org\//, `${name} must resolve from the npm registry over HTTPS`);
+    assert.match(pkg.integrity || "", /^sha512-/, `${name} must have a SHA-512 integrity digest`);
+  }
+  assert.match(setup, /npm ci --prefix "\$TOOLS_NPM_PREFIX" --no-audit --no-fund/,
+    "fresh Mermaid installs must use the committed integrity-bearing lockfile");
+  assert.match(setup, /TOOLS_MMDC="\$TOOLS_NPM_PREFIX\/node_modules\/\.bin\/mmdc"/);
+  assert.match(setup, /TOOLS_MMDC_LEGACY="\$TOOLS_NPM_PREFIX\/bin\/mmdc"/,
+    "existing global installs must remain discoverable during migration");
+  assert.doesNotMatch(setup, /pip install -q (?:yt-dlp|openai-whisper|duckdb)(?:\s|$)/m,
+    "optional Python tool installs must not bypass the hash-locked requirement files");
+  assert.doesNotMatch(setup, /npm install --global @mermaid-js\/mermaid-cli(?:\s|$)/m,
+    "optional Mermaid CLI install must not silently float to registry latest");
   assert.doesNotMatch(setup, /^\s*pip3?\s+install\b/m);
   assert.doesNotMatch(setup, /^\s*npm\s+install\s+-g\b/m);
   assert.match(setup, /find -P "\$TOOLS_VENV" -xdev[\s\S]*-exec chown "\$USERNAME:\$USERNAME"/);
@@ -49,4 +97,51 @@ test("downloaded setup binaries are pinned, verified, and safely extracted", () 
   assert.match(ollama, /\|\.\.\//);
   assert.ok(ollama.indexOf("sha256sum --check --status") < ollama.indexOf("--extract --file"));
   assert.doesNotMatch(setup, /ollama\.com\/install\.sh\s*\|\s*sh/);
+});
+
+test("metrics timer provisioning checks the protected Influx secret file", () => {
+  const bootstrap = read("scripts/bootstrap.sh");
+  const setup = read("scripts/setup-tools.sh");
+  const unit = read("systemd/sidekick-metrics.service");
+  const verifier = read("scripts/verify-runtime-secret.js");
+  const deploy = read("deploy.ps1");
+  for (const script of [bootstrap, setup]) {
+    assert.match(script, /sudo -u "\$USERNAME" node "\$SCRIPT_DIR\/verify-runtime-secret\.js" SIDEKICK_INFLUX_TOKEN \/etc\/sidekick\/secrets/);
+    assert.doesNotMatch(script, /grep -q '\^SIDEKICK_INFLUX_TOKEN=/,
+      "installer must not enable metrics based on a raw dotenv credential");
+  }
+  assert.match(unit, /^Environment=SIDEKICK_SECRET_DIR=\/etc\/sidekick\/secrets$/m);
+  assert.match(verifier, /readSecret\(name\)/);
+  assert.doesNotMatch(verifier, /console\.(?:log|error).*value/);
+  assert.match(deploy, /scripts\\verify-runtime-secret\.js/,
+    "incremental deployment must upload the new installer helper");
+});
+
+test("runtime-secret verifier accepts only the protected file and never prints its value", t => {
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-runtime-secret-verifier-"));
+  t.after(() => fs.rmSync(fixture, { recursive: true, force: true }));
+  const secretDir = path.join(fixture, "secrets");
+  fs.mkdirSync(secretDir);
+  const secretFile = path.join(secretDir, "sidekick_influx_token");
+  const verifier = path.join(root, "scripts/verify-runtime-secret.js");
+  const env = { ...process.env, SIDEKICK_INFLUX_TOKEN: "synthetic-environment-only-token" };
+
+  fs.writeFileSync(secretFile, "synthetic-file-backed-token\n", { mode: 0o600 });
+  fs.chmodSync(secretFile, 0o600);
+  let result = spawnSync(process.execPath, [verifier, "SIDEKICK_INFLUX_TOKEN", secretDir], { encoding: "utf8", env });
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, "");
+
+  fs.writeFileSync(secretFile, "sidekick-influx-token\n", { mode: 0o600 });
+  fs.chmodSync(secretFile, 0o600);
+  result = spawnSync(process.execPath, [verifier, "SIDEKICK_INFLUX_TOKEN", secretDir], { encoding: "utf8", env });
+  assert.equal(result.status, 1, "placeholder file contents cannot enable the timer");
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, "");
+
+  result = spawnSync(process.execPath, [verifier, "SIDEKICK_INFLUX_TOKEN", path.join(fixture, "missing")], { encoding: "utf8", env });
+  assert.equal(result.status, 1, "an environment-only token cannot enable the timer");
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, "");
 });

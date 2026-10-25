@@ -30,6 +30,7 @@
 const platformKernel = require("../platform/kernel");
 const toolContext = require("../tools/context");
 const authorization = require("../core/authorization");
+const { canonicalizeProjectName } = require("../core/project-identity");
 const definitionRepository = require("./repository");
 const { validateInputs, resolveValue, isTruthy } = require("./definition");
 const { canonicalStatus } = require("../tools/result");
@@ -130,6 +131,7 @@ async function runWorkflowDefinition(name, inputs = {}, options = {}) {
   let requestedByPrincipalId = executionContext.authIdentity?.requested_by_principal_id || executionContext.authIdentity?.principal_id || null;
   let actorPrincipalId = executionContext.authIdentity?.principal_id || null;
   let actingForPrincipalId = executionContext.authIdentity?.acting_for_principal_id || null;
+  let executionProject = canonicalizeProjectName(options.project || executionContext.project || "") || null;
 
   let state;
   let workflow;
@@ -160,10 +162,17 @@ async function runWorkflowDefinition(name, inputs = {}, options = {}) {
       });
       if (!administrator.ok) return { ok: false, code: "forbidden", error: "Workflow resume belongs to another principal" };
     }
-    const requestedProject = options.project || executionContext.project || null;
-    if (workflow.project_id && requestedProject && workflow.project_id !== requestedProject) {
+    const workflowProject = workflow.project_id ? canonicalizeProjectName(workflow.project_id) : null;
+    if (workflow.project_id && !workflowProject) {
+      return { ok: false, code: "project_scope_invalid", error: "Workflow run has an invalid recorded project scope" };
+    }
+    if (workflowProject && executionProject && workflowProject !== executionProject) {
       return { ok: false, code: "project_scope_denied", error: "Workflow resume belongs to another project" };
     }
+    // Keep the persisted project as the execution scope when a reconnecting
+    // caller omits it. This restores context only; current identity and every
+    // step's authorization are still evaluated by the canonical dispatcher.
+    executionProject = workflowProject || executionProject;
     // Resume carries the recorded identity only as an input to the current
     // Core authorization check. It is not trusted as a bypass: the current
     // principal must still be authenticated and enabled when the step is
@@ -198,7 +207,7 @@ async function runWorkflowDefinition(name, inputs = {}, options = {}) {
       operationType: "workflow_definition_run",
       state: "running",
       risk: workflowEffects.strict_no_write && definition.mode === "read_only" ? "low" : "medium",
-      projectId: options.project || null,
+      projectId: executionProject,
       allowConcurrent: true,
       metadata: {
         workflow: definition.name,
@@ -227,7 +236,7 @@ async function runWorkflowDefinition(name, inputs = {}, options = {}) {
         metadata: { title: step.title || step.name, on_error: step.on_error, always: step.always, expect: step.expect },
       })),
       execution_id: executionId,
-      project_id: options.project || toolContext.getExecutionContext().project || null,
+      project_id: executionProject,
       created_by: options.actor || toolContext.getExecutionContext().actor || "workflow-runner",
       requested_by_principal_id: requestedByPrincipalId,
       actor_principal_id: actorPrincipalId,
@@ -356,7 +365,7 @@ async function runWorkflowDefinition(name, inputs = {}, options = {}) {
             args,
             envelope: inheritedAuthority.envelope,
             principalRef: inheritedAuthority.principal_ref,
-            projectRef: options.project || inheritedAuthority.project_ref,
+            projectRef: executionProject || inheritedAuthority.project_ref,
             workspaceRef: inheritedAuthority.workspace_ref,
             repositoryRef: inheritedAuthority.repository_ref,
             capabilityRef: step.tool,
@@ -370,7 +379,7 @@ async function runWorkflowDefinition(name, inputs = {}, options = {}) {
           authIdentity: executionContext.authIdentity || null,
           timeoutMs: step.timeout_ms || options.stepTimeoutMs || DEFAULT_STEP_TIMEOUT_MS,
           executionId,
-          project: options.project || undefined,
+          project: executionProject || undefined,
           taskId: executionContext.taskId || undefined,
           agentAuthorityContext: inheritedAuthority || undefined,
           authorityApprovalRequired: authorityDecision?.approval_required === true,

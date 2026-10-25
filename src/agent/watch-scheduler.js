@@ -11,6 +11,7 @@ function createWatchScheduler({
   appendScheduledPlatformEvent,
   transitionExecution,
   executeWatchAction,
+  authorizeWatch = async () => ({ ok: false, reason: "scheduled watch authority is unavailable" }),
   checkService,
   checkProcess,
   checkEndpoint,
@@ -31,6 +32,28 @@ function createWatchScheduler({
     const watches = loadWatches();
     const current = watches.find(w => w.id === watch.id);
     if (!current || current.status !== "active") return;
+
+    let scheduledAuthority;
+    try { scheduledAuthority = await authorizeWatch(current); } catch { scheduledAuthority = null; }
+    if (!scheduledAuthority?.ok || !scheduledAuthority.context?.authIdentity?.principal_id) {
+      const watchesAfter = loadWatches();
+      const blocked = watchesAfter.find(w => w.id === current.id);
+      if (blocked && blocked.status === "active") {
+        blocked.status = "paused";
+        blocked.error = "Scheduled watch authority is missing, expired, revoked, or no longer permitted";
+        blocked.pausedAt = new Date().toISOString();
+        saveWatches(watchesAfter);
+      }
+      if (current.platform_execution_id) transitionExecution(current.platform_execution_id, "blocked", {
+        source: "agent", actor_id: "agent", reason: "scheduled watch authority is no longer valid",
+        result_status: "paused", error_category: "scheduled_authority_invalid",
+        result_summary: "watch paused because its current authority could not be verified",
+      });
+      appendScheduledPlatformEvent("watch", blocked || current, "schedule.watch.authorization_denied", {
+        code: "scheduled_authority_invalid",
+      }, { source: "agent", actor: "agent", severity: "warning" });
+      return;
+    }
 
     let checkClaim = { ok: true, claim: null };
     if (current.platform_execution_id) {
@@ -108,6 +131,13 @@ function createWatchScheduler({
             parentId: checkExecution?.execution_id || watch.platform_execution_id || null,
             rootExecutionId: watch.platform_execution_id || checkExecution?.root_execution_id || null,
             correlationId: watch.id,
+            project: scheduledAuthority.context.project || undefined,
+            taskId: scheduledAuthority.context.taskId || undefined,
+            authIdentity: scheduledAuthority.context.authIdentity,
+            agentAuthorityContext: scheduledAuthority.context.agentAuthorityContext || undefined,
+            authorityApprovalRequired: scheduledAuthority.authorityApprovalRequired === true,
+            authorityRisk: scheduledAuthority.authorityRisk || undefined,
+            authorityReason: scheduledAuthority.authorityReason || undefined,
           });
           if (checkExecution) transitionExecution(checkExecution.execution_id, actionResult?.isError ? "failed" : "completed", {
             source: "agent", actor_id: "agent",

@@ -917,6 +917,10 @@ async function main() {
   await enrollIfNeeded();
   if (!running) { await waitForActiveJobs(); return; }
   await sendHeartbeat().catch(e => log(`Initial heartbeat failed: ${e.message}`));
+  // A revoked credential can be rejected by this initial heartbeat. fatalStop
+  // clears an existing timer, but the timer is not installed until below; do
+  // not create a new retrying interval after that terminal decision.
+  if (!running) { await waitForActiveJobs(); return; }
   heartbeatTimer = setInterval(() => sendHeartbeat().catch(e => log(`Heartbeat error: ${e.message}`)), HEARTBEAT_MS);
   await claimLoop();
   await waitForActiveJobs();

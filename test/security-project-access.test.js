@@ -1420,6 +1420,166 @@ test("Dashboard memory evidence requires memory permission and project scope", (
   assert.equal(scopedRead.body.memory.id, memoryA.id);
 });
 
+test("Dashboard memory evidence requires access to both the memory project and linked handoff project", () => {
+  projectAccess.grantProjectAccess({ actorPrincipalId: owner.principal_id, principalId: operator.principal_id, project: "memory_a", accessLevel: "read" });
+  const linkedHandoff = db.saveHandoff({
+    project: "memory_a", title: "Synthetic linked handoff", source: "test",
+    content: "Synthetic content in the project the operator may read.",
+    owner_principal_id: operator.principal_id,
+    created_by_principal_id: operator.principal_id,
+  });
+  const crossProjectMemory = db.upsertMemory({
+    type: "fact", project: "memory_b", content: "Synthetic private memory linked to another project handoff",
+    summary: "Synthetic private memory", confidence: 0.8, source: "test", source_ref: linkedHandoff.id,
+  });
+  const sameProjectMemory = db.upsertMemory({
+    type: "fact", project: "memory_a", content: "Synthetic memory linked within the same project",
+    summary: "Synthetic same-project memory", confidence: 0.8, source: "test", source_ref: linkedHandoff.id,
+  });
+  assert.ok(linkedHandoff?.id, "synthetic source handoff fixture is persisted");
+  assert.ok(crossProjectMemory?.id, "synthetic cross-project memory fixture is persisted");
+  assert.ok(sameProjectMemory?.id, "synthetic same-project memory fixture is persisted");
+  assert.equal(crossProjectMemory.source_ref, linkedHandoff.id, "memory points at the authorized-project handoff");
+  assert.equal(db.getMemoryById(crossProjectMemory.id, { includeDisabled: true }).project, "memory_b");
+  assert.equal(db.getHandoff(linkedHandoff.id).project, "memory_a");
+  assert.equal(projectAccess.hasProjectAccess(operator.principal_id, "memory_a", "read", ["memory.read"]), true);
+  const handlers = new Map();
+  registerHandoffReadRoutes({ app: { get: (route, handler) => handlers.set(route, handler) }, dbStore: db, errorResponse: () => {} });
+  const invoke = memoryId => {
+    const res = {
+      statusCode: 200,
+      status(code) { this.statusCode = code; return this; },
+      json(body) { this.body = body; return this; },
+    };
+    handlers.get("/api/memories/:id/evidence")({
+      params: { id: memoryId },
+      authPrincipal: { principal_id: operator.principal_id, scopes: ["memory.read"] },
+    }, res);
+    return res;
+  };
+  const sameProject = invoke(sameProjectMemory.id);
+  assert.equal(sameProject.statusCode, 200, "same-project memory and handoff remain readable");
+  assert.equal(sameProject.body.memory.id, sameProjectMemory.id);
+  const res = invoke(crossProjectMemory.id);
+  assert.equal(res.statusCode, 404, "access to a linked handoff must not expose a memory from an unauthorized project");
+  assert.doesNotMatch(JSON.stringify(res.body), /Synthetic private memory/);
+});
+
+test("handoff details do not include linked memories outside the handoff project scope", async () => {
+  projectAccess.grantProjectAccess({ actorPrincipalId: owner.principal_id, principalId: operator.principal_id, project: "memory_a", accessLevel: "read" });
+  const handoff = db.saveHandoff({
+    project: "memory_a", title: "Synthetic scoped handoff", source: "test",
+    content: "Synthetic handoff content for project scope test.",
+    owner_principal_id: operator.principal_id,
+    created_by_principal_id: operator.principal_id,
+  });
+  const scopedMemory = db.upsertMemory({
+    type: "fact", project: "memory_a", content: "Synthetic same-project handoff memory",
+    summary: "Synthetic same-project handoff memory", confidence: 0.8, source: "test",
+    source_ref: handoff.id, metadata: { handoff_id: handoff.id },
+  });
+  const globalMemory = db.upsertMemory({
+    type: "fact", project: null, content: "Synthetic private global memory via source reference",
+    summary: "Synthetic private global memory", confidence: 0.8, source: "test",
+    source_ref: handoff.id,
+  });
+  const metadataLinkedGlobalMemory = db.upsertMemory({
+    type: "fact", project: null, content: "Synthetic private global memory via metadata reference",
+    summary: "Synthetic private global metadata memory", confidence: 0.8, source: "test",
+    metadata: { handoff_id: handoff.id },
+  });
+  const handlers = new Map();
+  registerHandoffReadRoutes({ app: { get: (route, handler) => handlers.set(route, handler) }, dbStore: db, errorResponse: () => {} });
+  const res = {
+    statusCode: 200,
+    status(code) { this.statusCode = code; return this; },
+    json(body) { this.body = body; return this; },
+  };
+  handlers.get("/api/handoffs/:id")({
+    params: { id: handoff.id }, query: {},
+    authPrincipal: { principal_id: operator.principal_id, scopes: ["memory.read"] },
+  }, res);
+
+  assert.equal(res.statusCode, 200, "the authorized operator may still read the handoff itself");
+  assert.ok(res.body.memories.some(memory => memory.id === scopedMemory.id), "same-project linked memories remain visible");
+  assert.ok(globalMemory?.id && metadataLinkedGlobalMemory?.id, "synthetic global fixtures are persisted");
+  assert.ok(!res.body.memories.some(memory => memory.id === globalMemory.id));
+  assert.ok(!res.body.memories.some(memory => memory.id === metadataLinkedGlobalMemory.id));
+  assert.doesNotMatch(JSON.stringify(res.body.memories), /Synthetic private global memory/);
+
+  const inspected = await dispatcher.callMcpTool("handoff", { action: "inspect", id: handoff.id, project: "memory_a" }, {
+    project: "memory_a",
+    authIdentity: { principal_id: operator.principal_id, principal_type: "human" },
+  });
+  assert.equal(inspected.isError, undefined);
+  const inspectedMemories = JSON.parse(inspected.content[0].text).extracted_memories;
+  assert.ok(Array.isArray(inspectedMemories), inspected.content[0].text);
+  assert.ok(inspectedMemories.some(memory => memory.id === scopedMemory.id));
+  assert.ok(!inspectedMemories.some(memory => memory.id === globalMemory.id));
+  assert.ok(!inspectedMemories.some(memory => memory.id === metadataLinkedGlobalMemory.id));
+  assert.doesNotMatch(JSON.stringify(inspectedMemories), /Synthetic private global memory/);
+});
+
+test("handoff packet persistence redacts credentials by nested field name", () => {
+  const apiKey = "SYNTHETIC_HANDOFF_API_KEY_VALUE";
+  const token = "SYNTHETIC_HANDOFF_TOKEN_VALUE";
+  const handoff = db.saveHandoff({
+    project: "memory_a", title: "Synthetic packet redaction", source: "test",
+    content: "Synthetic handoff content.",
+    packet: {
+      objective: "Synthetic objective",
+      status: "active",
+      next_step: "Continue safely",
+      provenance: { api_key: apiKey },
+      evidence: [{ type: "test", label: "Synthetic evidence", token }],
+    },
+  });
+  const updated = db.saveHandoff({
+    id: handoff.id, project: "memory_a", content: "Synthetic updated handoff content.",
+    expectedVersion: handoff.version,
+    packet: {
+      ...handoff.packet,
+      next_step: "Updated safely",
+      artifacts: [{ type: "test", password: "SYNTHETIC_HANDOFF_PASSWORD_VALUE" }],
+    },
+  });
+  const dbHandle = db.getDb();
+  const current = dbHandle.prepare("SELECT packet_json FROM memory_handoffs WHERE id = ?").get(handoff.id);
+  const history = dbHandle.prepare("SELECT packet_json FROM memory_handoff_versions WHERE handoff_id = ?").all(handoff.id);
+  const links = dbHandle.prepare("SELECT payload_json FROM memory_handoff_links WHERE handoff_id = ?").all(handoff.id);
+  const persisted = JSON.stringify({ current, history, links, updated });
+  assert.doesNotMatch(persisted, /SYNTHETIC_HANDOFF_API_KEY_VALUE/);
+  assert.doesNotMatch(persisted, /SYNTHETIC_HANDOFF_TOKEN_VALUE/);
+  assert.doesNotMatch(persisted, /SYNTHETIC_HANDOFF_PASSWORD_VALUE/);
+  assert.match(persisted, /\[REDACTED\]/);
+});
+
+test("handoff content and titles persist only redacted credential text", () => {
+  const apiKey = "SYNTHETIC_HANDOFF_CONTENT_API_KEY_VALUE";
+  const password = "SYNTHETIC_HANDOFF_CONTENT_PASSWORD_VALUE";
+  const handoff = db.saveHandoff({
+    project: "memory_a", title: `Synthetic api_key=${apiKey}`, source: "test",
+    content: JSON.stringify({ summary: "Synthetic handoff", password }),
+    packet: { objective: "Synthetic safe objective", status: "active", next_step: "Continue safely" },
+  });
+  const dbHandle = db.getDb();
+  const legacyRawContent = JSON.stringify({ summary: "Synthetic handoff", password });
+  const legacyRawPacket = JSON.stringify({ objective: "Synthetic safe objective", status: "active", next_step: "Continue safely", provenance: { api_key: apiKey } });
+  dbHandle.prepare("UPDATE memory_handoffs SET title = ?, content = ?, packet_json = ? WHERE id = ?")
+    .run(`Legacy api_key=${apiKey}`, legacyRawContent, legacyRawPacket, handoff.id);
+  const updated = db.saveHandoff({
+    id: handoff.id, project: "memory_a", expectedVersion: handoff.version,
+    title: `Legacy api_key=${apiKey}`,
+    content: legacyRawContent,
+  });
+  const current = dbHandle.prepare("SELECT title, content, redacted_content FROM memory_handoffs WHERE id = ?").get(handoff.id);
+  const history = dbHandle.prepare("SELECT title, content, redacted_content FROM memory_handoff_versions WHERE handoff_id = ?").all(handoff.id);
+  const persisted = JSON.stringify({ current, history, updated });
+  assert.doesNotMatch(persisted, /SYNTHETIC_HANDOFF_CONTENT_API_KEY_VALUE/);
+  assert.doesNotMatch(persisted, /SYNTHETIC_HANDOFF_CONTENT_PASSWORD_VALUE/);
+  assert.match(persisted, /\[REDACTED\]/);
+});
+
 test("handoff extraction cannot write memories into an ungranted project", async () => {
   const context = tools.context.createMcpExecutionContext({
     authIdentity: { principal_id: operator.principal_id, principal_type: "human" },
@@ -1438,6 +1598,178 @@ test("revoked and disabled principals cannot retain project access", () => {
   projectAccess.grantProjectAccess({ actorPrincipalId: owner.principal_id, principalId: operator.principal_id, project: "memory_a", accessLevel: "write" });
   identity.setPrincipalEnabled(operator.principal_id, false, owner);
   assert.equal(projectAccess.hasProjectAccess(operator.principal_id, "memory_a", "write"), false);
+});
+
+test("handoff claim tokens are exposed once to authenticated dispatch and excluded from logs", async () => {
+  const root = path.join(dataDir, "claim-token-repository");
+  const { execFileSync } = require("node:child_process");
+  fs.mkdirSync(root, { recursive: true });
+  execFileSync("git", ["init", "-b", "main", root], { stdio: "ignore" });
+  fs.writeFileSync(path.join(root, "README.md"), "Synthetic handoff claim fixture\n");
+  execFileSync("git", ["-C", root, "add", "README.md"], { stdio: "ignore" });
+  execFileSync("git", ["-C", root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "-m", "claim fixture"], { stdio: "ignore" });
+  const packet = {
+    objective: "Verify one-time claim output",
+    status: "active",
+    current_state: "A ready, disposable security fixture",
+    completed_steps: ["Created a synthetic handoff"],
+    next_step: "Verify claim handling",
+    acceptance_criteria: ["An authenticated caller receives the one-time token; logs do not"],
+    provenance: {
+      working_directory: root,
+      commit_sha: execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(),
+      branch: "main",
+    },
+    evidence: [{ type: "test", label: "synthetic claim fixture", status: "passed", observed_at: new Date().toISOString() }],
+  };
+  const handoff = db.saveHandoff({ project: "memory_a", content: "Synthetic claim-token test fixture.", packet });
+  db.captureHandoffCheckpoint(handoff.id, { working_directory: root });
+  db.refreshHandoffEvidence(handoff.id, { working_directory: root });
+  db.transitionHandoff(handoff.id, "ready", { expectedVersion: handoff.version });
+
+  const result = await dispatcher.callMcpTool("handoff", {
+    action: "claim", id: handoff.id, project: "memory_a", owner: owner.principal_id,
+  }, {
+    authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+    project: "memory_a",
+    sessionId: "synthetic-claim-token-session",
+  });
+  assert.notEqual(result.isError, true, JSON.stringify(result));
+  const payload = JSON.parse(result.content[0].text);
+  assert.ok(payload.claim_token, "authenticated dispatch must return the one-time token");
+  assert.equal(payload.handoff.lifecycle_state, "claimed");
+  assert.equal(JSON.stringify(db.readToolLogs(100)).includes(payload.claim_token), false, "the bearer token must not enter tool logs");
+
+  const denied = await dispatcher.callMcpTool("handoff", {
+    action: "claim", id: handoff.id, project: "memory_a", owner: owner.principal_id,
+  }, { project: "memory_a", sessionId: "synthetic-unauthenticated-session" });
+  assert.equal(denied.isError, true, "identityless dispatch must not receive a claim token");
+  assert.equal(JSON.stringify(denied).includes(payload.claim_token), false);
+  assert.equal(db.getHandoff(handoff.id).claim.owner, owner.principal_id, "denied retry must not change the active claim");
+});
+
+test("handoff provenance verification enforces the caller filesystem path policy", async () => {
+  const allowedRoot = fs.mkdtempSync(path.join(dataDir, "handoff-allowed-root-"));
+  const outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), "handoff-outside-root-"));
+  const previousAllowed = process.env.SIDEKICK_MCP_ALLOWED_PATHS;
+  const previousGlobalAllowed = process.env.SIDEKICK_ALLOWED_PATHS;
+  const previousDashboardAllowed = process.env.SIDEKICK_DASHBOARD_ALLOWED_PATHS;
+  process.env.SIDEKICK_MCP_ALLOWED_PATHS = allowedRoot;
+  process.env.SIDEKICK_DASHBOARD_ALLOWED_PATHS = allowedRoot;
+  process.env.SIDEKICK_ALLOWED_PATHS = allowedRoot;
+  try {
+    const { execFileSync } = require("node:child_process");
+    fs.writeFileSync(path.join(outsideRoot, "README.md"), "Synthetic out-of-scope handoff claim fixture\n");
+    execFileSync("git", ["init", "-b", "main", outsideRoot], { stdio: "ignore" });
+    execFileSync("git", ["-C", outsideRoot, "add", "README.md"], { stdio: "ignore" });
+    execFileSync("git", ["-C", outsideRoot, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "-m", "out-of-scope claim fixture"], { stdio: "ignore" });
+
+    const handoff = db.saveHandoff({
+      project: "memory_a",
+      content: "Synthetic fixture with a repository outside the caller's path scope.",
+      owner_principal_id: owner.principal_id,
+      created_by_principal_id: owner.principal_id,
+      packet: { objective: "Verify scoped repository access", provenance: { working_directory: outsideRoot, commit_sha: "abcdef0123456789" } },
+    });
+    const result = await dispatcher.callMcpTool("handoff", {
+      action: "verify", id: handoff.id, project: "memory_a",
+    }, {
+      authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+      project: "memory_a",
+      sessionId: "synthetic-handoff-path-policy-session",
+    });
+    assert.equal(result.isError, true, JSON.stringify(result));
+    assert.match(result.content[0].text, /Path blocked by policy/, JSON.stringify(result));
+
+    const createResult = await dispatcher.callMcpTool("handoff", {
+      action: "create", project: "memory_a", title: "Blocked out-of-scope repository",
+      content: "Synthetic record that must not persist an out-of-scope repository path.",
+      packet: { objective: "Reject an out-of-scope persisted repository", provenance: { working_directory: outsideRoot } },
+    }, {
+      authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+      project: "memory_a",
+      sessionId: "synthetic-handoff-create-path-policy-session",
+    });
+    assert.equal(createResult.isError, true, JSON.stringify(createResult));
+    assert.match(createResult.content[0].text, /Path blocked by policy/, JSON.stringify(createResult));
+    assert.equal(db.listHandoffs({ project: "memory_a", limit: 100 }).some(item => item.title === "Blocked out-of-scope repository"), false,
+      "out-of-scope repository paths must not be persisted by the MCP handoff tool");
+
+    const dashboardHandoff = db.saveHandoff({
+      project: "memory_a",
+      content: "Synthetic dashboard path-scope fixture.",
+      owner_principal_id: owner.principal_id,
+      created_by_principal_id: owner.principal_id,
+      packet: { objective: "Verify dashboard repository path scope", provenance: { working_directory: outsideRoot, commit_sha: "abcdef0123456789" } },
+    });
+    const handlers = new Map();
+    registerHandoffReadRoutes({ app: { get: (route, handler) => handlers.set(route, handler) }, dbStore: db, errorResponse: () => {} });
+    const response = {
+      statusCode: 200,
+      status(code) { this.statusCode = code; return this; },
+      json(body) { this.body = body; return this; },
+    };
+    handlers.get("/api/handoffs/:id/preflight")({
+      params: { id: dashboardHandoff.id }, query: {},
+      authPrincipal: { principal_id: owner.principal_id, scopes: null },
+    }, response);
+    assert.equal(response.statusCode, 403, "Dashboard preflight must not inspect a handoff repo outside its filesystem policy");
+
+    const claimHandoff = db.saveHandoff({
+      project: "memory_a",
+      content: "Synthetic out-of-scope repository claim fixture.",
+      owner_principal_id: owner.principal_id,
+      created_by_principal_id: owner.principal_id,
+      packet: {
+        objective: "Reject claim of an out-of-scope repository",
+        status: "active",
+        current_state: "Synthetic fixture",
+        completed_steps: ["Created disposable repository"],
+        next_step: "Continue after an authorized claim",
+        acceptance_criteria: ["Claiming checks repository path policy before readiness inspection"],
+        provenance: {
+          working_directory: outsideRoot,
+          commit_sha: execFileSync("git", ["-C", outsideRoot, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
+          branch: "main",
+        },
+        evidence: [{ type: "test", label: "synthetic claim fixture", status: "passed", observed_at: new Date().toISOString() }],
+      },
+    });
+    db.captureHandoffCheckpoint(claimHandoff.id, { working_directory: outsideRoot });
+    db.refreshHandoffEvidence(claimHandoff.id, { working_directory: outsideRoot });
+    db.transitionHandoff(claimHandoff.id, "ready", { expectedVersion: claimHandoff.version });
+    const claimResult = await dispatcher.callMcpTool("handoff", {
+      action: "claim", id: claimHandoff.id, project: "memory_a", owner: owner.principal_id, working_directory: allowedRoot,
+    }, {
+      authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+      project: "memory_a",
+      sessionId: "synthetic-handoff-claim-path-policy-session",
+    });
+    assert.equal(claimResult.isError, true, JSON.stringify(claimResult));
+    assert.match(claimResult.content[0].text, /Path blocked by policy/, JSON.stringify(claimResult));
+    assert.equal(db.getHandoff(claimHandoff.id).claim, null, "an out-of-scope repository must be rejected before claim/readiness work");
+
+    const sessionResult = await dispatcher.callMcpTool("session", {
+      action: "begin", goal: "Reject an out-of-scope workspace", project: "memory_a", working_directory: outsideRoot,
+    }, {
+      authIdentity: { principal_id: owner.principal_id, principal_type: "human" },
+      project: "memory_a",
+      sessionId: "synthetic-session-path-policy-session",
+    });
+    assert.equal(sessionResult.isError, true, JSON.stringify(sessionResult));
+    assert.match(sessionResult.content[0].text, /Path blocked by policy/, JSON.stringify(sessionResult));
+    assert.equal(db.listTaskSessions({ project: "memory_a", limit: 100 }).some(session => session.goal === "Reject an out-of-scope workspace"), false,
+      "a blocked workspace must not leave a durable session record");
+  } finally {
+    if (previousAllowed === undefined) delete process.env.SIDEKICK_MCP_ALLOWED_PATHS;
+    else process.env.SIDEKICK_MCP_ALLOWED_PATHS = previousAllowed;
+    if (previousGlobalAllowed === undefined) delete process.env.SIDEKICK_ALLOWED_PATHS;
+    else process.env.SIDEKICK_ALLOWED_PATHS = previousGlobalAllowed;
+    if (previousDashboardAllowed === undefined) delete process.env.SIDEKICK_DASHBOARD_ALLOWED_PATHS;
+    else process.env.SIDEKICK_DASHBOARD_ALLOWED_PATHS = previousDashboardAllowed;
+    fs.rmSync(allowedRoot, { recursive: true, force: true });
+    fs.rmSync(outsideRoot, { recursive: true, force: true });
+  }
 });
 
 test.after(() => {

@@ -15,6 +15,7 @@ const dbStore = require("../db");
 const { ensureCapabilityPackSchema } = require("./schema");
 const { normalizePackManifest, validatePackConfig, PROVENANCE } = require("./manifest");
 const { compareVersions } = require("../modules/manifest");
+const { canonicalizeProjectName } = require("../core/project-identity");
 
 const PACK_STATES = Object.freeze(["installed", "configured", "enabled", "disabled", "error"]);
 
@@ -76,10 +77,12 @@ function normalizeRow(row) {
 
 function normalizeVerification(row) {
   if (!row) return null;
+  const evidence = parseJson(row.evidence_json, {});
   return {
     ...row,
-    evidence_refs: parseJson(row.evidence_json, {}).refs || [],
-    checks: parseJson(row.evidence_json, {}).checks || {},
+    evidence_contract_version: evidence.contract_version || null,
+    evidence_refs: evidence.refs || [],
+    checks: evidence.checks || {},
     provider: parseJson(row.provider_json, {}),
     source: row.actor_ref,
     legacy: Boolean(row.legacy),
@@ -226,6 +229,11 @@ function recordPackVerification(name, verification) {
     error.code = "verification_source_required";
     throw error;
   }
+  if (typeof verification.project_ref !== "string" || !verification.project_ref.trim()) {
+    const error = new Error("pack verification requires an attributable project_ref");
+    error.code = "verification_project_required";
+    throw error;
+  }
   const observedAt = verification.observed_at || nowIso();
   const observedTime = Date.parse(observedAt);
   const expiresAt = verification.expires_at || (Number.isFinite(observedTime) ? new Date(observedTime + 30 * 24 * 60 * 60 * 1000).toISOString() : "");
@@ -235,12 +243,15 @@ function recordPackVerification(name, verification) {
     error.code = "invalid_pack_verification";
     throw error;
   }
-  if (verification.evidence_refs.some(reference => reference?.role === "provider_integration") && verification.provider?.verified !== true) {
-    const error = new Error("provider integration evidence requires an explicitly attributed provider verification");
-    error.code = "provider_verification_required";
+  if (verification.evidence_refs.some(reference => reference?.role === "provider_integration")) {
+    const error = new Error("provider integration evidence cannot be self-attested; a server-verifiable provider receipt is not available");
+    error.code = "provider_evidence_unavailable";
     throw error;
   }
-  const verified = verifyEvidenceReferences(record, verification.evidence_refs);
+  const verified = verifyEvidenceReferences(record, verification.evidence_refs, {
+    actorRef: verification.actor_ref.trim(),
+    projectRef: verification.project_ref.trim(),
+  });
   if (!verified.ok) {
     const error = new Error(`pack verification evidence rejected: ${verified.reasons.join("; ")}`);
     error.code = "verification_evidence_rejected";
@@ -249,7 +260,7 @@ function recordPackVerification(name, verification) {
   const crypto = require("crypto");
   const evidence = verified.refs;
   const checks = verified.checks;
-  const resultDigest = verification.result_digest || crypto.createHash("sha256").update(JSON.stringify({ evidence, checks, observed_at: observedAt, expires_at: expiresAt })).digest("hex");
+  const resultDigest = verification.result_digest || crypto.createHash("sha256").update(JSON.stringify({ contract_version: 2, evidence, checks, observed_at: observedAt, expires_at: expiresAt })).digest("hex");
   const id = verification.id || `pack-verification-${Date.now().toString(36)}-${crypto.randomBytes(4).toString("hex")}`;
   getDb().prepare(`INSERT INTO platform_pack_verification_evidence
     (verification_id, pack_name, pack_version, package_hash, config_fingerprint, lifecycle_epoch,
@@ -258,7 +269,7 @@ function recordPackVerification(name, verification) {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'verified', ?, ?, 0, ?)`)
     .run(id, record.name, record.version, record.package_hash || null, verified.config_fingerprint,
       Number(record.metadata?.maturity_lifecycle_epoch || 0), verified.health_fingerprint,
-      String(verification.recipe_version || "pack-proving-v1").slice(0, 64), JSON.stringify({ refs: evidence, checks }),
+      String(verification.recipe_version || "pack-proving-v1").slice(0, 64), JSON.stringify({ contract_version: 2, refs: evidence, checks }),
       resultDigest, verification.actor_ref.slice(0, 256), verification.project_ref ? String(verification.project_ref).slice(0, 256) : null,
       verification.scope_revision ? String(verification.scope_revision).slice(0, 256) : null,
       JSON.stringify(verification.provider || {}), observedAt, expiresAt, nowIso());
@@ -266,18 +277,30 @@ function recordPackVerification(name, verification) {
   return getPack(name);
 }
 
-function verifyEvidenceReferences(record, references) {
+function verifyEvidenceReferences(record, references, { actorRef, projectRef }) {
   const db = getDb();
   const allowedTools = new Set();
+  const allowedWorkflows = new Set();
   for (const component of listComponents(record.name, { kind: "module" })) {
     for (const tool of component.detail?.tools || []) allowedTools.add(String(tool).replace(/^sidekick_/, ""));
   }
+  for (const component of listComponents(record.name, { kind: "workflow" })) allowedWorkflows.add(String(component.ref));
+  const roleSourceTypes = { canonical_dispatch: "receipt", workflow: "workflow" };
   const refs = [];
   const reasons = [];
   const usedEvidence = new Map();
   for (const reference of references) {
     if (!reference || typeof reference !== "object" || !["receipt", "workflow", "execution"].includes(reference.type) || typeof reference.id !== "string" || reference.id.length > 256 || !["canonical_dispatch", "agent_discovery", "workflow", "single_pack", "cross_pack", "skeptical_verification", "provider_integration"].includes(reference.role)) {
       reasons.push("malformed evidence reference");
+      continue;
+    }
+    const expectedType = roleSourceTypes[reference.role];
+    if (!expectedType) {
+      reasons.push(`verification role ${reference.role} has no server-verifiable evidence source`);
+      continue;
+    }
+    if (reference.type !== expectedType) {
+      reasons.push(`${reference.type} evidence cannot substantiate verification role ${reference.role}`);
       continue;
     }
     const evidenceKey = `${reference.type}:${reference.id}`;
@@ -294,16 +317,23 @@ function verifyEvidenceReferences(record, references) {
       if (!row) { reasons.push(`receipt ${reference.id} does not exist`); continue; }
       if (!["finalized", "verified"].includes(row.outcome_state)) { reasons.push(`receipt ${reference.id} is not terminal`); continue; }
       if (!allowedTools.has(String(row.capability).replace(/^sidekick_/, ""))) { reasons.push(`receipt ${reference.id} used a tool outside pack ownership`); continue; }
+      if (row.principal_ref !== actorRef) { reasons.push(`receipt ${reference.id} was not performed by the attributed verifier`); continue; }
+      if (canonicalizeProjectName(row.project_ref) !== canonicalizeProjectName(projectRef)) { reasons.push(`receipt ${reference.id} belongs to a different project`); continue; }
       refs.push({ type: "receipt", id: row.receipt_id, role: reference.role, task_id: row.task_id, capability: row.capability, capability_version: row.capability_version, project_ref: row.project_ref, principal_ref: row.principal_ref, observed_at: row.updated_at });
     } else if (reference.type === "workflow") {
-      const row = db.prepare("SELECT name, state, updated_at FROM platform_workflows WHERE workflow_id = ?").get(reference.id);
+      const row = db.prepare("SELECT name, state, project_id, actor_principal_id, updated_at FROM platform_workflows WHERE workflow_id = ?").get(reference.id);
       if (!row) { reasons.push(`${reference.type} ${reference.id} does not exist`); continue; }
       if (row.state !== "completed") { reasons.push(`${reference.type} ${reference.id} is not completed`); continue; }
-      refs.push({ type: reference.type, id: reference.id, role: reference.role, name: row.name, observed_at: row.updated_at });
+      if (row.actor_principal_id !== actorRef) { reasons.push(`${reference.type} ${reference.id} was not performed by the attributed verifier`); continue; }
+      if (canonicalizeProjectName(row.project_id) !== canonicalizeProjectName(projectRef)) { reasons.push(`${reference.type} ${reference.id} belongs to a different project`); continue; }
+      if (!allowedWorkflows.has(String(row.name))) { reasons.push(`${reference.type} ${reference.id} is not owned by pack ${record.name}`); continue; }
+      refs.push({ type: reference.type, id: reference.id, role: reference.role, name: row.name, project_ref: row.project_id, principal_ref: row.actor_principal_id, observed_at: row.updated_at });
     } else {
       const row = db.prepare("SELECT execution_id, state, project_id, actor_principal_id, updated_at FROM platform_executions WHERE execution_id = ?").get(reference.id);
       if (!row) { reasons.push(`${reference.type} ${reference.id} does not exist`); continue; }
       if (row.state !== "completed") { reasons.push(`${reference.type} ${reference.id} is not completed`); continue; }
+      if (row.actor_principal_id !== actorRef) { reasons.push(`${reference.type} ${reference.id} was not performed by the attributed verifier`); continue; }
+      if (canonicalizeProjectName(row.project_id) !== canonicalizeProjectName(projectRef)) { reasons.push(`${reference.type} ${reference.id} belongs to a different project`); continue; }
       refs.push({ type: reference.type, id: row.execution_id, role: reference.role, project_ref: row.project_id, principal_ref: row.actor_principal_id, observed_at: row.updated_at });
     }
   }

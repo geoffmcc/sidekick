@@ -2,7 +2,7 @@
 
 // Handoff checkpoints describe repository continuity; Agent checkpoints remain
 // authoritative for execution recovery and approval continuation.
-function createHandoffContinuity({ getTask, getHandoff, authorizeHandoffWrite = () => false, captureHandoffCheckpoint, saveHandoff, transitionHandoff, refreshHandoffEvidence = null, listPlans = null, workingDirectory = process.cwd(), intervalMs = 15000 }) {
+function createHandoffContinuity({ getTask, getHandoff, authorizeHandoffWrite = () => false, authorizeRepositoryPath = () => true, captureHandoffCheckpoint, saveHandoff, transitionHandoff, refreshHandoffEvidence = null, listPlans = null, workingDirectory = process.cwd(), intervalMs = 15000 }) {
   const lastCapture = new Map();
 
   function checkpointTask(taskId, { reason = "agent_loop_boundary", safeBoundary = "agent_loop_boundary" } = {}) {
@@ -17,6 +17,8 @@ function createHandoffContinuity({ getTask, getHandoff, authorizeHandoffWrite = 
     const taskDirectory = task.working_directory || task.repository || workingDirectory;
     let handoff = getHandoff(task.handoff_id);
     if (!authorizeHandoffWrite(task, handoff)) throw new Error("Current authority does not permit updating the linked handoff");
+    const repositoryPath = handoff.packet?.provenance?.working_directory || taskDirectory;
+    if (!authorizeRepositoryPath(repositoryPath, task, handoff)) throw new Error("linked handoff repository path is blocked by filesystem policy");
     const taskState = String(task.state || "active");
     const terminal = new Set(["completed", "partial", "failed", "cancelled", "timed_out"]);
     if (typeof saveHandoff === "function") {

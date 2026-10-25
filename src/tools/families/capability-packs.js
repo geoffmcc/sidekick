@@ -13,6 +13,7 @@
 
 const { z } = require("zod");
 const { requireCanonicalInvocation, requireToolExecution } = require("../read-authorization");
+const { capabilityPermission } = require("../action-permissions");
 
 function jsonText(payload) {
   return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
@@ -28,12 +29,10 @@ function requireName(name, action) {
 }
 
 async function sidekick_capability({ action = "list", name, path: sourcePath, expected_package_hash, config, enable, allow_same_version, allow_downgrade, remove_knowledge, remove_module_data, source, query, kind, owner, state, available, offset, limit }, runtime = {}) {
-  const readActions = new Set(["list", "available", "show", "inspect", "validate", "health", "doctor"]);
-  const permission = readActions.has(action) ? "packs.read" : "packs.manage";
+  const permission = capabilityPermission(action);
   // Pack summaries include runtime configuration, installation paths and
   // health details. Keep only the non-sensitive catalog surfaces public.
-  const publicReadActions = new Set(["list", "available", "catalog"]);
-  const authorizationError = publicReadActions.has(action)
+  const authorizationError = permission === null
     ? requireCanonicalInvocation("capability")
     : requireToolExecution({ tool: "capability", action }, permission, "capability");
   if (authorizationError) return authorizationError;

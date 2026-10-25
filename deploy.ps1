@@ -489,6 +489,11 @@ try {
     }
     $changed += "verify-runtime-secrets.js"
 
+    if (-not (Copy-ToVPS (Join-Path $PROJECT_DIR "scripts\verify-runtime-secret.js") "$REMOTE_DIR/scripts/verify-runtime-secret.js")) {
+      throw "Failed to copy verify-runtime-secret.js"
+    }
+    $changed += "verify-runtime-secret.js"
+
     if (-not (Copy-ToVPS (Join-Path $PROJECT_DIR "docs\knowledge-seed.sql") "$REMOTE_DIR/docs/knowledge-seed.sql")) {
       throw "Failed to copy knowledge-seed.sql"
     }

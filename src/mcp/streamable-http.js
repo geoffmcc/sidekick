@@ -29,8 +29,12 @@ function headersObject(req) {
 
 function copyResponseHeaders(res, webRes) {
   webRes.headers.forEach((value, key) => {
-    if (key !== "content-encoding" && key !== "content-length") res.setHeader(key, value);
+    if (key !== "content-encoding" && key !== "content-length" && key !== "cache-control" && key !== "pragma") res.setHeader(key, value);
   });
+  // The MCP handler does not impose a cache policy. Keep tool results and
+  // authentication-related responses private at the HTTP boundary.
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Pragma", "no-cache");
 }
 
 function reportRouteFailure(logDebug, event, sessionId) {

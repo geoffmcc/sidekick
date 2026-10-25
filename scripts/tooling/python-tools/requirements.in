@@ -1,0 +1,4 @@
+duckdb==1.5.6
+openai-whisper==20250625
+setuptools==84.2.1
+yt-dlp==2026.10.21

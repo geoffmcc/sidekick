@@ -43,7 +43,7 @@ function createDatabaseInspection({ getDb, fs, dbFile }) {
     return Math.round(bytes / Math.pow(k, i) * 100) / 100 + " " + sizes[i];
   }
 
-  function getDatabaseStats() {
+  function getDatabaseStats({ detailed = true } = {}) {
     const db = getDb();
     const dbSize = fs.statSync(dbFile).size;
     const pageCount = db.prepare("PRAGMA page_count").get().page_count;
@@ -61,7 +61,7 @@ function createDatabaseInspection({ getDb, fs, dbFile }) {
       `).get();
     } catch {}
     const tables = getTableList();
-    const tableStats = tables.map(t => {
+    const tableStats = detailed ? tables.map(t => {
       let size = 0;
       let rowCount = 0;
       try {
@@ -69,7 +69,7 @@ function createDatabaseInspection({ getDb, fs, dbFile }) {
         size = db.prepare(`SELECT page_count * ${pageSize} as size FROM pragma_page_count('${t.name}')`).get().size || 0;
       } catch {}
       return { name: t.name, rowCount, size };
-    });
+    }) : undefined;
     return {
       dbSize,
       dbSizeHuman: formatBytes(dbSize),

@@ -6,11 +6,15 @@
 
 const assert = require('assert');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
-const TEST_DATA_DIR = path.join(__dirname, 'test-data-pack-contract');
-fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+const runnerDataRoot = process.env.SIDEKICK_TEST_DATA_DIR;
+const TEST_DATA_DIR = runnerDataRoot
+  ? path.join(runnerDataRoot, 'pack-contract')
+  : fs.mkdtempSync(path.join(os.tmpdir(), 'sidekick-test-pack-contract-'));
 fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
+if (!runnerDataRoot) process.once('exit', () => fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true }));
 process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
 process.env.SIDEKICK_DB_FILE = path.join(TEST_DATA_DIR, 'sidekick.db');
 process.env.SIDEKICK_TOOL_POLICY = 'open';
@@ -25,6 +29,7 @@ const packLifecycle = require('../src/packs/lifecycle');
 const packRepository = require('../src/packs/repository');
 const moduleLifecycle = require('../src/modules/lifecycle');
 const bundled = require('../src/packs/bundled');
+const bundledAttestations = require('../src/packs/bundled-attestations');
 const moduleManifestModule = require('../src/modules/manifest');
 const { callInternalTool } = require('../src/tools/dispatcher');
 const authorizedContext = require('./helpers/authorized-context').createOwnerContext({ source: 'internal' });
@@ -565,6 +570,18 @@ function packWithWorkflow(name, tool, requires = {}) {
     fs.writeFileSync(path.join(sensitiveDir, 'sidekick.pack.json'), `${JSON.stringify(baseManifest('sensitive-file'))}\n`);
     fs.writeFileSync(path.join(sensitiveDir, '.env'), 'PACK_SECRET=fixture-only\n');
     assert.throws(() => packLifecycle.inspect(sensitiveDir), /contains a sensitive file/);
+  });
+
+  test('PC.33: every bundled first-party package matches its release-committed hash attestation', () => {
+    const packs = bundled.listBundledPacks();
+    assert.strictEqual(packs.length, Object.keys(bundledAttestations.EXPECTED_PACKAGE_HASHES).length);
+    for (const pack of packs) {
+      assert.ok(!pack.error, `${pack.name}: ${pack.error || ''}`);
+      assert.strictEqual(pack.integrity_verified, true, `${pack.name} is attested`);
+      assert.ok(bundledAttestations.verifyBundledPackageHash(pack.name, pack.package_hash), `${pack.name} hash matches`);
+    }
+    assert.strictEqual(bundledAttestations.verifyBundledPackageHash('developer', '0'.repeat(64)), false,
+      'a caller-selected replacement hash cannot become a release attestation');
   });
 
   console.log(failures ? `\n${failures} test(s) FAILED` : '\nAll pack contract tests passed');

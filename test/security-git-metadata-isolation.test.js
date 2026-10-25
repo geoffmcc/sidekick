@@ -150,6 +150,21 @@ process.env.SIDEKICK_ALLOWED_PATHS = allowedRepo;
   assert.notEqual(configuredDiff.isError, true, "diff remains available when external diff config is neutralized");
   assert.equal(fs.existsSync(fsmonitorMarker), false, "repository-controlled diff.external must not execute");
 
+  const outOfScopeDiffOutput = path.join(root, "outside", "git-diff-output.txt");
+  git(configRepo, ["diff", "--no-ext-diff", `--output=${gitShellPath(outOfScopeDiffOutput)}`]);
+  assert.match(fs.readFileSync(outOfScopeDiffOutput, "utf8"), /modified synthetic tracked file/, "the fixture confirms Git can write a diff to an out-of-scope path");
+  fs.rmSync(outOfScopeDiffOutput, { force: true });
+  for (const outputArgs of [
+    `--output=${gitShellPath(outOfScopeDiffOutput)}`,
+    `--output ${gitShellPath(outOfScopeDiffOutput)}`,
+    `-o ${gitShellPath(outOfScopeDiffOutput)}`,
+    `-o${gitShellPath(outOfScopeDiffOutput)}`,
+  ]) {
+    const diffOutputEscape = await callInternalTool("git", { action: "diff", path: configRepo, args: outputArgs }, owner);
+    assert.equal(diffOutputEscape.isError, true, `read-authorized diff must reject Git output-file arguments (${outputArgs})`);
+  }
+  assert.equal(fs.existsSync(outOfScopeDiffOutput), false, "a denied diff output path must not be created");
+
   git(configRepo, ["config", "credential.helper", `!node ${gitShellPath(fsmonitorScript)}`]);
   try {
     execFileSync("git", ["-C", configRepo, "credential", "fill"], {

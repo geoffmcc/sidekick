@@ -28,7 +28,7 @@ function createContinuationJobStarter({ brain, callLLM, callAgentTool, redactSen
             redact: redactSensitive,
             toolContracts: getLiveAgentToolDefs(),
             agentTools: getLiveAgentToolDefs(),
-            concurrencyLimit: Math.max(1, Math.min(16, Number(getTask(taskId)?.authority_envelope?.concurrency_limit) || 1)),
+            concurrencyLimit: Math.floor(Math.max(1, Math.min(16, Number(getTask(taskId)?.authority_envelope?.concurrency_limit) || 1))),
             workPackageHooks: {
               start: async (step) => {
                 const operations = require("./durable-operations");
